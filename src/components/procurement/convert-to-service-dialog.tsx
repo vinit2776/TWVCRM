@@ -11,11 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { BILLING_CYCLE_LABELS, type ServicePoBillingCycle } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { cyclesBetween } from "@/lib/procurement/amc-billing";
-import { checkConvertToService, cycle1Period, suggestConversion } from "@/lib/procurement/convert-to-service";
+import { checkConvertToService, suggestAssignments, suggestConversion } from "@/lib/procurement/convert-to-service";
+import { cycleSchedule } from "@/lib/procurement/amc-running";
 
 export interface ConvertBill {
   id: string;
   bill_number: string;
+  invoice_date?: string | null;
   total_amount: number;
   approval_status: string;
   service_report_id?: string | null;
@@ -47,14 +49,25 @@ const CYCLES = Object.keys(BILLING_CYCLE_LABELS).filter((c) => ["monthly", "quar
  * other invoice are left alone.
  */
 export function ConvertToServiceDialog({ open, onOpenChange, po, bills, onDone }: Props) {
-  const liveBills = useMemo(() => bills.filter((b) => b.approval_status !== "rejected" && !b.service_report_id), [bills]);
+  const liveBills = useMemo(() => bills.filter((b) => !["rejected", "withdrawn"].includes(b.approval_status) && !b.service_report_id), [bills]);
 
   const [cycle, setCycle] = useState<ServicePoBillingCycle>("yearly");
   const [count, setCount] = useState("1");
-  const [billId, setBillId] = useState("none");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  /** Bill id -> the cycle it belongs to, or "none" to leave it loose. */
+  const [cycleOf, setCycleOf] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  const scheduleFor = (c: ServicePoBillingCycle, n: number) => cycleSchedule(po.amc_start_date ?? "", po.amc_end_date ?? "", c, n);
+
+  const seedAssignments = (c: ServicePoBillingCycle, n: number) => {
+    const guess = suggestAssignments(
+      liveBills.map((b) => ({ id: b.id, sortKey: `${b.invoice_date ?? ""}|${b.bill_number}` })),
+      scheduleFor(c, n)
+    );
+    const next: Record<string, string> = {};
+    for (const b of liveBills) next[b.id] = String(guess.find((g) => g.billId === b.id)?.cycle ?? "none");
+    setCycleOf(next);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -62,28 +75,33 @@ export function ConvertToServiceDialog({ open, onOpenChange, po, bills, onDone }
       total: po.total_ordered_amount,
       amcStart: po.amc_start_date,
       amcEnd: po.amc_end_date,
-      liveBillAmounts: bills.filter((b) => b.approval_status !== "rejected").map((b) => Number(b.total_amount)),
+      liveBillAmounts: bills.filter((b) => !["rejected", "withdrawn"].includes(b.approval_status)).map((b) => Number(b.total_amount)),
     });
     setCycle(s.billingCycle);
     setCount(String(s.cycleCount));
-    const approved = liveBills.find((b) => b.approval_status === "approved");
-    setBillId(approved?.id ?? "none");
-    const p = cycle1Period(po.amc_start_date, s.billingCycle);
-    setFrom(p?.from ?? "");
-    setTo(p?.to ?? "");
+    seedAssignments(s.billingCycle, s.cycleCount);
   // Re-seed only when the dialog opens for a PO, not on every edit.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, po.id]);
 
   const changeCycle = (c: ServicePoBillingCycle) => {
     setCycle(c);
-    const n = cyclesBetween(po.amc_start_date, po.amc_end_date, c);
-    if (n) setCount(String(n));
-    const p = cycle1Period(po.amc_start_date, c);
-    if (p) { setFrom(p.from); setTo(p.to); }
+    const n = cyclesBetween(po.amc_start_date, po.amc_end_date, c) ?? Number(count);
+    setCount(String(n));
+    seedAssignments(c, n);
   };
 
-  const chosen = billId === "none" ? null : liveBills.find((b) => b.id === billId) ?? null;
+  const schedule = scheduleFor(cycle, Number(count) > 0 ? Number(count) : 1);
+  const assignments = liveBills.flatMap((b) => {
+    const n = Number(cycleOf[b.id]);
+    const period = schedule.find((p) => p.n === n);
+    if (!n || !period) return [];
+    return [{
+      billId: b.id, cycle: n, from: period.from, to: period.to,
+      bill: { po_id: po.id, service_report_id: null, approval_status: b.approval_status, total_amount: b.total_amount },
+    }];
+  });
+
   const verdict = checkConvertToService({
     role: "admin",
     po: {
@@ -97,10 +115,8 @@ export function ConvertToServiceDialog({ open, onOpenChange, po, bills, onDone }
     billingCycle: cycle,
     cycleCount: Number(count),
     serviceStart: po.amc_start_date ?? null,
-    bill: chosen ? { po_id: po.id, service_report_id: null, approval_status: chosen.approval_status, total_amount: chosen.total_amount } : null,
+    assignments,
     poId: po.id,
-    cycle1From: from,
-    cycle1To: to,
   });
 
   const submit = async () => {
@@ -114,9 +130,9 @@ export function ConvertToServiceDialog({ open, onOpenChange, po, bills, onDone }
           billing_cycle: cycle,
           cycle_count: Number(count),
           service_start_date: po.amc_start_date,
-          bill_id: chosen?.id ?? null,
-          cycle1_from: chosen ? from : null,
-          cycle1_to: chosen ? to : null,
+          assignments: assignments.map((a) => ({
+            bill_id: a.billId, cycle_number: a.cycle, period_from: a.from, period_to: a.to,
+          })),
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -157,32 +173,43 @@ export function ConvertToServiceDialog({ open, onOpenChange, po, bills, onDone }
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Invoice that belongs to cycle 1</Label>
-            <Select value={billId} onValueChange={setBillId}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None, convert without one</SelectItem>
-                {liveBills.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>
-                    {b.bill_number} · {formatCurrency(b.total_amount)} · {b.approval_status === "approved" ? "approved" : "pending"}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {chosen && (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Cycle 1 from</Label>
-                <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          {liveBills.length > 0 ? (
+            <div className="space-y-2">
+              <div>
+                <Label>Invoices already on this PO</Label>
+                <p className="text-xs text-muted-foreground">
+                  Say which cycle each one belongs to. They keep their approval and payment status; nothing new is created for them.
+                </p>
               </div>
-              <div className="space-y-1.5">
-                <Label>Cycle 1 to</Label>
-                <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+              <div className="rounded-lg border divide-y">
+                {liveBills.map((b) => {
+                  const dupAmount = liveBills.some((o) => o.id !== b.id && Math.abs(Number(o.total_amount) - Number(b.total_amount)) < 0.01);
+                  return (
+                    <div key={b.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-mono text-xs">{b.bill_number}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatCurrency(b.total_amount)} · {b.approval_status === "approved" ? "approved" : "pending"}
+                          {b.invoice_date ? ` · ${formatDate(b.invoice_date)}` : ""}
+                          {dupAmount && <span className="text-amber-700"> · same amount as another invoice, check it is not a copy</span>}
+                        </p>
+                      </div>
+                      <Select value={cycleOf[b.id] ?? "none"} onValueChange={(v) => setCycleOf((prev) => ({ ...prev, [b.id]: v }))}>
+                        <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Leave out</SelectItem>
+                          {schedule.map((p) => (
+                            <SelectItem key={p.n} value={String(p.n)}>Cycle {p.n} · {formatDate(p.from)}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  );
+                })}
               </div>
             </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">There are no invoices on this PO to tie to a cycle.</p>
           )}
 
           {verdict.ok ? (
@@ -190,9 +217,9 @@ export function ConvertToServiceDialog({ open, onOpenChange, po, bills, onDone }
               <p className="font-medium">What will change</p>
               <ul className="list-disc pl-5 text-xs text-muted-foreground space-y-0.5">
                 <li>Becomes a service PO: {BILLING_CYCLE_LABELS[cycle]}, {count} × {formatCurrency(verdict.unitCost)}, status Ordered.</li>
-                {chosen
-                  ? <li>Cycle 1 report ({formatDate(from)} – {formatDate(to)}) is created and {chosen.bill_number} is tied to it. It keeps its approval and payment status.</li>
-                  : <li>No cycle 1 report is created. You record reports from the PO page.</li>}
+                {assignments.length > 0
+                  ? <li>{assignments.length} cycle report{assignments.length === 1 ? "" : "s"} backfilled ({[...assignments].sort((x, y) => x.cycle - y.cycle).map((a) => `cycle ${a.cycle}: ${bills.find((x) => x.id === a.billId)?.bill_number}`).join(", ")}). Each invoice keeps its approval and payment status.</li>
+                  : <li>No invoice is tied to a cycle. You record reports from the PO page.</li>}
                 <li>Everything else stays as it is, and an audit entry is written.</li>
               </ul>
             </div>
