@@ -119,10 +119,11 @@ export default function ProposalDetailPage({
   const [manualPayMedium, setManualPayMedium] = useState("");
   // True once any part of the deposit has been asked for or paid: the single-deposit controls stand down.
   const [depositPartsActive, setDepositPartsActive] = useState(false);
-  // More than half of the deposit received in parts: activation and the GST invoice are allowed, with a pending-balance warning.
+  // More than half of the deposit received in parts: contract activation is allowed, with a pending-balance warning.
   const [depositCollection, setDepositCollection] = useState<PartialDepositState | null>(null);
   const handleDepositPosition = useCallback((p: DepositPosition) => setDepositCollection(partialDepositState(p.required, p.paid)), []);
-  const depositPartialOk = !!depositCollection?.allowsActivation;
+  // The GST invoice goes out in parallel with the deposit once the deposit has been asked for (not necessarily received).
+  const depositRequested = !!proposal?.deposit_email_sent_at || depositPartsActive;
   const [manualPayNotes, setManualPayNotes] = useState("");
   const [manualPayFile, setManualPayFile] = useState<File | null>(null);
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
@@ -1042,7 +1043,7 @@ export default function ProposalDetailPage({
                       ) : (
                         <DropdownMenuItem
                           onClick={() => openGstDialog(invoiceSentAlready)}
-                          disabled={hasDeposit && !depositPaid && !depositPartialOk}
+                          disabled={hasDeposit && !depositPaid && !depositRequested}
                         >
                           <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-blue-600" />
                           <div>
@@ -1050,8 +1051,8 @@ export default function ProposalDetailPage({
                               {invoiceSentAlready ? "Revise & Resend GST Invoice" : "GST Invoice — First Month"}
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              {hasDeposit && !depositPaid && !depositPartialOk
-                                ? "Deposit must be paid first"
+                              {hasDeposit && !depositPaid && !depositRequested
+                                ? "Send the deposit request first"
                                 : `₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month · Prorated · PDF attached`}
                             </p>
                           </div>
@@ -1144,7 +1145,7 @@ export default function ProposalDetailPage({
           <CardTitle className="text-base">Proposal history</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
-          <ProposalLifecycle proposal={proposal} />
+          <ProposalLifecycle proposal={proposal} depositPartsRequested={depositPartsActive} />
         </CardContent>
       </Card>
 
@@ -1688,7 +1689,7 @@ export default function ProposalDetailPage({
           {proposal.status !== "draft" && proposal.status !== "rejected" && (() => {
             const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
             const depositPaid = proposal.deposit_payment_status === "paid";
-            const canSendInvoice = !depositRequired || depositPaid || depositPartialOk;
+            const canSendInvoice = !depositRequired || depositPaid || depositRequested;
             const invoiceSent = !!proposal.occupation_start_date;
 
             return (
@@ -1802,7 +1803,7 @@ export default function ProposalDetailPage({
                     <>
                       {!canSendInvoice && (
                         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          More than half of the security deposit must be paid before sending the GST invoice.
+                          Send the security deposit request before sending the GST invoice.
                         </p>
                       )}
                       {canSendInvoice && !depositPaid && depositCollection && (

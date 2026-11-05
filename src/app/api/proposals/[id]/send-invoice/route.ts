@@ -6,7 +6,7 @@ import { logWhatsAppActivity } from "@/lib/audit";
 import { calcGst } from "@/lib/tax";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
-import { loadDepositCollection } from "@/lib/deposit-instalment-server";
+import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
 
 /**
  * POST /api/proposals/[id]/send-invoice
@@ -84,12 +84,15 @@ export async function POST(
 
   if (!proposal) return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
 
+  // The invoice runs in parallel with the deposit: it only needs the deposit
+  // to have been asked for (single request sent, or at least one live part),
+  // not received.
   const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
   if (depositRequired && proposal.deposit_payment_status !== "paid") {
-    // A deposit collected in parts counts once more than half is received.
-    const collection = await loadDepositCollection(createAdminClient(), proposal);
-    if (!collection.allowsActivation) {
-      return NextResponse.json({ error: "More than half of the security deposit must be paid before sending the invoice" }, { status: 400 });
+    const depositRequested = !!proposal.deposit_email_sent_at
+      || await hasLiveInstalments(createAdminClient(), id);
+    if (!depositRequested) {
+      return NextResponse.json({ error: "Send the security deposit request before sending the invoice" }, { status: 400 });
     }
   }
 
