@@ -44,6 +44,7 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/contract-expiry":         DAILY,
   "cron/lead-reminder-digest":    DAILY,
   "cron/vo-renewal":              DAILY,
+  "cron/auto-renew":              DAILY,
   "cron/renewal-reminders":       DAILY,
   "cron/lease-payment-reminders": DAILY,
   "cron/rent-gap-alert":          DAILY,
