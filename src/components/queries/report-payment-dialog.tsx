@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Loader2, Users } from "lucide-react";
 import {
@@ -78,6 +78,8 @@ interface ExistingReport {
   payment_mode: string;
   status: PaymentReportStatus;
   created_by: { full_name: string } | null;
+  /** Whether this viewer may take the report back (reporter, accounts or admin, while unverified). */
+  can_withdraw?: boolean;
   query: { id: string } | null;
   timeline?: {
     messages?: Array<{
@@ -127,6 +129,15 @@ export function ReportPaymentDialog({
   // The invoice picker stays tucked away when the dialog was opened from a
   // specific invoice; "Wrong invoice?" reveals it.
   const [pickingInvoice, setPickingInvoice] = useState(false);
+  // Bumped after a withdrawal so the "already reported" panel and the
+  // reportable balance are read again.
+  const [reloadKey, setReloadKey] = useState(0);
+  const [confirmWithdrawId, setConfirmWithdrawId] = useState<string | null>(null);
+  const [withdrawingId, setWithdrawingId] = useState<string | null>(null);
+  // A withdrawal changes what the page behind shows, but refreshing it while the
+  // dialog is open would unmount the dialog (the pages reload their whole
+  // record), so the refresh waits until the dialog closes.
+  const withdrewRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -141,6 +152,7 @@ export function ReportPaymentDialog({
     setNote("");
     setFiles([]);
     setStatementId(defaultStatementId ?? null);
+    setConfirmWithdrawId(null);
   }, [open, suggestedAmount, defaultStatementId]);
 
   /**
@@ -169,7 +181,7 @@ export function ReportPaymentDialog({
       })
       .catch(() => { if (!cancelled) { setExisting([]); setBalance(null); } });
     return () => { cancelled = true; };
-  }, [open, entityType, entityId]);
+  }, [open, entityType, entityId, reloadKey]);
 
   useEffect(() => {
     if (!open || !contractId) { setStatements(null); return; }
@@ -186,6 +198,35 @@ export function ReportPaymentDialog({
   // picker behaves as before.
   const knownStatement =
     defaultStatementId ? statements?.find((st) => st.id === defaultStatementId) ?? null : null;
+
+  async function withdraw(reportId: string) {
+    setWithdrawingId(reportId);
+    const res = await fetch(`/api/queries/payment-reports/${encodeURIComponent(reportId)}/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const json = await res.json().catch(() => ({}));
+    setWithdrawingId(null);
+    setConfirmWithdrawId(null);
+    if (!res.ok) {
+      toast.error(json.error || "Could not withdraw this report");
+      // Accounts may have settled it in the meantime; show what is true now.
+      setReloadKey((k) => k + 1);
+      return;
+    }
+    toast.success("Report withdrawn — the invoice is untouched. You can report the payment again with the right details");
+    withdrewRef.current = true;
+    setReloadKey((k) => k + 1);
+  }
+
+  function handleOpenChange(next: boolean) {
+    if (!next && withdrewRef.current) {
+      withdrewRef.current = false;
+      onReported();
+    }
+    onOpenChange(next);
+  }
 
   async function submit() {
     if (!entityId) return;
@@ -245,6 +286,7 @@ export function ReportPaymentDialog({
       // Queries page's default tab and people concluded it hadn't saved.
       toast.success("Sent to accounts to verify against the bank", { action: openThread });
     }
+    withdrewRef.current = false;
     onOpenChange(false);
     onReported();
   }
@@ -256,7 +298,7 @@ export function ReportPaymentDialog({
   const fullyReported = !!balance && balance.reportable <= 0 && pendingReports.length > 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Report payment received</DialogTitle>
@@ -285,7 +327,9 @@ export function ReportPaymentDialog({
                         ? "text-amber-800 border-amber-300"
                         : rep.status === "verified"
                           ? "text-green-800 border-green-300"
-                          : "text-red-800 border-red-300"
+                          : rep.status === "withdrawn"
+                            ? "text-muted-foreground border-border"
+                            : "text-red-800 border-red-300"
                     }`}>
                       {PAYMENT_REPORT_STATUS_LABELS[rep.status]}
                     </span>
@@ -321,6 +365,44 @@ export function ReportPaymentDialog({
                     >
                       Open the thread
                     </a>
+                  )}
+                  {rep.can_withdraw && rep.status === "reported" && (
+                    confirmWithdrawId === rep.id ? (
+                      <div className="flex items-center gap-2 border-t pt-1.5">
+                        <span className="text-[11px] text-amber-900">
+                          Withdraw this report? The invoice and any payment are not affected, and
+                          you can report it again. Accounts will be told.
+                        </span>
+                        <Button
+                          type="button" size="sm" variant="outline"
+                          className="h-6 px-2 text-[11px]"
+                          disabled={withdrawingId === rep.id}
+                          onClick={() => withdraw(rep.id)}
+                        >
+                          {withdrawingId === rep.id && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                          Withdraw
+                        </Button>
+                        <Button
+                          type="button" size="sm" variant="ghost"
+                          className="h-6 px-2 text-[11px]"
+                          disabled={withdrawingId === rep.id}
+                          onClick={() => setConfirmWithdrawId(null)}
+                        >
+                          Keep
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="border-t pt-1.5">
+                        <Button
+                          type="button" size="sm" variant="outline"
+                          className="h-6 px-2 text-[11px]"
+                          title="Take back this report so you can correct it and report it again — the invoice and payment are not affected. Only possible until accounts verifies it"
+                          onClick={() => setConfirmWithdrawId(rep.id)}
+                        >
+                          Withdraw report
+                        </Button>
+                      </div>
+                    )
                   )}
                 </div>
               ))}
