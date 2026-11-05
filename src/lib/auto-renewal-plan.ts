@@ -45,6 +45,8 @@ export interface AutoRenewFacts {
   subtotal: number;
   agreementEscalationPercentage: number | null;
   escalationPercentage: number | null;
+  /** A rate agreed for the NEXT term only (migration 00669); null when none. */
+  revisedEscalationPercentage?: number | null;
   renewalDeclined: boolean;
   hasLiveExit: boolean;
   overdueAmount: number;
@@ -186,6 +188,8 @@ export function planAutoRenewals(
       escalation_percentage: f.escalationPercentage,
     });
     const draftPct = f.renewalDraft?.escalationPercentage ?? null;
+    const revisedPct = f.revisedEscalationPercentage ?? null;
+    const previewPct = revisedPct ?? programmedPct;
     return {
       facts: f,
       holds: eligibility.holds,
@@ -194,8 +198,8 @@ export function planAutoRenewals(
       stage: stageFor(today, schedule, rollOn, f.endDate, eligibility.holds.length > 0),
       next: nextStep(today, schedule, rollOn),
       programmedPct,
-      nextRent: f.renewalDraft ? f.renewalDraft.subtotal : previewNextRent(f.items, programmedPct, f.subtotal),
-      nextRentPct: f.renewalDraft && draftPct != null ? draftPct : programmedPct,
+      nextRent: f.renewalDraft ? f.renewalDraft.subtotal : previewNextRent(f.items, previewPct, f.subtotal),
+      nextRentPct: f.renewalDraft && draftPct != null ? draftPct : previewPct,
       nextRentIsDraft: !!f.renewalDraft,
     };
   });
