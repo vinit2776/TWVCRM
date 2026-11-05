@@ -21,6 +21,7 @@ import {
   describeReport,
   targetKindForEntity,
   validatePaymentReport,
+  canWithdrawPaymentReport,
   type PaymentReportEntityType,
 } from "@/lib/queries/payment-reports";
 
@@ -110,7 +111,26 @@ export async function GET(req: NextRequest) {
       entityType as Parameters<typeof reportableBalance>[1],
       entityId,
     );
-    return NextResponse.json({ items: mine, balance });
+    // Computed here, with the same rule the withdraw route enforces, so the
+    // dialog only offers the button to someone it will work for.
+    const items = mine.map((r) => {
+      const row = r as unknown as {
+        status: Parameters<typeof canWithdrawPaymentReport>[0]["status"];
+        target_kind: Parameters<typeof canWithdrawPaymentReport>[0]["targetKind"];
+        created_by: { id: string } | null;
+      };
+      return {
+        ...r,
+        can_withdraw: canWithdrawPaymentReport({
+          status: row.status,
+          targetKind: row.target_kind,
+          role: auth.dbUser.role,
+          userId: auth.dbUser.id,
+          reportedBy: row.created_by?.id,
+        }),
+      };
+    });
+    return NextResponse.json({ items, balance });
   }
 
   /**

@@ -248,7 +248,7 @@ export function PaymentReportCard({
       linkedPayment: report.linked_payment,
       modeLabel: (m) => STATEMENT_PAYMENT_MODE_LABELS[m] ?? m,
     });
-    const Icon = report.status === "rejected" ? XCircle : Link2;
+    const Icon = report.status === "rejected" || report.status === "withdrawn" ? XCircle : Link2;
     return (
       <div className="rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground flex gap-2 items-start leading-relaxed">
         <Icon className="h-3.5 w-3.5 mt-0.5 flex-none" aria-hidden />
@@ -256,7 +256,7 @@ export function PaymentReportCard({
           <p>
             <span className="font-medium text-foreground">{summary.headline}</span>
             {report.reviewed_by && report.reviewed_at
-              ? ` · ${report.status === "verified" ? "verified" : "closed"} by ${report.reviewed_by.full_name}, ${formatDate(report.reviewed_at)}`
+              ? ` · ${report.status === "verified" ? "verified" : report.status === "withdrawn" ? "withdrawn" : "closed"} by ${report.reviewed_by.full_name}, ${formatDate(report.reviewed_at)}`
               : ""}
           </p>
           <p>
@@ -264,7 +264,7 @@ export function PaymentReportCard({
             {formatCurrency(report.amount)}, {modeLabel}, {formatDate(report.paid_on)}
           </p>
           {summary.linkLine && <p>{summary.linkLine}</p>}
-          {report.status === "rejected" && report.resolution_note && (
+          {(report.status === "rejected" || report.status === "withdrawn") && report.resolution_note && (
             <p className="italic">{report.resolution_note}</p>
           )}
         </div>
