@@ -19,6 +19,17 @@ import type { Lead } from "@/types";
 
 type Panel = "spoke" | "no_answer" | "tour" | "quote" | "not_interested";
 
+/** How a call ended. Only "Not continuing" may finish without a next step, because it closes the lead. */
+type Outcome = "interested" | "waiting" | "not_continuing";
+const OUTCOME_LABELS: Record<Outcome, string> = {
+  interested: "Still interested",
+  waiting: "Waiting on them",
+  not_continuing: "Not continuing",
+};
+
+/** The quick picks for a next step: a count of days from today. */
+const QUICK_DAYS: [string, number][] = [["Tomorrow", 1], ["In 3 days", 3], ["Next week", 7]];
+
 /** Statuses where recording a quote moves the lead on to Negotiating. Later ones are left alone. */
 const BEFORE_NEGOTIATING = ["new", "contacted", "tour_scheduled", "tour_completed", "proposal_sent"];
 
@@ -44,7 +55,8 @@ async function postActivity(leadId: string, body: Record<string, unknown>) {
   const res = await fetch(`/api/leads/${leadId}/activities`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    // Whatever was pending is dealt with by this contact; the new next step replaces it.
+    body: JSON.stringify({ ...body, closes_open_follow_ups: true }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -77,6 +89,7 @@ export function LeadQuickActions({
   const [reason, setReason] = useState("");
   const [tourAt, setTourAt] = useState("");
   const [tourHost, setTourHost] = useState("");
+  const [outcome, setOutcome] = useState<Outcome | "">("");
   // Once the person picks a follow-up themselves, typing in the note stops overwriting it.
   const followUpTouched = useRef(false);
 
@@ -88,6 +101,7 @@ export function LeadQuickActions({
     setReason("");
     setTourAt("");
     setTourHost("");
+    setOutcome("");
     followUpTouched.current = false;
     setFollowUp(p === "no_answer" ? followUpInDays(2) : p === "quote" ? followUpInDays(3) : "");
     if (p === "no_answer") setFollowUpNote("Call back");
@@ -113,6 +127,23 @@ export function LeadQuickActions({
   const followUpFields = (label: string) => (
     <div className="space-y-2">
       <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="flex flex-wrap gap-2">
+        {QUICK_DAYS.map(([text, days]) => (
+          <button
+            key={text}
+            type="button"
+            onClick={() => {
+              followUpTouched.current = true;
+              setFollowUp(followUpInDays(days));
+            }}
+            className={`rounded-full border px-3 py-1 text-sm ${
+              followUp === followUpInDays(days) ? "border-primary bg-primary/10 font-medium text-primary" : "hover:bg-muted"
+            }`}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
       <FollowUpDateTimeInput
         value={followUp}
         onChange={(v) => {
@@ -199,7 +230,43 @@ export function LeadQuickActions({
                   placeholder="e.g. Wants 6 seats from January. Call Friday 4pm with pricing"
                 />
               </div>
-              {followUpFields(followUp ? "Next step (filled in from your note, change if needed)" : "Next step (optional)")}
+              <div className="space-y-1">
+                <div className="text-sm font-medium">How did the call end?</div>
+                {chips(
+                  Object.values(OUTCOME_LABELS),
+                  outcome ? OUTCOME_LABELS[outcome] : "",
+                  (label) => {
+                    const picked = (Object.keys(OUTCOME_LABELS) as Outcome[]).find((k) => OUTCOME_LABELS[k] === label) as Outcome;
+                    setOutcome(picked);
+                    if (picked === "waiting" && !followUpTouched.current) {
+                      setFollowUp(followUpInDays(7));
+                      setFollowUpNote((n) => n || "Check back");
+                    }
+                  },
+                )}
+              </div>
+              {outcome === "not_continuing" ? (
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">Why?</div>
+                  {chips(
+                    NOT_INTERESTED_REASONS.map((r) => NOT_INTERESTED_REASON_LABELS[r]),
+                    reason,
+                    setReason,
+                  )}
+                  <div className="text-xs text-muted-foreground">
+                    No next step is needed. The lead is closed and archived, and can be restored from its page.
+                  </div>
+                </div>
+              ) : (
+                outcome &&
+                followUpFields(
+                  outcome === "waiting"
+                    ? "Check back on (7 days from now unless you change it)"
+                    : followUp
+                      ? "Next step (filled in from your note, change if needed)"
+                      : "Next step (required)",
+                )
+              )}
             </>
           )}
 
@@ -285,14 +352,37 @@ export function LeadQuickActions({
               size="sm"
               disabled={
                 saving ||
-                (panel === "spoke" && (!note.trim() || !followUpReady)) ||
+                (panel === "spoke" &&
+                  (!note.trim() ||
+                    !outcome ||
+                    (outcome === "not_continuing" ? !reason : !followUp || !followUpReady))) ||
                 (panel === "no_answer" && (!reason || !followUp || !followUpReady)) ||
                 (panel === "tour" && (!tourAt || isPast(tourAt))) ||
-                (panel === "quote" && !followUpReady) ||
+                (panel === "quote" && (!followUp || !followUpReady)) ||
                 (panel === "not_interested" && !reason)
               }
               onClick={() => {
-                if (panel === "spoke") {
+                if (panel === "spoke" && outcome === "not_continuing") {
+                  const key = NOT_INTERESTED_REASONS.find((r) => NOT_INTERESTED_REASON_LABELS[r] === reason) as NotInterestedReason;
+                  void run(async () => {
+                    await postActivity(lead.id, {
+                      type: "call",
+                      subject: "Spoke",
+                      description: note.trim(),
+                      call_outcome: "connected",
+                    });
+                    const res = await fetch(`/api/leads/${lead.id}/not-interested`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ reason: key }),
+                    });
+                    if (!res.ok) {
+                      const err = await res.json().catch(() => ({}));
+                      // The call is already logged; say so rather than let a retry log it twice.
+                      throw new Error(`Call logged, but the lead could not be closed: ${err.error || "try Not interested"}`);
+                    }
+                  }, "Call logged and lead closed");
+                } else if (panel === "spoke") {
                   void run(
                     () =>
                       postActivity(lead.id, {
@@ -367,7 +457,13 @@ export function LeadQuickActions({
               }}
             >
               {saving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-              {panel === "not_interested" ? "Close and archive" : panel === "tour" ? "Book tour" : "Save"}
+              {panel === "not_interested"
+                ? "Close and archive"
+                : panel === "spoke" && outcome === "not_continuing"
+                  ? "Save and close lead"
+                  : panel === "tour"
+                    ? "Book tour"
+                    : "Save"}
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={close}>
               Cancel
