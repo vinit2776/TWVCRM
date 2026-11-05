@@ -1,4 +1,5 @@
 import { leadStaleState, latestInstant, NON_EVENT_SUBJECTS } from "@/lib/lead-stale";
+import { isLastContactActivity } from "@/lib/lead-last-contact";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { normalizePhoneFields, normalizeStoredPhone } from "@/lib/phone";
@@ -358,7 +359,7 @@ export async function GET(request: NextRequest) {
     }[]) {
       if ((NON_EVENT_SUBJECTS as readonly string[]).includes(a.subject ?? "")) continue;
       if (!lastActivity.has(a.lead_id)) lastActivity.set(a.lead_id, a.created_at);
-      if (!lastContact.has(a.lead_id) && ["call", "tour", "meeting", "email"].includes(a.type)) {
+      if (!lastContact.has(a.lead_id) && isLastContactActivity(a)) {
         lastContact.set(a.lead_id, { subject: a.subject || a.type, at: a.created_at, note: a.description?.trim() || null });
       }
     }
