@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Loader2, PauseCircle, PlayCircle, Repeat, SlidersHorizontal, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { AUTO_RENEW_MANAGE_ROLES } from "@/lib/auto-renewal";
+import { NEXT_TERM_ACTIVATE_ROLES, canActivateNow, rentMatchesNotice } from "@/lib/auto-renewal-next-term";
 import { PLAN_STAGE_LABELS, type PlanStage } from "@/lib/auto-renewal-plan";
 import { ContractAutoRenewalNotices } from "@/components/contracts/contract-auto-renewal-notices";
 
@@ -31,6 +33,14 @@ interface CardData {
   paused: boolean;
   /** Set once the rate notice has gone out: the next term's rent is then what the customer was told. */
   lock: { sentAt: string; newRent: number } | null;
+  nextTerm: {
+    id: string;
+    contractNumber: string;
+    status: string;
+    subtotal: number;
+    startDate: string;
+    escalationPercentage: number | null;
+  } | null;
   depositTopUp: number;
   programmedPct: number;
   revised: { percentage: number; reason: string | null; at: string | null } | null;
@@ -61,6 +71,8 @@ interface Props {
   exitInProgress: boolean;
 }
 
+const todayIst = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+
 async function post(contractId: string, body: Record<string, unknown>): Promise<string | null> {
   try {
     const res = await fetch(`/api/contracts/${contractId}/auto-renewal`, {
@@ -82,6 +94,7 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
   const [busy, setBusy] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
   const [pauseOpen, setPauseOpen] = useState(false);
+  const [activateOpen, setActivateOpen] = useState(false);
   const [pct, setPct] = useState("");
   const [reason, setReason] = useState("");
 
@@ -121,6 +134,37 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
     return true;
   };
 
+  const activateNextTerm = async () => {
+    if (!data.nextTerm) return;
+    setBusy(true);
+    const patchStatus = async (status: string) => {
+      try {
+        const res = await fetch(`/api/contracts/${data.nextTerm!.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        });
+        if (res.ok) return null;
+        const err = await res.json().catch(() => null);
+        return (err?.error as string) || "Something went wrong";
+      } catch {
+        return "Network error. Please try again.";
+      }
+    };
+    // The original signed agreement renews the term, so it is accepted as it stands; then it starts.
+    const error = (data.nextTerm.status === "accepted" ? null : await patchStatus("accepted")) ?? (await patchStatus("active"));
+    setBusy(false);
+    if (error) {
+      toast.error(error);
+      await load();
+      return;
+    }
+    toast.success(`${data.nextTerm.contractNumber} is now active`);
+    setActivateOpen(false);
+    // This contract is now renewed; reload the page so it shows that, not a stale card.
+    window.location.reload();
+  };
+
   const openRevise = () => {
     setPct(String(data.revised?.percentage ?? data.programmedPct));
     setReason("");
@@ -150,8 +194,8 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-          The term is not rolled automatically yet, so this contract still needs the usual Renew. Switching this on adds
-          it to the daily internal report and to the customer notices below.
+          The system prepares the customer notices below and, once the customer has been sent the rate, the next term.
+          A person still activates the next term when it starts. Until then the usual Renew works as before.
         </p>
 
         {data.autoRenew && plan && (
@@ -200,6 +244,33 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
               <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
                 The customer was sent {formatCurrency(data.lock.newRent)} per month on {formatDate(data.lock.sentAt)}, so the rate is locked for this term.
               </p>
+            )}
+
+            {data.nextTerm && (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-950 space-y-1.5">
+                <p className="font-semibold">Next term is ready</p>
+                <p>
+                  <Link href={`/contracts/${data.nextTerm.id}`} className="underline">{data.nextTerm.contractNumber}</Link>
+                  {" "}starts {formatDate(data.nextTerm.startDate)} at {formatCurrency(data.nextTerm.subtotal)} per month
+                  {data.nextTerm.escalationPercentage != null ? ` (+${data.nextTerm.escalationPercentage}%)` : ""}.
+                </p>
+                {data.lock && !rentMatchesNotice(data.nextTerm.subtotal, data.lock.newRent) && (
+                  <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-amber-900">
+                    The customer was sent {formatCurrency(data.lock.newRent)}, not {formatCurrency(data.nextTerm.subtotal)}. Check before activating.
+                  </p>
+                )}
+                {(NEXT_TERM_ACTIVATE_ROLES as readonly string[]).includes(userRole ?? "") ? (
+                  canActivateNow(todayIst(), plan.rollOn) ? (
+                    <Button size="sm" className="w-full" disabled={busy} onClick={() => setActivateOpen(true)}>
+                      Activate next term
+                    </Button>
+                  ) : (
+                    <p className="text-emerald-900/80">You can activate it from {formatDate(plan.rollOn)}.</p>
+                  )
+                ) : (
+                  <p className="text-emerald-900/80">An admin or manager activates it when it starts.</p>
+                )}
+              </div>
             )}
 
             <ContractAutoRenewalNotices
@@ -301,6 +372,26 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
               }}
             >
               Save rate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={activateOpen} onOpenChange={setActivateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Activate next term · {data.nextTerm?.contractNumber}</DialogTitle>
+            <DialogDescription>
+              Starts {data.nextTerm ? formatDate(data.nextTerm.startDate) : ""} at {data.nextTerm ? formatCurrency(data.nextTerm.subtotal) : ""} per month.
+              This marks {contractNumber} as renewed, revokes its WiFi vouchers (IT is emailed the old codes to disable) and issues new ones.
+              It cannot be undone from here.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setActivateOpen(false)}>Back</Button>
+            <Button disabled={busy} onClick={activateNextTerm}>
+              {busy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              Activate
             </Button>
           </DialogFooter>
         </DialogContent>
