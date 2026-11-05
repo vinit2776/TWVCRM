@@ -191,6 +191,23 @@ describe("planAutoRenewals: sections", () => {
     expect(html).not.toContain("negotiated");
   });
 
+  it("previews a revised rate for the next term, and labels it nothing more than the rent at that rate", () => {
+    const item = planAutoRenewals([facts({ revisedEscalationPercentage: 7 })], "2026-10-01").items[0];
+    expect(item.programmedPct).toBe(10);
+    expect(item.nextRentPct).toBe(7);
+    expect(item.nextRent).toBe(15910);
+    expect(item.nextRentIsDraft).toBe(false);
+  });
+
+  it("an existing draft still wins over a revised rate", () => {
+    const item = planAutoRenewals(
+      [facts({ revisedEscalationPercentage: 7, renewalDraft: { subtotal: 16300, escalationPercentage: 10 } })],
+      "2026-11-10",
+    ).items[0];
+    expect(item.nextRent).toBe(16300);
+    expect(item.nextRentPct).toBe(10);
+  });
+
   it("carries the programmed escalation and the next rent for each contract", () => {
     const item = planAutoRenewals([facts({ agreementEscalationPercentage: 10, escalationPercentage: 7 })], "2026-10-01").items[0];
     expect(item.programmedPct).toBe(10);

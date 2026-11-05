@@ -10,14 +10,24 @@ import type { AutoRenewFacts, PlanLine } from "@/lib/auto-renewal-plan";
  * Returns null when the auto_renew column does not exist on this database yet
  * (migration 00662 not applied), so the caller can say so instead of failing.
  */
-export async function loadAutoRenewFacts(admin: SupabaseClient, today: string): Promise<AutoRenewFacts[] | null> {
-  const { data: contracts, error } = await admin
+export interface LoadFactsOptions {
+  /** Load just this contract, whether or not it has opted in (for its page). */
+  contractId?: string;
+}
+
+export async function loadAutoRenewFacts(
+  admin: SupabaseClient,
+  today: string,
+  opts: LoadFactsOptions = {},
+): Promise<AutoRenewFacts[] | null> {
+  let query = admin
     .from("contracts")
     .select(
       "*, lead:leads!contracts_lead_id_fkey(first_name, last_name, company), location:locations!contracts_location_id_fkey(name)",
     )
-    .eq("auto_renew", true)
     .in("status", ["active", "renewal_in_progress"]);
+  query = opts.contractId ? query.eq("id", opts.contractId) : query.eq("auto_renew", true);
+  const { data: contracts, error } = await query;
 
   if (error) {
     // 42703 undefined_column: the migration has not reached this database.
@@ -126,6 +136,8 @@ export async function loadAutoRenewFacts(admin: SupabaseClient, today: string): 
       agreementEscalationPercentage:
         c.agreement_escalation_percentage == null ? null : Number(c.agreement_escalation_percentage),
       escalationPercentage: c.escalation_percentage == null ? null : Number(c.escalation_percentage),
+      revisedEscalationPercentage:
+        c.auto_renew_escalation_override == null ? null : Number(c.auto_renew_escalation_override),
       renewalDeclined: !!c.renewal_declined,
       hasLiveExit: exiting.has(c.id as string),
       overdueAmount: overdueByContract.get(c.id as string) ?? 0,
