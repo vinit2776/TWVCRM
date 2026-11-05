@@ -2577,6 +2577,9 @@ export interface PurchaseRequest {
   amc_start_date?: string | null;
   amc_end_date?: string | null;
   amc_visits_covered?: number | null;
+  /** Cycles settled and visits done before the contract was entered here (the line quantity is only what is left). */
+  opening_cycles?: number;
+  opening_visits?: number;
   amc_contact_name?: string | null;
   amc_helpline_number?: string | null;
   amc_contact_email?: string | null;
@@ -2757,6 +2760,10 @@ export interface PurchaseOrder {
   service_start_date?: string | null;
   billing_cycle?: ServicePoBillingCycle | null;
   cycle_count?: number | null;
+  /** Cycles billed and settled before the contract was entered here (cycle_count is only what is left). */
+  opening_cycles?: number;
+  /** Visits already done before the contract was entered here. */
+  opening_visits?: number;
   unit_cost_per_cycle?: number | null;
   notes?: string;
   payment_terms?: string;
