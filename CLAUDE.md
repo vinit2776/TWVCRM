@@ -184,6 +184,7 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 |----------|----------|---------|
 | 28–31st 21:00 IST | `/api/billing/auto-generate` | Monthly invoice generation |
 | Daily 18:30 IST | `/api/cron/contract-expiry` | Contract expiry alerts |
+| Daily 06:00 IST | `/api/cron/auto-renew` | Auto-renewal, **dry run only** (part 2 of 4, see `docs/auto-renewal.md`). For contracts with `contracts.auto_renew` on, emails admin and accounts a digest of who needs a person, what is due now and what is coming up. Changes nothing, contacts no customer, sends nothing when no contract is opted in. Mode is `app_settings.auto_renew_cron_mode` (`off` / `dry_run` default; `live` is not built and reads as `dry_run`) |
 | Daily 20:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
 | Daily 09:00 IST | `/api/cron/query-digest` | The only place queries send email — one digest per person (new/replies/overdue/silent); in-app alerts stay real-time |
@@ -217,6 +218,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Facility tickets | `fms`, `admin` |
 | `coordinator` scope | Sales + Operations + Procurement (create/edit **own** MRs, view everything, **no approvals**) + day-to-day Facility. **No** Finance, Payroll, Attendance or Admin — sidebar hides them, `isCoordinatorBlockedPath` (`src/lib/restricted-roles.ts`) redirects typed URLs, API role lists refuse writes |
 | Void billing statements | `admin` only |
+| Withdraw an unverified payment report (Report paid) | the reporter, `admin`, `accounts` — only while it is still unverified; `POST /api/queries/payment-reports/[id]/withdraw`; never for booking reports |
 | Reverse a customer payment recorded in error | `admin` only — `POST /api/billing-statements/[id]/payment/[paymentId]/reverse` (reason ≥10 chars; refused for gateway/Tally-receipted/TDS-filed/deposit-adjustment payments, accounted or period-locked statements, and proposal/invoice/VO-case statements) |
 
 ### Procurement → Payment Flow (strict separation)
@@ -266,6 +268,7 @@ A live contract (`active`, or `renewal_in_progress` before its end date — `isC
 - `POST /api/proposals/[id]/send-invoice` always creates a **fresh** link — never reuses `proposal.razorpay_payment_link_url`
 - Deposit paid → webhook auto-accepts proposal (`status → accepted`)
 - Pro-rata paid → `payment_status → paid`
+- The pro-rata invoice goes out **in parallel** with the deposit: it needs the deposit to have been *requested* (single request sent, or at least one live part), not received. Receipt is still required for contract activation.
 
 **Contract activation gate (hard — do not bypass):**
 1. `proposal_id` is set
