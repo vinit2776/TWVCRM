@@ -29,7 +29,7 @@ import {
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import { uploadQuotation } from "@/lib/procurement/upload-quotation";
-import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
+import { cyclesBetween, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { PriceToleranceField } from "@/components/procurement/price-tolerance-field";
 import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
