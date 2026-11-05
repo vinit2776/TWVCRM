@@ -35,6 +35,9 @@ import { PriceToleranceField } from "@/components/procurement/price-tolerance-fi
 import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { AmcStepHeader, AmcReviewCard } from "@/components/procurement/amc-wizard-parts";
+import { AmcProposalCard } from "@/components/procurement/amc-proposal-card";
+import type { PrefillPlan } from "@/lib/procurement/amc-prefill";
+import type { ExtractedAmcProposal } from "@/lib/procurement/proposal-extraction";
 import { AMC_STEPS, validateAmcStep, contractLengthText } from "@/lib/procurement/amc-wizard-steps";
 
 interface LineItem {
@@ -795,6 +798,32 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     goToAmcStep(amcStep + 1);
   };
 
+  /** Fills the wizard from a proposal the user confirmed; returns how many details were set. */
+  const applyProposalPrefill = (plan: PrefillPlan, file: File, x: ExtractedAmcProposal, chosenValue: number | undefined): number => {
+    const u = plan.updates;
+    let count = 0;
+    if (u.serviceName !== undefined) { setServiceItemName(u.serviceName); count++; }
+    if (u.startDate !== undefined && u.endDate !== undefined) { setAmcStartDate(u.startDate); setAmcEndDate(u.endDate); count += 2; }
+    if (u.visitsCovered !== undefined) { setAmcVisitsCovered(u.visitsCovered); setAmcUnlimited(false); count++; }
+    if (u.coverage !== undefined) { setAmcCoverageType(u.coverage); count++; }
+    if (u.contactName !== undefined) { setAmcContactName(u.contactName); count++; }
+    if (u.helpline !== undefined) { setAmcHelpline(u.helpline); count++; }
+    if (u.contactEmail !== undefined) { setAmcContactEmail(u.contactEmail); count++; }
+    if (u.firstLine) {
+      const fl = u.firstLine;
+      setAmcLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, billingCycle: fl.billingCycle, perCycleCost: fl.perCycleCost ?? l.perCycleCost, cycleCountOverride: "" } : l)));
+      count += fl.perCycleCost === undefined ? 1 : 2;
+    }
+    // Keep the proposal itself as the attached quotation, so the approver can read it.
+    const amount = chosenValue ?? x.valueBeforeGst;
+    setQuotations((prev) => [
+      ...prev,
+      { id: generateLocalId(), vendor_name: x.vendorName ?? "Vendor", amount: amount ? String(amount) : "", notes: "AMC proposal", file },
+    ]);
+    toast.success("Filled in from the proposal. Check each step as you go.");
+    return count;
+  };
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <PageBreadcrumb
@@ -997,6 +1026,18 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           )}
         </CardContent>
       </Card>
+
+      {amcWizard && amcStep === 0 && (
+        <AmcProposalCard
+          onApply={applyProposalPrefill}
+          current={{
+            serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,
+            visitsCovered: amcVisitsCovered, unlimitedVisits: amcUnlimited,
+            contactName: amcContactName, helpline: amcHelpline, contactEmail: amcContactEmail,
+            firstLine: { assetId: amcLines[0]?.assetId ?? "", perCycleCost: amcLines[0]?.perCycleCost ?? "", lineCount: amcLines.length },
+          }}
+        />
+      )}
 
       {/* AMC Service Details — replaces the Line Items card when department=amc */}
       {department === "amc" && (
