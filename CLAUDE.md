@@ -267,6 +267,7 @@ A live contract (`active`, or `renewal_in_progress` before its end date — `isC
 - `POST /api/proposals/[id]/send-invoice` always creates a **fresh** link — never reuses `proposal.razorpay_payment_link_url`
 - Deposit paid → webhook auto-accepts proposal (`status → accepted`)
 - Pro-rata paid → `payment_status → paid`
+- The pro-rata invoice goes out **in parallel** with the deposit: it needs the deposit to have been *requested* (single request sent, or at least one live part), not received. Receipt is still required for contract activation.
 
 **Contract activation gate (hard — do not bypass):**
 1. `proposal_id` is set
