@@ -59,6 +59,7 @@ interface AmcRow {
   payment_state: "paid" | "partially_paid" | "unpaid" | "no_bill";
   billing_cycle: ServicePoBillingCycle | null;
   cycle_count: number | null;
+  opening_cycles?: number;
   unit_cost_per_cycle: number | null;
   bills_raised: number;
 }
@@ -504,7 +505,7 @@ export default function AmcRegisterPage() {
 
                       {/* Billing progress — only meaningful for multi-cycle contracts */}
                       {(() => {
-                        const progress = billingProgress(row.bills_raised, row.cycle_count, row.unit_cost_per_cycle);
+                        const progress = billingProgress(row.bills_raised, row.cycle_count, row.unit_cost_per_cycle, row.opening_cycles);
                         if (!progress || !row.billing_cycle) return null;
                         const unit = CYCLE_UNIT_LABEL[row.billing_cycle];
                         return (

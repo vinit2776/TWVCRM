@@ -1,17 +1,18 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, Minus, Plus } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AMC_STEPS } from "@/lib/procurement/amc-wizard-steps";
+import { AMC_STEPS, type AmcStep } from "@/lib/procurement/amc-wizard-steps";
+import type { CyclePeriod } from "@/lib/procurement/amc-running";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 /** Where the user is in the new-AMC request, what is being asked, and why. */
-export function AmcStepHeader({ step }: { step: number }) {
-  const s = AMC_STEPS[step];
+export function AmcStepHeader({ step, steps = AMC_STEPS }: { step: number; steps?: readonly AmcStep[] }) {
+  const s = steps[step];
   return (
     <div className="space-y-3" aria-live="polite">
       <ol className="flex flex-wrap items-center gap-1.5 text-xs">
-        {AMC_STEPS.map((st, i) => (
+        {steps.map((st, i) => (
           <li
             key={st.key}
             aria-current={i === step ? "step" : undefined}
@@ -20,12 +21,12 @@ export function AmcStepHeader({ step }: { step: number }) {
             }`}
           >
             {i < step ? <Check className="h-3 w-3" /> : <span>{i + 1}</span>}
-            <span className="hidden sm:inline">{st.key === "who" ? "Company" : st.key === "contract" ? "Contract" : st.key === "billing" ? "Cost" : st.key === "contacts" ? "Contacts" : st.key === "proposal" ? "Proposal" : "Review"}</span>
+            <span className="hidden sm:inline">{st.key === "who" ? "Company" : st.key === "contract" ? "Contract" : st.key === "billing" ? "Cost" : st.key === "running" ? "Progress" : st.key === "contacts" ? "Contacts" : st.key === "proposal" ? "Proposal" : "Review"}</span>
           </li>
         ))}
       </ol>
       <div>
-        <p className="text-xs text-muted-foreground">Step {step + 1} of {AMC_STEPS.length}</p>
+        <p className="text-xs text-muted-foreground">Step {step + 1} of {steps.length}</p>
         <h2 className="text-lg font-semibold">{s.title}</h2>
         <p className="text-sm text-muted-foreground">{s.why}</p>
       </div>
@@ -51,6 +52,8 @@ export interface AmcReviewProps {
   visits: string;
   lines: AmcReviewLine[];
   total: number;
+  /** Set when the contract was already running: the whole contract and what is already settled. */
+  running?: { fullTotal: number; paidTotal: number; cyclesDone: number; cyclesTotal: number; visitsDone: number };
   contact: string;
   advance: string | null;
   proposals: number;
@@ -81,7 +84,7 @@ export function AmcReviewCard(p: AmcReviewProps) {
         </dl>
         <div className="rounded-lg border">
           <div className="grid grid-cols-4 gap-2 bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-            <span className="col-span-2">Asset</span><span className="text-right">Each bill</span><span className="text-right">Total</span>
+            <span className="col-span-2">Asset</span><span className="text-right">Each bill</span><span className="text-right">{p.running ? "To approve" : "Total"}</span>
           </div>
           {p.lines.map((l, i) => (
             <div key={i} className="grid grid-cols-4 gap-2 border-t px-3 py-2 text-sm">
@@ -90,13 +93,128 @@ export function AmcReviewCard(p: AmcReviewProps) {
               <span className="text-right font-medium">{formatCurrency(l.total)}</span>
             </div>
           ))}
+          {p.running && (
+            <>
+              <div className="flex justify-between border-t px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Full contract value</span><span>{formatCurrency(p.running.fullTotal)}</span>
+              </div>
+              <div className="flex justify-between border-t px-3 py-2 text-sm">
+                <span className="text-muted-foreground">
+                  Already paid ({p.running.cyclesDone} of {p.running.cyclesTotal} cycles, before this system)
+                </span>
+                <span>− {formatCurrency(p.running.paidTotal)}</span>
+              </div>
+            </>
+          )}
           <div className="flex justify-between border-t px-3 py-2 text-sm font-semibold">
-            <span>Total before GST</span><span>{formatCurrency(p.total)}</span>
+            <span>{p.running ? "Total to approve, before GST" : "Total before GST"}</span><span>{formatCurrency(p.total)}</span>
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
           What happens next: your approver reviews this. Once approved, a purchase order is made for each asset and the vendor&apos;s bills are matched to the schedule above.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Shown once the start date is in the past, so nobody is surprised by the extra step. */
+export function AmcRunningNotice({ startDate }: { startDate: string }) {
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+      <p className="font-medium">This contract started on {formatDate(startDate)}, so it is already running.</p>
+      <p className="text-xs mt-0.5">
+        After the cost step we will ask which cycles are already paid, so you are not asked to approve or pay them again.
+      </p>
+    </div>
+  );
+}
+
+export interface AmcRunningStepProps {
+  schedule: CyclePeriod[];
+  unit: string;
+  /** Sum of every asset's bill for one cycle, before GST. */
+  perCycleTotal: number;
+  opening: number;
+  maxSettled: number;
+  onOpening: (n: number) => void;
+  visits: number;
+  /** Visits the contract covers, or null for unlimited. */
+  visitsCovered: number | null;
+  onVisits: (n: number) => void;
+  today: string;
+}
+
+/** Cycles are ticked in order, so a gap can never be left in the schedule. */
+export function AmcRunningStep(p: AmcRunningStepProps) {
+  const Unit = p.unit.charAt(0).toUpperCase() + p.unit.slice(1);
+  const total = p.schedule.length;
+  const startsAt = p.opening + 1;
+  const toggle = (n: number) => {
+    if (n > p.maxSettled) return;
+    // Ticking cycle n settles 1..n; un-ticking the last ticked one steps back.
+    p.onOpening(n === p.opening ? n - 1 : n);
+  };
+  return (
+    <Card>
+      <CardContent className="space-y-5 pt-5">
+        <div>
+          <p className="text-sm font-medium">Which cycles are already billed and paid?</p>
+          <p className="text-xs text-muted-foreground">
+            Tick the ones the vendor has already invoiced and you have already paid, outside this system. Leave all unticked if none has been paid yet.
+          </p>
+        </div>
+        <div className="rounded-lg border divide-y">
+          {p.schedule.map((c) => {
+            const done = c.n <= p.opening;
+            const locked = c.n > p.maxSettled;
+            return (
+              <label
+                key={c.n}
+                className={`flex items-center gap-3 px-3 py-2.5 text-sm ${locked ? "opacity-60" : "cursor-pointer"} ${done ? "bg-muted/40" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={done}
+                  disabled={locked}
+                  onChange={() => toggle(c.n)}
+                />
+                <span className="flex-1">
+                  <span className="font-medium">{Unit} {c.n} of {total}</span>
+                  {c.n === startsAt && <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] font-medium text-blue-800">we start here</span>}
+                  <span className="block text-xs text-muted-foreground">{formatDate(c.from)} – {formatDate(c.to)}</span>
+                </span>
+                <span className="text-right">
+                  {formatCurrency(p.perCycleTotal)}
+                  {locked && <span className="block text-[11px] text-muted-foreground">{c.to >= p.today ? "not finished yet" : "must be billed here"}</span>}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Cycles are ticked in order. The cycle that is running now, and later ones, cannot be marked as paid.
+        </p>
+
+        <div>
+          <p className="text-sm font-medium">
+            How many{p.visitsCovered ? ` of the ${p.visitsCovered}` : ""} visits are already done?
+          </p>
+          <div className="mt-2 flex items-center gap-3">
+            <button type="button" aria-label="One fewer visit" className="h-8 w-8 rounded-md border flex items-center justify-center disabled:opacity-40"
+              disabled={p.visits <= 0} onClick={() => p.onVisits(p.visits - 1)}><Minus className="h-4 w-4" /></button>
+            <span className="w-8 text-center text-lg font-semibold">{p.visits}</span>
+            <button type="button" aria-label="One more visit" className="h-8 w-8 rounded-md border flex items-center justify-center disabled:opacity-40"
+              disabled={p.visitsCovered != null && p.visits >= p.visitsCovered} onClick={() => p.onVisits(p.visits + 1)}><Plus className="h-4 w-4" /></button>
+            {p.visitsCovered != null && <span className="text-sm text-muted-foreground">of {p.visitsCovered} this year</span>}
+          </div>
+        </div>
+
+        <div className="rounded-lg bg-blue-50 px-3 py-2.5 text-sm text-blue-900">
+          We will start this contract at <strong>{p.unit} {startsAt} of {total}</strong>
+          {p.visitsCovered != null ? <>, with <strong>{p.visits} of {p.visitsCovered} visits</strong> used.</> : <>, with <strong>{p.visits}</strong> visits already done.</>}
+        </div>
       </CardContent>
     </Card>
   );

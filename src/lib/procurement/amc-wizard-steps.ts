@@ -9,12 +9,19 @@ export const AMC_STEPS = [
   { key: "who", title: "Who is this for?", why: "The company decides which budget the contract counts against." },
   { key: "contract", title: "What is the contract?", why: "The name, dates and visits are what the vendor has promised. Check them against the vendor's proposal." },
   { key: "billing", title: "What is covered, and how is it paid?", why: "Each asset is paid on its own schedule. This decides how many invoices the vendor will send and for how much." },
+  { key: "running", title: "Is the contract already running?", why: "Tick the cycles the vendor has already invoiced and you have already paid, so nobody is asked to approve or pay them again. Nothing is created for them." },
   { key: "contacts", title: "Who do you call?", why: "When something breaks, the team needs the vendor's number and who to escalate to." },
   { key: "proposal", title: "Attach the proposal", why: "Approvers decide faster with the vendor's proposal in front of them. You can skip this and add it later." },
   { key: "review", title: "Check and send", why: "Look over everything once. Nothing is sent until you press the button." },
 ] as const;
 
 export type AmcStepKey = (typeof AMC_STEPS)[number]["key"];
+export type AmcStep = (typeof AMC_STEPS)[number];
+
+/** The steps this request needs: the "already running" step only appears for a contract that has begun. */
+export function amcStepsFor(running: boolean): readonly AmcStep[] {
+  return running ? AMC_STEPS : AMC_STEPS.filter((s) => s.key !== "running");
+}
 
 export interface AmcStepInput {
   companyId: string;
@@ -26,11 +33,13 @@ export interface AmcStepInput {
   lines: Array<{ assetId: string; perCycleCost: string; cycleCountOverride: string }>;
   contactName: string;
   helpline: string;
+  /** Only for a contract that has already begun. */
+  running?: { scheduleProblem: string | null };
 }
 
 /** The first problem on a step, in plain words, or null when the step is complete. */
-export function validateAmcStep(step: number, d: AmcStepInput): string | null {
-  switch (AMC_STEPS[step]?.key) {
+export function validateAmcStep(step: number, d: AmcStepInput, steps: readonly AmcStep[] = AMC_STEPS): string | null {
+  switch (steps[step]?.key) {
     case "who":
       return d.companyId ? null : "Choose which company this request is for";
     case "contract": {
@@ -55,6 +64,8 @@ export function validateAmcStep(step: number, d: AmcStepInput): string | null {
       if (new Set(assets).size !== assets.length) return "Each asset can only be on one line";
       return null;
     }
+    case "running":
+      return d.running?.scheduleProblem ?? null;
     case "contacts":
       return !d.contactName.trim() || !d.helpline.trim() ? "Enter the vendor's main contact name and phone number" : null;
     default:
