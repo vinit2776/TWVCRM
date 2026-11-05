@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
 import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } from "@/types";
 import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
@@ -76,11 +76,11 @@ function NewVendorBillForm() {
     approval_status: string;
   };
   const [duplicatesRaw, setDuplicates] = useState<DupCandidate[]>([]);
-  // Bills the "same invoice, other PO" prompt already covers are not duplicates to block on:
-  // the person decides there whether this PO joins that invoice.
+  // Bills the "same invoice number" prompt already covers are not shown again here: that prompt
+  // explains them (and blocks saving itself when this PO can't join).
   const duplicates = useMemo(() => {
-    const joinable = new Set(sameInvoice?.can_join ? sameInvoice.existing.map((b) => b.id) : []);
-    return duplicatesRaw.filter((d) => !joinable.has(d.bill_id));
+    const covered = new Set(sameInvoice?.existing.map((b) => b.id) ?? []);
+    return duplicatesRaw.filter((d) => !covered.has(d.bill_id));
   }, [duplicatesRaw, sameInvoice]);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [duplicateDismissed, setDuplicateDismissed] = useState(false);
@@ -470,6 +470,8 @@ function NewVendorBillForm() {
 
   const isGoodsPo = !!poData && poData.po_type !== "service";
   const exceedsPo = isGoodsPo && shareChoice === "none" && !!amountError;
+  // The number is already on a bill this PO can't share an invoice with (same PO, service PO...).
+  const sameInvoiceBlocked = !!sameInvoice && !sameInvoice.can_join;
 
   const joinShared = () => {
     if (!sameInvoice) return;
@@ -534,16 +536,27 @@ function NewVendorBillForm() {
   // Findings from the invoice check get one pause at Save — a guide, never a block ("Save anyway").
   const [findingsConfirmOpen, setFindingsConfirmOpen] = useState(false);
 
+  // Save problems stay on the page until acknowledged: a toast alone vanishes before it can be read.
+  const [formError, setFormError] = useState<string | null>(null);
+  const formErrorRef = useRef<HTMLDivElement>(null);
+  const reportError = (msg: string) => {
+    setFormError(msg);
+    toast.error(msg, { duration: 6000 });
+    requestAnimationFrame(() => formErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  };
+
   const handleSave = () => {
+    setFormError(null);
     const err = validate();
-    if (err) { toast.error(err, { duration: 6000 }); return; }
+    if (err) { reportError(err); return; }
     if (invoiceFindings.length > 0) { setFindingsConfirmOpen(true); return; }
     void handleSubmit();
   };
 
   const handleSubmit = async () => {
+    setFormError(null);
     const err = validate();
-    if (err) { toast.error(err, { duration: 6000 }); return; }
+    if (err) { reportError(err); return; }
 
     setSubmitting(true);
     try {
@@ -559,7 +572,7 @@ function NewVendorBillForm() {
           .upload(filePath, invoiceFile);
 
         if (uploadError) {
-          toast.error(`File upload failed: ${uploadError.message}`);
+          reportError(`File upload failed: ${uploadError.message}`);
           return;
         }
 
@@ -603,7 +616,7 @@ function NewVendorBillForm() {
       });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(typeof json.error === "string" ? json.error : "Failed to create vendor invoice");
+        reportError(typeof json.error === "string" ? json.error : "Failed to create vendor invoice");
         return;
       }
       toast.success(`Vendor invoice recorded — ${json.data.bill_number}`);
@@ -807,59 +820,45 @@ function NewVendorBillForm() {
           {/* Duplicate-invoice warning (Finance Intelligence) */}
           {(hasExactDuplicate || (!duplicateDismissed && duplicates.length > 0)) && (
             <div className={`rounded-lg border p-3 space-y-2 ${
-              hasExactDuplicate
-                ? "border-red-400 bg-red-50"
-                : "border-amber-300 bg-amber-50"
+              hasExactDuplicate ? "border-red-300 bg-red-50" : "border-amber-300 bg-amber-50"
             }`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2 min-w-0">
-                  <AlertCircle className={`h-4 w-4 shrink-0 mt-0.5 ${hasExactDuplicate ? "text-red-600" : "text-amber-600"}`} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-semibold ${hasExactDuplicate ? "text-red-900" : "text-amber-900"}`}>
-                      {hasExactDuplicate ? "Duplicate invoice — submission blocked" : `Possible duplicate${duplicates.length > 1 ? "s" : ""} found`}
-                    </p>
-                    <p className={`text-xs mt-0.5 ${hasExactDuplicate ? "text-red-700" : "text-amber-700"}`}>
-                      {hasExactDuplicate
-                        ? "This invoice number already exists for this vendor. Open the existing bill below to check before creating another."
-                        : "A bill matching these details already exists for this vendor. Review before saving."}
-                    </p>
-                  </div>
+              <div className="flex items-start gap-2">
+                <AlertCircle className={`h-4 w-4 shrink-0 mt-0.5 ${hasExactDuplicate ? "text-red-600" : "text-amber-600"}`} />
+                <div className="min-w-0">
+                  <p className={`text-sm font-semibold ${hasExactDuplicate ? "text-red-900" : "text-amber-900"}`}>
+                    {hasExactDuplicate ? "This invoice number is already recorded" : "This may be an invoice you already recorded"}
+                  </p>
+                  <p className={`text-xs mt-0.5 ${hasExactDuplicate ? "text-red-700" : "text-amber-800"}`}>
+                    {hasExactDuplicate
+                      ? "The same vendor can't have the same invoice number twice, so saving is blocked. Open the bill to check, or change the invoice number."
+                      : "Open the bill to check before saving. If yours is a different invoice, carry on."}
+                  </p>
                 </div>
-                {!hasExactDuplicate && (
-                  <button
-                    type="button"
-                    onClick={() => setDuplicateDismissed(true)}
-                    className="text-xs text-amber-700 hover:text-amber-900 shrink-0"
-                    aria-label="Dismiss"
-                  >
-                    Dismiss
-                  </button>
-                )}
               </div>
-              <div className="space-y-1 mt-2">
-                {duplicates.map((d) => (
-                  <div
-                    key={d.bill_id}
-                    className="flex items-center justify-between gap-2 bg-white/60 rounded px-2 py-1.5 text-xs"
-                  >
-                    <div className="flex flex-wrap items-baseline gap-x-2 min-w-0">
-                      <Link
-                        href={`/procurement/bills/${d.bill_id}`}
-                        target="_blank"
-                        className="font-mono font-medium text-amber-900 hover:underline"
-                      >
-                        {d.bill_number}
+              <div className="space-y-1">
+                {/* When the invoice number matches exactly, the look-alikes below are noise: show only the exact ones. */}
+                {duplicates.filter((d) => !hasExactDuplicate || d.match_reason.includes("Same invoice #")).map((d) => (
+                  <div key={d.bill_id} className="bg-white/70 rounded px-2.5 py-2 text-xs space-y-0.5">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+                      <span>
+                        <span className="font-mono font-medium">{d.bill_number}</span>
+                        <span className="text-muted-foreground"> · {formatCurrency(d.total_amount)} · dated {formatDate(d.invoice_date)}</span>
+                      </span>
+                      <Link href={`/procurement/bills/${d.bill_id}`} target="_blank" className="text-primary font-medium hover:underline">
+                        Open bill
                       </Link>
-                      <span className="text-amber-700">{formatCurrency(d.total_amount)}</span>
-                      <span className="text-amber-600">{d.invoice_date}</span>
-                      <span className="text-amber-700 text-[10px]">· {d.match_reason}</span>
                     </div>
-                    <span className="text-amber-900 font-semibold tabular-nums text-[10px] shrink-0">
-                      {Math.round(d.similarity_score * 100)}% match
-                    </span>
+                    <p className="text-muted-foreground">
+                      Why it matched: {d.match_reason.split(" · ").map((r) => r.replace(/invoice #/gi, "invoice number").replace(/^./, (c) => c.toLowerCase())).join(", ")}
+                    </p>
                   </div>
                 ))}
               </div>
+              {!hasExactDuplicate && (
+                <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => setDuplicateDismissed(true)}>
+                  It&apos;s a different invoice
+                </Button>
+              )}
             </div>
           )}
 
@@ -1206,9 +1205,27 @@ function NewVendorBillForm() {
             </span>
           </p>
         )}
+        {formError ? (
+          <div ref={formErrorRef} role="alert" className="w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-900 flex items-start gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-600" />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold">Couldn&apos;t save this invoice</p>
+              <p className="text-xs mt-0.5">{formError}</p>
+            </div>
+            <Button type="button" size="sm" variant="outline" className="h-7 shrink-0 bg-white" onClick={() => setFormError(null)}>Got it</Button>
+          </div>
+        ) : (amountError || hasExactDuplicate || sameInvoiceBlocked) ? (
+          <div role="alert" className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 flex items-start gap-2">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-red-600" />
+            <span>
+              <b>Saving is blocked.</b>{" "}
+              {amountError ?? (sameInvoiceBlocked ? sameInvoice?.reason : "This invoice number is already recorded for this vendor. Open the bill in the card above, or change the invoice number.")}
+            </span>
+          </div>
+        ) : null}
         <Button
           onClick={handleSave}
-          disabled={submitting || !!amountError || hasExactDuplicate}
+          disabled={submitting || !!amountError || hasExactDuplicate || sameInvoiceBlocked}
           size="lg"
           className={invoiceFindings.length > 0 ? "bg-amber-600 hover:bg-amber-700 text-white" : undefined}
         >
