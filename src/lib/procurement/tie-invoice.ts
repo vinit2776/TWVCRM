@@ -1,6 +1,8 @@
+import { invoiceFitsCycle } from "@/lib/procurement/invoice-fits-cycle";
+
 export interface TieCheckInput {
   role: string;
-  bill: { po_id: string | null; service_report_id: string | null; approval_status: string; total_amount: number | string };
+  bill: { po_id: string | null; service_report_id: string | null; approval_status: string; total_amount: number | string; base_amount?: number | string | null };
   po: { po_type: string; status: string; unit_cost_per_cycle: number | string | null; amc_terminated_at?: string | null } | null;
   report: { po_id: string } | null;
   /** Bills already linked to the target report (any status). */
@@ -33,7 +35,7 @@ export function checkTieInvoiceToCycle(i: TieCheckInput): { ok: true } | { ok: f
   }
   if (i.billsOnReport > 0) return { ok: false, error: "That cycle already has an invoice", status: 422 };
   const cap = Number(i.po.unit_cost_per_cycle ?? 0);
-  if (cap > 0 && Number(i.bill.total_amount) > cap + 0.01) {
+  if (cap > 0 && !invoiceFitsCycle(i.bill, cap).fits) {
     return { ok: false, error: `This invoice (₹${Number(i.bill.total_amount).toLocaleString("en-IN")}) is more than one cycle's cost (₹${cap.toLocaleString("en-IN")})`, status: 422 };
   }
   return { ok: true };

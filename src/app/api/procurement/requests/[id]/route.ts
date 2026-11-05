@@ -619,6 +619,24 @@ export async function PATCH(
           return NextResponse.json({ error: "Linked contract not found" }, { status: 404 });
         }
       }
+      // An AMC is more than a department: it needs a contract period, billing cycles and
+      // visits, which a bare relabel never collects. If a PO already exists, relabelling it
+      // leaves a goods PO that reads as an AMC but can't log reports or bill by cycle
+      // (PO-2604-044). Send the admin to the guided setup on the PO instead.
+      if ((newDepartment === "amc" || pr.department === "amc") && pr.status !== "draft" && pr.status !== "submitted") {
+        const { count: livePos } = await supabase
+          .from("purchase_orders")
+          .select("*", { count: "exact", head: true })
+          .eq("pr_id", id)
+          .not("status", "in", "(cancelled)");
+        if (livePos && livePos > 0) {
+          return NextResponse.json({
+            error: newDepartment === "amc"
+              ? "This request already has a purchase order. Open the PO and use \"Set up as AMC\" so its contract period, billing cycles and visits are captured; changing the department alone would leave it half set up."
+              : "This request is an AMC with a purchase order. Cancel or roll back the PO first; changing the department alone would orphan its contract.",
+          }, { status: 422 });
+        }
+      }
       // Moving away from reimbursement must not orphan invoices already issued to the customer.
       if (pr.department === "reimbursement" && newDepartment !== "reimbursement") {
         const { count: activeStatements } = await supabase

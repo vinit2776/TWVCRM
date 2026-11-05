@@ -47,7 +47,7 @@ describe("checkConvertToService", () => {
     expect(checkConvertToService(w({ bill: { ...base.bill!, approval_status: "rejected" } }))).toMatchObject({ ok: false });
     expect(checkConvertToService(w({ bill: { ...base.bill!, service_report_id: "r" } }))).toMatchObject({ ok: false });
     expect(checkConvertToService(w({ bill: { ...base.bill!, po_id: "other" } }))).toMatchObject({ ok: false });
-    expect(checkConvertToService(w({ bill: { ...base.bill!, total_amount: 9478.36 } }))).toMatchObject({ ok: false });
+    expect(checkConvertToService(w({ bill: { ...base.bill!, total_amount: 10000 } }))).toMatchObject({ ok: false });
     expect(checkConvertToService(w({ cycle1To: "2026-03-01" }))).toMatchObject({ ok: false });
   });
 });
@@ -65,11 +65,51 @@ describe("cycle1Period", () => {
 
 describe("suggestConversion", () => {
   it("reads two equal invoices on the PO as half-yearly", () => {
-    expect(suggestConversion({ total: 16065, liveBillAmounts: [8032.5, 8032.5] })).toEqual({ billingCycle: "half_yearly", cycleCount: 2 });
+    expect(suggestConversion({ total: 16065, liveBillAmounts: [8032.5, 8032.5] })).toMatchObject({ billingCycle: "half_yearly", cycleCount: 2 });
   });
   it("falls back to one yearly cycle when the invoices don't line up", () => {
     expect(suggestConversion({ total: 16065, amcStart: "2026-03-30", amcEnd: "2027-03-29", liveBillAmounts: [9478.36] }))
-      .toEqual({ billingCycle: "yearly", cycleCount: 1 });
-    expect(suggestConversion({ total: 12000, liveBillAmounts: [] })).toEqual({ billingCycle: "yearly", cycleCount: 1 });
+      .toMatchObject({ billingCycle: "yearly", cycleCount: 1 });
+    expect(suggestConversion({ total: 12000, liveBillAmounts: [] })).toMatchObject({ billingCycle: "yearly", cycleCount: 1 });
+  });
+});
+
+describe("GST-inclusive invoices (PO-2604-044 shape)", () => {
+  const po044 = { ...base.po, total_ordered_amount: 20790 };
+  it("accepts ₹12,266.10 as half-yearly cycle 1 of a ₹20,790 PO", () => {
+    const v = checkConvertToService(w({ po: po044, bill: { ...base.bill!, total_amount: 12266.1 } }));
+    expect(v).toEqual({ ok: true, unitCost: 10395 });
+  });
+  it("still refuses an invoice that is neither the cycle cost nor cost + a GST slab", () => {
+    expect(checkConvertToService(w({ po: po044, bill: { ...base.bill!, total_amount: 13000 } }))).toMatchObject({ ok: false });
+  });
+  it("suggests half-yearly from the invoice even when it includes GST", () => {
+    const s = suggestConversion({ total: 20790, amcStart: "2026-03-30", amcEnd: "2027-03-29", liveBillAmounts: [12266.1, 12266.1] });
+    expect(s).toMatchObject({ billingCycle: "half_yearly", cycleCount: 2, reason: "invoices" });
+  });
+  it("falls back to the PO's payment terms before guessing yearly", () => {
+    const s = suggestConversion({ total: 20790, amcStart: "2026-03-30", amcEnd: "2027-03-29", liveBillAmounts: [12266.1], paymentTerms: "Half-Yearly Payment(AMC)" });
+    expect(s).toMatchObject({ billingCycle: "half_yearly", cycleCount: 2, reason: "payment_terms" });
+  });
+});
+
+describe("bills with base_amount 0 (rows from before GST tracking)", () => {
+  it("treats 0 as unset, not as a free pass", () => {
+    const v = checkConvertToService(w({ bill: { ...base.bill!, total_amount: 16065, base_amount: 0 } }));
+    expect(v).toMatchObject({ ok: false });
+  });
+});
+
+describe("vendor rounding to the rupee (PO-2604-047 shape)", () => {
+  it("accepts ₹15,611 for a ₹13,230 cycle plus 18% GST", () => {
+    const v = checkConvertToService(w({ po: { ...base.po, total_ordered_amount: 26460 }, bill: { ...base.bill!, total_amount: 15611 } }));
+    expect(v).toEqual({ ok: true, unitCost: 13230 });
+  });
+});
+
+describe("vendor rounding to the rupee", () => {
+  it("accepts ₹15,611 for a ₹13,230 cycle plus 18% GST", () => {
+    const v = checkConvertToService(w({ po: { ...base.po, total_ordered_amount: 26460 }, bill: { ...base.bill!, total_amount: 15611 } }));
+    expect(v).toEqual({ ok: true, unitCost: 13230 });
   });
 });

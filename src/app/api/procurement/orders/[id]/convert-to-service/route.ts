@@ -57,7 +57,7 @@ export async function POST(
   const [{ count: reportCount }, billRes] = await Promise.all([
     supabase.from("po_service_reports").select("id", { count: "exact", head: true }).eq("po_id", id),
     b.bill_id
-      ? supabase.from("vendor_bills").select("po_id, service_report_id, approval_status, total_amount").eq("id", b.bill_id).maybeSingle()
+      ? supabase.from("vendor_bills").select("po_id, service_report_id, approval_status, total_amount, base_amount").eq("id", b.bill_id).maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
 

@@ -1,5 +1,6 @@
 import { BILLING_CYCLE_MONTHS, type ServicePoBillingCycle } from "@/lib/constants";
 import { cyclesBetween } from "@/lib/procurement/amc-billing";
+import { invoiceFitsCycle, GST_SLABS, GST_ROUNDING_TOLERANCE } from "@/lib/procurement/invoice-fits-cycle";
 
 export const CONVERTIBLE_STATUSES = ["ordered", "partially_received", "received", "invoice_received", "invoice_approved"] as const;
 
@@ -17,7 +18,7 @@ export interface ConvertInput {
   cycleCount: number;
   serviceStart: string | null;
   /** Invoice to become cycle 1; omit to convert without one. */
-  bill?: { po_id: string | null; service_report_id: string | null; approval_status: string; total_amount: number | string } | null;
+  bill?: { po_id: string | null; service_report_id: string | null; approval_status: string; total_amount: number | string; base_amount?: number | string | null } | null;
   poId: string;
   cycle1From?: string | null;
   cycle1To?: string | null;
@@ -59,7 +60,7 @@ export function checkConvertToService(i: ConvertInput):
     if (i.bill.po_id !== i.poId) return { ok: false, error: "That invoice is not on this purchase order", status: 422 };
     if (i.bill.approval_status === "rejected") return { ok: false, error: "A rejected invoice can't be used for cycle 1", status: 422 };
     if (i.bill.service_report_id) return { ok: false, error: "That invoice is already tied to a cycle", status: 422 };
-    if (Number(i.bill.total_amount) > unitCost + 0.01) {
+    if (!invoiceFitsCycle(i.bill, unitCost).fits) {
       return { ok: false, error: `That invoice (₹${Number(i.bill.total_amount).toLocaleString("en-IN")}) is more than one cycle's cost (₹${unitCost.toLocaleString("en-IN")})`, status: 422 };
     }
     if (!i.cycle1From || !i.cycle1To || i.cycle1From > i.cycle1To) {
@@ -97,12 +98,44 @@ export function suggestConversion(input: {
   amcStart?: string | null;
   amcEnd?: string | null;
   liveBillAmounts: number[];
-}): { billingCycle: ServicePoBillingCycle; cycleCount: number } {
+  /** The PO's payment terms text, e.g. "Half-Yearly Payment(AMC)". */
+  paymentTerms?: string | null;
+}): { billingCycle: ServicePoBillingCycle; cycleCount: number; reason: "invoices" | "payment_terms" | "dates" } {
   const n = input.liveBillAmounts.length;
   const total = round2(input.total);
-  if (n > 0 && CYCLE_BY_COUNT[n] && input.liveBillAmounts.every((a) => Math.abs(a - total / n) <= 0.01)) {
-    return { billingCycle: CYCLE_BY_COUNT[n], cycleCount: n };
+  const equalShare = (a: number, k: number) =>
+    Math.abs(a - total / k) <= 0.01 ||
+    GST_SLABS.some((r) => Math.abs(a - round2((total / k) * (1 + r / 100))) <= GST_ROUNDING_TOLERANCE);
+  if (n > 0 && CYCLE_BY_COUNT[n] && input.liveBillAmounts.every((a) => equalShare(a, n))) {
+    return { billingCycle: CYCLE_BY_COUNT[n], cycleCount: n, reason: "invoices" };
+  }
+  const fromTerms = cycleFromText(input.paymentTerms);
+  if (fromTerms) {
+    const k = cyclesBetween(input.amcStart, input.amcEnd, fromTerms) ?? Math.round(12 / BILLING_CYCLE_MONTHS[fromTerms]);
+    return { billingCycle: fromTerms, cycleCount: k, reason: "payment_terms" };
   }
   const byDates = cyclesBetween(input.amcStart, input.amcEnd, "yearly");
-  return { billingCycle: "yearly", cycleCount: byDates ?? 1 };
+  return { billingCycle: "yearly", cycleCount: byDates ?? 1, reason: "dates" };
+}
+
+/** Reads a billing cycle out of free text such as "Half-Yearly Payment(AMC)". */
+export function cycleFromText(text: string | null | undefined): ServicePoBillingCycle | null {
+  const t = (text ?? "").toLowerCase().replace(/[-_]/g, " ");
+  if (/half\s*yearly|bi\s*annual|six\s*month|6\s*month/.test(t)) return "half_yearly";
+  if (/quarter/.test(t)) return "quarterly";
+  if (/monthly|per month/.test(t)) return "monthly";
+  if (/yearly|annual|12\s*month/.test(t)) return "yearly";
+  return null;
+}
+
+/** Every cycle's date range, so the user can see the whole year before confirming. */
+export function cyclePeriods(start: string | null | undefined, cycle: ServicePoBillingCycle, count: number): Array<{ n: number; from: string; to: string }> {
+  const p = start ? parts(start) : null;
+  if (!p || !Number.isInteger(count) || count < 1 || count > 60) return [];
+  const months = BILLING_CYCLE_MONTHS[cycle] ?? 12;
+  return Array.from({ length: count }, (_, i) => ({
+    n: i + 1,
+    from: iso(new Date(Date.UTC(p.y, p.m - 1 + i * months, p.day))),
+    to: iso(new Date(Date.UTC(p.y, p.m - 1 + (i + 1) * months, p.day - 1))),
+  }));
 }
