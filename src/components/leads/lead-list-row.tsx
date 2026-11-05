@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, CalendarClock, Clock, MapPin } from "lucide-react";
+import { AlertTriangle, CalendarClock, Clock, MapPin, Phone } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
 import { NextStepControls } from "@/components/leads/next-step-controls";
@@ -88,6 +88,8 @@ export function LeadListRow({
   const want = wantLine(lead);
   const place = lead.location?.name ?? lead._enquiry?.preferred_location ?? null;
   const name = `${lead.first_name} ${lead.last_name}`.trim();
+  // A mobile is what people actually answer, so it wins over a landline.
+  const callNumber = lead.mobile?.trim() || lead.phone?.trim() || null;
 
   return (
     <div
@@ -154,6 +156,18 @@ export function LeadListRow({
             <MapPin className="h-3.5 w-3.5 shrink-0" />
             {place}
           </span>
+        )}
+        {callNumber && (
+          <a
+            href={`tel:${callNumber.replace(/[^\d+]/g, "")}`}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            title={`Call ${name}`}
+            className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+          >
+            <Phone className="h-3.5 w-3.5 shrink-0" />
+            {callNumber}
+          </a>
         )}
       </div>
 
