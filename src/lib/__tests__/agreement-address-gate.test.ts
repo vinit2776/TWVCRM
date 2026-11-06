@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agreementAddressGate, agreementAddressIsStale } from "../agreement-address-gate";
+import { agreementAddressGate, agreementAddressIsStale, caseAddressText } from "../agreement-address-gate";
 
 describe("agreementAddressGate", () => {
   it("blocks empty, null and the placeholder", () => {
@@ -30,5 +30,12 @@ describe("agreementAddressIsStale", () => {
   });
   it("is not stale when the case has no address", () => {
     expect(agreementAddressIsStale("", "To be provided")).toBe(false);
+  });
+});
+
+describe("caseAddressText", () => {
+  it("joins the filled parts in print order", () => {
+    expect(caseAddressText({ client_address: "A", client_city: null, client_state: "TN", client_pincode: "600007" })).toBe("A, TN, 600007");
+    expect(caseAddressText({})).toBe("");
   });
 });

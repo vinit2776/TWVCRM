@@ -1,10 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAgreementPdf, type AgreementTemplateKey, type AgreementVariables } from "@/lib/agreement-generator";
 import { generateLeaveLicensePdf, type LeaveLicenseVariables } from "@/lib/leave-license-generator";
+import { caseAddressText } from "@/lib/agreement-address-gate";
 
 // A VO case's agreements are stored PDFs built from `variables`. When the
-// case's approved clause changes, rebuild every agreement that hasn't gone out
-// yet so the stored copy matches. Agreements already sent/signed are left
+// case's approved clause or client address changes, rebuild every agreement that
+// hasn't gone out yet so the stored copy matches. Agreements already sent/signed are left
 // alone; submit/withdraw refuse to change a clause once one is out for signature.
 // Failures are logged, not thrown: agreementClauseGate then blocks sending a
 // stale PDF, so the safe state holds even when this step doesn't complete.
@@ -13,10 +14,18 @@ const REGENERABLE = ["draft", "internally_approved"];
 const norm = (t: unknown) => (typeof t === "string" ? t.replace(/\s+/g, " ").trim() : "");
 
 export async function regenerateCaseAgreementPdfs(admin: SupabaseClient, caseId: string): Promise<void> {
-  const { data: kase } = await admin.from("cases").select("special_clause_status, special_clause_text").eq("id", caseId).maybeSingle();
-  const k = kase as { special_clause_status: string | null; special_clause_text: string | null } | null;
+  const { data: kase } = await admin
+    .from("cases")
+    .select("special_clause_status, special_clause_text, client_address, client_city, client_state, client_pincode")
+    .eq("id", caseId).maybeSingle();
+  const k = kase as {
+    special_clause_status: string | null; special_clause_text: string | null;
+    client_address: string | null; client_city: string | null; client_state: string | null; client_pincode: string | null;
+  } | null;
   if (!k) return;
   const text = k.special_clause_status === "approved" ? k.special_clause_text : null;
+  // One source for the address: the case. An empty case address leaves the agreement's as is.
+  const address = caseAddressText(k);
 
   const { data: agreements } = await admin
     .from("case_agreements").select("id, type, template_key, variables, status")
@@ -25,7 +34,10 @@ export async function regenerateCaseAgreementPdfs(admin: SupabaseClient, caseId:
   for (const a of (agreements ?? []) as { id: string; type: string; template_key: string; variables: Record<string, unknown> | null }[]) {
     try {
       const vars = { ...(a.variables ?? {}), special_clause_text: text } as Record<string, unknown>;
-      if (norm(a.variables?.special_clause_text) === norm(text)) continue;
+      if (address) vars.client_address = address;
+      const clauseSame = norm(a.variables?.special_clause_text) === norm(text);
+      const addressSame = !address || norm(a.variables?.client_address) === norm(address);
+      if (clauseSame && addressSame) continue;
 
       const isLl = a.type === "leave_license";
       const doc = isLl

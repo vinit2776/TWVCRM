@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateCaseSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { regenerateCaseAgreementPdfs } from "@/lib/special-clause/case-regenerate";
 import { caseEndDate } from "@/lib/case-workflow";
 import { generateDocumentChecklist } from "@/lib/compliance";
 import type { EntityType, VoPurpose } from "@/types";
@@ -183,6 +184,14 @@ export async function PATCH(
         );
       }
     }
+  }
+
+  // The case is the one source for the client address: rebuild any agreement
+  // that hasn't gone out yet. Signed/sent ones are left alone. Failures are
+  // logged inside, and the send gate still stops a stale draft going out.
+  const touchesAddress = ["client_address", "client_city", "client_state", "client_pincode"].some((k) => k in patch);
+  if (touchesAddress) {
+    await regenerateCaseAgreementPdfs(await createAdminClient(), id);
   }
 
   // Audit log

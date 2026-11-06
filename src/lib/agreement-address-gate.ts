@@ -39,3 +39,13 @@ export function agreementAddressIsStale(caseAddress: string | null | undefined, 
   if (!c) return false;
   return c !== squash(agreementAddress);
 }
+
+/** The case's address as the agreements print it (street, city, state, pincode). */
+export function caseAddressText(c: {
+  client_address?: string | null;
+  client_city?: string | null;
+  client_state?: string | null;
+  client_pincode?: string | null;
+}): string {
+  return [c.client_address, c.client_city, c.client_state, c.client_pincode].filter(Boolean).join(", ");
+}
