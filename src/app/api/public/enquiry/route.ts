@@ -8,13 +8,14 @@ import { sanitiseAttribution } from "@/lib/public-forms/attribution";
 import { verifyTurnstile } from "@/lib/public-forms/turnstile";
 import { withCors } from "@/lib/public-forms/cors";
 
-const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin"] as const;
+const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin", "website"] as const;
 type AllowedSource = (typeof ALLOWED_SOURCES)[number];
 
 const SOURCE_META: Record<AllowedSource, { label: string; tag: string }> = {
   google_ads:    { label: "Google Ads",     tag: "google-ads-form" },
   meta_ads:      { label: "Meta Ads",       tag: "meta-ads-form"   },
   direct_walkin: { label: "Direct Walk-in", tag: "walkin-form"     },
+  website:       { label: "Website",        tag: "website-form"    },
 };
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
@@ -335,8 +336,8 @@ async function handleEnquiry(request: NextRequest): Promise<NextResponse> {
     new Set(["space@theworkvilla.com", ...staffEmails])
   );
 
-  // WhatsApp alert — only for Google Ads / Meta Ads enquiries, to sales reps + managers
-  const shouldSendWhatsApp = source === "google_ads" || source === "meta_ads";
+  // WhatsApp alert — only for Google Ads / Meta Ads / Website enquiries, to sales reps + managers
+  const shouldSendWhatsApp = source === "google_ads" || source === "meta_ads" || source === "website";
   let salesPhones: string[] = [];
   if (shouldSendWhatsApp) {
     const { data: salesRows } = await supabase
