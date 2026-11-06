@@ -39,6 +39,7 @@ import {
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
 import type { CaseAgreement } from "@/types";
+import { agreementAddressGate } from "@/lib/agreement-address-gate";
 
 interface LeegalityHealth {
   environment: string;
@@ -57,12 +58,17 @@ interface CaseLeaveAgreementTabProps {
   clauseGate?: { blocked: boolean; reason: string | null };
 }
 
-export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreementTabProps) {
-  const clauseBlocked = clauseGate?.blocked ?? false;
+export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase }: CaseLeaveAgreementTabProps) {
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
   const { enabled: leegalityEnabled } = useLeegalityEnabled();
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
+  // A draft with no client address (or no pincode) may exist, but must not go out.
+  const addressGate = agreement
+    ? agreementAddressGate(((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined)
+    : { blocked: false, reason: null };
+  const clauseGate = clauseGateFromCase?.blocked ? clauseGateFromCase : addressGate;
+  const clauseBlocked = clauseGate.blocked;
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
