@@ -698,6 +698,15 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
               </span>
             </div>
           )}
+          {!!agreement && !!(agreement.variables as Record<string, unknown> | null)?.address_reset_at && agreement.status !== "executed" && (
+            <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                The client address was changed after this agreement was signed. This agreement has been reset and
+                must be signed again. The previous signed version is kept in the documents.
+              </span>
+            </div>
+          )}
           {/* Agreement Info Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
             <div>

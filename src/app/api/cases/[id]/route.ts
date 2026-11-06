@@ -3,6 +3,15 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateCaseSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { regenerateCaseAgreementPdfs } from "@/lib/special-clause/case-regenerate";
+import { caseAddressText } from "@/lib/agreement-address-gate";
+import {
+  AGREEMENT_RESET_MIN_REASON,
+  AGREEMENT_RESET_ROLES,
+  cancelOpenSigningRequests,
+  findSignedAgreements,
+  resetAgreementsForNewAddress,
+  type SignedAgreementRow,
+} from "@/lib/agreement-reset";
 import { caseEndDate } from "@/lib/case-workflow";
 import { generateDocumentChecklist } from "@/lib/compliance";
 import type { EntityType, VoPurpose } from "@/types";
@@ -137,6 +146,52 @@ export async function PATCH(
     }
   }
 
+  // A signed (or out-for-signature) agreement carries the old address. Changing
+  // the address would invalidate that signature, so it needs an explicit,
+  // reasoned acceptance from admin/manager first; nothing is changed until then.
+  let signedToReset: SignedAgreementRow[] = [];
+  let newAddress = "";
+  let resetReason = "";
+  const touchesAddress = ["client_address", "client_city", "client_state", "client_pincode"].some((k) => k in patch);
+  if (touchesAddress && oldCase) {
+    newAddress = caseAddressText({ ...oldCase, ...patch } as Record<string, string | null>);
+    const squash = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+    const changed = !!newAddress && squash(newAddress) !== squash(caseAddressText(oldCase as Record<string, string | null>));
+    if (changed) {
+      const adminForReset = await createAdminClient();
+      signedToReset = await findSignedAgreements(adminForReset, id);
+      if (signedToReset.length > 0) {
+        const { data: actor } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+        if (!actor || !AGREEMENT_RESET_ROLES.includes(actor.role)) {
+          return NextResponse.json(
+            { error: "This case has a signed agreement. Only an admin or manager can change the client address, which requires the agreement to be signed again." },
+            { status: 403 }
+          );
+        }
+        const req = body as { confirm_agreement_reset?: unknown; agreement_reset_reason?: unknown };
+        if (req.confirm_agreement_reset !== true) {
+          return NextResponse.json(
+            {
+              error: "Changing the address will reset the signed agreement. It must be signed again.",
+              code: "AGREEMENT_RESET_REQUIRED",
+              agreements: signedToReset.map((a) => ({ type: a.type, status: a.status })),
+            },
+            { status: 409 }
+          );
+        }
+        resetReason = typeof req.agreement_reset_reason === "string" ? req.agreement_reset_reason.trim() : "";
+        if (resetReason.length < AGREEMENT_RESET_MIN_REASON) {
+          return NextResponse.json(
+            { error: `Give a reason of at least ${AGREEMENT_RESET_MIN_REASON} characters for resetting the signed agreement.` },
+            { status: 400 }
+          );
+        }
+        const cancelErr = await cancelOpenSigningRequests(signedToReset);
+        if (cancelErr) return NextResponse.json({ error: cancelErr }, { status: 502 });
+      }
+    }
+  }
+
   const { data, error } = await supabase
     .from("cases")
     .update(patch)
@@ -189,7 +244,6 @@ export async function PATCH(
   // The case is the one source for the client address: rebuild any agreement
   // that hasn't gone out yet. Signed/sent ones are left alone. Failures are
   // logged inside, and the send gate still stops a stale draft going out.
-  const touchesAddress = ["client_address", "client_city", "client_state", "client_pincode"].some((k) => k in patch);
   if (touchesAddress) {
     await regenerateCaseAgreementPdfs(await createAdminClient(), id);
   }
@@ -200,6 +254,27 @@ export async function PATCH(
     .select("id")
     .eq("auth_id", user.id)
     .single();
+
+  if (signedToReset.length > 0) {
+    const outcome = await resetAgreementsForNewAddress(await createAdminClient(), id, signedToReset, newAddress, resetReason);
+    if (dbUser?.id) {
+      for (const agreementId of outcome.reset) {
+        logAudit(supabase, {
+          entityType: "case_agreement",
+          entityId: agreementId,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: { action: { old: null, new: "reset_for_address_change" }, reason: { old: null, new: resetReason } },
+        });
+      }
+    }
+    if (outcome.failed.length > 0) {
+      return NextResponse.json(
+        { data, warning: "The address was saved, but the signed agreement could not be reset. Regenerate it from the agreement tab." },
+        { status: 207 }
+      );
+    }
+  }
 
   if (dbUser?.id && oldCase) {
     logAudit(supabase, {
