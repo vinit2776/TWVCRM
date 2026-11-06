@@ -77,6 +77,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const mode = parseAutoRenewMode(settings[AUTO_RENEW_CRON_MODE_SETTING]);
   const lock = await lockedRateNotice(admin, id, String(c.end_date).slice(0, 10));
+  const { data: nextTermRow } = await admin
+    .from("contracts")
+    .select("id, contract_number, status, subtotal, start_date, escalation_percentage")
+    .eq("parent_contract_id", id)
+    .eq("is_renewal", true)
+    .not("status", "in", '("terminated","rejected")')
+    .maybeSingle();
   const item = facts[0] ? planAutoRenewals(facts, today, parseAutoRenewTiming(settings)).items[0] : null;
 
   return NextResponse.json({
@@ -90,6 +97,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       paused: !c.auto_renew && String(c.auto_renew_stop_reason ?? "").startsWith(AUTO_RENEW_PAUSE_REASON_PREFIX),
       // Set once the rate notice has gone out: the next term's rent is then what the customer was told.
       lock,
+      // The next term, once one exists (made by Renew or by the job): a person activates it when it starts.
+      nextTerm: nextTermRow
+        ? {
+            id: nextTermRow.id as string,
+            contractNumber: nextTermRow.contract_number as string,
+            status: nextTermRow.status as string,
+            subtotal: Number(nextTermRow.subtotal ?? 0),
+            startDate: String(nextTermRow.start_date).slice(0, 10),
+            escalationPercentage: nextTermRow.escalation_percentage == null ? null : Number(nextTermRow.escalation_percentage),
+          }
+        : null,
       // What the new rent adds to the security deposit. Shown to staff only; it never holds a renewal.
       depositTopUp: item
         ? Math.max(0, Math.round((item.nextRent - Number(c.subtotal ?? 0)) * Number(c.security_deposit_months ?? 3)))

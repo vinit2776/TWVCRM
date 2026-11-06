@@ -6,6 +6,7 @@ import { sendPushToAll } from "@/lib/push";
 import { messaging } from "@/lib/whatsapp";
 import { sanitiseAttribution } from "@/lib/public-forms/attribution";
 import { verifyTurnstile } from "@/lib/public-forms/turnstile";
+import { withCors } from "@/lib/public-forms/cors";
 
 const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin"] as const;
 type AllowedSource = (typeof ALLOWED_SOURCES)[number];
@@ -151,8 +152,34 @@ function buildEnquiryEmailHtml(p: EnquiryEmailParams): string {
 </html>`;
 }
 
+// Preflight for the marketing website's cross-origin form post.
+export async function OPTIONS(request: NextRequest) {
+  return withCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+}
+
+// Every response — success, validation error or crash — carries the CORS headers, otherwise
+// the website cannot read the error text or the reference number.
 export async function POST(request: NextRequest) {
-  const body = await request.json();
+  let res: NextResponse;
+  try {
+    res = await handleEnquiry(request);
+  } catch (err) {
+    console.error("[public/enquiry] unhandled error:", err instanceof Error ? err.message : "unknown");
+    res = NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+  }
+  return withCors(res, request.headers.get("origin"));
+}
+
+async function handleEnquiry(request: NextRequest): Promise<NextResponse> {
+  let body: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any -- untrusted JSON, each field is validated below
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
 
   const {
     name,
