@@ -104,6 +104,7 @@ export type LeadSource =
   | "google_ads"
   | "direct_walkin"
   | "whatsapp"
+  | "website"
   | "inbound_call"
   | "referral"
   | "cold_call"
