@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agreementAddressGate } from "../agreement-address-gate";
+import { agreementAddressGate, agreementAddressIsStale } from "../agreement-address-gate";
 
 describe("agreementAddressGate", () => {
   it("blocks empty, null and the placeholder", () => {
@@ -17,5 +17,18 @@ describe("agreementAddressGate", () => {
   });
   it("allows a full address with pincode", () => {
     expect(agreementAddressGate("No. 148, C Block, Vepery, Chennai, Tamil Nadu, 600007").blocked).toBe(false);
+  });
+});
+
+describe("agreementAddressIsStale", () => {
+  it("is stale when the case has an address the agreement lacks", () => {
+    expect(agreementAddressIsStale("A, Chennai 600007", "To be provided")).toBe(true);
+    expect(agreementAddressIsStale("A, Chennai 600007", "Old address")).toBe(true);
+  });
+  it("is not stale when they match ignoring spacing and case", () => {
+    expect(agreementAddressIsStale("A,  Chennai 600007", "a, chennai 600007")).toBe(false);
+  });
+  it("is not stale when the case has no address", () => {
+    expect(agreementAddressIsStale("", "To be provided")).toBe(false);
   });
 });

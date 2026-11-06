@@ -28,3 +28,14 @@ export function agreementAddressGate(address: string | null | undefined): Addres
   }
   return { blocked: false, reason: null };
 }
+
+const squash = (t: string | null | undefined) => (t ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+
+/** True when the case now has an address that the stored agreement doesn't carry
+ *  (the agreement is a snapshot taken when it was generated). Warning only: staff
+ *  may deliberately edit the address on the agreement itself. */
+export function agreementAddressIsStale(caseAddress: string | null | undefined, agreementAddress: string | null | undefined): boolean {
+  const c = squash(caseAddress);
+  if (!c) return false;
+  return c !== squash(agreementAddress);
+}

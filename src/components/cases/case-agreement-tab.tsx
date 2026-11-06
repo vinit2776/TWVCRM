@@ -23,19 +23,22 @@ import {
   Eye,
   Pencil,
   RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
 import type { CaseAgreement } from "@/types";
-import { agreementAddressGate } from "@/lib/agreement-address-gate";
+import { agreementAddressGate, agreementAddressIsStale } from "@/lib/agreement-address-gate";
 
 interface CaseAgreementTabProps {
   caseId: string;
   /** From the case's special clause: when blocked, nothing may leave the building. */
   clauseGate?: { blocked: boolean; reason: string | null };
+  /** The case's current client address, to warn when the agreement's copy is out of date. */
+  caseAddress?: string | null;
 }
 
-export function CaseAgreementTab({ caseId, clauseGate: clauseGateFromCase }: CaseAgreementTabProps) {
+export function CaseAgreementTab({ caseId, clauseGate: clauseGateFromCase, caseAddress }: CaseAgreementTabProps) {
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
   // A draft with no client address (or no pincode) may exist, but must not go out.
   const addressGate = agreement
@@ -43,6 +46,10 @@ export function CaseAgreementTab({ caseId, clauseGate: clauseGateFromCase }: Cas
     : { blocked: false, reason: null };
   const clauseGate = clauseGateFromCase?.blocked ? clauseGateFromCase : addressGate;
   const clauseBlocked = clauseGate.blocked;
+  const addressStale = !!agreement && agreementAddressIsStale(
+    caseAddress,
+    ((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined,
+  );
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -301,6 +308,15 @@ export function CaseAgreementTab({ caseId, clauseGate: clauseGateFromCase }: Cas
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {addressStale && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                The case address has changed since this agreement was generated, so the PDF may show an old
+                address. Regenerate the agreement to pick up the current address before sending.
+              </span>
+            </div>
+          )}
           {/* Proposal Info Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
             <div>
