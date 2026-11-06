@@ -1,10 +1,12 @@
 # Auto-renewal
 
-Status: **parts 1 to 3 and 4a of 4 (foundation, dry-run job, contract-page card and board, customer
-notices)**. Part 4b, the live roll, is still to come, so no contract rolls automatically. `contracts.auto_renew`
+Status: **parts 1 to 3, 4a and 4b-1 (foundation, dry-run job, contract-page card and board, customer
+notices, next term prepared)**. Part 4b-2, activating by itself, is still to come, so a person activates every
+next term. `contracts.auto_renew`
 is `false` everywhere until a person switches a contract on. The only thing a customer can receive is a
 notice a person approved or sent by hand (part 4a); the daily job drafts and sends notices only when
-`auto_renew_notice_mode` is `live`, which is not the default.
+`auto_renew_notice_mode` is `live`, and creates next terms only when `auto_renew_roll_mode` is `live`.
+Neither is the default.
 
 ## What it is
 
@@ -126,10 +128,35 @@ redirected. A notice is claimed (`sending`) before it goes, so two callers canno
 Routes: `GET/POST /api/contracts/[id]/auto-renewal/notices`, `PATCH .../notices/[noticeId]` (edit, approve,
 unapprove, cancel, send). Logic: `src/lib/auto-renewal-notice.ts` (pure), `auto-renewal-notice-server.ts`.
 
+## The next term (part 4b-1)
+
+Once the customer has been **sent the rate notice** and the contract is inside the **45-day renewal window**
+(the same window the Renew button uses), the daily job creates the **next term** for it: the same draft a person
+gets from Renew, because both call `createRenewalDraft` (`src/lib/renewal-draft.ts`). The draft carries the rent
+that was emailed (the notice's locked escalation), the contract's original **signed agreement** (that agreement
+is what renews it, clause 18), and a note saying so. Creating it marks the old contract "renewal in progress",
+which is what makes the existing month-end run bill a mid-month ending as one invoice with old and new rent.
+
+- **A person activates it.** The contract card shows "Next term is ready" with an **Activate next term** button
+  for admins and managers, enabled from the roll date (the day after the end date, or the 1st of the next month
+  for a mid-month ending). It runs the existing accept and activate steps, so every existing check still applies:
+  the mid-month pro-rata gate, escalation approval, voucher revocation and the IT email, new vouchers. Activating
+  by itself is part 4b-2.
+- **Safety checks.** If the draft's rent is not what the customer was sent, the card and the internal email say
+  so ("Check before activating"). A term that cannot be created is listed for a person to renew by hand. A held
+  contract gets nothing created. Nothing is created before the rate notice has gone out, and a renewal made by
+  hand meanwhile is left alone.
+- **Switch**: `app_settings.auto_renew_roll_mode` (`off` / `dry_run` default / `live`, an absent row reads as
+  `dry_run`), separate from `auto_renew_notice_mode`. Only `live` makes the job create next terms. No migration.
+- The internal email now covers late and failed notices, terms that could not be created, rent mismatches,
+  drafts waiting for approval, next terms ready, and notices sent.
+- Escalation approval is not requested for a job-created term: a rate below the agreement's can only have been
+  set by an admin (`checkRevision`).
+
 ## Parts still to come
 
-4b. The live roll: create the next term on the day after the end date, carry over vouchers, access and
-allocations, the two-line invoice for a mid-month end, and the deposit top-up request.
+4b-2. The system activates the next term itself on the roll day, once 4b-1 has run for a cycle or two:
+decide how vouchers work without a new signature, and the failed-roll alerts.
 
 ## Deploy note for part 1
 
