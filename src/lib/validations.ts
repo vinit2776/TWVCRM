@@ -40,6 +40,7 @@ export const createLeadSchema = z.object({
     "google_ads",
     "direct_walkin",
     "whatsapp",
+    "website",
     "inbound_call",
     "referral",
     "cold_call",
@@ -110,7 +111,7 @@ export const importLeadSchema = z.object({
     "proposal_sent", "negotiating", "won", "lost", "junk",
   ]).default("new"),
   source: z.enum([
-    "meta_ads", "google_ads", "direct_walkin", "whatsapp", "inbound_call", "referral", "cold_call", "aggregator",
+    "meta_ads", "google_ads", "direct_walkin", "whatsapp", "website", "inbound_call", "referral", "cold_call", "aggregator",
   ]).default("meta_ads"),
   industry: z.string().optional(),
   no_of_employees: z.number().int().positive().optional(),
