@@ -13,6 +13,7 @@ import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procureme
 import { tryAutoApproveBill } from "@/lib/procurement/recurring-bill-rules-server";
 import { tryAutoApproveAmcBill } from "@/lib/procurement/amc-bill-auto-approve";
 import { decideElectricityContext, type ElectricityBillExtra, type RememberName } from "@/lib/electricity-bill-match";
+import { findLiveDuplicateInvoice } from "@/lib/procurement/duplicate-invoice";
 import { findDuplicateVendorBill, loadElectricityFacts, rememberConnectionName } from "@/lib/electricity-bill-context-server";
 
 // Any 8-4-4-4-12 hex id, which is what Postgres accepts. Zod's strict .uuid() also demands an RFC version
@@ -403,19 +404,13 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Hard-block exact duplicate invoices ───────────────────────────────────
-  // Same vendor + same invoice number on any non-rejected bill = duplicate.
+  // Same vendor + same invoice number (case, spacing and punctuation ignored) on any live bill = duplicate.
   // Rejected bills are excluded so a re-submission after rejection is allowed.
   if (parsed.data.invoice_number?.trim()) {
-    const { count: dupCount } = await supabase
-      .from("vendor_bills")
-      .select("*", { count: "exact", head: true })
-      .eq("vendor_id", parsed.data.vendor_id)
-      .eq("invoice_number", parsed.data.invoice_number.trim())
-      .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
-
-    if (dupCount && dupCount > 0) {
+    const dup = await findLiveDuplicateInvoice(supabase, parsed.data.vendor_id, parsed.data.invoice_number);
+    if (dup) {
       return NextResponse.json(
-        { error: `Invoice number "${parsed.data.invoice_number.trim()}" already exists for this vendor. Check Vendor Payments to avoid duplicate processing.` },
+        { error: `Invoice number "${parsed.data.invoice_number.trim()}" already exists for this vendor (${dup.bill_number}). Check Vendor Payments to avoid duplicate processing.` },
         { status: 409 }
       );
     }

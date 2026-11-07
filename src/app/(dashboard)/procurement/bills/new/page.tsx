@@ -21,6 +21,7 @@ import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } fro
 import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
 import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
+import { billAmountCeiling } from "@/lib/procurement/bill-ceiling";
 import { checkInvoice, type SuggestionField } from "@/lib/procurement/invoice-check";
 import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
@@ -371,7 +372,7 @@ function NewVendorBillForm() {
   const receivedValue = poData && poData.po_type !== "service" ? computeReceivedValue(poData) : null;
   const hasShortfall = receivedValue !== null && receivedValue < Number(poData?.total_ordered_amount ?? 0);
   // Effective ceiling: received value if shortfall, otherwise full PO value
-  const effectiveCeiling = hasShortfall ? receivedValue! : (poData ? Number(poData.total_ordered_amount) : null);
+  const effectiveCeiling = hasShortfall ? receivedValue! : (poData ? billAmountCeiling(poData) : null);
 
   // Price tolerance (goods POs): the invoice may drift past the PO value inside the band;
   // outside it the bill is flagged for an admin, with a reason from here.
@@ -423,8 +424,11 @@ function NewVendorBillForm() {
     if (hasShortfall && amountNum > receivedValue!) {
       return `Exceeds received value of ${formatCurrency(receivedValue!)} — only ${formatCurrency(receivedValue!)} of goods received out of PO value ${formatCurrency(poData!.total_ordered_amount)}.`;
     }
-    if (poData && poData.total_ordered_amount > 0 && amountNum > Number(poData.total_ordered_amount)) {
-      return `Exceeds PO value of ${formatCurrency(poData.total_ordered_amount)}.`;
+    const ceiling = poData ? billAmountCeiling(poData) : null;
+    if (poData && ceiling !== null && amountNum > ceiling) {
+      return poData.po_type === "service"
+        ? `Exceeds this cycle's cost of ${formatCurrency(ceiling)} (before GST).`
+        : `Exceeds PO value of ${formatCurrency(poData.total_ordered_amount)}.`;
     }
     return null;
   })();
