@@ -23,6 +23,7 @@ const {
   parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
+const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, REPORTS: DAILY_REPORTS } = require('./daily-report');
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
   ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
@@ -335,6 +336,26 @@ const SETTING_DEFS = [
     label: 'Address search bounding box',
     help: 'lon1,lat1,lon2,lat2 — biases address suggestions to one city so other cities do not clutter results. Default covers Chennai. Empty disables the restriction.',
     fallback: '79.95,12.75,80.35,13.35',
+  },
+  {
+    key: 'REPORT_EMAILS',
+    label: 'Daily report recipients',
+    help: 'Who gets the 10 AM punch-in and 7 PM punch-out emails, separated by commas. Empty stops both emails.',
+    fallback: 'vinit@chordia.asia, naval@chordia.asia, anmol@alertinsurancebrokers.com',
+    validate: (value) => parseRecipients(value) ? null : 'Daily report recipients must be email addresses separated by commas.',
+  },
+  {
+    key: 'RESEND_API_KEY',
+    label: 'Resend API key',
+    help: 'Sends the daily report emails (resend.com). The CRM already has one. While empty no report email is sent.',
+    secret: true,
+    fallback: '',
+  },
+  {
+    key: 'REPORT_EMAIL_FROM',
+    label: 'Daily report sender',
+    help: "The From line on the daily report emails. Its domain must be verified in the Resend account the key above belongs to.",
+    fallback: 'TWV Attendance <contact@theworkvilla.com>',
   },
 ];
 const SETTING_DEFS_BY_KEY = Object.fromEntries(SETTING_DEFS.map(d => [d.key, d]));
@@ -700,6 +721,14 @@ const SCHEMA_SQL = `
   );
   -- location is "lat, lng" ('' until set). has_device marks the branch the biometric
   -- device is in, so its punches count as made there.
+  -- One row per daily report email actually sent, so a cron that fires twice (or a
+  -- retry) never emails the same report again.
+  CREATE TABLE IF NOT EXISTS daily_report_runs (
+    kind TEXT NOT NULL,
+    date TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY (kind, date)
+  );
   CREATE TABLE IF NOT EXISTS branches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
@@ -754,6 +783,9 @@ const {
   getApprovedLeaveForDate, getApprovedPermissionForDate, getActiveCorrectionsForMonth, computeDayStatus,
   getDeviationReview,
 } = createAttendanceLogic(db);
+const dailyReport = createDailyReport(db, {
+  getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate, getApprovedPermissionForDate,
+});
 
 const LEAVE_TYPES = ['Casual Leave', 'Sick Leave', 'Comp Off'];
 // Casual/Sick are no longer a depleting annual pool — each resets every calendar
@@ -1795,6 +1827,36 @@ async function runScheduledAutoCheckout() {
   await performAutoCheckout();
   return 'ran';
 }
+// --- Daily report emails (10 AM punch-in, 7 PM punch-out), called by Vercel Cron ---
+async function renderDailyReport(kind, dateStr) {
+  const report = await dailyReport.buildReport(kind, dateStr);
+  if (report.skipped) return { report };
+  const sn = CONFIG.ZK_DEVICE_SN;
+  const device = sn ? await getDeviceStatus(sn) : null;
+  const deviceOfflineSince = device && isDeviceOffline(device.last_seen) ? device.last_seen.slice(0, 16) : null;
+  return { report, email: renderReportEmail(report, { deviceOfflineSince, appUrl: 'https://twv-attendance.vercel.app' }) };
+}
+async function runDailyReport(kind) {
+  const date = todayStr();
+  const to = parseRecipients(CONFIG.REPORT_EMAILS) || [];
+  if (to.length === 0 || !CONFIG.RESEND_API_KEY) return 'not_configured';
+  const { report, email } = await renderDailyReport(kind, date);
+  if (report.skipped) return 'skipped';
+  // Claim the day first: if two invocations race, only one sends. A failed send
+  // releases the claim so the next run (or a manual retry) can still go out.
+  const claim = await db.prepare('INSERT OR IGNORE INTO daily_report_runs (kind, date, sent_at) VALUES (?, ?, ?)')
+    .run(kind, date, formatTimestamp(new Date()));
+  if (!claim.changes) return 'already_sent';
+  try {
+    await sendEmail({ apiKey: CONFIG.RESEND_API_KEY, from: CONFIG.REPORT_EMAIL_FROM, to, ...email });
+  } catch (err) {
+    await db.prepare('DELETE FROM daily_report_runs WHERE kind = ? AND date = ?').run(kind, date);
+    throw err;
+  }
+  console.log(`Daily ${kind} report sent to ${to.length} recipients`);
+  return 'sent';
+}
+
 async function checkAndRunAutoCheckout() {
   const now = new Date();
   const today = todayStr(now);
@@ -5436,6 +5498,26 @@ async function handleRequest(req, res) {
     return sendJson(res, 200, { ok: true, ran: 'auto-checkout', outcome });
   }
 
+  // Daily report emails for Vercel Cron: ?kind=morning (10:00 IST) or evening (19:00 IST).
+  // Same CRON_SECRET guard as the auto-checkout above.
+  if (parsed.pathname === '/internal/daily-report') {
+    const expected = process.env.CRON_SECRET;
+    const provided = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+    if (!expected || provided !== expected) {
+      logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
+      return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+    const kind = parsed.searchParams.get('kind');
+    if (!Object.hasOwn(DAILY_REPORTS, kind)) return sendJson(res, 400, { error: 'kind must be morning or evening' });
+    try {
+      const outcome = await runDailyReport(kind);
+      return sendJson(res, 200, { ok: true, ran: `daily-report:${kind}`, outcome });
+    } catch (err) {
+      console.error(`daily ${kind} report failed:`, err.message);
+      return sendJson(res, 502, { ok: false, error: 'Report email failed' });
+    }
+  }
+
   // PWA static assets — unauthenticated on purpose: the browser fetches these
   // (manifest, service worker, icons) as part of install/registration, which can
   // happen from the login screen before any session exists.
@@ -6442,6 +6524,20 @@ async function handleRequest(req, res) {
     const workingHours = computeWorkingHoursGrid(statusGrid);
     const muster = computeMusterReport(statusGrid);
     return sendHtml(res, await renderReports(monthStr, punchInRows, punchInGrid, workingHours, leaveRows, muster, user));
+  }
+
+  // What the daily report email looks like for a given day — read-only, never sends.
+  // ?kind=morning|evening&date=YYYY-MM-DD (defaults: morning, today).
+  if (parsed.pathname === '/admin/daily-report' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const kind = parsed.searchParams.get('kind') || 'morning';
+    const date = parsed.searchParams.get('date') || todayStr();
+    if (!Object.hasOwn(DAILY_REPORTS, kind) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.writeHead(400); return res.end('kind must be morning or evening, date YYYY-MM-DD.');
+    }
+    const { report, email } = await renderDailyReport(kind, date);
+    if (report.skipped) return sendHtml(res, `<p style="font-family:sans-serif;padding:24px;">No ${kind} report on ${escapeHtml(date)} (${escapeHtml(report.skipped)}).</p>`);
+    return sendHtml(res, email.html);
   }
 
   if (parsed.pathname === '/admin/reports/hours-worked.csv' && req.method === 'GET') {

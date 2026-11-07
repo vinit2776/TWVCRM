@@ -137,8 +137,22 @@ Its own Vercel project, with **Root Directory** set to `attendance-gateway-code`
 so this repo's CRM code is not part of its build. Both projects use an ignored
 build step so a commit touching only one of them does not redeploy the other.
 
-The single cron (`/internal/auto-checkout`, 19:00 IST) is declared in this
-directory's own [vercel.json](vercel.json) and is protected by `CRON_SECRET`.
+The crons are declared in this directory's own [vercel.json](vercel.json) and are
+protected by `CRON_SECRET`:
+
+- `/internal/auto-checkout`, 19:00 IST.
+- `/internal/daily-report?kind=morning`, 10:00 IST: emails who has punched in,
+  who is late, who isn't in yet and who is on leave.
+- `/internal/daily-report?kind=evening`, 19:00 IST: emails who punched out, who
+  left before their shift ended, who is still in and who was absent.
+
+The reports go to the recipients set at `/admin/settings` (Daily report recipients),
+through Resend; nothing is sent while the Resend API key there is empty. Each is a
+snapshot as of 10:00 / 19:00 (later punches and the auto-checkout are ignored), so
+the hour-wide timing of Vercel's Hobby cron doesn't change what it says. No email on
+holidays or Sundays, and at most one of each per day (`daily_report_runs`).
+`/admin/daily-report?kind=morning&date=YYYY-MM-DD` shows any day's email without
+sending it.
 
 A day closed only by that auto-checkout is a **Missed Checkout** (MC): it counts as
 a Half Day, with hours counted up to the shift end, until the employee files a
