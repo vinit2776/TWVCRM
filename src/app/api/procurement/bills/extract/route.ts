@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import type { InvoiceCheckReason } from "@/lib/procurement/invoice-check-reasons";
 import { EXTRACTION_MEDIA_TYPES, extractInvoice, type ExtractionMediaType } from "@/lib/procurement/invoice-extraction";
 
 // Read-only: reads the uploaded invoice and returns what it says. Creates or changes
@@ -25,6 +26,11 @@ function throttled(userId: string): boolean {
 
 export const maxDuration = 60;
 
+function fail(reason: InvoiceCheckReason, httpStatus: number) {
+  console.error("[extract-route]", `reason=${reason}`);
+  return NextResponse.json({ status: "unavailable", reason }, { status: httpStatus });
+}
+
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -32,20 +38,20 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
   if (!dbUser || !ALLOWED_ROLES.includes(dbUser.role)) {
-    return NextResponse.json({ error: "You do not have permission to use this" }, { status: 403 });
+    return fail("no_permission", 403);
   }
 
-  // Missing key (e.g. Preview) is not an error: the form quietly hides the check.
-  if (!process.env.ANTHROPIC_API_KEY) return NextResponse.json({ status: "unavailable" });
+  // Missing key (e.g. Preview) is not an error: the form says the check isn't set up.
+  if (!process.env.ANTHROPIC_API_KEY) return fail("not_configured", 200);
 
-  if (throttled(user.id)) return NextResponse.json({ status: "unavailable" });
+  if (throttled(user.id)) return fail("rate_limited", 429);
 
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File)) return NextResponse.json({ error: "No file" }, { status: 400 });
-  if (file.size === 0 || file.size > MAX_BYTES) return NextResponse.json({ error: "File must be under 10 MB" }, { status: 400 });
+  if (file.size === 0 || file.size > MAX_BYTES) return fail("too_large", 413);
   if (!(EXTRACTION_MEDIA_TYPES as readonly string[]).includes(file.type)) {
-    return NextResponse.json({ error: "Unsupported file type" }, { status: 400 });
+    return fail("unsupported_type", 415);
   }
 
   const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
