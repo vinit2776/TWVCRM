@@ -216,7 +216,7 @@ export default function NetworkPage() {
     : false;
   const isAdmin = userRole === "admin";
   const canRunCommands = userRole ? ["admin", "it_manager"].includes(userRole) : false;
-  const canManageLabels = userRole ? ["admin", "manager", "sales_rep"].includes(userRole) : false;
+  const canManageLabels = userRole ? ["admin", "manager", "sales_rep", "coordinator"].includes(userRole) : false;
 
   const selectedLocation = locations.find((l) => l.id === locationId) ?? null;
   const selectedHasUnifi = Boolean(selectedLocation?.unifi_site_id);

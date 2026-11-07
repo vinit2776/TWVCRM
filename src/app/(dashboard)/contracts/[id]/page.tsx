@@ -44,6 +44,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import { ContractMembersAccessSection } from "@/components/contracts/contract-members-access-section";
+import { ContractPeopleAccessSection } from "@/components/contracts/contract-people-access-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractAddonsSection } from "@/components/contracts/contract-addons-section";
@@ -51,8 +52,10 @@ import { ContractRatePhasesSection } from "@/components/contracts/contract-rate-
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractElectricityTab } from "@/components/contracts/contract-electricity-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
+import { EscalationApprovalActions } from "@/components/contracts/escalation-approval-actions";
 import { ContractMoratoriumSection } from "@/components/contracts/contract-moratorium-section";
 import { ContractDepositSection } from "@/components/contracts/contract-deposit-section";
+import { partialDepositState, partialDepositWarning } from "@/lib/deposit-activation";
 import { ContractDepositAdjustmentsSection } from "@/components/contracts/contract-deposit-adjustments-section";
 import { ContractDepositTopupsSection } from "@/components/contracts/contract-deposit-topups-section";
 import { ContractInvoicesSection } from "@/components/contracts/contract-invoices-section";
@@ -86,7 +89,7 @@ import {
   CONTRACT_PRE_ACTIVATION_STATUSES,
   canWithdrawContract,
 } from "@/lib/constants";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import { JourneyPanel } from "@/components/journey/journey-panel";
 import {
@@ -112,6 +115,7 @@ import { toast } from "sonner";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
+import { ContractAutoRenewalCard } from "@/components/contracts/contract-auto-renewal-card";
 import { ContractProrataSection } from "@/components/contracts/contract-prorata-section";
 import { QueryButton } from "@/components/queries/query-button";
 import { useLeegalityEnabled } from "@/hooks/use-leegality-enabled";
@@ -200,6 +204,9 @@ export default function ContractDetailPage({
 
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  // Bumped when the People & Access panel changes something so the voucher and
+  // door-access detail sections below it reload their own data.
+  const [accessVersion, setAccessVersion] = useState(0);
   // Special clause not yet approved: nothing leaves the building, previews are watermarked.
   const clauseGate = specialClauseGate(contract?.special_clause_status);
   const { enabled: leegalityEnabled } = useLeegalityEnabled();
@@ -228,12 +235,31 @@ export default function ContractDetailPage({
   const [applyingPool, setApplyingPool] = useState(false);
   const poolDepositApplied = Number(contract?.deposit_pool_applied_amount || 0);
   const canApplyPooledDeposit = ["admin", "manager", "sales_rep"].includes(userRole ?? "");
+  // Deposit taken in parts: how much of the required amount is in, shown while the proposal's deposit is still pending.
+  const [depositParts, setDepositParts] = useState<{ paid: number; required: number; balance: number } | null>(null);
+  const partsProposalId: string | null = linkedProposal?.deposit_payment_status === "pending" ? linkedProposal.id : null;
+  useEffect(() => {
+    if (!partsProposalId) { setDepositParts(null); return; }
+    let cancelled = false;
+    fetch(`/api/proposals/${partsProposalId}/deposit-instalments`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json?.data) return;
+        const pos = json.data.position;
+        setDepositParts(pos.paid > 0 ? { paid: pos.paid, required: pos.required, balance: pos.balance } : null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [partsProposalId]);
+  // More than half of a deposit collected in parts is in: the contract may activate with a pending-balance warning.
+  const depositPartialOk = !!depositParts && partialDepositState(depositParts.required, depositParts.paid).allowsActivation;
   const depositGateBlocked =
     contract?.status === "accepted" &&
     !contract.deposit_carried_from &&
     !!contract.proposal_id &&
     !!linkedProposal &&
     Number(linkedProposal.security_deposit_months || 0) > 0 &&
+    !(depositPartialOk && !(linkedProposal.deposit_claimed_by_contract_id && linkedProposal.deposit_claimed_by_contract_id !== contract.id)) &&
     (linkedProposal.deposit_payment_status !== "paid" ||
       (!!linkedProposal.deposit_claimed_by_contract_id && linkedProposal.deposit_claimed_by_contract_id !== contract.id));
   useEffect(() => {
@@ -297,10 +323,32 @@ export default function ContractDetailPage({
   };
   const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
   const [spaceWarningOpen, setSpaceWarningOpen] = useState(false);
-  const [pendingActivateArgs, setPendingActivateArgs] = useState<{ overrideReason?: string } | null>(null);
+  const [pendingActivateArgs, setPendingActivateArgs] = useState<{ overrideReason?: string; ackPartial?: boolean } | null>(null);
+  const [partialDepositOpen, setPartialDepositOpen] = useState(false);
 
   // Assigned spaces
   const [spaceAllocations, setSpaceAllocations] = useState<ContractSpaceAllocation[]>([]);
+
+  // A pending escalation request can exist without the contract's own status
+  // flag being set, so look the request up directly instead of trusting the flag.
+  const [pendingEscalationId, setPendingEscalationId] = useState<string | null>(null);
+  const [escalationRefresh, setEscalationRefresh] = useState(0);
+  useEffect(() => {
+    if (!contract?.is_renewal) { setPendingEscalationId(null); return; }
+    let cancelled = false;
+    fetch(`/api/approval-requests?status=pending&entity_type=contract&entity_id=${contract.id}&limit=10`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled) return;
+        const req = (json?.data ?? []).find((x: { approval_type: string }) =>
+          ["escalation_reduction", "escalation_waiver"].includes(x.approval_type));
+        setPendingEscalationId(req?.id ?? null);
+      })
+      .catch(() => { if (!cancelled) setPendingEscalationId(null); });
+    return () => { cancelled = true; };
+  }, [contract?.id, contract?.is_renewal, escalationRefresh]);
+  const escalationApprovalStatus = contract?.escalation_approval_status ?? (pendingEscalationId ? "pending" : null);
+  const escalationApprovalId = contract?.escalation_approval_id ?? pendingEscalationId;
 
   const handleSpaceAllocationsChange = useCallback((allocs: ContractSpaceAllocation[]) => {
     setSpaceAllocations(allocs);
@@ -394,21 +442,36 @@ export default function ContractDetailPage({
   };
 
   /** Wraps activation to check space allocation first */
-  const attemptActivation = (overrideReason?: string) => {
+  const attemptActivation = (overrideReason?: string, ackPartial = false) => {
+    // The deposit is only part-paid (over half): the person activating must see and accept that.
+    if (depositPartialOk && !overrideReason && !ackPartial) {
+      setPendingActivateArgs({ overrideReason });
+      setPartialDepositOpen(true);
+      return;
+    }
     const validation = validateSpaceAllocation(spaceAllocations, contract?.seats ?? 1);
     if (validation.isUnderAllocated) {
       // Show warning but still allow activation
-      setPendingActivateArgs({ overrideReason });
+      setPendingActivateArgs({ overrideReason, ackPartial });
       setSpaceWarningOpen(true);
       return;
     }
-    handleStatusUpdate("active", overrideReason);
+    handleStatusUpdate("active", overrideReason, ackPartial ? { acknowledge_partial_deposit: true } : undefined);
   };
 
   const confirmActivationWithSpaceWarning = () => {
     setSpaceWarningOpen(false);
-    handleStatusUpdate("active", pendingActivateArgs?.overrideReason);
+    handleStatusUpdate(
+      "active",
+      pendingActivateArgs?.overrideReason,
+      pendingActivateArgs?.ackPartial ? { acknowledge_partial_deposit: true } : undefined,
+    );
     setPendingActivateArgs(null);
+  };
+
+  const confirmPartialDepositActivation = () => {
+    setPartialDepositOpen(false);
+    attemptActivation(pendingActivateArgs?.overrideReason, true);
   };
 
   // Withdraw = terminating a contract that never reached activation. Same
@@ -423,9 +486,9 @@ export default function ContractDetailPage({
     !!contract?.leegality_document_id &&
     !["COMPLETED", "EXPIRED", "CANCELLED"].includes(contract.leegality_status || "");
 
-  const handleStatusUpdate = async (newStatus: string, paymentOverrideReason?: string) => {
+  const handleStatusUpdate = async (newStatus: string, paymentOverrideReason?: string, extra?: Record<string, unknown>) => {
     setStatusUpdating(true);
-    const payload: Record<string, unknown> = { status: newStatus };
+    const payload: Record<string, unknown> = { status: newStatus, ...extra };
     if (paymentOverrideReason) payload.payment_override_reason = paymentOverrideReason;
 
     const res = await fetch(`/api/contracts/${id}`, {
@@ -1050,6 +1113,22 @@ export default function ContractDetailPage({
 
   return (
     <div className="space-y-6">
+      {/* Deposit still pending: shown to everyone who opens the contract until the last part is paid */}
+      {depositParts && depositParts.balance > 0 && contract.status !== "draft" && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" data-testid="contract-deposit-pending-banner">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div>
+            <p className="font-semibold">Security deposit pending</p>
+            <p className="text-xs">
+              {partialDepositWarning(partialDepositState(depositParts.required, depositParts.paid))}
+              {linkedProposal && (
+                <> <Link href={`/proposals/${linkedProposal.id}`} className="font-medium underline">Collect the next part on the proposal</Link>.</>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         {/* shrink-0 + nowrap: the wide action-button group beside this must
@@ -1227,7 +1306,8 @@ export default function ContractDetailPage({
             const depositClaimedByOther = !!linkedProposal?.deposit_claimed_by_contract_id
               && linkedProposal.deposit_claimed_by_contract_id !== contract.id;
             const depositPaid = isRenewal || !depositRequired || poolDepositApplied > 0
-              || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther);
+              || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther)
+              || (depositPartialOk && !depositClaimedByOther);
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
             // A mid-month renewal can't activate until its pro-rata invoice is
             // sent (or admin-waived) — nothing else bills the partial first
@@ -1705,6 +1785,11 @@ export default function ContractDetailPage({
                         {formatCurrency(Number(linkedProposal?.security_deposit_amount || securityDeposit))}
                       </p>
                       <p className="text-[10px] text-amber-600 mt-0.5">Pending</p>
+                      {depositParts && linkedProposal && (
+                        <Link href={`/proposals/${linkedProposal.id}#security-deposit`} className="block text-[10px] text-amber-700 underline mt-0.5">
+                          Partly paid: {formatCurrency(depositParts.paid)} of {formatCurrency(depositParts.required)} received · {formatCurrency(depositParts.balance)} still to collect
+                        </Link>
+                      )}
                     </>
                   )}
                   {poolDepositApplied > 0 && (
@@ -2002,12 +2087,23 @@ export default function ContractDetailPage({
           {/* Contract Contacts — each contract can have its own set of
               contact persons (finance, occupant, signatory, etc.) */}
           <ContractContactsPanel
+            key={`contacts-${accessVersion}`}
             contractId={id}
             leadId={contract.lead_id || undefined}
           />
 
+          {/* People & Access: the one place people are added and access is tracked.
+              The voucher and door-access sections below stay as per-person detail. */}
+          <ContractPeopleAccessSection
+            contractId={id}
+            contractStatus={contract.status}
+            signedDocumentId={contract.signed_document_id}
+            onChanged={() => setAccessVersion((v) => v + 1)}
+          />
+
           {/* Vouchers Section */}
           <ContractVouchersSection
+            key={`vouchers-${accessVersion}`}
             contractId={id}
             seats={contract.seats}
             contractStatus={contract.status}
@@ -2023,9 +2119,11 @@ export default function ContractDetailPage({
 
           {/* Members & Access Control (lifecycle steps shown inline per member) */}
           <ContractMembersAccessSection
+            key={`members-${accessVersion}`}
             contractId={id}
             seats={contract.seats}
             contractStatus={contract.status}
+            allowAdd={false}
           />
 
           {/* ── Quota sections ──────────────────────────────────────────────
@@ -2100,6 +2198,54 @@ export default function ContractDetailPage({
 
         {/* Sidebar */}
         <div className="space-y-4">
+          {/* Escalation approval status — on any renewal, whatever its status */}
+          {contract.is_renewal && escalationApprovalStatus && (
+            <div className={`rounded-md border px-3 py-2 text-xs space-y-1 ${
+              escalationApprovalStatus === "pending"
+                ? "border-purple-200 bg-purple-50 text-purple-800"
+                : escalationApprovalStatus === "approved"
+                  ? "border-green-200 bg-green-50 text-green-800"
+                  : "border-red-200 bg-red-50 text-red-800"
+            }`}>
+              <p className="font-semibold flex items-center gap-1">
+                {escalationApprovalStatus === "pending" && "⏳ Escalation Approval Pending"}
+                {escalationApprovalStatus === "approved" && "✓ Escalation Approved"}
+                {escalationApprovalStatus === "rejected" && "✗ Escalation Rejected"}
+              </p>
+              <p>
+                {escalationApprovalStatus === "pending" && "The reduced/waived escalation rate is awaiting admin approval. The contract cannot be activated until approved."}
+                {escalationApprovalStatus === "approved" && "The negotiated escalation rate has been approved by admin."}
+                {escalationApprovalStatus === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
+              </p>
+              {escalationApprovalStatus !== "pending" && contract.escalation_decision?.acted_at && (
+                <p className="opacity-80">
+                  {escalationApprovalStatus === "approved" ? "Approved" : "Rejected"}
+                  {contract.escalation_decision.acted_by_name ? ` by ${contract.escalation_decision.acted_by_name}` : ""}
+                  {` on ${formatDateTime(contract.escalation_decision.acted_at)}`}
+                </p>
+              )}
+              {escalationApprovalStatus === "pending" &&
+                escalationApprovalId &&
+                ["admin", "manager"].includes(userRole ?? "") && (
+                  <EscalationApprovalActions
+                    approvalId={escalationApprovalId}
+                    onActed={() => { setEscalationRefresh((n) => n + 1); fetchContract(false); }}
+                  />
+                )}
+            </div>
+          )}
+
+          {["active", "renewal_in_progress"].includes(contract.status) && (
+            <ContractAutoRenewalCard
+              contractId={contract.id}
+              contractNumber={contract.contract_number}
+              endDate={contract.end_date}
+              userRole={userRole}
+              onStartExit={() => setStartExitOpen(true)}
+              exitInProgress={!!exitView}
+            />
+          )}
+
           {/* Renewal Card — pinned to top of sidebar for active/expired/renewal_in_progress/renewed contracts */}
           {["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) && (
             <Card>
@@ -2131,30 +2277,8 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
-                {/* Escalation approval status — on renewal drafts */}
-                {contract.is_renewal && contract.escalation_approval_status && (
-                  <div className={`rounded-md border px-3 py-2 text-xs space-y-1 ${
-                    contract.escalation_approval_status === "pending"
-                      ? "border-purple-200 bg-purple-50 text-purple-800"
-                      : contract.escalation_approval_status === "approved"
-                        ? "border-green-200 bg-green-50 text-green-800"
-                        : "border-red-200 bg-red-50 text-red-800"
-                  }`}>
-                    <p className="font-semibold flex items-center gap-1">
-                      {contract.escalation_approval_status === "pending" && "⏳ Escalation Approval Pending"}
-                      {contract.escalation_approval_status === "approved" && "✓ Escalation Approved"}
-                      {contract.escalation_approval_status === "rejected" && "✗ Escalation Rejected"}
-                    </p>
-                    <p>
-                      {contract.escalation_approval_status === "pending" && "The reduced/waived escalation rate is awaiting admin approval. The contract cannot be activated until approved."}
-                      {contract.escalation_approval_status === "approved" && "The negotiated escalation rate has been approved by admin."}
-                      {contract.escalation_approval_status === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
-                    </p>
-                  </div>
-                )}
-
                 {/* Escalation waiver — admin only, on renewal drafts */}
-                {contract.is_renewal && contract.status === "draft" && !contract.escalation_approval_status && (
+                {contract.is_renewal && contract.status === "draft" && !escalationApprovalStatus && (
                   <EscalationWaiverSection
                     contractId={contract.id}
                     escalationWaived={contract.escalation_waived || false}
@@ -2880,6 +3004,32 @@ export default function ContractDetailPage({
             >
               {statusUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Activate Anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Part-paid deposit: confirm activating with the balance still pending */}
+      <Dialog open={partialDepositOpen} onOpenChange={setPartialDepositOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              Activate with the deposit pending?
+            </DialogTitle>
+            <DialogDescription>
+              More than half of the deposit is in, so this contract can start now. The rest must still be collected.
+            </DialogDescription>
+          </DialogHeader>
+          {depositParts && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+              {partialDepositWarning(partialDepositState(depositParts.required, depositParts.paid))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPartialDepositOpen(false)}>Go Back</Button>
+            <Button className="bg-amber-600 hover:bg-amber-700 text-white" onClick={confirmPartialDepositActivation}>
+              Activate anyway
             </Button>
           </DialogFooter>
         </DialogContent>

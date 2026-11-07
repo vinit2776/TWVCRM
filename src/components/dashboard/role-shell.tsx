@@ -6,7 +6,13 @@ import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/providers/current-user-provider";
-import { ENQUIRY_VIEWER_HOME, ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
+import {
+  COORDINATOR_HOME,
+  COORDINATOR_ROLE,
+  ENQUIRY_VIEWER_HOME,
+  ENQUIRY_VIEWER_ROLE,
+  isCoordinatorBlockedPath,
+} from "@/lib/restricted-roles";
 
 /**
  * Swaps the full dashboard chrome (`full`) for a bare shell when the signed-in user's role
@@ -51,4 +57,22 @@ function EnquiryViewerShell({ name, children }: { name: string; children: ReactN
       <main className="flex-1 overflow-y-auto p-4 lg:p-6">{allowed ? children : null}</main>
     </div>
   );
+}
+
+/**
+ * Keeps a coordinator off the Finance, Payroll and Admin pages even when the address is typed
+ * in. Every other role passes straight through. Until /api/me answers the role is unknown, so
+ * the page mounts briefly, as it does for the enquiry viewer shell.
+ */
+export function RouteAccessGuard({ children }: { children: ReactNode }) {
+  const { user } = useCurrentUser();
+  const pathname = usePathname();
+  const router = useRouter();
+  const blocked = user?.role === COORDINATOR_ROLE && isCoordinatorBlockedPath(pathname);
+
+  useEffect(() => {
+    if (blocked) router.replace(COORDINATOR_HOME);
+  }, [blocked, router]);
+
+  return blocked ? null : <>{children}</>;
 }

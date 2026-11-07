@@ -1,5 +1,6 @@
 "use client";
 
+import { amountLeftToCollect, isCancelledPayment } from "@/lib/booking-payment-rules";
 import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -825,10 +826,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const closeOut = closeOutDecision(booking, new Date());
   const needsCloseOut = closeOut.allowed;
   const closeOutGrandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount) || 0;
-  const closeOutVerifiedPaid = existingPayments
-    .filter((p) => p.status === "verified")
-    .reduce((sum, p) => sum + Number(p.amount), 0);
-  const closeOutBalance = Math.max(0, closeOutGrandTotal - closeOutVerifiedPaid);
 
   // Pending contract-holder pooled-usage charge, if any (Model B — posted
   // at checkout from actual check-in/check-out time, no longer a separate
@@ -1404,6 +1401,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <BookingLifecycleTimeline
             booking={booking}
             compRequest={compRequest}
+            payments={existingPayments}
             paymentReceivedAt={
               existingPayments
                 .filter((p) => p.status === "verified")
@@ -1978,13 +1976,18 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 .filter((p) => p.status === "pending")
                 .reduce((sum, p) => sum + Number(p.amount), 0);
               const chargeableTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
-              const balanceDue = Math.max(0, chargeableTotal - verifiedTotal);
+              // Money already reported (pending verification) is not left to collect.
+              const balanceDue = Math.max(0, chargeableTotal - verifiedTotal - pendingTotal);
 
               return (
                 <>
                   {existingPayments.length > 0 && (
                     <>
                       <Separator />
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Grand Total</span>
+                        <span className="font-medium">{formatCurrency(chargeableTotal)}</span>
+                      </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Amount Paid</span>
                         <span className="font-medium text-green-700">{formatCurrency(verifiedTotal)}</span>
@@ -1997,7 +2000,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       )}
                       {balanceDue > 0 && (
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Balance Due</span>
+                          <span className="text-muted-foreground">
+                            {pendingTotal > 0 ? "Balance to Receive" : "Balance Due"}
+                          </span>
                           <span className="font-medium text-red-600">{formatCurrency(balanceDue)}</span>
                         </div>
                       )}
@@ -2043,9 +2048,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                           </span>
                         </div>
                         <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_RECORD_STATUS_COLORS[p.status]}`}>
-                          {BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
+                          {isCancelledPayment(p) ? "Cancelled" : BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
                         </Badge>
                       </div>
+                      {/* Who cancelled / why it was rejected */}
+                      {p.status === "rejected" && p.verification_notes && (
+                        <p className="mt-1 text-[11px] text-muted-foreground">{p.verification_notes}</p>
+                      )}
                       {/* Razorpay confirmation details */}
                       {p.payment_mode === "razorpay" && (p.razorpay_payment_id || p.razorpay_order_id) && (
                         <div className="mt-1.5 pt-1.5 border-t border-muted/50 text-[11px] text-muted-foreground space-y-0.5">
@@ -2381,6 +2390,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         bookingReference={booking.booking_number || ""}
         totalAmount={Number(booking.total_amount_with_gst) || Number(booking.total_amount)}
         onSuccess={handlePaymentRecorded}
+        onPaymentsChanged={fetchBooking}
         upiId={upiId}
         upiQrCodePath={upiQrCodePath}
       />
@@ -2414,7 +2424,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           daysLate={closeOut.daysLate}
           status={booking.status as "confirmed" | "checked_in"}
           grandTotal={closeOutGrandTotal}
-          balanceDue={closeOutBalance}
+          paymentStatus={booking.payment_status}
+          payments={existingPayments}
+          onCollectPayment={() => setPaymentDialogOpen(true)}
           bookedById={booking.created_by ?? null}
           onClosed={fetchBooking}
         />
@@ -2485,8 +2497,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onOpenChange={setGetPaymentChooserOpen}
         amountDue={(() => {
           const grandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
-          const paid = existingPayments.filter((p) => p.status === "verified").reduce((s, p) => s + Number(p.amount), 0);
-          return Math.max(0, grandTotal - paid);
+          return amountLeftToCollect(grandTotal, existingPayments);
         })()}
         onPickCounter={() => setPaymentDialogOpen(true)}
         onPickLink={() => setPaymentSendDialogOpen(true)}

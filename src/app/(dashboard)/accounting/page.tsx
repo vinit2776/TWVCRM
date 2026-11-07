@@ -1,6 +1,7 @@
 "use client";
 
 import { ExitSettlementsPanel } from "@/components/accounting/exit-settlements-panel";
+import { DepositRefundsPanel } from "@/components/accounting/deposit-refunds-panel";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -55,10 +56,14 @@ import {
 } from "@/lib/constants";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import { BillEditedBadge } from "@/components/procurement/bill-edited-badge";
 
 type VendorBillItem = {
   id: string;
   bill_number: string;
+  edit_count?: number | null;
+  last_edited_at?: string | null;
+  last_edit_summary?: string | null;
   invoice_number: string | null;
   invoice_file_url: string | null;
   invoice_date: string;
@@ -669,6 +674,7 @@ export default function AccountingPage() {
         {/* ── Vendor Payments ──────────────────────────────────────────── */}
         <TabsContent value="vendor-payments" className="mt-4">
           <ExitSettlementsPanel />
+          <DepositRefundsPanel role={currentUserRole} />
           {billsLoading ? (
             <div className="space-y-2">
               {[...Array(5)].map((_, i) => (
@@ -1180,6 +1186,7 @@ export default function AccountingPage() {
                               )}
                               <td className="px-4 py-3 font-mono text-xs font-medium">
                                 {bill.bill_number}
+                                <BillEditedBadge editCount={bill.edit_count} editedAt={bill.last_edited_at} summary={bill.last_edit_summary} className="ml-1.5 align-middle" />
                                 {bill.invoice_number && (
                                   <p className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-muted-foreground"
                                      onClick={(e) => e.stopPropagation()}>
@@ -1413,6 +1420,7 @@ export default function AccountingPage() {
                               >
                                 <td className="px-4 py-2.5 font-mono text-xs font-medium">
                                   {bill.bill_number}
+                                  <BillEditedBadge editCount={bill.edit_count} editedAt={bill.last_edited_at} summary={bill.last_edit_summary} className="ml-1.5 align-middle" />
                                   {bill.invoice_number && (
                                     <p className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-muted-foreground"
                                        onClick={(e) => e.stopPropagation()}>

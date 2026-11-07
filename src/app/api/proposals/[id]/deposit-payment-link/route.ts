@@ -2,6 +2,7 @@ import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
 
 /**
  * POST /api/proposals/[id]/deposit-payment-link
@@ -42,6 +43,11 @@ export async function POST(
 
   if (proposal.status === "superseded") {
     return NextResponse.json({ error: "This proposal has been replaced by a newer revision." }, { status: 409 });
+  }
+
+  // Collected in parts: never regenerate a whole-deposit link behind the parts.
+  if (await hasLiveInstalments(createAdminClient(), id)) {
+    return NextResponse.json({ instalments_active: true });
   }
 
   // Already has a link — return it

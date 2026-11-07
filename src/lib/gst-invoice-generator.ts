@@ -171,6 +171,12 @@ export interface GstInvoiceData {
   periodStart: string;
   periodEnd: string;
   contractNumber: string;
+  /**
+   * Ad-hoc invoices belong to no contract and to no billing period (the
+   * statement's period is just the day it was raised). Set to label the
+   * reference "Ref:" instead of "Contract:" and to drop the Billing Period line.
+   */
+  adhoc?: boolean;
   /** Customer's own PO number for this contract — printed on both the proforma and tax invoice when set. */
   poNumber?: string | null;
   /** Customer payment due date (proforma only). YYYY-MM-DD. Printed in the totals block. */
@@ -247,7 +253,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   if (isProforma) {
     doc.text(`Proforma Ref: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
     doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
-    doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+    doc.text(`${data.adhoc ? "Ref" : "Contract"}: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
     if (data.poNumber) {
       detailY += 5;
       doc.text(`Customer PO Number: ${data.poNumber}`, pageWidth - 14, detailY, { align: "right" });
@@ -365,7 +371,9 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   // ── Supply details ──
   doc.setFontSize(8);
   doc.setTextColor(100, 100, 100);
-  doc.text(`Billing Period: ${formatDateInv(data.periodStart)} to ${formatDateInv(data.periodEnd)}`, 14, y);
+  if (!data.adhoc) {
+    doc.text(`Billing Period: ${formatDateInv(data.periodStart)} to ${formatDateInv(data.periodEnd)}`, 14, y);
+  }
   doc.text("Reverse Charge: No", pageWidth - 14, y, { align: "right" });
   y += 6;
 

@@ -21,10 +21,13 @@ import {
 import { Loader2, Flag } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { closeOutPaymentState } from "@/lib/booking-payment-rules";
+import type { BookingPayment } from "@/types";
 import {
   BOOKING_LATE_CLOSE_OUT,
   PROCESS_DEVIATIONS,
   OTHER_COMMENT_MIN_LENGTH,
+  UNPAID_NOTE_MIN_LENGTH,
 } from "@/lib/process-registry";
 
 interface StaffOption { id: string; full_name: string; role: string }
@@ -37,9 +40,12 @@ interface Props {
   bookingDate: string;
   daysLate: number;
   status: "confirmed" | "checked_in";
-  /** Grand total and what is still unpaid, for the "billed as booked" note. */
+  /** Grand total, payment status and payment rows: what decides whether payment must be dealt with. */
   grandTotal: number;
-  balanceDue: number;
+  paymentStatus: string;
+  payments: BookingPayment[];
+  /** Opens the normal Collect Payment dialog. Close out reopens afterwards. */
+  onCollectPayment: () => void;
   /** Who made the booking, the default for "who was on duty". */
   bookedById: string | null;
   onClosed: () => void;
@@ -49,15 +55,20 @@ const def = PROCESS_DEVIATIONS[BOOKING_LATE_CLOSE_OUT];
 
 export function CloseOutDialog({
   open, onOpenChange, bookingId, bookingNumber, bookingDate, daysLate,
-  status, grandTotal, balanceDue, bookedById, onClosed,
+  status, grandTotal, paymentStatus, payments, onCollectPayment, bookedById, onClosed,
 }: Props) {
   const [outcome, setOutcome] = useState<"used" | "no_show">("used");
   const [reason, setReason] = useState("");
   const [comment, setComment] = useState("");
   const [accountable, setAccountable] = useState<string>(bookedById ?? "");
   const [staff, setStaff] = useState<StaffOption[]>([]);
+  const [closeUnpaid, setCloseUnpaid] = useState(false);
+  const [unpaidNote, setUnpaidNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const pay = closeOutPaymentState(grandTotal, paymentStatus, payments);
+  const needsPaymentChoice = outcome === "used" && !pay.settled;
 
   useEffect(() => {
     if (!open || staff.length > 0) return;
@@ -88,6 +99,14 @@ export function CloseOutDialog({
       setError(`Say what happened, in at least ${OTHER_COMMENT_MIN_LENGTH} characters`);
       return;
     }
+    if (needsPaymentChoice && !closeUnpaid) {
+      setError("Collect the payment, or choose to close without it and say why");
+      return;
+    }
+    if (needsPaymentChoice && unpaidNote.trim().length < UNPAID_NOTE_MIN_LENGTH) {
+      setError("Say why it's being closed without payment");
+      return;
+    }
     setError(null);
     setSubmitting(true);
     const res = await fetch(`/api/bookings/${bookingId}/close-out`, {
@@ -98,6 +117,8 @@ export function CloseOutDialog({
         reason_code: reason,
         comment: comment.trim(),
         accountable_user_id: accountable || null,
+        close_unpaid: needsPaymentChoice && closeUnpaid,
+        unpaid_note: needsPaymentChoice && closeUnpaid ? unpaidNote.trim() : "",
       }),
     });
     const json = await res.json().catch(() => ({}));
@@ -173,21 +194,56 @@ export function CloseOutDialog({
           </div>
 
           {outcome === "used" ? (
-            <div className="rounded-md bg-amber-50 border border-amber-200 text-amber-900 text-xs p-2.5 space-y-1">
-              <p>
-                Billed as booked: {formatCurrency(grandTotal)}. No overtime is added, and check-in and
-                checkout times stay empty.
-              </p>
-              {balanceDue > 0 ? (
-                <p>
-                  {formatCurrency(balanceDue)} is still unpaid. It stays in Pending Collection, and the
-                  GST invoice follows once the payment is verified.
-                </p>
+            <>
+              {pay.settled ? (
+                <div className="rounded-md bg-green-50 border border-green-200 text-green-900 text-xs p-2.5">
+                  {pay.provisional
+                    ? "Payment is recorded and waiting for accounts to verify. The GST invoice follows once it is verified."
+                    : "Paid in full, so it goes straight to the GST invoice queue."}
+                </div>
               ) : (
-                <p>Paid in full, so it goes straight to the GST invoice queue.</p>
+                <div className="rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-xs p-2.5 space-y-2">
+                  <p className="font-medium text-sm">{formatCurrency(pay.balance)} is still unpaid</p>
+                  <p>The GST invoice can&apos;t start until the payment is verified. Pick one:</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="bg-background"
+                    onClick={() => { onOpenChange(false); onCollectPayment(); }}
+                  >
+                    Collect payment now
+                  </Button>
+                  <label className="flex items-start gap-2 pt-1">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={closeUnpaid}
+                      onChange={(e) => { setCloseUnpaid(e.target.checked); setError(null); }}
+                    />
+                    <span>
+                      Close without payment. It stays in Pending Collection and is recorded as closed unpaid.
+                    </span>
+                  </label>
+                  {closeUnpaid && (
+                    <Textarea
+                      rows={2}
+                      value={unpaidNote}
+                      onChange={(e) => { setUnpaidNote(e.target.value); setError(null); }}
+                      placeholder="Why? e.g. customer left without paying"
+                      className="bg-background"
+                    />
+                  )}
+                </div>
               )}
-              <p>Add any extra charges from Add charge on this page first. They can&apos;t be added once it&apos;s closed.</p>
-            </div>
+              <div className="rounded-md bg-muted/60 text-xs p-2.5 space-y-1">
+                <p>
+                  Billed as booked: {formatCurrency(grandTotal)}. No overtime is added, and check-in and
+                  checkout times stay empty.
+                </p>
+                <p>Add any extra charges from Add charge on this page first. They can&apos;t be added once it&apos;s closed.</p>
+              </div>
+            </>
           ) : (
             <div className="rounded-md bg-amber-50 border border-amber-200 text-amber-900 text-xs p-2.5">
               Same as No Show: vouchers are revoked and any usage charge waived. A payment already taken is kept.

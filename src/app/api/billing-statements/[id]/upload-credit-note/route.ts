@@ -114,6 +114,7 @@ export async function POST(
     .select(`
       id, total_amount, payment_status, status, issuance_channel, lifecycle_stage,
       statement_number, tally_invoice_number, razorpay_payment_link_id, notes,
+      cancellation_requested_at, cancellation_requested_by, cancellation_reason,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email)
@@ -150,6 +151,9 @@ export async function POST(
     tally_invoice_number: string | null;
     razorpay_payment_link_id: string | null;
     notes: string | null;
+    cancellation_requested_at: string | null;
+    cancellation_requested_by: string | null;
+    cancellation_reason: string | null;
     contract: { id: string; contract_number: string | null; lead: { id: string; gst_number: string | null; first_name: string | null; last_name: string | null; company: string | null; email: string | null } | null } | null;
     proposal: { id: string; proposal_number: string | null; lead: { id: string; gst_number: string | null; first_name: string | null; last_name: string | null; company: string | null; email: string | null } | null } | null;
     invoice: { id: string; invoice_number: string | null; lead: { id: string; gst_number: string | null; first_name: string | null; last_name: string | null; company: string | null; email: string | null } | null } | null;
@@ -358,6 +362,15 @@ export async function POST(
       status: { old: statement.status, new: "voided" },
       lifecycle_stage: { old: statement.lifecycle_stage, new: "cancelled" },
       tally_credit_note_number: { old: null, new: meta.credit_note_number },
+      // Closes out the request raised from Receivables, so this row alone
+      // shows who asked, when, and why.
+      ...(statement.cancellation_requested_at
+        ? {
+            cancellation_requested_by: { old: statement.cancellation_requested_by, new: null },
+            cancellation_requested_at: { old: statement.cancellation_requested_at, new: null },
+            cancellation_reason: { old: statement.cancellation_reason, new: null },
+          }
+        : {}),
     },
   });
 

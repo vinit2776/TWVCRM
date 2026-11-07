@@ -12,6 +12,16 @@ export interface DepositRequestPdfInput {
   customer_message: string;
   deposit_link_url: string | null;
   due_date: string;
+  /**
+   * Optional overrides for the additional-deposit (top-up) variant. Left
+   * unset, the output is the original security deposit request unchanged.
+   */
+  variant?: {
+    title: string;
+    intro: string;
+    rows: [string, string][];
+    paymentReference: string;
+  };
 }
 
 // jsPDF's built-in Helvetica is Latin-1 only; anything outside it (₹, smart
@@ -41,7 +51,7 @@ export async function generateDepositRequestPDF(input: DepositRequestPdfInput): 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
   doc.setTextColor(...BRAND_TEAL);
-  doc.text("Security Deposit Request", left, y);
+  doc.text(input.variant?.title ?? "Security Deposit Request", left, y);
   y += 10;
 
   doc.setFont("helvetica", "normal");
@@ -53,7 +63,8 @@ export async function generateDepositRequestPDF(input: DepositRequestPdfInput): 
 
   const intro = doc.splitTextToSize(
     sanitize(
-      `Thank you for accepting our proposal ${input.proposal_number}. To proceed with the contract, please pay the refundable security deposit of ${input.security_deposit_months} month(s).`
+      input.variant?.intro
+        ?? `Thank you for accepting our proposal ${input.proposal_number}. To proceed with the contract, please pay the refundable security deposit of ${input.security_deposit_months} month(s).`
     ),
     width
   );
@@ -75,7 +86,7 @@ export async function generateDepositRequestPDF(input: DepositRequestPdfInput): 
     y += boxH + 5;
   }
 
-  const rows: [string, string][] = [
+  const rows: [string, string][] = input.variant?.rows ?? [
     ["Proposal", input.proposal_number],
     ["Balance Due", formatCurrency(input.amount)],
     ["Type", `Refundable (${input.security_deposit_months} month${input.security_deposit_months > 1 ? "s" : ""})`],
@@ -125,7 +136,7 @@ export async function generateDepositRequestPDF(input: DepositRequestPdfInput): 
     ["A/C No", COMPANY_BANK_DETAILS.accountNumber],
     ["IFSC", COMPANY_BANK_DETAILS.ifscCode],
     ["Bank", `${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}`],
-    ["Payment Reference", input.proposal_number],
+    ["Payment Reference", input.variant?.paymentReference ?? input.proposal_number],
   ];
   doc.setFontSize(10);
   doc.setFillColor(240, 250, 245);
@@ -148,7 +159,7 @@ export async function generateDepositRequestPDF(input: DepositRequestPdfInput): 
   doc.setFontSize(9);
   doc.setTextColor(146, 64, 14);
   doc.text(
-    `Important: please use ${input.proposal_number} as the payment reference when making the bank transfer.`,
+    `Important: please use ${input.variant?.paymentReference ?? input.proposal_number} as the payment reference when making the bank transfer.`,
     left + 4,
     y + 6.3
   );

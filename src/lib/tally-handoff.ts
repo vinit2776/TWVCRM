@@ -412,6 +412,12 @@ export interface InboxRow {
    *  credit-note upload flow (see upload-credit-note/route.ts). */
   lifecycle_stage: string | null;
   tally_credit_note_number: string | null;
+  /** Set when an admin/manager has asked for this GST invoice to be cancelled.
+   *  Accounts must issue a credit note in Tally and upload it; until then the
+   *  row is a credit-note task, not a payment or send task. */
+  cancellation_requested_at: string | null;
+  cancellation_reason: string | null;
+  cancellation_requested_by_name: string | null;
   contract: InboxContract | null;
   proposal: InboxProposal | null;
   invoice: InboxInvoice | null;
@@ -588,4 +594,6 @@ export interface ExtractResponse {
    *  extracted text. Null when the statement has no PO number to check, or the
    *  PDF's text couldn't be parsed at all (e.g. a scanned image). */
   po_number_found: boolean | null;
+  /** Calendar months (YYYY-MM) the PDF says it bills; empty when it names no period. */
+  invoice_period_months?: string[];
 }

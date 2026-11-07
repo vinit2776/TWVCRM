@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
 import { EarlierEnquiries } from "@/components/leads/earlier-enquiries";
+import { PossibleLeadsTray } from "@/components/enquiries/possible-leads-tray";
 import {
   ENQUIRY_SOURCE_LABEL,
   toEnquiryItem,
@@ -124,6 +125,8 @@ export function EnquiryTracker() {
   ];
 
   return (
+    <div className="space-y-3">
+      <PossibleLeadsTray onChanged={load} />
     <div className="rounded-lg border-2 border-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/20 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-100/60 dark:bg-emerald-900/30 border-b border-emerald-300/60">
         <div className="flex items-center gap-2">
@@ -230,6 +233,7 @@ export function EnquiryTracker() {
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }

@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, IndianRupee, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle, Wallet } from "lucide-react";
+import { Loader2, IndianRupee, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle, Wallet, Ban } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
@@ -38,9 +38,13 @@ import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-s
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
 import { WrittenOffStatementsPanel } from "@/components/billing/written-off-statements-panel";
+import { CancelledStatementsPanel } from "@/components/billing/cancelled-statements-panel";
+import { CancelInvoiceDialog } from "@/components/billing/cancel-invoice-dialog";
+import { canCancelInvoice, classifyForCancel } from "@/lib/invoice-cancel";
 import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
 import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
 import {
@@ -193,6 +197,14 @@ interface ReceivableRow {
   gst_invoice_number: string | null;
   pi_cancelled_at: string | null;
   accounted: boolean;
+  cancellation_requested_at?: string | null;
+  cancellation_reason?: string | null;
+  cancellation_requested_by_user?: { full_name: string } | null;
+  tally_invoice_number?: string | null;
+  issuance_channel?: string | null;
+  proposal_id?: string | null;
+  case_id?: string | null;
+  aggregator_id?: string | null;
   payments: PaymentDetail[];
   contract: Contract | null;
   proposal?: ProposalRef | null;
@@ -217,6 +229,7 @@ interface PendingPaymentReport {
   payer_differs: boolean;
   claimed_statement_id: string | null;
   status: "reported" | "verified" | "rejected";
+  created_at?: string;
   resolution_note: string | null;
   reviewed_at: string | null;
   reviewed_by: { full_name: string } | null;
@@ -233,7 +246,7 @@ interface Summary {
   oldest_days: number;
 }
 
-type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "reported" | "paid" | "written_off";
+type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "reported" | "paid" | "written_off" | "cancelled";
 type ViewMode = "detail" | "ageing";
 
 /** One row in the Ageing view — aggregates all statements for a contract. */
@@ -260,6 +273,7 @@ const FILTERS: { key: FilterKey; label: string; hint: string }[] = [
   { key: "reported",   label: "Reported",       hint: "Payments reported by customers, not yet verified" },
   { key: "paid",       label: "Paid",           hint: "Finalized statements settled in full" },
   { key: "written_off", label: "Written Off",   hint: "Uncollectible statements — excluded from active AR chasing" },
+  { key: "cancelled",  label: "Cancelled",     hint: "Invoices cancelled, with the reason" },
 ];
 
 function customerName(lead?: Lead): string {
@@ -329,6 +343,8 @@ export default function AccountsReceivablePage() {
   const [canRecordPayment, setCanRecordPayment] = useState(false);
   const [canConvertPi, setCanConvertPi] = useState(false);
   const [convertRow, setConvertRow] = useState<ReceivableRow | null>(null);
+  const [canCancel, setCanCancel] = useState(false);
+  const [cancelRow, setCancelRow] = useState<ReceivableRow | null>(null);
   // Which row has its query thread expanded (one at a time).
   const [queryRowId, setQueryRowId] = useState<string | null>(null);
 
@@ -401,16 +417,32 @@ export default function AccountsReceivablePage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const withdrawCancellation = useCallback(async (row: ReceivableRow) => {
+    if (!window.confirm(`Withdraw the cancellation request for ${row.statement_number}? Reminders will resume.`)) return;
+    try {
+      const res = await fetch(`/api/billing-statements/${row.id}/withdraw-cancellation`, { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Failed to withdraw");
+      toast.success("Cancellation withdrawn. Reminders have resumed; reissue the payment link if the customer needs one.");
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to withdraw");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     fetch("/api/me")
       .then((res) => res.json())
       .then((me) => {
         setCanRecordPayment(canRecordPayments(me.role));
         setCanConvertPi(canOverridePiToGst(me.role));
+        setCanCancel(canCancelInvoice(me.role));
       })
       .catch(() => {
         setCanRecordPayment(false);
         setCanConvertPi(false);
+        setCanCancel(false);
       });
   }, []);
 
@@ -462,8 +494,13 @@ export default function AccountsReceivablePage() {
    * saved correctly; there was just nothing rendering it.
    */
   const reportsForOtherRow = useCallback(
-    (row: OtherReceivableRow): PendingPaymentReport[] =>
-      row.kind === "deposit" ? reportsByEntity.get(`proposal_deposit:${row.id}`) ?? [] : [],
+    (row: OtherReceivableRow): PendingPaymentReport[] => {
+      if (row.kind !== "deposit") return [];
+      const all = reportsByEntity.get(`proposal_deposit:${row.id}`) ?? [];
+      // Reports hang off the proposal, so with several parts out each one would
+      // appear under every part. Keep a part's own: the report for its amount.
+      return row.part_id ? all.filter((r) => Math.abs(Number(r.amount) - row.total_amount) <= 1) : all;
+    },
     [reportsByEntity],
   );
 
@@ -560,6 +597,10 @@ export default function AccountsReceivablePage() {
   // Which row's collapsed "reported paid" banner is expanded (one at a time,
   // matching the existing single-open pattern used for the query panel).
   const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
+  // The report being reviewed in the side drawer. Reviewing happens here, on
+  // the receivables page, so the invoice row behind it visibly updates when
+  // accounts record the payment, instead of sending them to the Queries page.
+  const [reviewing, setReviewing] = useState<PendingPaymentReport | null>(null);
 
   // ── Ageing view: group filtered statements by contract (or proposal) ─────
   const agingRows = useMemo((): AgingRow[] => {
@@ -811,7 +852,7 @@ export default function AccountsReceivablePage() {
               className="pl-8 w-72"
             />
           </div>
-          {filter !== "paid" && filter !== "written_off" && (
+          {filter !== "paid" && filter !== "written_off" && filter !== "cancelled" && (
             <div className="flex items-center border rounded-md overflow-hidden">
               <button
                 onClick={() => setViewMode("detail")}
@@ -829,7 +870,7 @@ export default function AccountsReceivablePage() {
               </button>
             </div>
           )}
-          {filter !== "paid" && filter !== "written_off" && (
+          {filter !== "paid" && filter !== "written_off" && filter !== "cancelled" && (
             <Button variant="outline" size="sm" onClick={exportCsv} title="Download AR aging report as CSV">
               <Download className="h-4 w-4 mr-1" /> Export CSV
             </Button>
@@ -843,6 +884,8 @@ export default function AccountsReceivablePage() {
             <PaidStatementsPanel search={search} onOpenHistory={openHistory} />
           ) : filter === "written_off" ? (
             <WrittenOffStatementsPanel search={search} onOpenHistory={openHistory} />
+          ) : filter === "cancelled" ? (
+            <CancelledStatementsPanel search={search} onOpenHistory={openHistory} />
           ) : loading ? (
             <div className="p-8 text-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…</div>
           ) : filtered.length === 0 ? (
@@ -934,25 +977,55 @@ export default function AccountsReceivablePage() {
                       const avg = avgDays[party.lead?.id ?? party.id];
                       const reports = reportsForRow(r);
                       const reportOpen = expandedReportId === r.id;
+                      // Only a report still waiting on accounts earns the loud
+                      // treatment; a closed one is history and stays quiet.
+                      const unverified = reports.filter((x) => x.status === "reported");
+                      const firstUnverified = unverified[0];
                       return (
-                        <div key={r.id} className={`rounded-xl border overflow-hidden ${bucket.borderClass} border-l-4`}>
-                          {reports.length > 0 && (
+                        <div
+                          key={r.id}
+                          className={`rounded-xl border overflow-hidden ${bucket.borderClass} border-l-4 ${
+                            unverified.length > 0 ? "ring-2 ring-amber-300" : ""
+                          }`}
+                        >
+                          {firstUnverified ? (
+                            <div className="flex items-center justify-between gap-3 flex-wrap px-3.5 py-2 text-xs bg-amber-100 text-amber-900 border-b border-amber-300">
+                              <button
+                                type="button"
+                                onClick={() => setExpandedReportId(reportOpen ? null : r.id)}
+                                className="text-left flex items-start gap-1.5 min-w-0"
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-none" />
+                                <span>
+                                  <span className="font-semibold">Payment reported, needs bank check:</span>{" "}
+                                  {formatCurrency(firstUnverified.amount)} ·{" "}
+                                  {STATEMENT_PAYMENT_MODE_LABELS[firstUnverified.payment_mode] ?? firstUnverified.payment_mode} ·{" "}
+                                  {formatDate(firstUnverified.paid_on)} · by {firstUnverified.created_by.full_name}
+                                  {firstUnverified.created_at && ` · ${waitingDays(firstUnverified.created_at)}d waiting`}
+                                  {unverified.length > 1 && ` · +${unverified.length - 1} more`}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setReviewing(firstUnverified)}
+                                className="flex-none rounded-md border border-amber-400 bg-white px-2.5 py-1 font-medium hover:bg-amber-50"
+                              >
+                                Review report
+                              </button>
+                            </div>
+                          ) : reports.length > 0 ? (
                             <button
                               type="button"
                               onClick={() => setExpandedReportId(reportOpen ? null : r.id)}
-                              className={`block w-full text-left px-3.5 py-1.5 text-xs font-medium border-b ${
-                                reports.some((x) => x.status === "reported")
-                                  ? "bg-amber-50 text-amber-900 border-amber-200"
-                                  : "bg-muted/40 text-muted-foreground border-border"
-                              }`}
+                              className="block w-full text-left px-3.5 py-1.5 text-xs font-medium border-b bg-muted/40 text-muted-foreground border-border"
                             >
-                              ⚠ {reports.length} payment report{reports.length > 1 ? "s" : ""} on this statement — {reportOpen ? "hide" : "view"}
+                              Payment report closed — {reportOpen ? "hide" : "view"}
                             </button>
-                          )}
+                          ) : null}
                           {reportOpen && (
                             <div className="px-3.5 py-2 border-b bg-amber-50/40 space-y-1.5">
                               {reports.map((rep) => (
-                                <ReportedPaymentLine key={rep.id} rep={rep} />
+                                <ReportedPaymentLine key={rep.id} rep={rep} onOpen={setReviewing} />
                               ))}
                             </div>
                           )}
@@ -1069,6 +1142,17 @@ export default function AccountsReceivablePage() {
                                     <Link href={`/contracts/${r.contract.id}`}>{badge}</Link>
                                   ) : badge;
                                 })()}
+                                {r.cancellation_requested_at && (
+                                  <div className="mt-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-800">
+                                    <Badge variant="outline" className="text-[10px] gap-1 border-red-300 bg-white text-red-700 mr-1.5">
+                                      <Ban className="h-3 w-3" /> Cancellation requested
+                                    </Badge>
+                                    {formatDate(r.cancellation_requested_at)}
+                                    {r.cancellation_requested_by_user?.full_name ? ` · ${r.cancellation_requested_by_user.full_name}` : ""}
+                                    {r.cancellation_reason ? ` — “${r.cancellation_reason}”` : ""}
+                                    <div className="text-[11px] text-red-700/80">Reminders stopped. Waiting for Accounts to upload the credit note.</div>
+                                  </div>
+                                )}
                               </div>
                             </div>
 
@@ -1103,7 +1187,7 @@ export default function AccountsReceivablePage() {
                           </div>
 
                           <div className="flex items-center justify-start sm:justify-end gap-1 px-3.5 py-2 border-t bg-gray-50/50 flex-wrap">
-                            <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id} title="Send next reminder now (bypasses 48h throttle)">
+                            <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id || !!r.cancellation_requested_at} title="Send next reminder now (bypasses 48h throttle)">
                               {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Bell className="h-3.5 w-3.5 mr-1" />} Remind
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View send history (reminders, proforma, GST invoice)">
@@ -1130,20 +1214,43 @@ export default function AccountsReceivablePage() {
                                 <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Convert to GST
                               </Button>
                             )}
+                            {canCancel && r.cancellation_requested_at && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => withdrawCancellation(r)}
+                                title="Take back the cancellation request"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5 mr-1" /> Withdraw cancellation
+                              </Button>
+                            )}
+                            {canCancel && ["pi", "gst"].includes(classifyForCancel(r).kind) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-red-200 text-red-700 hover:bg-red-50"
+                                onClick={() => setCancelRow(r)}
+                                title={classifyForCancel(r).kind === "gst" ? "Ask Accounts to cancel this GST invoice with a credit note" : "Cancel this proforma and stop its reminders"}
+                              >
+                                <Ban className="h-3.5 w-3.5 mr-1" /> Cancel
+                              </Button>
+                            )}
                             {/*
                               Distinct from Record: that is the accounts-only
                               action that moves money, this is open to everyone
                               and moves nothing until accounts verify it.
                             */}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-teal-200 text-teal-700 hover:bg-teal-50"
-                              onClick={() => setReportRow(r)}
-                              title="Customer says they've paid outside the CRM — tell accounts"
-                            >
-                              <BadgeIndianRupee className="h-3.5 w-3.5 mr-1" /> Report paid
-                            </Button>
+                            {unverified.length === 0 && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-teal-200 text-teal-700 hover:bg-teal-50"
+                                onClick={() => setReportRow(r)}
+                                title="Customer says they've paid outside the CRM — tell accounts"
+                              >
+                                <BadgeIndianRupee className="h-3.5 w-3.5 mr-1" /> Report paid
+                              </Button>
+                            )}
                             {canRecordPayment && (
                               <Button size="sm" onClick={() => openPayDialog(r)} title="Record offline payment" className="bg-teal-700 hover:bg-teal-800">
                                 <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record payment
@@ -1184,7 +1291,32 @@ export default function AccountsReceivablePage() {
         onReportDeposit={openReportForOtherRow}
         promotingId={promotingAdhocId}
         reportsForRow={reportsForOtherRow}
+        onReviewReport={setReviewing}
       />
+
+      <Sheet open={!!reviewing} onOpenChange={(o) => { if (!o) setReviewing(null); }}>
+        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto p-4">
+          <SheetHeader className="mb-3">
+            <SheetTitle className="text-base">
+              Payment reported{reviewing ? ` · ${formatCurrency(reviewing.amount)}` : ""}
+            </SheetTitle>
+            <p className="text-xs text-muted-foreground">
+              Check the bank statement, then record the payment, or tell the reporter it isn&apos;t there yet.
+            </p>
+          </SheetHeader>
+          {reviewing?.query && (
+            <QueryThreadPanel
+              // Remount per report so a stale thread never flashes while the next loads.
+              key={reviewing.id}
+              entityType={reviewing.query.entity_type}
+              entityId={reviewing.query.entity_id}
+              initialQueryId={reviewing.query.id}
+              // Refresh the list behind the drawer so the invoice row shows the effect.
+              onChanged={load}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
 
       <ReportPaymentDialog
         open={!!reportRow}
@@ -1276,6 +1408,20 @@ export default function AccountsReceivablePage() {
         />
       )}
 
+      {cancelRow && (
+        <CancelInvoiceDialog
+          open
+          onOpenChange={(o) => { if (!o) setCancelRow(null); }}
+          statementId={cancelRow.id}
+          statementNumber={cancelRow.statement_number}
+          customerName={customerName(partyOf(cancelRow).lead)}
+          amountLabel={formatCurrency(cancelRow.balance_due)}
+          hasPaymentLink={!!cancelRow.razorpay_payment_link_url}
+          kind={classifyForCancel(cancelRow).kind === "gst" ? "gst" : "pi"}
+          onSuccess={() => { setCancelRow(null); load(); }}
+        />
+      )}
+
       <Dialog open={!!resendRow} onOpenChange={(o) => !o && setResendRow(null)}>
         <DialogContent>
           <DialogHeader>
@@ -1338,7 +1484,7 @@ export default function AccountsReceivablePage() {
                       />
                       <span className="text-sm text-blue-900">
                         <span className="font-medium">Generate fresh payment link</span>
-                        <span className="text-blue-600 text-xs block">Cancel the old link · create a new 15-day link · resend invoice with new QR code</span>
+                        <span className="text-blue-600 text-xs block">Cancel the old link · create a new 180-day link · resend invoice with new QR code</span>
                       </span>
                     </label>
                   </div>
@@ -1393,7 +1539,12 @@ export default function AccountsReceivablePage() {
  * used to be written to the thread and then never surfaced anywhere the
  * reporter would look.
  */
-function ReportedPaymentLine({ rep }: { rep: PendingPaymentReport }) {
+/** Whole days since a report was raised, for the "waiting" label. */
+function waitingDays(createdAt: string): number {
+  return Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000));
+}
+
+function ReportedPaymentLine({ rep, onOpen }: { rep: PendingPaymentReport; onOpen?: (rep: PendingPaymentReport) => void }) {
   const settled = rep.status !== "reported";
   const tone = rep.status === "reported"
     ? "text-amber-900"
@@ -1423,9 +1574,15 @@ function ReportedPaymentLine({ rep }: { rep: PendingPaymentReport }) {
         )}
         {settled && rep.resolution_note && <span className="block italic">&ldquo;{rep.resolution_note}&rdquo;</span>}
         {" "}
-        <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
-          {settled ? "Open the thread" : "Open to verify"}
-        </a>
+        {onOpen ? (
+          <button type="button" onClick={() => onOpen(rep)} className="underline hover:no-underline">
+            {settled ? "Open the thread" : "Open to verify"}
+          </button>
+        ) : (
+          <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
+            {settled ? "Open the thread" : "Open to verify"}
+          </a>
+        )}
         {!settled && (
           <span className="opacity-80"> · Balance is unchanged until accounts confirm it.</span>
         )}
@@ -1459,7 +1616,7 @@ interface OtherSummary {
  * or search box, which was as good as invisible to anyone not already
  * looking for it.
  */
-function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, onReportDeposit, promotingId, reportsForRow }: {
+function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, onReportDeposit, promotingId, reportsForRow, onReviewReport }: {
   rows: OtherReceivableRow[];
   totalCount: number;
   canRecordPayment: boolean;
@@ -1468,6 +1625,8 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
   /** id of the row currently being promoted to "sent" before its report dialog opens — see openReportForOtherRow. */
   promotingId: string | null;
   reportsForRow: (row: OtherReceivableRow) => PendingPaymentReport[];
+  /** Open a report's review drawer on this page. */
+  onReviewReport: (rep: PendingPaymentReport) => void;
 }) {
   const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
@@ -1540,7 +1699,7 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
               {rows.map((r) => {
                 const style = OTHER_KIND_STYLE[r.kind];
                 return (
-                  <Fragment key={`${r.kind}-${r.id}`}>
+                  <Fragment key={`${r.kind}-${r.id}-${r.part_id ?? ""}`}>
                   <tr className="border-b last:border-0 hover:bg-gray-50">
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2">
@@ -1554,6 +1713,7 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
                         )}
                       </div>
                       <Badge variant="outline" className={`text-[10px] mt-1 ${style.cls}`}>{style.label}</Badge>
+                      {r.part_label && <div className="mt-1 max-w-[16rem] whitespace-normal text-[11px] text-muted-foreground">{r.part_label}</div>}
                     </td>
                     <td className="px-4 py-3">{r.party_name}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
@@ -1661,7 +1821,7 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
                     >
                       <td colSpan={6} className="px-4 py-2">
                         {reportsForRow(r).map((rep) => (
-                          <ReportedPaymentLine key={rep.id} rep={rep} />
+                          <ReportedPaymentLine key={rep.id} rep={rep} onOpen={onReviewReport} />
                         ))}
                       </td>
                     </tr>

@@ -75,6 +75,22 @@ describe("validateCloseOut", () => {
   });
 });
 
+describe("validateCloseOut unpaid", () => {
+  const base = { outcome: "used", reason_code: "staff_forgot" };
+  it("defaults to not closing unpaid", () => {
+    const r = validateCloseOut(base);
+    expect(r.ok && r.value.close_unpaid).toBe(false);
+  });
+  it("needs a note when closing without payment", () => {
+    expect(validateCloseOut({ ...base, close_unpaid: true }).ok).toBe(false);
+    expect(validateCloseOut({ ...base, close_unpaid: true, unpaid_note: "left without paying" }).ok).toBe(true);
+  });
+  it("ignores a stray note when not closing unpaid", () => {
+    const r = validateCloseOut({ ...base, unpaid_note: "x" });
+    expect(r.ok).toBe(true);
+  });
+});
+
 describe("reasons", () => {
   it("marks system problems as not counting against the person", () => {
     expect(findReason(BOOKING_LATE_CLOSE_OUT, "system_problem")?.countsAgainstPerson).toBe(false);

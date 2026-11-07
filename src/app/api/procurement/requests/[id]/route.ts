@@ -83,6 +83,9 @@ const editPrSchema = z.object({
   amc_start_date: z.string().optional().nullable(),
   amc_end_date: z.string().optional().nullable(),
   amc_visits_covered: z.number().int().positive().optional().nullable(),
+  // Optional on edit: a form that doesn't send them must not wipe a running AMC's start.
+  opening_cycles: z.number().int().min(0).max(120).optional(),
+  opening_visits: z.number().int().min(0).max(500).optional(),
   amc_contact_name: z.string().optional().nullable(),
   amc_helpline_number: z.string().optional().nullable(),
   amc_contact_email: z.string().email().optional().nullable().or(z.literal("")),
@@ -165,7 +168,7 @@ export async function GET(
   if (error || !data) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
   // Only procurement roles can access
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -703,7 +706,7 @@ export async function PUT(
   // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
   const lockedChain = await chainLockedResponse(supabase, { prId: id });
   if (lockedChain) return lockedChain;
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -713,6 +716,11 @@ export async function PUT(
     .eq("id", id)
     .single();
   if (fetchError || !pr) return NextResponse.json({ error: "Request not found" }, { status: 404 });
+
+  // A coordinator raises and edits their own requests only.
+  if (dbUser.role === "coordinator" && pr.requested_by !== dbUser.id) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
 
   if (!MR_EDITABLE_STATUSES.includes(pr.status)) {
     return NextResponse.json(
@@ -855,6 +863,14 @@ export async function PUT(
     tolerance_requested_percent: isAmc ? 0 : prData.tolerance_requested_percent,
     tolerance_reason: isAmc || prData.tolerance_requested_percent === 0 ? null : prData.tolerance_reason ?? null,
   };
+  // NOT NULL columns: cleared to 0 when switching away from AMC, left alone when not sent.
+  if (!isAmc) {
+    updatePayload.opening_cycles = 0;
+    updatePayload.opening_visits = 0;
+  } else {
+    if (prData.opening_cycles !== undefined) updatePayload.opening_cycles = prData.opening_cycles;
+    if (prData.opening_visits !== undefined) updatePayload.opening_visits = prData.opening_visits;
+  }
   // Rewrite every AMC column each time so switching away from AMC clears stale values.
   for (const field of AMC_FIELDS) {
     const value = prData[field];

@@ -4,7 +4,7 @@ import { DashboardMain } from "@/components/dashboard/dashboard-main";
 import { MobileNav } from "@/components/shared/mobile-nav";
 import { ReportIssueButton } from "@/components/support/report-issue-button";
 import { CurrentUserProvider } from "@/providers/current-user-provider";
-import { RoleShell } from "@/components/dashboard/role-shell";
+import { RoleShell, RouteAccessGuard } from "@/components/dashboard/role-shell";
 
 const CommandPalette = dynamic(
   () => import("@/components/shared/command-palette").then(m => ({ default: m.CommandPalette }))
@@ -36,7 +36,9 @@ export default function DashboardLayout({
              *   3. Renders <EnquiryAlertBanner> (dismissable full-width banner + audio chime)
              *   4. Renders {children} (pages may also consume the same context)
              */}
-            <DashboardMain>{children}</DashboardMain>
+            <DashboardMain>
+              <RouteAccessGuard>{children}</RouteAccessGuard>
+            </DashboardMain>
             <MobileNav />
             <CommandPalette />
             <ReportIssueButton />

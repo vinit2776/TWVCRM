@@ -433,11 +433,14 @@ export default function PurchaseRequestDetailPage() {
 
   if (!pr) return null;
 
-  const canSeePrices = ["admin", "manager"].includes(userRole);
+  // office_admin sees the same figures as admin/manager on this page. This is display only:
+  // approval stays on `isApprover` (admin/manager).
+  const canSeePrices = ["admin", "manager", "office_admin"].includes(userRole);
   // Everything on an MR stays editable until it's approved — see MR_EDITABLE_STATUSES.
   const canEditRequest =
     MR_EDITABLE_STATUSES.includes(pr.status) &&
-    ["admin", "manager", "office_admin"].includes(userRole);
+    (["admin", "manager", "office_admin"].includes(userRole) ||
+      (userRole === "coordinator" && pr.requested_by === user?.id));
   const isLargeAmount = pr.total_estimated_amount > approvalThreshold;
   const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 

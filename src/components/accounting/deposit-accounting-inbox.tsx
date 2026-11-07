@@ -125,12 +125,15 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                         <span className="font-medium text-sm truncate">{row.party_name}</span>
                         <Badge
                           variant="outline"
-                          className={row.kind === "deposit"
-                            ? "text-xs border-violet-300 bg-violet-50 text-violet-700"
-                            : "text-xs border-purple-300 bg-purple-50 text-purple-700"}
+                          className={row.kind === "topup"
+                            ? "text-xs border-purple-300 bg-purple-50 text-purple-700"
+                            : "text-xs border-violet-300 bg-violet-50 text-violet-700"}
                         >
-                          {row.kind === "deposit" ? "Security deposit" : "Top-up"}
+                          {row.kind === "deposit" ? "Security deposit" : row.kind === "part" ? `Deposit · Part ${row.part_seq} of ${row.parts_known}` : "Top-up"}
                         </Badge>
+                        {row.kind === "part" && row.is_final && (
+                          <Badge variant="outline" className="text-xs border-green-300 bg-green-50 text-green-700">Final · deposit complete</Badge>
+                        )}
                         {row.category && (
                           <Badge variant="outline" className="text-xs">
                             {DEPOSIT_TOPUP_CATEGORY_LABELS[row.category]}
@@ -168,7 +171,12 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                       <span className={row.amount == null ? "block text-xs text-amber-600 italic" : "block font-semibold text-sm"}>
                         {amountLabel(row.amount)}
                       </span>
-                      {row.amount == null && row.expected_amount != null && (
+                      {row.kind === "part" && row.expected_amount != null && (
+                        <span className="block text-[11px] text-muted-foreground">
+                          received now · {formatCurrency(row.received_to_date ?? 0)} of {formatCurrency(row.expected_amount)}
+                        </span>
+                      )}
+                      {row.kind !== "part" && row.amount == null && row.expected_amount != null && (
                         <span className="block text-[11px] text-muted-foreground">
                           expected {formatCurrency(row.expected_amount)}
                         </span>
@@ -178,7 +186,7 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                       open={queryOpen === key}
                       openCount={row.open_query_count ?? 0}
                       onToggle={() => setQueryOpen(queryOpen === key ? null : key)}
-                      title={`Raise or answer a question about this ${row.kind === "deposit" ? "deposit" : "top-up"}`}
+                      title={`Raise or answer a question about this ${row.kind === "topup" ? "top-up" : "deposit"}`}
                     />
                     {subTab === "open" ? (
                       <Button size="sm" variant="outline" className="gap-1.5 h-8" onClick={() => setUploadTarget(row)}>
@@ -211,8 +219,8 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                   <div className="border-t px-3 py-2.5">
                     <QueryThreadPanel
                       // A deposit row is a proposal; a top-up is its own table.
-                      entityType={row.kind === "deposit" ? "proposal_deposit" : "deposit_topup"}
-                      entityId={row.id}
+                      entityType={row.kind === "topup" ? "deposit_topup" : "proposal_deposit"}
+                      entityId={row.kind === "part" ? (row.proposal_id as string) : row.id}
                       onChanged={() => load(subTab, debouncedSearch)}
                     />
                   </div>
@@ -261,9 +269,15 @@ function VerificationPanel({ row }: { row: DepositInboxRow }) {
   return (
     <div className="border-t bg-muted/30 px-3 py-3">
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Field label="Amount received" value={row.amount == null ? notOnFile : formatCurrency(row.amount)} />
+        <Field label={row.kind === "part" ? `Received now (Part ${row.part_seq})` : "Amount received"} value={row.amount == null ? notOnFile : formatCurrency(row.amount)} />
         {row.expected_amount != null && (
-          <Field label="Deposit required" value={formatCurrency(row.expected_amount)} />
+          <Field label={row.kind === "part" ? "Total deposit expected" : "Deposit required"} value={formatCurrency(row.expected_amount)} />
+        )}
+        {row.kind === "part" && (
+          <>
+            <Field label="Received to date" value={formatCurrency(row.received_to_date ?? 0)} />
+            <Field label="Balance after this part" value={row.is_final ? "Nil — deposit complete" : formatCurrency(row.balance_after ?? 0)} />
+          </>
         )}
         {row.credit_amount != null && (
           <Field

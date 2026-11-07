@@ -12,7 +12,7 @@ export async function GET(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager", "office_admin", "accounts"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator", "accounts"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -184,7 +184,7 @@ export async function GET(
     .from("audit_trail")
     .select(`
       id, entity_type, entity_id, action, changes, created_at,
-      performer:users!audit_trail_performed_by_fkey(id, full_name)
+      performer:users!audit_trail_performed_by_fkey(id, full_name, role)
     `)
     .in("entity_id", entityIds)
     .order("created_at", { ascending: true });

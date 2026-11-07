@@ -40,6 +40,9 @@ const createPrSchema = z.object({
   amc_start_date: z.string().optional().nullable(),
   amc_end_date: z.string().optional().nullable(),
   amc_visits_covered: z.number().int().positive().optional().nullable(),
+  // A contract already running when entered here: cycles settled and visits done before.
+  opening_cycles: z.number().int().min(0).max(120).default(0),
+  opening_visits: z.number().int().min(0).max(500).default(0),
   amc_contact_name: z.string().optional().nullable(),
   amc_helpline_number: z.string().optional().nullable(),
   amc_contact_email: z.string().email().optional().nullable().or(z.literal("")),
@@ -100,7 +103,7 @@ export async function GET(request: NextRequest) {
   query = fetchAll ? query.limit(ALL_ROWS_CAP) : query.range(offset, offset + limit - 1);
 
   // Only procurement roles can see all; others are blocked at the route level
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -150,7 +153,7 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -169,6 +172,11 @@ export async function POST(request: NextRequest) {
     prData.tolerance_reason = null;
   }
   if (prData.tolerance_requested_percent === 0) prData.tolerance_reason = null;
+  // Only a running AMC has an opening position.
+  if (prData.department !== "amc") {
+    prData.opening_cycles = 0;
+    prData.opening_visits = 0;
+  }
 
   // One line per asset — the same asset on two lines would double-count it.
   if (prData.department === "amc") {

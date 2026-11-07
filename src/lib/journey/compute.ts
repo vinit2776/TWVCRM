@@ -80,6 +80,7 @@ function buildDrafts(input: JourneyInput): PhaseDraft[] {
     phases.push({ key: "lead", title: "Enquiry and lead", steps: sales });
 
     const rejected = proposal?.status === "rejected";
+    const withdrew = rejected && !!proposal?.rejectionReason?.startsWith("Customer withdrew");
     const needsWaiver = !!proposal && proposal.depositMonths <= 0 && !proposal.waiverVerified;
     phases.push({
       key: "proposal",
@@ -101,7 +102,9 @@ function buildDrafts(input: JourneyInput): PhaseDraft[] {
           blockedBy: !proposal
             ? null
             : rejected
-              ? "The customer rejected this proposal. Create a revised proposal."
+              ? withdrew
+                ? "The customer withdrew and their deposit was refunded. Create a new proposal if they come back."
+                : "The customer rejected this proposal. Create a revised proposal."
               : needsWaiver
                 ? "Zero deposit: an admin must approve the deposit waiver before it can be emailed."
                 : null,

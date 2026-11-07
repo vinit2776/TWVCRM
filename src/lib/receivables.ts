@@ -71,6 +71,10 @@ export interface ReceivableRow {
   /** Owning record's id where the receivable is a child — the contract for
    *  a top-up. Needed to address the settle endpoint. */
   parent_id?: string | null;
+  /** A deposit collected in parts: the part this row is for, and a one-line
+   *  description of where the whole deposit stands. */
+  part_id?: string | null;
+  part_label?: string | null;
 }
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;

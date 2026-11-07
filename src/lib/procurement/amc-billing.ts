@@ -113,17 +113,33 @@ export function contractTotal(unitCostPerCycle: number, cycleCount: number): num
 export function billingProgress(
   billCount: number,
   cycleCount: number | null | undefined,
-  unitCostPerCycle: number | null | undefined
+  unitCostPerCycle: number | null | undefined,
+  openingCycles: number | null | undefined = 0
 ): { billed: number; total: number; remainingAmount: number; isComplete: boolean } | null {
-  if (!cycleCount || cycleCount <= 1) return null;
-  const billed = Math.max(0, billCount);
-  const remainingCycles = Math.max(0, cycleCount - billed);
+  // A contract that was already running is still a multi-cycle contract even
+  // when only one of its cycles is left to bill here.
+  const opening = Math.max(0, openingCycles ?? 0);
+  if (!cycleCount || cycleCount + opening <= 1) return null;
+  const billedHere = Math.max(0, billCount);
+  const remainingCycles = Math.max(0, cycleCount - billedHere);
   return {
-    billed,
-    total: cycleCount,
+    billed: opening + billedHere,
+    total: opening + cycleCount,
     remainingAmount: remainingCycles * Number(unitCostPerCycle ?? 0),
-    isComplete: billed >= cycleCount,
+    isComplete: billedHere >= cycleCount,
   };
+}
+
+/**
+ * Full contract value, including cycles that were billed and settled before the
+ * contract was entered here. `cycleCount` is only the cycles still to bill here.
+ */
+export function fullContractValue(
+  unitCostPerCycle: number,
+  cycleCount: number,
+  openingCycles: number | null | undefined = 0
+): number {
+  return contractTotal(unitCostPerCycle, cycleCount + Math.max(0, openingCycles ?? 0));
 }
 
 /**
@@ -168,8 +184,9 @@ export type ServiceNextStep =
  * user never has to work out which of several buttons applies.
  *
  * Billing only opens once the PO is ordered. After that it is strictly
- * report → invoice, one cycle at a time; `cycle` is the 1-based cycle that
- * action applies to.
+ * report → invoice, one cycle at a time; `cycle` is the 1-based cycle of the
+ * whole contract that action applies to (so it starts above 1 when the contract
+ * was already running).
  */
 export function serviceNextStep(input: {
   status: string;
@@ -177,6 +194,8 @@ export function serviceNextStep(input: {
   reportsFiled: number;
   invoicesFiled: number;
   cycleCount: number | null | undefined;
+  /** Cycles billed before this system; screen numbering continues from here. */
+  openingCycles?: number | null;
 }): ServiceNextStep {
   if (input.terminated) return { kind: "terminated" };
   if (input.status !== "ordered") {
@@ -184,8 +203,9 @@ export function serviceNextStep(input: {
   }
   const { nextAction } = serviceBillingStep(input.reportsFiled, input.invoicesFiled, input.cycleCount);
   if (nextAction === "none") return { kind: "all_billed" };
-  if (nextAction === "upload_invoice") return { kind: "upload_invoice", cycle: input.invoicesFiled + 1 };
-  return { kind: "log_report", cycle: input.reportsFiled + 1 };
+  const opening = Math.max(0, input.openingCycles ?? 0);
+  if (nextAction === "upload_invoice") return { kind: "upload_invoice", cycle: opening + input.invoicesFiled + 1 };
+  return { kind: "log_report", cycle: opening + input.reportsFiled + 1 };
 }
 
 /**

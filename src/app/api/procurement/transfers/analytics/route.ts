@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin", "coordinator"];
 const WEEKS = 10;
 
 function average(nums: number[]): number | null {

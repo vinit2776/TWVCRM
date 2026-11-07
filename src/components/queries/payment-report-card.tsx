@@ -9,6 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
+import { livePartNumbers } from "@/lib/deposit-instalments";
 import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statementReference } from "@/lib/receivables";
@@ -89,6 +90,29 @@ export function PaymentReportCard({
   const canReview = canReviewPaymentReport(user?.role) && report.status === "reported";
 
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isDeposit || entityType !== "proposal_deposit" || report.status !== "reported") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/proposals/${entityId}/deposit-instalments`);
+        if (!res.ok) return;
+        const rows = ((await res.json()).data?.instalments ?? []) as Array<{ id: string; seq: number; amount: number | string; status: string; paid_amount?: number | string | null }>;
+        const numbers = livePartNumbers(rows);
+        if (cancelled) return;
+        const live = rows.filter((r) => r.status !== "cancelled");
+        setDepositHasParts(live.length > 0);
+        const open = live.filter((r) => r.status === "requested");
+        // The part whose amount the customer reported; the only open one if just one is out.
+        const match = open.find((r) => Math.abs(Number(r.amount) - Number(report.amount)) <= 1) ?? (open.length === 1 ? open[0] : null);
+        setDepositPart(match ? { id: match.id, seq: numbers.get(match.id) ?? match.seq, amount: Number(match.amount) } : null);
+      } catch {
+        // Falls back to the single-deposit dialog, which explains itself if parts exist.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isDeposit, entityType, entityId, report.status, report.amount]);
   const [mode, setMode] = useState<"idle" | "not_found" | "rejected">("idle");
   const [note, setNote] = useState("");
 
@@ -103,6 +127,10 @@ export function PaymentReportCard({
     report.claimed_statement_id ?? (entityType === "billing_statement" ? entityId : null),
   );
   const [recordOpen, setRecordOpen] = useState(false);
+  // A deposit collected in parts is recorded against the part it pays, not the
+  // proposal. `undefined` = not looked up yet, `null` = no matching open part.
+  const [depositPart, setDepositPart] = useState<{ id: string; seq: number; amount: number } | null | undefined>(undefined);
+  const [depositHasParts, setDepositHasParts] = useState(false);
   // Payments already on the chosen invoice. The usual way a report ends up
   // double-counted is accounts recording the receipt first, then verifying the
   // report with "Verify and record" — which would record it again. Showing
@@ -158,10 +186,22 @@ export function PaymentReportCard({
   // is the common case (the same receipt entered before anyone verified the
   // report) and earns a one-click accept; zero or several fall back to the
   // list below, where a person chooses.
-  const acceptable = matchingRecordedPayments(recorded, report.amount);
+  // A deposit adjustment moves money from the security deposit onto the
+  // invoice. There is no bank credit behind it to check or to match against
+  // the reported amount, so it is shown on its own rather than offered as a
+  // payment to confirm.
+  const adjustments = recorded.filter((p) => p.payment_mode === "deposit_adjustment");
+  const bankRecorded = recorded.filter((p) => p.payment_mode !== "deposit_adjustment");
+  const acceptable = matchingRecordedPayments(bankRecorded, report.amount);
+  // One exact match is a single obvious answer: link it. Recording the report
+  // as a second payment is how receipts get double-counted, so that path sits
+  // behind a deliberate click instead of beside the safe one.
+  const exactMatch = acceptable.length === 1 ? acceptable[0] : null;
+  const [recordAsNew, setRecordAsNew] = useState(false);
+  const showVerifyAndRecord = !exactMatch || recordAsNew;
 
   const settle = useCallback(
-    async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string) => {
+    async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string, noteOverride?: string) => {
       setBusy(true);
       const res = await fetch(`/api/queries/payment-reports/${report.id}`, {
         method: "PATCH",
@@ -169,7 +209,7 @@ export function PaymentReportCard({
         body: JSON.stringify({
           outcome,
           billing_payment_id: billingPaymentId,
-          note: note.trim() || undefined,
+          note: noteOverride ?? (note.trim() || undefined),
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -208,7 +248,7 @@ export function PaymentReportCard({
       linkedPayment: report.linked_payment,
       modeLabel: (m) => STATEMENT_PAYMENT_MODE_LABELS[m] ?? m,
     });
-    const Icon = report.status === "rejected" ? XCircle : Link2;
+    const Icon = report.status === "rejected" || report.status === "withdrawn" ? XCircle : Link2;
     return (
       <div className="rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground flex gap-2 items-start leading-relaxed">
         <Icon className="h-3.5 w-3.5 mt-0.5 flex-none" aria-hidden />
@@ -216,7 +256,7 @@ export function PaymentReportCard({
           <p>
             <span className="font-medium text-foreground">{summary.headline}</span>
             {report.reviewed_by && report.reviewed_at
-              ? ` · ${report.status === "verified" ? "verified" : "closed"} by ${report.reviewed_by.full_name}, ${formatDate(report.reviewed_at)}`
+              ? ` · ${report.status === "verified" ? "verified" : report.status === "withdrawn" ? "withdrawn" : "closed"} by ${report.reviewed_by.full_name}, ${formatDate(report.reviewed_at)}`
               : ""}
           </p>
           <p>
@@ -224,7 +264,7 @@ export function PaymentReportCard({
             {formatCurrency(report.amount)}, {modeLabel}, {formatDate(report.paid_on)}
           </p>
           {summary.linkLine && <p>{summary.linkLine}</p>}
-          {report.status === "rejected" && report.resolution_note && (
+          {(report.status === "rejected" || report.status === "withdrawn") && report.resolution_note && (
             <p className="italic">{report.resolution_note}</p>
           )}
         </div>
@@ -304,38 +344,83 @@ export function PaymentReportCard({
               </div>
             )}
 
-            {mode === "idle" && acceptable.length === 1 && (
+            {mode === "idle" && adjustments.length > 0 && (
+              <div className="space-y-1.5 rounded border border-slate-300 bg-slate-50 p-2 text-slate-900">
+                <p className="text-[11px] font-medium">This invoice was settled by deposit adjustment</p>
+                <p className="text-[11px] text-slate-700">
+                  The security deposit was applied to it, so there is no bank credit to check. If this report was
+                  asking for that adjustment, close it here.
+                </p>
+                {adjustments.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span>
+                      {formatCurrency(Number(a.amount))} · deposit adjustment · {formatDate(a.payment_date)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 text-[11px] bg-background flex-none"
+                      disabled={busy}
+                      onClick={() =>
+                        void settle(
+                          "verified",
+                          a.id,
+                          `Settled by deposit adjustment of ${formatCurrency(Number(a.amount))} (${formatDate(a.payment_date)}). No bank credit to verify.`,
+                        )
+                      }
+                    >
+                      Close: settled by deposit adjustment
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {mode === "idle" && exactMatch && (
               <div className="space-y-1.5 rounded border border-green-300 bg-green-50 p-2">
                 <p className="text-[11px] font-medium text-green-900">
-                  This payment is already recorded on the invoice
+                  Matches a payment already recorded on this invoice
                 </p>
                 <p className="text-[11px] text-green-900/80">
-                  {formatCurrency(Number(acceptable[0].amount) + Number(acceptable[0].tds_amount ?? 0))}
+                  {Number(exactMatch.tds_amount ?? 0) > 0
+                    ? `${formatCurrency(Number(exactMatch.amount))} + ${formatCurrency(Number(exactMatch.tds_amount))} TDS = `
+                    : ""}
+                  {formatCurrency(Number(exactMatch.amount) + Number(exactMatch.tds_amount ?? 0))}
                   {" · "}
-                  {STATEMENT_PAYMENT_MODE_LABELS[acceptable[0].payment_mode] ?? acceptable[0].payment_mode}
-                  {acceptable[0].payment_reference ? ` · ${acceptable[0].payment_reference}` : ""}
+                  {STATEMENT_PAYMENT_MODE_LABELS[exactMatch.payment_mode] ?? exactMatch.payment_mode}
+                  {exactMatch.payment_reference ? ` · ref ${exactMatch.payment_reference}` : ""}
                   {" · received "}
-                  {formatDate(acceptable[0].payment_date)}
+                  {formatDate(exactMatch.payment_date)}
                 </p>
+                <p className="text-[11px] text-green-900/80">
+                  Matched on amount only. Check the bank statement before confirming.
+                </p>
+                {exactMatch.payment_mode !== report.payment_mode && (
+                  <p className="text-[11px] font-medium text-amber-800">
+                    Mode differs: reported {modeLabel}, recorded{" "}
+                    {STATEMENT_PAYMENT_MODE_LABELS[exactMatch.payment_mode] ?? exactMatch.payment_mode}.
+                  </p>
+                )}
                 <Button
                   size="sm"
                   className="h-7 text-xs bg-green-600 hover:bg-green-700"
                   disabled={busy}
-                  onClick={() => void settle("verified", acceptable[0].id)}
+                  onClick={() => void settle("verified", exactMatch.id)}
                 >
-                  <Check className="h-3 w-3 mr-1" /> Accept and link this payment
+                  <Link2 className="h-3 w-3 mr-1" /> Confirm payment already recorded
                 </Button>
               </div>
             )}
 
-            {mode === "idle" && recorded.length > 0 && (
+            {mode === "idle" && bankRecorded.length > 0 && !exactMatch && (
               <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
                 <p className="text-[11px] font-medium">Already recorded on this invoice</p>
                 <p className="text-[11px] opacity-80">
-                  If this is the same payment, link it here. &ldquo;Verify and record&rdquo; adds a second
-                  payment, and is refused if it would over-credit the invoice.
+                  {acceptable.length > 0
+                    ? "More than one of these matches the amount reported. Confirm the one that is the same payment."
+                    : "None of these matches the amount reported, so this report stays open. Use Not found yet or No such payment."}
                 </p>
-                {recorded.map((p) => (
+                {bankRecorded.map((p) => (
                   <div key={p.id} className="flex items-center justify-between gap-2 text-[11px]">
                     <span>
                       <span className="font-medium tabular-nums">{formatCurrency(Number(p.amount))}</span>
@@ -346,15 +431,17 @@ export function PaymentReportCard({
                       {formatDate(p.payment_date)}
                       {p.created_at ? ` · recorded ${formatRecordedOn(p.created_at)}` : ""}
                     </span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-6 text-[11px] bg-background flex-none"
-                      disabled={busy}
-                      onClick={() => void settle("verified", p.id)}
-                    >
-                      Link and verify
-                    </Button>
+                    {acceptable.some((a) => a.id === p.id) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[11px] bg-background flex-none"
+                        disabled={busy}
+                        onClick={() => void settle("verified", p.id)}
+                      >
+                        Confirm payment already recorded
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -377,13 +464,17 @@ export function PaymentReportCard({
             <div className="flex flex-wrap gap-1.5">
               {mode === "idle" ? (
                 <>
+                  {showVerifyAndRecord && (
                   <Button
                     size="sm"
-                    className="h-7 text-xs bg-green-600 hover:bg-green-700"
-                    disabled={busy || (!isDeposit && !isBooking && !statementId)}
+                    variant={bankRecorded.length > 0 ? "outline" : "default"}
+                    className={bankRecorded.length > 0 ? "h-7 text-xs bg-background" : "h-7 text-xs bg-green-600 hover:bg-green-700"}
+                    disabled={busy || (!isDeposit && !isBooking && !statementId) || (isDeposit && depositHasParts && !depositPart)}
                     title={
                       isBooking
                         ? "Mark this booking payment verified — the booking becomes paid"
+                        : isDeposit && depositHasParts && !depositPart
+                          ? "No open part matches this report — ask sales to request the part on the proposal first"
                         : isDeposit
                           ? "Record this deposit against the proposal"
                           : statementId
@@ -397,8 +488,9 @@ export function PaymentReportCard({
                     ) : (
                       <Check className="h-3 w-3 mr-1" />
                     )}
-                    {isBooking ? "Credit found — verify" : "Verify and record"}
+                    {isBooking ? "Credit found — verify" : "Record payment"}
                   </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="outline"
@@ -442,6 +534,16 @@ export function PaymentReportCard({
               )}
             </div>
 
+            {mode === "idle" && exactMatch && !recordAsNew && (
+              <button
+                type="button"
+                className="text-[11px] underline underline-offset-2 opacity-80 hover:opacity-100"
+                onClick={() => setRecordAsNew(true)}
+              >
+                It isn&apos;t recorded yet. Record it as a new payment
+              </button>
+            )}
+
             {mode === "idle" && (
               <p className="text-[11px] opacity-80">
                 &ldquo;Not found yet&rdquo; keeps this open and chasing. Only close it if the payment
@@ -459,8 +561,10 @@ export function PaymentReportCard({
             kind: "deposit",
             reference: entityReference ?? "Deposit",
             party_name: entityTitle ?? "",
-            total_amount: entityAmount ?? report.amount,
-            balance_due: entityAmount ?? report.amount,
+            total_amount: depositPart?.amount ?? entityAmount ?? report.amount,
+            balance_due: depositPart?.amount ?? entityAmount ?? report.amount,
+            part_id: depositPart?.id ?? null,
+            part_label: depositPart ? `Part ${depositPart.seq} — recorded for exactly what was asked` : null,
             due_date: null,
             days_overdue: null,
             payment_link_url: null,
@@ -488,6 +592,7 @@ export function PaymentReportCard({
         statementId={statementId}
         balanceDue={null}
         partyLabel={`Verifying a payment reported by ${report.created_by.full_name}`}
+        requireDateEntry
         prefill={{
           amount: report.amount,
           date: report.paid_on,

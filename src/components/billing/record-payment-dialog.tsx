@@ -61,12 +61,18 @@ interface RecordPaymentDialogProps {
     mode?: string | null;
     reference?: string | null;
   } | null;
+  /**
+   * Start with the bank-receipt date empty and make accounts type it. Used when
+   * verifying a reported payment: the reporter's date is when the customer says
+   * they paid, not when the money reached the bank.
+   */
+  requireDateEntry?: boolean;
 }
 
 const PAYMENT_MODES = STATEMENT_PAYMENT_MODES;
 
 export function RecordPaymentDialog({
-  open, onOpenChange, statementId, statementNumber, partyLabel, balanceDue, onSuccess, prefill,
+  open, onOpenChange, statementId, statementNumber, partyLabel, balanceDue, onSuccess, prefill, requireDateEntry,
 }: RecordPaymentDialogProps) {
   const [amount, setAmount]       = useState("");
   const [date, setDate]           = useState(todayIst());
@@ -106,7 +112,7 @@ export function RecordPaymentDialog({
             ? String(balanceDue)
             : "",
       );
-      setDate(prefill?.date || todayIst());
+      setDate(requireDateEntry ? "" : prefill?.date || todayIst());
       setMode(prefill?.mode || "neft");
       setReference(prefill?.reference || "");
       setNotes("");
@@ -121,7 +127,7 @@ export function RecordPaymentDialog({
       setOverrideConfirmed(false);
       setOverrideReason("");
     }
-  }, [open, balanceDue, prefill]);
+  }, [open, balanceDue, prefill, requireDateEntry]);
 
   useEffect(() => {
     if (!open || !statementId) return;
@@ -213,6 +219,11 @@ export function RecordPaymentDialog({
       return;
     }
 
+    if (!date) {
+      toast.error("Enter the date the money reached the bank");
+      return;
+    }
+
     const tdsAmt = tdsEnabled ? Math.max(0, Number(tdsAmount) || 0) : 0;
     if (tdsEnabled && tdsAmt <= 0) {
       toast.error("Enter the TDS amount deducted by the client");
@@ -246,6 +257,7 @@ export function RecordPaymentDialog({
           ? "Invoice fully paid!"
           : `Balance due: ₹${json.balance_due.toLocaleString("en-IN")}`}`
       );
+      if (json?.closed_report_id) toast.success("The payment report for this invoice was closed too.");
       onOpenChange(false);
       onSuccess(recordedPaymentId);
     } else {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle, Lightbulb, TrendingUp, CalendarClock, PackageSearch, ShieldCheck, Clock } from "lucide-react";
 import Link from "next/link";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -19,6 +20,9 @@ import { AlertTriangle } from "lucide-react";
 import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } from "@/types";
 import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
+import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
+import { checkInvoice, type SuggestionField } from "@/lib/procurement/invoice-check";
+import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
@@ -83,6 +87,9 @@ function NewVendorBillForm() {
 
   // File upload state
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  // Advisory read of the uploaded invoice (never blocks, never overwrites typed values)
+  const [invoiceCheck, setInvoiceCheck] = useState<InvoiceCheckState>({ status: "idle" });
+  const extractSeq = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
@@ -334,9 +341,29 @@ function NewVendorBillForm() {
       return;
     }
     setInvoiceFile(file);
+    runInvoiceCheck(file);
   };
 
+  // One read per upload. Any failure just hides the card; manual entry carries on.
+  const runInvoiceCheck = (file: File) => {
+    const seq = ++extractSeq.current;
+    setInvoiceCheck({ status: "loading" });
+    requestInvoiceExtraction(file).then((extracted) => {
+      if (seq !== extractSeq.current) return;
+      setInvoiceCheck(extracted ? { status: "ok", extracted } : { status: "unavailable" });
+    });
+  };
+
+  const applyInvoiceSuggestion = useCallback((field: SuggestionField, value: string) => {
+    if (field === "amount") setTotalAmount(value);
+    else if (field === "gstAmount") setGstAmount(value);
+    else if (field === "invoiceNumber") setInvoiceNumber(value);
+    else setInvoiceDate(value);
+  }, []);
+
   const removeFile = () => {
+    extractSeq.current++;
+    setInvoiceCheck({ status: "idle" });
     setInvoiceFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -364,6 +391,30 @@ function NewVendorBillForm() {
         })
       : null;
   const needsToleranceReason = toleranceOutcome?.kind === "exception";
+
+  // Inputs for the advisory invoice check card
+  const vendorNameForCheck = vendors.find((v) => v.id === vendorId)?.name ?? null;
+  const gstNum = parseFloat(gstAmount);
+  const enteredForCheck = useMemo(
+    () => ({
+      invoiceNumber,
+      invoiceDate,
+      vendorName: vendorNameForCheck,
+      amount: isFinite(amountNum) && amountNum > 0 ? amountNum : null,
+      gstAmount: isFinite(gstNum) && gstNum > 0 ? gstNum : null,
+    }),
+    [invoiceNumber, invoiceDate, vendorNameForCheck, amountNum, gstNum],
+  );
+  const checkCeiling = effectiveCeiling ? effectiveCeiling * (1 + tolerancePercent / 100) : null;
+  // The invoice check's findings, echoed on the amount field and the Save button so they aren't missed
+  const invoiceFindings = useMemo(
+    () =>
+      invoiceCheck.status === "ok"
+        ? checkInvoice({ extracted: invoiceCheck.extracted, entered: enteredForCheck, poCeiling: checkCeiling })
+        : [],
+    [invoiceCheck, enteredForCheck, checkCeiling],
+  );
+  const amountCheckFinding = invoiceFindings.find((f) => f.code === "amount_looks_gst_inclusive" || f.code === "amount_differs_subtotal");
 
   // Inline real-time error shown below the amount field
   const amountError: string | null = (() => {
@@ -393,6 +444,16 @@ function NewVendorBillForm() {
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
     if (showElectricity && !elecStatus.ok) return elecStatus.reason ?? "Choose the location this electricity bill is for";
     return null;
+  };
+
+  // Findings from the invoice check get one pause at Save — a guide, never a block ("Save anyway").
+  const [findingsConfirmOpen, setFindingsConfirmOpen] = useState(false);
+
+  const handleSave = () => {
+    const err = validate();
+    if (err) { toast.error(err, { duration: 6000 }); return; }
+    if (invoiceFindings.length > 0) { setFindingsConfirmOpen(true); return; }
+    void handleSubmit();
   };
 
   const handleSubmit = async () => {
@@ -797,8 +858,29 @@ function NewVendorBillForm() {
                 placeholder="0.00"
                 value={totalAmount}
                 onChange={(e) => setTotalAmount(e.target.value)}
-                className={amountError ? "border-red-500 focus-visible:ring-red-500" : ""}
+                className={amountError ? "border-red-500 focus-visible:ring-red-500" : amountCheckFinding ? "border-amber-400 bg-amber-50 focus-visible:ring-amber-400" : ""}
               />
+              {!amountError && amountCheckFinding && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-amber-800">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="flex-1 min-w-[10rem]">
+                    {amountCheckFinding.code === "amount_looks_gst_inclusive"
+                      ? "Looks GST-inclusive — this field takes the amount before GST."
+                      : "Differs from the pre-GST amount on the uploaded invoice."}
+                  </span>
+                  {amountCheckFinding.suggestion && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-6 bg-white px-2 text-xs"
+                      onClick={() => applyInvoiceSuggestion("amount", amountCheckFinding.suggestion!.value)}
+                    >
+                      {amountCheckFinding.suggestion.label}
+                    </Button>
+                  )}
+                </div>
+              )}
               {amountError ? (
                 <p className="text-xs text-red-600 flex items-start gap-1">
                   <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
@@ -961,6 +1043,7 @@ function NewVendorBillForm() {
               className="sr-only"
               onChange={handleFileChange}
             />
+            <InvoiceCheckCard state={invoiceCheck} entered={enteredForCheck} poCeiling={checkCeiling} onApply={applyInvoiceSuggestion} />
           </div>
 
           <div className="space-y-1.5">
@@ -1011,8 +1094,22 @@ function NewVendorBillForm() {
         </CardContent>
       </Card>
 
-      <div className="flex justify-end">
-        <Button onClick={handleSubmit} disabled={submitting || !!amountError || hasExactDuplicate} size="lg">
+      <div className="flex flex-col items-end gap-2">
+        {invoiceFindings.length > 0 && (
+          <p className="flex items-start gap-1.5 text-xs text-amber-800 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5 max-w-md">
+            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+            <span>
+              The uploaded invoice differs from what you entered in {invoiceFindings.length} {invoiceFindings.length === 1 ? "place" : "places"} — check the
+              invoice review above. This is a guide only; you can still save.
+            </span>
+          </p>
+        )}
+        <Button
+          onClick={handleSave}
+          disabled={submitting || !!amountError || hasExactDuplicate}
+          size="lg"
+          className={invoiceFindings.length > 0 ? "bg-amber-600 hover:bg-amber-700 text-white" : undefined}
+        >
           {submitting ? (
             <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving…</>
           ) : (
@@ -1020,6 +1117,36 @@ function NewVendorBillForm() {
           )}
         </Button>
       </div>
+
+      <Dialog open={findingsConfirmOpen} onOpenChange={setFindingsConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-800">
+              <AlertTriangle className="h-5 w-5" /> Check before saving
+            </DialogTitle>
+            <DialogDescription>
+              The uploaded invoice differs from what you entered. This is a guide only — you can still save.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-2 text-sm">
+            {invoiceFindings.map((f) => (
+              <li key={f.code} className="flex items-start gap-2 rounded border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-900">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <span>{f.message}</span>
+              </li>
+            ))}
+          </ul>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={() => setFindingsConfirmOpen(false)}>Go back and review</Button>
+            <Button
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => { setFindingsConfirmOpen(false); void handleSubmit(); }}
+            >
+              Save anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

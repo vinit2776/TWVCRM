@@ -94,6 +94,8 @@ export async function GET(req: NextRequest) {
       held_at, hold_reason,
       gst_waived_at, gst_waived_reason,
       lifecycle_stage, tally_credit_note_number,
+      cancellation_requested_at, cancellation_reason,
+      cancellation_requested_by_user:users!billing_statements_cancellation_requested_by_fkey(full_name),
       statement_type, fixed_amount, usage_amount,
       service_usage_amount, booking_usage_amount,
       subtotal, tax_percentage, tax_amount,
@@ -142,7 +144,10 @@ export async function GET(req: NextRequest) {
       .order("updated_at", { ascending: false })
       .range((page - 1) * CLOSED_PAGE_SIZE, page * CLOSED_PAGE_SIZE);
   } else {
-    query = query.in("handoff_state", INBOX_ACTIONABLE_STATES as readonly string[])
+    // A pending cancellation is a task whatever state the invoice was in, so
+    // it is pulled in even when its handoff_state is not otherwise actionable.
+    query = query
+      .or(`handoff_state.in.(${INBOX_ACTIONABLE_STATES.join(",")}),cancellation_requested_at.not.is.null`)
       .is("voided_at", null)
       .order("updated_at", { ascending: true });
   }
@@ -206,6 +211,9 @@ export async function GET(req: NextRequest) {
     pi_cancelled_at: string | null;
     lifecycle_stage: string | null;
     tally_credit_note_number: string | null;
+    cancellation_requested_at: string | null;
+    cancellation_reason: string | null;
+    cancellation_requested_by_user: { full_name: string | null } | { full_name: string | null }[] | null;
     contract: {
       id: string;
       contract_number: string;
@@ -658,6 +666,11 @@ export async function GET(req: NextRequest) {
       pi_was_cancelled: !!s.pi_cancelled_at,
       lifecycle_stage: s.lifecycle_stage,
       tally_credit_note_number: s.tally_credit_note_number,
+      cancellation_requested_at: s.cancellation_requested_at,
+      cancellation_reason: s.cancellation_reason,
+      cancellation_requested_by_name: (Array.isArray(s.cancellation_requested_by_user)
+        ? s.cancellation_requested_by_user[0]?.full_name
+        : s.cancellation_requested_by_user?.full_name) ?? null,
       ...(timelineEvents ? { timeline_events: timelineEvents } : {}),
       contract: s.contract
         ? {

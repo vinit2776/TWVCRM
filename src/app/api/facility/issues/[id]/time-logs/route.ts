@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { hasRole, FACILITY_ROLES } from "@/lib/facility";
+import { canWorkOnIssue } from "@/lib/facility";
 import { MAX_TIME_LOG_MINUTES } from "@/lib/facility-ui";
 
 /**
@@ -46,7 +46,7 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!hasRole(dbUser?.role, FACILITY_ROLES.workOnIssues)) {
+  if (!(await canWorkOnIssue(supabase, id, dbUser))) {
     return NextResponse.json({ error: "Insufficient role" }, { status: 403 });
   }
 

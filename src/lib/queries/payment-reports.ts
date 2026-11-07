@@ -62,7 +62,7 @@ export function targetKindForEntity(entityType: PaymentReportEntityType): Paymen
  */
 export const DEPOSIT_RECORD_ROLES: readonly UserRole[] = ["admin", "manager", "accounts"];
 
-export type PaymentReportStatus = "reported" | "verified" | "rejected";
+export type PaymentReportStatus = "reported" | "verified" | "rejected" | "withdrawn";
 
 export const PAYMENT_REPORT_TARGET_LABELS: Record<PaymentReportTargetKind, string> = {
   invoice: "Invoice payment",
@@ -74,12 +74,14 @@ export const PAYMENT_REPORT_STATUS_LABELS: Record<PaymentReportStatus, string> =
   reported: "Reported · unverified",
   verified: "Verified",
   rejected: "No such payment",
+  withdrawn: "Withdrawn",
 };
 
 export const PAYMENT_REPORT_STATUS_COLORS: Record<PaymentReportStatus, string> = {
   reported: "bg-amber-50 border-amber-200 text-amber-800",
   verified: "bg-green-50 border-green-200 text-green-800",
   rejected: "bg-red-50 border-red-200 text-red-800",
+  withdrawn: "bg-muted/40 border-border text-muted-foreground",
 };
 
 /**
@@ -97,6 +99,23 @@ export const PAYMENT_REPORT_REVIEW_ROLES: readonly UserRole[] = ["admin", "accou
 
 export function canReviewPaymentReport(role: string | null | undefined): boolean {
   return !!role && (PAYMENT_REPORT_REVIEW_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * Who can take a report back before it is verified: whoever raised it (to fix a
+ * wrong amount or date), or accounts/admin (to clear a mistaken one). Booking
+ * reports are raised by the server against a pending booking payment, so they
+ * are settled from the booking, never withdrawn.
+ */
+export function canWithdrawPaymentReport(args: {
+  status: PaymentReportStatus;
+  targetKind: PaymentReportTargetKind;
+  role: string | null | undefined;
+  userId: string | null | undefined;
+  reportedBy: string | null | undefined;
+}): boolean {
+  if (args.status !== "reported" || args.targetKind === "booking") return false;
+  return (!!args.userId && args.userId === args.reportedBy) || canReviewPaymentReport(args.role);
 }
 
 /**
@@ -278,17 +297,28 @@ export function lastCheckedChip(
 }
 
 /**
+ * Does a recorded payment cover a reported amount? Reporters give whichever
+ * figure they were told: the bank credit (net of TDS) or the whole invoice
+ * credit (net plus TDS). Either counts, to within a rupee of rounding.
+ */
+export function paymentCoversReportedAmount(
+  payment: { amount: number | string | null; tds_amount?: number | string | null },
+  reportedAmount: number,
+): boolean {
+  const net = Number(payment.amount ?? 0);
+  const gross = net + Number(payment.tds_amount ?? 0);
+  return Math.abs(net - reportedAmount) <= 1 || Math.abs(gross - reportedAmount) <= 1;
+}
+
+/**
  * Which payments already recorded on an invoice are plausibly the one a report
- * is about: those whose credit (cash plus TDS) equals the reported amount to
- * within a rupee. Exactly one match earns the one-click "Accept and link";
- * none or several leave the choice to a person.
+ * is about (see paymentCoversReportedAmount). Exactly one match earns the
+ * one-click "Link and verify"; none or several leave the choice to a person.
  */
 export function matchingRecordedPayments<
   T extends { amount: number | string | null; tds_amount?: number | string | null },
 >(payments: T[], reportedAmount: number): T[] {
-  return payments.filter(
-    (p) => Math.abs(Number(p.amount ?? 0) + Number(p.tds_amount ?? 0) - reportedAmount) <= 1,
-  );
+  return payments.filter((p) => paymentCoversReportedAmount(p, reportedAmount));
 }
 
 /**
@@ -309,6 +339,9 @@ export function closedReportSummary(args: {
   if (args.status === "rejected") {
     return { headline: "Payment report closed — no such payment", linkLine: null };
   }
+  if (args.status === "withdrawn") {
+    return { headline: "Payment report withdrawn", linkLine: null };
+  }
   if (args.targetKind === "deposit") {
     return { headline: "Payment report closed", linkLine: "Recorded against the deposit" };
   }
@@ -317,6 +350,9 @@ export function closedReportSummary(args: {
   }
   const p = args.linkedPayment;
   if (!p) return { headline: "Payment report closed", linkLine: "Linked to the recorded payment" };
+  if (p.payment_mode === "deposit_adjustment") {
+    return { headline: "Payment report closed", linkLine: "Settled by deposit adjustment" };
+  }
   const ref = p.payment_reference ? `, ref ${p.payment_reference}` : "";
   return {
     headline: "Payment report closed",

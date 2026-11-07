@@ -1298,7 +1298,7 @@ function DocumentsSection({
   const [file, setFile] = useState<File | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
-  const canUpload = ["admin", "manager", "fms", "accounts", "office_admin", "it_manager"].includes(userRole);
+  const canUpload = ["admin", "manager", "fms", "accounts", "office_admin", "coordinator", "it_manager"].includes(userRole);
   const canDelete = ["admin", "manager"].includes(userRole);
 
   async function handleUpload() {

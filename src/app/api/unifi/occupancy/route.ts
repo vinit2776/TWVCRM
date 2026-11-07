@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  const allowed = ["admin", "manager", "sales_rep", "floor_manager", "office_admin", "it_manager", "it_technician"];
+  const allowed = ["admin", "manager", "sales_rep", "floor_manager", "office_admin", "coordinator", "it_manager", "it_technician"];
   if (!allowed.includes(dbUser.role)) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }

@@ -4,8 +4,11 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { pingCronHealth } from "@/lib/cron-ping";
 import {
   STAGES, pickStageIndex, daysOverdueFromDueDate,
-  sendOneReminder, fetchCcPools, hasReachedCustomer, byLeastRecentlyReminded,
+  sendConsolidatedReminder, fetchCcPools, hasReachedCustomer, byLeastRecentlyReminded,
 } from "@/lib/payment-reminder";
+import {
+  groupForConsolidatedReminder, reminderLeadKey, type ReminderCandidate,
+} from "@/lib/reminder-consolidation";
 import {
   pickStageForKind, shouldFire, sendReceivableReminder,
 } from "@/lib/receivable-reminder";
@@ -30,6 +33,11 @@ const STOP_STARTING_AFTER_MS = 240_000;
  * Daily customer payment-reminder cron. See src/lib/payment-reminder.ts for
  * the ladder definition + send logic (shared with the manual "Send Reminder
  * Now" button on /accounting/receivables).
+ *
+ * One email per customer: invoices that are due for the same customer are sent
+ * together (total as the amount due, a per-invoice breakdown, PDFs attached) —
+ * see sendConsolidatedReminder. A group sends when any one of its invoices is
+ * due for a reminder; the stage, CC and tone follow its most overdue invoice.
  *
  * Idempotency: reminder_count gates per-stage; only fires when stageIdx >=
  * reminder_count, EXCEPT the terminal stage (stage 5, "Continued follow-up")
@@ -64,6 +72,7 @@ export async function GET(request: NextRequest) {
       payment_status, razorpay_payment_link_id, razorpay_payment_link_url,
       reminder_count, last_reminder_sent_at, voided_at,
       issuance_channel, tally_delivered_at, proforma_sent_at, emailed_at,
+      gst_invoice_number, gst_invoice_path, pi_cancelled_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
@@ -80,6 +89,8 @@ export async function GET(request: NextRequest) {
     .in("status", ["finalized", "exported"])
     .in("payment_status", ["unpaid", "partially_paid"])
     .is("voided_at", null)
+    // A GST invoice awaiting its credit note is being withdrawn — never dun it.
+    .is("cancellation_requested_at", null)
     .not("due_date", "is", null);
 
   if (error) {
@@ -89,6 +100,8 @@ export async function GET(request: NextRequest) {
 
   const ccPools = await fetchCcPools(admin);
   let sent = 0, skipped = 0, errors = 0, deferred = 0;
+  // Reminders that went out without a Pay button because no working link could be secured.
+  const linkIssues: string[] = [];
   // Statements held back because there's no evidence the customer ever received
   // them. Reported, never silent — each one needs a human to resend it.
   const undelivered: string[] = [];
@@ -96,6 +109,11 @@ export async function GET(request: NextRequest) {
 
   const ordered = [...(statements || [])].sort(byLeastRecentlyReminded);
 
+  // Pass 1 — decide, per statement, whether it is chaseable and whether its own
+  // ladder says "send now". Nothing is sent here. Statements already due go on
+  // as candidates; they are then grouped per customer so someone with several
+  // overdue invoices gets ONE email listing all of them, not one per invoice.
+  const candidates: ReminderCandidate<(typeof ordered)[number]>[] = [];
   for (const s of ordered) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const contract: any = s.contract;
@@ -123,6 +141,7 @@ export async function GET(request: NextRequest) {
     // statement with none of them is NOT dropped quietly: it is counted and
     // named in the response so accounts can resend it (or dun it by hand from
     // /accounting/receivables, which stays available for exactly this case).
+    // Being excluded here also keeps it out of a consolidated email's table.
     if (!hasReachedCustomer(s)) {
       skipped++; undelivered.push(s.statement_number as string);
       summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "—", channel: "—", status: "skip", reason: "never delivered to customer — needs a resend" });
@@ -143,51 +162,68 @@ export async function GET(request: NextRequest) {
     const isFirstFire = stageIdx >= remCount;
     const isPerpetualRefire =
       !isFirstFire && stage.perpetualEveryDays !== undefined && stageIdx === STAGES.length - 1;
+    let gatePass = true;
+    let reason = "";
     if (!isFirstFire && !isPerpetualRefire) {
-      skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: "—", channel: "—", status: "skip", reason: "stage already sent" });
-      continue;
-    }
-
-    // Throttle:
-    //   • Perpetual re-fires: gate by the stage's own cadence (e.g. 3 days).
-    //   • All other sends: 48h base throttle to prevent accidental double-fires.
-    if (!force && s.last_reminder_sent_at) {
-      const lastMs = Date.parse(s.last_reminder_sent_at as string);
-      const elapsedMs = Date.now() - lastMs;
+      gatePass = false; reason = "stage already sent";
+    } else if (!force && s.last_reminder_sent_at) {
+      // Throttle:
+      //   • Perpetual re-fires: gate by the stage's own cadence (e.g. 3 days).
+      //   • All other sends: 48h base throttle to prevent accidental double-fires.
+      const elapsedMs = Date.now() - Date.parse(s.last_reminder_sent_at as string);
       const minIntervalMs = isPerpetualRefire
         ? (stage.perpetualEveryDays as number) * 24 * 60 * 60 * 1000
         : 48 * 60 * 60 * 1000;
       if (elapsedMs < minIntervalMs) {
-        const reason = isPerpetualRefire
+        gatePass = false;
+        reason = isPerpetualRefire
           ? `<${stage.perpetualEveryDays}d since last (perpetual cadence)`
           : "<48h since last";
-        skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: stage.toneLabel, channel: "—", status: "skip", reason });
-        continue;
       }
     }
+    if (!gatePass) summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: stage.toneLabel, channel: "—", status: "skip", reason });
+    candidates.push({ statement: s, leadKey: reminderLeadKey(lead, s.id as string), daysOverdue, gatePass });
+  }
+
+  // Pass 2 — one send per customer. A group sends when ANY of its invoices is
+  // due for a reminder; every due invoice then rides along in that email.
+  const { send: groups, held } = groupForConsolidatedReminder(candidates);
+  for (const g of held) skipped += g.members.length;
+
+  for (const g of groups) {
+    const primary = g.members[0].statement;
+    const stageIdx = pickStageIndex(g.members[0].daysOverdue);
+    const stage = STAGES[stageIdx];
+    const ids = g.members.map((m) => m.statement.statement_number as string).join(", ");
 
     if (dry) {
-      summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: STAGES[stageIdx].toneLabel, channel: STAGES[stageIdx].whatsApp ? "email+wa" : "email", status: "would-send" });
+      summary.push({ id: primary.id, stmt: ids, stage: stageIdx, tone: stage.toneLabel, channel: stage.whatsApp ? "email+wa" : "email", status: "would-send", reason: `${g.members.length} invoice${g.members.length > 1 ? "s" : ""} in one email` });
       continue;
     }
 
     // Capped for this run — leave it for the next one (it keeps its place at the front).
     if (sent + errors >= MAX_STATEMENT_SENDS_PER_RUN || Date.now() - startedAt > STOP_STARTING_AFTER_MS) {
-      deferred++;
-      summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: stage.toneLabel, channel: "—", status: "deferred", reason: "per-run send cap reached" });
+      deferred += g.members.length;
+      summary.push({ id: primary.id, stmt: ids, stage: stageIdx, tone: stage.toneLabel, channel: "—", status: "deferred", reason: "per-run send cap reached" });
       continue;
     }
 
-    const r = await sendOneReminder(admin, {
-      statement: s, stageIdx, appUrl, triggeredBy: "cron", triggeredByUserId: null, ccPools,
+    const r = await sendConsolidatedReminder(admin, {
+      statements: g.members.map((m) => m.statement),
+      appUrl, triggeredBy: "cron", triggeredByUserId: null, ccPools,
     });
-    if (!r.emailSent && !r.whatsAppSent) {
+    if (r.skipped) {
+      // Not a failure: the link shows a payment that is waiting to be reconciled.
+      skipped += g.members.length;
+      summary.push({ id: primary.id, stmt: ids, stage: stageIdx, tone: r.toneLabel, channel: "—", status: "skip", reason: r.skipped });
+    } else if (!r.emailSent && !r.whatsAppSent) {
       errors++;
-      summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: r.toneLabel, channel: "email+wa", status: "error" });
+      summary.push({ id: primary.id, stmt: ids, stage: stageIdx, tone: r.toneLabel, channel: "email+wa", status: "error", reason: r.errors[0] });
     } else {
       sent++;
+      if (r.linkIssues?.length) linkIssues.push(...r.linkIssues);
       summary.push({
-        id: s.id, stmt: s.statement_number, stage: stageIdx, tone: r.toneLabel,
+        id: primary.id, stmt: ids, stage: stageIdx, tone: r.toneLabel,
         channel: `${r.emailSent ? "email" : ""}${r.emailSent && r.whatsAppSent ? "+" : ""}${r.whatsAppSent ? "wa" : ""}`,
         status: "sent",
       });
@@ -200,12 +236,14 @@ export async function GET(request: NextRequest) {
   // drives live monthly invoicing — stays untouched.
   const other = await runOtherReceivablesPass(admin, { dry, force, ccPools, startedAt });
   sent += other.sent; skipped += other.skipped; errors += other.errors; deferred += other.deferred;
+  linkIssues.push(...other.linkIssues);
 
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
   await pingCronHealth("cron/payment-reminder", errors > 0 ? "error" : "ok", {
     sent, skipped, errors, deferred,
     elapsed_s: Math.round((Date.now() - startedAt) / 1000),
     undelivered: undelivered.length,
+    ...(linkIssues.length > 0 ? { link_issues: linkIssues.join(", ") } : {}),
     ...(undelivered.length > 0 ? { undelivered_statements: undelivered.join(", ") } : {}),
   });
   return NextResponse.json({
@@ -215,6 +253,9 @@ export async function GET(request: NextRequest) {
     // Open receivables that were never delivered — excluded from dunning and
     // waiting on a resend. Surfaced at the top level so it can't hide inside
     // a long per-statement summary.
+    // Sent without a Pay button (no working link could be secured) — accounts should reissue these.
+    link_issue_count: linkIssues.length,
+    link_issues: linkIssues,
     undelivered_count: undelivered.length,
     undelivered_statements: undelivered,
     summary, other_summary: other.summary,
@@ -234,6 +275,7 @@ async function runOtherReceivablesPass(
 ) {
   const rows = (await fetchDunnableReceivables(admin)).sort(byLeastRecentlyReminded);
   let sent = 0, skipped = 0, errors = 0, deferred = 0;
+  const linkIssues: string[] = [];
   const summary: { kind: string; ref: string; stage: number; status: string; reason?: string }[] = [];
 
   for (const r of rows) {
@@ -276,17 +318,21 @@ async function runOtherReceivablesPass(
     const res = await sendReceivableReminder(admin, {
       kind: r.kind, id: r.id, reference: r.reference, partyName: r.party_name,
       email: r.email, phone: r.phone, amount: r.amount, dueDate: r.due_date,
-      daysOverdue: days, stageIdx, payLinkUrl: r.payment_link_url,
+      daysOverdue: days, stageIdx, payLinkUrl: r.payment_link_url, payLinkId: r.payment_link_id,
       triggeredBy: "cron", triggeredByUserId: null, ccPools,
     });
-    if (!res.emailSent && !res.whatsAppSent) {
+    if (res.skipped) {
+      skipped++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "skip", reason: res.skipped });
+    } else if (!res.emailSent && !res.whatsAppSent) {
       errors++;
       summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "error", reason: res.errors[0] });
     } else {
       sent++;
+      if (res.linkIssue) linkIssues.push(r.reference);
       summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "sent" });
     }
   }
 
-  return { considered: rows.length, sent, skipped, errors, deferred, summary };
+  return { considered: rows.length, sent, skipped, errors, deferred, summary, linkIssues };
 }

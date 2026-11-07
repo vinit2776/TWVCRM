@@ -76,6 +76,7 @@ export default function CaseDetailPage({
   const { user } = useCurrentUser();
   // Special clause not yet approved: neither agreement may be sent, signed or stamped.
   const clauseGate = specialClauseGate(caseData?.special_clause_status);
+  const caseAddress = [caseData?.client_address, caseData?.client_city, caseData?.client_state, caseData?.client_pincode].filter(Boolean).join(", ");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
@@ -516,11 +517,11 @@ export default function CaseDetailPage({
         </TabsContent>
 
         <TabsContent value="proposal" className="mt-4">
-          <CaseAgreementTab caseId={id} clauseGate={clauseGate} />
+          <CaseAgreementTab caseId={id} clauseGate={clauseGate} caseAddress={caseAddress} />
         </TabsContent>
 
         <TabsContent value="agreement" className="mt-4">
-          <CaseLeaveAgreementTab caseId={id} clauseGate={clauseGate} />
+          <CaseLeaveAgreementTab caseId={id} clauseGate={clauseGate} caseAddress={caseAddress} />
         </TabsContent>
 
         <TabsContent value="billing" className="mt-4">

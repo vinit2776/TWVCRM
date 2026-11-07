@@ -1,3 +1,4 @@
+import { normalizeStoredPhone } from "@/lib/phone";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
@@ -5,26 +6,16 @@ import { sendPushToAll } from "@/lib/push";
 import { messaging } from "@/lib/whatsapp";
 import { sanitiseAttribution } from "@/lib/public-forms/attribution";
 import { verifyTurnstile } from "@/lib/public-forms/turnstile";
+import { withCors } from "@/lib/public-forms/cors";
 
-/** Normalise a phone number to a canonical 10-digit Indian mobile number.
- *  Strips all non-digit characters, then removes a leading country code
- *  (+91 / 91) or STD zero if present, so both "9876543210" and
- *  "+91 98765 43210" normalise to the same "9876543210".
- */
-function normalisePhone(raw: string): string {
-  let digits = raw.replace(/\D/g, "");
-  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
-  if (digits.length === 11 && digits.startsWith("0"))  digits = digits.slice(1);
-  return digits;
-}
-
-const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin"] as const;
+const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin", "website"] as const;
 type AllowedSource = (typeof ALLOWED_SOURCES)[number];
 
 const SOURCE_META: Record<AllowedSource, { label: string; tag: string }> = {
   google_ads:    { label: "Google Ads",     tag: "google-ads-form" },
   meta_ads:      { label: "Meta Ads",       tag: "meta-ads-form"   },
   direct_walkin: { label: "Direct Walk-in", tag: "walkin-form"     },
+  website:       { label: "Website",        tag: "website-form"    },
 };
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
@@ -162,8 +153,34 @@ function buildEnquiryEmailHtml(p: EnquiryEmailParams): string {
 </html>`;
 }
 
+// Preflight for the marketing website's cross-origin form post.
+export async function OPTIONS(request: NextRequest) {
+  return withCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+}
+
+// Every response — success, validation error or crash — carries the CORS headers, otherwise
+// the website cannot read the error text or the reference number.
 export async function POST(request: NextRequest) {
-  const body = await request.json();
+  let res: NextResponse;
+  try {
+    res = await handleEnquiry(request);
+  } catch (err) {
+    console.error("[public/enquiry] unhandled error:", err instanceof Error ? err.message : "unknown");
+    res = NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+  }
+  return withCors(res, request.headers.get("origin"));
+}
+
+async function handleEnquiry(request: NextRequest): Promise<NextResponse> {
+  let body: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any -- untrusted JSON, each field is validated below
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
 
   const {
     name,
@@ -221,7 +238,7 @@ export async function POST(request: NextRequest) {
   const firstName = nameParts[0];
   const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "-";
 
-  const normalisedMobile = normalisePhone(mobile);
+  const normalisedMobile = normalizeStoredPhone(mobile);
 
   // Validate: must be a 10-digit Indian mobile number (starts with 6–9)
   if (!/^[6-9]\d{9}$/.test(normalisedMobile)) {
@@ -319,8 +336,8 @@ export async function POST(request: NextRequest) {
     new Set(["space@theworkvilla.com", ...staffEmails])
   );
 
-  // WhatsApp alert — only for Google Ads / Meta Ads enquiries, to sales reps + managers
-  const shouldSendWhatsApp = source === "google_ads" || source === "meta_ads";
+  // WhatsApp alert — only for Google Ads / Meta Ads / Website enquiries, to sales reps + managers
+  const shouldSendWhatsApp = source === "google_ads" || source === "meta_ads" || source === "website";
   let salesPhones: string[] = [];
   if (shouldSendWhatsApp) {
     const { data: salesRows } = await supabase

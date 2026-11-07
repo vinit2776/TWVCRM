@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     .from("purchase_orders")
     .select(`
       id, po_number, po_type, status, amc_status,
-      billing_cycle, cycle_count, unit_cost_per_cycle,
+      billing_cycle, cycle_count, opening_cycles, unit_cost_per_cycle,
       amc_start_date, amc_end_date,
       amc_visits_covered, amc_visits_used,
       amc_contact_name, amc_helpline_number, amc_contact_email,

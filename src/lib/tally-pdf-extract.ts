@@ -12,6 +12,7 @@
  * server-side rasterisation isn't viable on Vercel without native deps.
  */
 
+import { extractInvoicePeriodMonths } from "@/lib/invoice-period-text";
 import type { ExtractedFields, AutofillSource } from "@/lib/tally-handoff";
 
 export interface PdfExtractResult {
@@ -19,6 +20,8 @@ export interface PdfExtractResult {
   raw_text_snippet: string | null;
   source: AutofillSource;
   po_number_found: boolean | null;
+  /** Calendar months (YYYY-MM) the invoice text says it covers; empty when none is named. */
+  invoice_period_months: string[];
 }
 
 /**
@@ -143,6 +146,7 @@ export async function extractFromPdf(pdfBuffer: Buffer, expectedPoNumber?: strin
       raw_text_snippet: null,
       source: "manual",
       po_number_found: null,
+      invoice_period_months: [],
     };
   }
 
@@ -152,6 +156,7 @@ export async function extractFromPdf(pdfBuffer: Buffer, expectedPoNumber?: strin
       raw_text_snippet: null,
       source: "manual",
       po_number_found: null,
+      invoice_period_months: [],
     };
   }
 
@@ -185,5 +190,6 @@ export async function extractFromPdf(pdfBuffer: Buffer, expectedPoNumber?: strin
     raw_text_snippet: text.slice(0, 200),
     source: "pdf_text",
     po_number_found: poNumberFound,
+    invoice_period_months: extractInvoicePeriodMonths(text),
   };
 }

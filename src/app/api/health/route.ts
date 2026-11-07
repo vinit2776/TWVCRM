@@ -44,6 +44,7 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/contract-expiry":         DAILY,
   "cron/lead-reminder-digest":    DAILY,
   "cron/vo-renewal":              DAILY,
+  "cron/auto-renew":              DAILY,
   "cron/renewal-reminders":       DAILY,
   "cron/lease-payment-reminders": DAILY,
   "cron/rent-gap-alert":          DAILY,
@@ -140,7 +141,7 @@ export async function GET() {
     try {
       const { data: msgRows } = await createAdminClient()
         .from("messaging_health_state")
-        .select("channel, status, fail_rate, sample_size, template_issues, last_checked_at");
+        .select("channel, status, fail_rate, sample_size, template_issues, template_health, last_checked_at");
 
       for (const row of msgRows ?? []) {
         // The cron runs every 30 min; >2h without a write means it stopped.
@@ -157,6 +158,16 @@ export async function GET() {
         }
         const issues = (row.template_issues ?? []) as unknown[];
         if (issues.length > 0) messagingProblems.push(`${row.channel}:${issues.length} template issue(s)`);
+
+        // A single template can be 100% broken while the channel rate looks
+        // healthy — that is how gst_invoice_doc failed 37 sends unnoticed. Name
+        // the template so the health check is actionable, not just "degraded".
+        const tplHealth = (row.template_health ?? {}) as Record<string, { status?: string }>;
+        for (const [name, t] of Object.entries(tplHealth)) {
+          if (t?.status === "down" || t?.status === "degraded") {
+            messagingProblems.push(`template ${name}:${t.status}`);
+          }
+        }
       }
     } catch (err) {
       // Never let the messaging read take down the health endpoint itself —

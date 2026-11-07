@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { entityTypesForModule, queryEntityDef, type QueryEntityDef, type EntityRow } from "@/lib/queries/registry";
+import { buildSearchBlob, matchesSearchTokens, searchTokens } from "@/lib/queries/search";
+import { USER_ROLE_LABELS } from "@/lib/constants";
 import { canSeeQuery, isAwaitingUser, validateTargeting, type Viewer } from "@/lib/queries/audience";
 import {
   requireQueryUser,
@@ -212,29 +214,40 @@ function sortByUrgency(items: QueryListItem[], today: string): QueryListItem[] {
 }
 
 /**
- * Text search over what a reader sees on a card: the customer/vendor and the
- * transaction reference line, who raised it, the claimed amount and payment
- * reference, and every message in the thread. Amounts match with or without
- * thousands separators ("17,700" finds 17700).
+ * Text search over everything about a thread: the customer/vendor, the
+ * transaction reference and context line, the amount (or claimed amount), who
+ * raised it, who it was sent to (people and roles), who answered or resolved
+ * it, the module and kind, the payment reference, and every message. Each typed
+ * word must be found somewhere; see src/lib/queries/search.ts.
  */
-function matchesSearch(row: QueryRow, summary: QueryListItem["entity"], needle: string): boolean {
+function threadSearchBlob(
+  row: QueryRow,
+  def: QueryEntityDef,
+  summary: QueryListItem["entity"],
+  userNames: Map<string, string>,
+): string {
   const report = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
-  const digits = needle.replace(/,/g, "");
-  const haystack = [
+  return buildSearchBlob([
     summary?.title,
     summary?.reference,
     summary?.subtitle,
-    summary?.amount != null ? String(summary.amount) : null,
+    summary?.amount,
+    def.label,
+    QUERY_MODULE_LABELS[def.module],
+    row.kind.replace(/_/g, " "),
+    row.status,
     row.created_by?.full_name,
+    USER_ROLE_LABELS[row.created_by?.role] ?? row.created_by?.role,
+    row.resolved_by?.full_name,
+    ...(row.audience === "users" ? row.audience_user_ids.map((id) => userNames.get(id)) : []),
+    ...(row.audience === "roles" ? row.audience_roles.map((r) => USER_ROLE_LABELS[r] ?? r) : []),
+    row.needed_by,
     report?.payment_reference,
-    report ? String(report.amount) : null,
+    report?.amount,
+    report?.payment_mode,
     ...row.messages.map((m) => m.body),
-  ];
-  return haystack.some((v) => {
-    if (!v) return false;
-    const lower = v.toLowerCase();
-    return lower.includes(needle) || (digits !== needle && lower.includes(digits));
-  });
+    ...row.messages.map((m) => m.author?.full_name),
+  ]);
 }
 
 /** Drop threads whose entity type this viewer's role isn't authorized on. */
@@ -377,8 +390,20 @@ export async function GET(req: NextRequest) {
   );
 
   const summaryFor = (row: QueryRow) => summaries.get(entityKey(row.entity_type, row.entity_id)) ?? null;
+  const tokens = searchTokens(search);
+  const userNames = new Map<string, string>();
+  if (tokens.length > 0) {
+    const ids = [...new Set(visible.flatMap(({ row }) => (row.audience === "users" ? row.audience_user_ids : [])))];
+    if (ids.length > 0) {
+      const { data: people } = await admin.from("users").select("id, full_name").in("id", ids);
+      for (const p of people ?? []) userNames.set(p.id as string, p.full_name as string);
+    }
+  }
   let items = visible
-    .filter(({ row }) => !search || matchesSearch(row, summaryFor(row), search))
+    .filter(
+      ({ row, def }) =>
+        tokens.length === 0 || matchesSearchTokens(threadSearchBlob(row, def, summaryFor(row), userNames), tokens),
+    )
     .map(({ row, def }) => toListItem(row, def, viewer, summaryFor(row)));
 
   if (isPostFiltered) {

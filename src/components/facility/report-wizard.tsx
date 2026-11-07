@@ -3,8 +3,8 @@
  * Mobile-first 3-step wizard for reporting a facility issue.
  *
  * Step 1 — Where?  Optional asset search (auto-fills location+scope) OR pick location manually
- * Step 2 — What?   Pick scope (7 buttons) → priority → title + description + photo
- * Step 3 — Who?    Reporter contact
+ * Step 2 — What?   Pick scope (6 buttons) → priority → title + description + photo
+ * Step 3 — Who?    Assignees (default: the department's in-charge) + reporter contact
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -16,17 +16,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   ChevronLeft, ChevronRight, Loader2, MapPin, AlertTriangle, Check,
-  Search, X, Wifi, ThermometerSun, Droplets, Zap, Sparkles, ShieldAlert, HelpCircle, ScanLine,
+  Search, X, ChevronDown, Wifi, ThermometerSun, Droplets, Zap, Sparkles, ShieldAlert, HelpCircle, ScanLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PRIORITY_LIST, PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
-import { BUSINESS_HOURS_TIME_SLOTS } from "@/lib/time-slots";
+import { BUSINESS_HOURS_TIME_SLOTS, currentTimeSlot } from "@/lib/time-slots";
 import { classify } from "@/lib/facility-classifier";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
@@ -56,7 +57,11 @@ interface Props {
 
 type Step = 1 | 2 | 3;
 
-const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "electrical", "plumbing", "housekeeping", "security", "other", "facility"];
+// Electrical and plumbing are reported under Facility; the scopes still exist
+// for older tickets and assets, so incoming values are folded in rather than removed.
+const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "housekeeping", "security", "other", "facility"];
+const toPickerScope = (s: FacilityScope): FacilityScope =>
+  s === "electrical" || s === "plumbing" ? "facility" : s;
 
 const SCOPE_ICONS: Record<FacilityScope, typeof Wifi> = {
   it: Wifi, hvac: ThermometerSun, plumbing: Droplets,
@@ -104,6 +109,14 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [reporterPhone, setReporterPhone] = useState("");
   const [reporterEmail, setReporterEmail] = useState("");
   const [customer, setCustomer] = useState<TicketCustomerOption | null>(null);
+  // Assignees: the department's in-charge is preselected when a department is
+  // chosen, until the reporter edits the list. Untouched, nothing is sent and the
+  // server applies its own routing (same person); touched, the list is sent.
+  const [assignees, setAssignees] = useState<{ id: string; full_name: string; role: string }[]>([]);
+  const [deptHeads, setDeptHeads] = useState<Partial<Record<FacilityScope, string>>>({});
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
+  const [assigneesTouched, setAssigneesTouched] = useState(false);
+  const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
   const [tatMode, setTatMode] = useState<"hours" | "datetime">("datetime");
   const [tatHours, setTatHours] = useState("");
@@ -139,7 +152,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   useEffect(() => {
     if (!classifierUiEnabled || selectedAsset || userTouchedScope) return;
     const t = setTimeout(() => {
-      if (classification.scope) setScope(classification.scope);
+      if (classification.scope) setScope(toPickerScope(classification.scope));
     }, 400);
     return () => clearTimeout(t);
   }, [classification, classifierUiEnabled, selectedAsset, userTouchedScope]);
@@ -164,16 +177,43 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setFloorId(defaults?.floor_id || "");
     setSpaceUnitId(defaults?.space_unit_id || "");
     setAssetId(defaults?.asset_id || "");
-    setScope(defaults?.scope || null);
+    setScope(defaults?.scope ? toPickerScope(defaults.scope) : null);
     setAssetScopeOverridden(false);
     setUserTouchedScope(false);
     setSelectedAsset(null);
     setAssetQuery("");
     setAssetResults([]);
+    setAssigneeIds([]);
+    setAssigneesTouched(false);
+    setAssigneeOpen(false);
 
+    fetch("/api/facility/assignees")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((j) => setAssignees(j.data ?? []));
+    fetch("/api/facility/departments")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((j) => {
+        const heads: Partial<Record<FacilityScope, string>> = {};
+        for (const d of (j.data ?? []) as { scope: FacilityScope; head_user_id: string | null }[]) {
+          if (d.head_user_id) heads[d.scope] = d.head_user_id;
+        }
+        setDeptHeads(heads);
+      });
     fetch("/api/locations?is_active=true").then((r) => r.json()).then((j) => setLocations(j.data || []));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Default the assignee to the department's in-charge until the reporter edits the list.
+  useEffect(() => {
+    if (assigneesTouched || !scope) return;
+    const head = deptHeads[scope];
+    setAssigneeIds(head ? [head] : []);
+  }, [scope, deptHeads, assigneesTouched]);
+
+  const toggleAssignee = (id: string) => {
+    setAssigneesTouched(true);
+    setAssigneeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
 
   // load floors + units when location changes
   useEffect(() => {
@@ -215,7 +255,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     // Pre-fill from the asset's registered category, but this is a starting point,
     // not a lock — the picker stays visible below so the reporter can correct it
     // if the asset itself is mis-categorized.
-    if (asset.category?.scope) setScope(asset.category.scope as FacilityScope);
+    if (asset.category?.scope) setScope(toPickerScope(asset.category.scope as FacilityScope));
     setAssetScopeOverridden(false);
     setAssetQuery("");
     setAssetResults([]);
@@ -272,6 +312,9 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
           reporter_name: reporterName.trim() || null,
           reporter_email: reporterEmail.trim() || null,
           reporter_phone: reporterPhone.trim() || null,
+          ...(assigneesTouched && assigneeIds.length > 0
+            ? { assigned_to: assigneeIds[0], additional_assignee_ids: assigneeIds.slice(1) }
+            : {}),
           attachments: photos.map((p) => ({
             file_url: p.file_url, file_path: p.file_path,
             file_type: p.file_type, caption: p.caption ?? null,
@@ -502,7 +545,10 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
                   sel ? "bg-[#015E65] text-white" : "bg-muted text-muted-foreground")}>
                   <Icon className="h-4 w-4" />
                 </div>
-                <span className={cn("text-sm", sel && "font-medium")}>{SCOPE_LABEL[s]}</span>
+                <span className="min-w-0">
+                  <span className={cn("block text-sm", sel && "font-medium")}>{SCOPE_LABEL[s]}</span>
+                  {s === "facility" && <span className="block text-[11px] text-muted-foreground">Incl. electrical &amp; plumbing</span>}
+                </span>
               </button>
             );
           })}
@@ -609,7 +655,11 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
               id="tat-date"
               type="date"
               value={tatDate}
-              onChange={(e) => setTatDate(e.target.value)}
+              onChange={(e) => {
+                setTatDate(e.target.value);
+                // Default the time to now (next slot) so picking a date alone gives a valid deadline.
+                if (e.target.value && !tatTime) setTatTime(currentTimeSlot());
+              }}
               className="max-w-[160px]"
             />
             <Select value={tatTime} onValueChange={setTatTime}>
@@ -682,6 +732,48 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
           onChange={setCustomer}
           disabled={submitting}
         />
+      </div>
+
+      <div className="space-y-2">
+        <Label>Assigned to</Label>
+        <Popover open={assigneeOpen} onOpenChange={setAssigneeOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex min-h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm text-left"
+            >
+              <span className={cn(assigneeIds.length === 0 && "text-muted-foreground")}>
+                {assigneeIds.length === 0
+                  ? "Unassigned — the team can claim it"
+                  : assigneeIds.map((id) => assignees.find((a) => a.id === id)?.full_name ?? "…").join(", ")}
+              </span>
+              <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-1 max-h-64 overflow-y-auto">
+            {assignees.map((a) => {
+              const sel = assigneeIds.includes(a.id);
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => toggleAssignee(a.id)}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-left hover:bg-muted"
+                >
+                  <Check className={cn("h-4 w-4 shrink-0", sel ? "opacity-100" : "opacity-0")} />
+                  {a.full_name} ({a.role})
+                </button>
+              );
+            })}
+          </PopoverContent>
+        </Popover>
+        <p className="text-xs text-muted-foreground">
+          {assigneeIds.length > 1
+            ? `${assignees.find((a) => a.id === assigneeIds[0])?.full_name} is the main assignee; the rest are added as collaborators.`
+            : scope && deptHeads[scope] && !assigneesTouched
+              ? "Preselected: this department's in-charge. Add more people or change it if needed."
+              : "Add more people if the work needs them."}
+        </p>
       </div>
 
       <div className="rounded-lg border bg-muted/30 p-3 space-y-3">

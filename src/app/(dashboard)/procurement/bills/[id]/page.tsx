@@ -11,7 +11,7 @@ import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
   CheckCircle2, XCircle, Clock, Send, Activity, CheckCircle,
   ClipboardList, ChevronDown, ChevronUp, FilePlus, AlertTriangle, RefreshCcw,
-  AlertCircle,
+  AlertCircle, Pencil, Lock, MessageCircleQuestion,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +35,7 @@ import {
   BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { summarizeAuditEvent, AUDIT_TONE_DOT, AUDIT_TONE_TEXT } from "@/lib/audit-labels";
+import { BillTransactionHistory } from "@/components/procurement/bill-transaction-history";
 import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
 import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-display";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
@@ -45,12 +45,16 @@ import { VendorBillDocuments } from "@/components/procurement/vendor-bill-docume
 import type { VendorBill, PaymentBatchType } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
+import { BillEditDialog } from "@/components/procurement/bill-edit-dialog";
+import { billEditLockReason, canEditBill, PAYMENT_HOLD_REASON_LABELS } from "@/lib/procurement/bill-edit-rules";
+import { BillEditedBadge } from "@/components/procurement/bill-edited-badge";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type ChainData = {
   bill: {
     id: string; bill_number: string; invoice_number: string | null;
+    edit_count?: number | null; last_edited_at?: string | null; last_edit_summary?: string | null;
     invoice_date: string; due_date: string | null; total_amount: number;
     amount_paid: number; payment_status: string; approval_status: string;
     payment_mode: string | null; payment_reference: string | null; payment_date: string | null;
@@ -111,108 +115,11 @@ type ChainData = {
     id: string; entity_type: string; entity_id: string; action: string;
     changes: Record<string, { old: unknown; new: unknown }> | null;
     created_at: string;
-    performer: { id: string; full_name: string } | null;
+    performer: { id: string; full_name: string; role?: string | null } | null;
   }>;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const AUDIT_ACTION_LABELS: Record<string, string> = {
-  created: "Created",
-  updated: "Updated",
-  approved: "Approved",
-  rejected: "Rejected",
-  deleted: "Deleted",
-  status_changed: "Status Changed",
-};
-
-const ENTITY_TYPE_LABELS: Record<string, string> = {
-  vendor_bill: "Invoice",
-  purchase_order: "Purchase Order",
-  purchase_request: "Material Request",
-};
-
-const FIELD_LABELS: Record<string, string> = {
-  status: "Status",
-  payment_status: "Payment",
-  approval_status: "Approval",
-  amount_paid: "Amount Paid",
-};
-
-function AuditEntry({
-  row, billId, poId, mrId,
-}: {
-  row: ChainData["auditTrail"][number];
-  billId: string;
-  poId: string | null;
-  mrId: string | null;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const changes = row.changes ?? {};
-  const hasChanges = Object.keys(changes).length > 0;
-  const entityLabel = ENTITY_TYPE_LABELS[row.entity_type] ?? row.entity_type;
-
-  // Same human-label pipeline as the Acc Payables audit timeline.
-  const summary = summarizeAuditEvent(row);
-  const dotColor = AUDIT_TONE_DOT[summary.tone];
-  const headingColor = AUDIT_TONE_TEXT[summary.tone];
-  let sourceHint: string | null = null;
-  if (row.entity_id === poId) sourceHint = "from PO";
-  else if (row.entity_id === mrId) sourceHint = "from MR";
-
-  return (
-    <div className="flex gap-3">
-      <div className="flex flex-col items-center">
-        <div className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${dotColor}`} />
-        <div className="w-px flex-1 bg-border mt-1" />
-      </div>
-      <div className="pb-4 flex-1 min-w-0">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <span className={`text-sm font-medium ${headingColor}`}>{summary.label}</span>
-            <span className="text-xs text-muted-foreground ml-2 bg-muted px-1.5 py-0.5 rounded">{entityLabel}</span>
-            {sourceHint && (
-              <span className="text-[10px] text-muted-foreground ml-1.5 italic">{sourceHint}</span>
-            )}
-          </div>
-          <span className="text-xs text-muted-foreground shrink-0 mt-0.5">
-            {new Date(row.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-          </span>
-        </div>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          {row.performer?.full_name ?? "System"}
-          {summary.detail && (
-            <>
-              {" · "}
-              <span className={`font-medium ${headingColor}`}>{summary.detail}</span>
-            </>
-          )}
-        </p>
-        {hasChanges && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="mt-1 text-xs text-primary flex items-center gap-1 hover:underline"
-          >
-            {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-            {expanded ? "Hide" : "Show"} changes
-          </button>
-        )}
-        {expanded && hasChanges && (
-          <div className="mt-2 space-y-1">
-            {Object.entries(changes).map(([field, { old: oldVal, new: newVal }]) => (
-              <div key={field} className="text-xs bg-muted/50 rounded px-2 py-1">
-                <span className="font-medium text-muted-foreground">{FIELD_LABELS[field] ?? field}:</span>{" "}
-                {oldVal != null ? <span className="line-through text-red-600">{String(oldVal)}</span> : <span className="text-muted-foreground italic">—</span>}
-                {" → "}
-                <span className="text-green-700 font-medium">{newVal != null ? String(newVal) : "—"}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -249,6 +156,8 @@ export default function VendorBillDetailPage() {
   const [rejectionReason, setRejectionReason] = useState("");
 
   // Edit-amount-and-resubmit dialog (rejected bills only)
+  const [editDialog, setEditDialog] = useState(false);
+  const [openQueries, setOpenQueries] = useState<Array<{ id: string; last_message: { body: string } | null; created_by: { full_name: string } | null }>>([]);
   const [resubmitDialog, setResubmitDialog] = useState(false);
   const [resubmitAmount, setResubmitAmount] = useState<string>("");
   const [resubmitLoading, setResubmitLoading] = useState(false);
@@ -293,6 +202,20 @@ export default function VendorBillDetailPage() {
   }, [id, router]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Open queries on this bill (e.g. Accounts: "total doesn't match the PO") so the
+  // person who can fix it sees what was asked without leaving the page.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/queries?entity_type=vendor_bill&entity_id=${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json) return;
+        setOpenQueries((json.items as Array<{ id: string; status: string; last_message: { body: string } | null; created_by: { full_name: string } | null }>).filter((q) => q.status === "open"));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, bill?.updated_at]);
 
   const handleResendConfirmation = async () => {
     setResendLoading(true);
@@ -523,6 +446,21 @@ export default function VendorBillDetailPage() {
   const billGst   = Number(bill.gst_amount ?? 0);
   const remaining = Number(bill.total_amount) + billGst - Number(bill.amount_paid);
   const canApprove = ["admin", "manager"].includes(currentUserRole ?? "");
+  const standingPayments = ((bill.vendor_bill_payments ?? []) as Array<{ reversed_at?: string | null }>)
+    .filter((p) => !p.reversed_at).length;
+  const editLockReason = billEditLockReason({
+    approvalStatus: bill.approval_status,
+    standingPaymentCount: standingPayments,
+    paymentStatus: bill.payment_status,
+    chequeSigned: !!bill.cheque_signed_at,
+  });
+  const userCanEdit = canEditBill({ role: currentUserRole, userId: user?.id, createdBy: bill.created_by });
+  const onHold = bill.payment_hold_status === "on_hold";
+  const poRow = bill.purchase_orders as { po_type?: string; total_ordered_amount?: number | null; unit_cost_per_cycle?: number | null } | null;
+  const poValue = poRow
+    ? Number(poRow.po_type === "service" && poRow.unit_cost_per_cycle ? poRow.unit_cost_per_cycle : poRow.total_ordered_amount ?? 0) || null
+    : null;
+  const amountOverPo = poValue !== null && Number(bill.total_amount) > poValue + 0.01;
 
   const linkedPo = bill.purchase_orders as {
     id: string; po_number: string; status: string; po_type?: string;
@@ -610,6 +548,7 @@ export default function VendorBillDetailPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold font-mono">{bill.bill_number}</h1>
+              <BillEditedBadge editCount={bill.edit_count} editedAt={bill.last_edited_at} summary={bill.last_edit_summary} />
               {bill.approval_status !== "withdrawn" && (
                 <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>
                   {BILL_PAYMENT_STATUS_LABELS[bill.payment_status]}
@@ -647,6 +586,11 @@ export default function VendorBillDetailPage() {
             isAdmin={currentUserRole === "admin"}
             onDone={() => { fetchAll(); reloadChain(); }}
           />
+          {userCanEdit && !editLockReason && bill.approval_status !== "rejected" && (
+            <Button variant="outline" onClick={() => setEditDialog(true)}>
+              <Pencil className="h-4 w-4 mr-1" /> Correct amount / Edit invoice
+            </Button>
+          )}
           {bill.approval_status === "pending" && canApprove && (
             <>
               <Button
@@ -703,6 +647,53 @@ export default function VendorBillDetailPage() {
       </div>
 
       <ChainLockBanner chain={cycle} ref={{ billId: id }} isAdmin={currentUserRole === "admin"} onChanged={() => { fetchAll(); reloadChain(); }} />
+
+      {/* Loud call to action: someone is waiting on this bill and the viewer can fix it */}
+      {(onHold || openQueries.length > 0) && bill.approval_status !== "withdrawn" && (
+        <div className="rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3" data-testid="bill-needs-fix-banner">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-6 w-6 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 space-y-1.5 text-sm text-red-900">
+              <p className="text-base font-semibold text-red-800">
+                {editLockReason ? "Accounts is waiting on this bill" : "Accounts can't pay this bill until it's corrected"}
+              </p>
+              {onHold && (
+                <p>
+                  <span className="font-medium">Payment on hold — {PAYMENT_HOLD_REASON_LABELS[bill.payment_hold_reason ?? ""] ?? bill.payment_hold_reason ?? "reason not recorded"}.</span>
+                  {bill.payment_hold_notes ? ` ${bill.payment_hold_notes}` : ""}
+                </p>
+              )}
+              {openQueries.map((q) => (
+                <p key={q.id} className="flex items-start gap-1.5">
+                  <MessageCircleQuestion className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <span>
+                    Query from {q.created_by?.full_name ?? "someone"}
+                    {q.last_message?.body ? <> — latest: &ldquo;{q.last_message.body}&rdquo;</> : "."}
+                  </span>
+                </p>
+              ))}
+              {amountOverPo && (
+                <p className="text-xs">
+                  Invoice {formatCurrency(Number(bill.total_amount))} is above the PO {formatCurrency(poValue ?? 0)} (pre-GST). If GST was included in the amount, enter the pre-GST figure.
+                </p>
+              )}
+            </div>
+            {userCanEdit && !editLockReason && bill.approval_status !== "rejected" && (
+              <Button className="bg-red-600 hover:bg-red-700 text-white flex-shrink-0" onClick={() => setEditDialog(true)}>
+                <Pencil className="h-4 w-4 mr-1" /> Correct amount / Edit invoice
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Locked once paid — say why, so nobody hunts for a missing button */}
+      {editLockReason && bill.approval_status !== "withdrawn" && userCanEdit && (
+        <div className="rounded-md border border-gray-300 bg-gray-50 px-4 py-2.5 flex items-start gap-2 text-sm text-gray-700">
+          <Lock className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span>{editLockReason}</span>
+        </div>
+      )}
 
       {/* Withdrawn banner */}
       {bill.approval_status === "withdrawn" && (
@@ -938,7 +929,7 @@ export default function VendorBillDetailPage() {
           <CardContent className="space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Invoice Amount</span>
-              <span className="text-xl font-bold">{formatCurrency(bill.total_amount)}</span>
+              <span className={`text-xl font-bold ${amountOverPo ? "text-red-700" : ""}`}>{formatCurrency(bill.total_amount)}{amountOverPo && <span className="ml-2 align-middle text-[11px] font-medium rounded-full bg-red-100 text-red-700 px-2 py-0.5">above PO</span>}</span>
             </div>
 
             {/* GST Breakdown — total_amount is base (pre-GST), gst_amount is additive */}
@@ -1397,43 +1388,7 @@ export default function VendorBillDetailPage() {
       )}
 
       {/* Transaction History */}
-      {chain && chain.auditTrail.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              Transaction History
-            </CardTitle>
-            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-orange-400" />
-                Material Request
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-purple-400" />
-                Purchase Order
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-blue-400" />
-                Invoice / Bill
-              </span>
-            </p>
-          </CardHeader>
-          <CardContent>
-            <div>
-              {chain.auditTrail.map((row) => (
-                <AuditEntry
-                  key={row.id}
-                  row={row}
-                  billId={chain.bill.id}
-                  poId={chain.po?.id ?? null}
-                  mrId={chain.mr?.id ?? null}
-                />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {chain && <BillTransactionHistory auditTrail={chain.auditTrail} billId={chain.bill.id} poId={chain.po?.id ?? null} mrId={chain.mr?.id ?? null} />}
 
       {/* Payment summary card with resend option */}
       {bill.payment_status !== "unpaid" && (currentUserRole === "accounts" || currentUserRole === "admin") && (
@@ -1962,6 +1917,15 @@ export default function VendorBillDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <BillEditDialog
+        bill={bill}
+        poValue={poValue}
+        pinnedAsk={openQueries[0] ? { by: openQueries[0].created_by?.full_name ?? null, message: openQueries[0].last_message?.body ?? null } : null}
+        open={editDialog}
+        onOpenChange={setEditDialog}
+        onSaved={async () => { await fetchAll(); reloadChain(); }}
+      />
 
       {/* Edit amount & resubmit — rejected bills only. Pre-GST base only. */}
       <Dialog open={resubmitDialog} onOpenChange={setResubmitDialog}>

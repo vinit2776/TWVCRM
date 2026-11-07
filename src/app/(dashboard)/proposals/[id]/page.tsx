@@ -14,6 +14,7 @@ import {
   Mail,
   AlertTriangle,
   Banknote,
+  BadgeIndianRupee,
   Upload,
   X,
   Loader2,
@@ -38,6 +39,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -56,14 +58,18 @@ import {
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
+import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { revisionBlockedReason } from "@/lib/proposal-revision";
 import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { JourneyPanel } from "@/components/journey/journey-panel";
 import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
+import { partialDepositState, partialDepositWarning, type PartialDepositState } from "@/lib/deposit-activation";
+import type { DepositPosition } from "@/lib/deposit-instalments";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
+import { DepositPartsPanel } from "@/components/proposals/deposit-parts-panel";
 import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
 import dynamic from "next/dynamic";
 
@@ -113,6 +119,13 @@ export default function ProposalDetailPage({
   const [manualPayAmount, setManualPayAmount] = useState("");
   const [manualPayRef, setManualPayRef] = useState("");
   const [manualPayMedium, setManualPayMedium] = useState("");
+  // True once any part of the deposit has been asked for or paid: the single-deposit controls stand down.
+  const [depositPartsActive, setDepositPartsActive] = useState(false);
+  // More than half of the deposit received in parts: contract activation is allowed, with a pending-balance warning.
+  const [depositCollection, setDepositCollection] = useState<PartialDepositState | null>(null);
+  const handleDepositPosition = useCallback((p: DepositPosition) => setDepositCollection(partialDepositState(p.required, p.paid)), []);
+  // The GST invoice goes out in parallel with the deposit once the deposit has been asked for (not necessarily received).
+  const depositRequested = !!proposal?.deposit_email_sent_at || depositPartsActive;
   const [manualPayNotes, setManualPayNotes] = useState("");
   const [manualPayFile, setManualPayFile] = useState<File | null>(null);
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
@@ -123,6 +136,7 @@ export default function ProposalDetailPage({
   // from the deposit's manualPay* above — both dialogs live on this page and
   // sharing state would let one dialog inherit the other's half-typed values.
   const [monthlyPayDialogOpen, setMonthlyPayDialogOpen] = useState(false);
+  const [reportPiOpen, setReportPiOpen] = useState(false);
   const [monthlyPayAmount, setMonthlyPayAmount] = useState("");
   const [monthlyPayRef, setMonthlyPayRef] = useState("");
   const [monthlyPayMedium, setMonthlyPayMedium] = useState("");
@@ -148,6 +162,10 @@ export default function ProposalDetailPage({
   const [depositExceptionProofFile, setDepositExceptionProofFile] = useState<File | null>(null);
   const [depositExceptionSubmitting, setDepositExceptionSubmitting] = useState(false);
   const exceptionFileInputRef = useRef<HTMLInputElement>(null);
+  // Remove an entered exception (admin/manager, reason required)
+  const [removeExceptionOpen, setRemoveExceptionOpen] = useState(false);
+  const [removeExceptionReason, setRemoveExceptionReason] = useState("");
+  const [removeExceptionSubmitting, setRemoveExceptionSubmitting] = useState(false);
 
   // Deposit email preview dialog
   const [depositEmailOpen, setDepositEmailOpen] = useState(false);
@@ -400,6 +418,30 @@ export default function ProposalDetailPage({
   };
 
   const canReduceDeposit = ["admin", "manager"].includes(currentUser?.role || "");
+
+  const submitRemoveException = async () => {
+    setRemoveExceptionSubmitting(true);
+    try {
+      const res = await fetch(`/api/proposals/${id}/deposit-exception`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: removeExceptionReason.trim() }),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success("Deposit exception removed");
+        setRemoveExceptionOpen(false);
+        setRemoveExceptionReason("");
+        fetchProposal();
+      } else {
+        toast.error(json?.error || "Failed to remove the deposit exception");
+      }
+    } catch {
+      toast.error("Unexpected error removing the deposit exception");
+    } finally {
+      setRemoveExceptionSubmitting(false);
+    }
+  };
 
   const submitDepositException = async () => {
     const magnitude = parseFloat(depositExceptionAmount);
@@ -656,8 +698,8 @@ export default function ProposalDetailPage({
         const verb = json.is_revise ? "resent" : "sent";
         toast.success(
           json.prorationFactor < 1
-            ? `GST invoice ${verb} (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
-            : `GST invoice ${verb}: ₹${json.totalAmount.toLocaleString("en-IN")}`,
+            ? `Proforma invoice ${verb} (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
+            : `Proforma invoice ${verb}: ₹${json.totalAmount.toLocaleString("en-IN")}`,
           { duration: 8000 }
         );
         setGstDialogOpen(false);
@@ -995,7 +1037,7 @@ export default function ProposalDetailPage({
                           <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-green-600" />
                           <div>
                             <p className="font-medium flex items-center gap-1.5">
-                              GST Invoice
+                              Proforma Invoice
                               <span className="text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded">PAID</span>
                             </p>
                             <p className="text-xs text-muted-foreground">Monthly charge paid — no email needed</p>
@@ -1004,16 +1046,16 @@ export default function ProposalDetailPage({
                       ) : (
                         <DropdownMenuItem
                           onClick={() => openGstDialog(invoiceSentAlready)}
-                          disabled={hasDeposit && !depositPaid}
+                          disabled={hasDeposit && !depositPaid && !depositRequested}
                         >
                           <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-blue-600" />
                           <div>
                             <p className="font-medium">
-                              {invoiceSentAlready ? "Revise & Resend GST Invoice" : "GST Invoice — First Month"}
+                              {invoiceSentAlready ? "Revise & Resend Proforma Invoice" : "Proforma Invoice — First Month"}
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              {hasDeposit && !depositPaid
-                                ? "Deposit must be paid first"
+                              {hasDeposit && !depositPaid && !depositRequested
+                                ? "Send the deposit request first"
                                 : `₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month · Prorated · PDF attached`}
                             </p>
                           </div>
@@ -1035,7 +1077,7 @@ export default function ProposalDetailPage({
               Edit
             </Button>
           )}
-          {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && !revisionBlockedReason(proposal) && (
+          {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && !revisionBlockedReason({ ...proposal, deposit_parts_active: depositPartsActive }) && (
             <Button variant="outline" size="sm" onClick={() => setReviseOpen(true)}>
               <Pencil className="mr-2 h-4 w-4" />
               Revise
@@ -1092,10 +1134,10 @@ export default function ProposalDetailPage({
           </CardContent>
         </Card>
       )}
-      {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && revisionBlockedReason(proposal) && (
+      {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && revisionBlockedReason({ ...proposal, deposit_parts_active: depositPartsActive }) && (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="pt-6 text-sm text-amber-900">
-            This proposal has been sent, so its terms are locked. {revisionBlockedReason(proposal)}
+            This proposal has been sent, so its terms are locked. {revisionBlockedReason({ ...proposal, deposit_parts_active: depositPartsActive })}
           </CardContent>
         </Card>
       )}
@@ -1106,7 +1148,7 @@ export default function ProposalDetailPage({
           <CardTitle className="text-base">Proposal history</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
-          <ProposalLifecycle proposal={proposal} />
+          <ProposalLifecycle proposal={proposal} depositPartsRequested={depositPartsActive} />
         </CardContent>
       </Card>
 
@@ -1412,7 +1454,7 @@ export default function ProposalDetailPage({
                   </div>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && (
+                {proposal.deposit_payment_status === "pending" && !depositPartsActive && (
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {["admin", "manager", "sales_rep"].includes(currentUser?.role || "") && (
                       <button
@@ -1434,8 +1476,30 @@ export default function ProposalDetailPage({
                         {Number(proposal.deposit_exception_amount || 0) !== 0 ? "Edit deposit exception" : "Apply a deposit exception"}
                       </button>
                     )}
+                    {canReduceDeposit && Number(proposal.deposit_exception_amount || 0) !== 0 && (
+                      <button
+                        type="button"
+                        onClick={() => { setRemoveExceptionReason(""); setRemoveExceptionOpen(true); }}
+                        className="text-xs text-red-700 hover:text-red-900 underline flex items-center gap-1"
+                      >
+                        <X className="h-3 w-3" />
+                        Remove deposit exception
+                      </button>
+                    )}
                   </div>
                 )}
+
+                <DepositPartsPanel
+                  proposalId={id}
+                  proposalStatus={proposal.status}
+                  depositPaymentStatus={proposal.deposit_payment_status}
+                  userId={currentUser?.id ?? null}
+                  role={currentUser?.role ?? null}
+                  partyLabel={`${proposal.proposal_number} · security deposit`}
+                  onChanged={fetchProposal}
+                  onPartsActive={setDepositPartsActive}
+                  onPosition={handleDepositPosition}
+                />
 
                 {proposal.deposit_payment_status === "paid" && (
                   <>
@@ -1489,13 +1553,13 @@ export default function ProposalDetailPage({
                   </>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && proposal.deposit_email_sent_at && (
+                {proposal.deposit_payment_status === "pending" && !depositPartsActive && proposal.deposit_email_sent_at && (
                   <p className="text-xs text-amber-700/80">
                     Last sent: {formatDateTime(proposal.deposit_email_sent_at)}
                   </p>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(proposal.status) && (
+                {proposal.deposit_payment_status === "pending" && !depositPartsActive && ["sent", "viewed", "accepted"].includes(proposal.status) && (
                   <Button
                     size="sm"
                     className="w-full mt-2"
@@ -1510,6 +1574,7 @@ export default function ProposalDetailPage({
                     the API rejected the wrong roles, but the button was
                     visible to anyone who could open the proposal. */}
                 {proposal.deposit_payment_status === "pending" &&
+                  !depositPartsActive &&
                   ["sent", "viewed", "accepted"].includes(proposal.status) &&
                   canRecordPayments(currentUser?.role) && (
                   <Button
@@ -1523,7 +1588,7 @@ export default function ProposalDetailPage({
                   </Button>
                 )}
 
-                {proposal.deposit_razorpay_link_url && proposal.deposit_payment_status !== "paid" && (() => {
+                {proposal.deposit_razorpay_link_url && proposal.deposit_payment_status !== "paid" && !depositPartsActive && (() => {
                   const linkCreated = proposal.sent_at ? new Date(proposal.sent_at) : new Date();
                   const expiresAt = new Date(linkCreated.getTime() + 30 * 24 * 60 * 60 * 1000);
                   const now = new Date();
@@ -1627,7 +1692,7 @@ export default function ProposalDetailPage({
           {proposal.status !== "draft" && proposal.status !== "rejected" && (() => {
             const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
             const depositPaid = proposal.deposit_payment_status === "paid";
-            const canSendInvoice = !depositRequired || depositPaid;
+            const canSendInvoice = !depositRequired || depositPaid || depositRequested;
             const invoiceSent = !!proposal.occupation_start_date;
 
             return (
@@ -1741,7 +1806,12 @@ export default function ProposalDetailPage({
                     <>
                       {!canSendInvoice && (
                         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          Security deposit must be paid before sending the GST invoice.
+                          Send the security deposit request before sending the proforma invoice.
+                        </p>
+                      )}
+                      {canSendInvoice && !depositPaid && depositCollection && (
+                        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                          {partialDepositWarning(depositCollection)}
                         </p>
                       )}
                       <Button
@@ -1751,7 +1821,7 @@ export default function ProposalDetailPage({
                         onClick={() => openGstDialog(false)}
                       >
                         <Mail className="mr-2 h-3.5 w-3.5" />
-                        Preview & Send GST Invoice
+                        Preview & Send Proforma Invoice
                       </Button>
                     </>
                   )}
@@ -1772,6 +1842,21 @@ export default function ProposalDetailPage({
                       >
                         <Banknote className="mr-2 h-3.5 w-3.5" />
                         Record Payment Received
+                      </Button>
+                    )}
+                  {/* Everyone else tells accounts the customer says they paid; accounts verify against the bank and record it. */}
+                  {proposal.payment_status !== "paid" &&
+                    !canRecordPayments(currentUser?.role) &&
+                    proposal.pi_statement_id && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full border-teal-300 text-teal-700 hover:bg-teal-50"
+                        title="The customer says they've paid this proforma outside the CRM — accounts will check the bank and record it"
+                        onClick={() => setReportPiOpen(true)}
+                      >
+                        <BadgeIndianRupee className="mr-2 h-3.5 w-3.5" />
+                        Report paid
                       </Button>
                     )}
                 </CardContent>
@@ -2002,7 +2087,7 @@ export default function ProposalDetailPage({
 
               {!depositEmailPreview.to.length && (
                 <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-                  This lead has no email address, so the email can&apos;t be sent. Use <strong>Download to share</strong> to send the request manually.
+                  This lead has no email address, so the email can&apos;t be sent. Use <strong>Download</strong> to send the request manually.
                 </div>
               )}
 
@@ -2078,7 +2163,7 @@ export default function ProposalDetailPage({
                   title="Creates the payment link, marks the deposit as requested and downloads a PDF to share manually — no email is sent"
                 >
                   {depositDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-                  {depositDownloading ? "Preparing…" : "Download to share"}
+                  {depositDownloading ? "Preparing…" : "Download"}
                 </Button>
                 <Button
                   onClick={handleSendDepositEmail}
@@ -2101,7 +2186,7 @@ export default function ProposalDetailPage({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Mail className="h-5 w-5 text-primary" />
-              {gstIsRevise ? "Revise & Resend GST Invoice" : "Preview & Send GST Invoice"}
+              {gstIsRevise ? "Revise & Resend Proforma Invoice" : "Preview & Send Proforma Invoice"}
             </DialogTitle>
             <p className="text-sm text-muted-foreground">
               {proposal.proposal_number} — Monthly charge ₹{Number(proposal.total_amount).toLocaleString("en-IN")}
@@ -2243,13 +2328,13 @@ export default function ProposalDetailPage({
 
               {gstIsRevise && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  <strong>Revise & Resend:</strong> This will cancel the previously sent payment link and void that invoice, then issue a new GST invoice number and send a fresh email (with the new PDF) to the customer.
+                  <strong>Revise & Resend:</strong> This will cancel the previously sent payment link and void that invoice, then issue a new proforma invoice number and send a fresh email (with the new PDF) to the customer.
                 </div>
               )}
 
               <div className="flex-1 min-h-0 overflow-auto rounded-md border bg-white p-1">
                 <iframe
-                  title="GST invoice email preview"
+                  title="Proforma invoice email preview"
                   srcDoc={gstPreview.html}
                   className="w-full h-[400px] border-0"
                   sandbox=""
@@ -2514,6 +2599,15 @@ export default function ProposalDetailPage({
       </Dialog>
 
       {/* Record the monthly / pro-rata first invoice payment (bank transfer) */}
+      <ReportPaymentDialog
+        open={reportPiOpen}
+        onOpenChange={setReportPiOpen}
+        entityType="billing_statement"
+        entityId={proposal?.pi_statement_id ?? null}
+        partyLabel={`${proposal?.lead?.company || [proposal?.lead?.first_name, proposal?.lead?.last_name].filter(Boolean).join(" ")} · ${proposal?.proposal_number} · first-month proforma`}
+        suggestedAmount={proposal?.pi_statement_total ?? null}
+        onReported={fetchProposal}
+      />
       <Dialog open={monthlyPayDialogOpen} onOpenChange={setMonthlyPayDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -2828,6 +2922,29 @@ export default function ProposalDetailPage({
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove Deposit Exception Dialog */}
+      <Dialog open={removeExceptionOpen} onOpenChange={(o) => { if (!removeExceptionSubmitting) setRemoveExceptionOpen(o); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Remove the deposit exception?</DialogTitle>
+            <DialogDescription>
+              The required deposit goes back to ₹{Number(proposal?.security_deposit_amount || 0).toLocaleString("en-IN")}
+              {Number(proposal?.deposit_credit_amount || 0) > 0 ? " less the held credit" : ""}. Any deposit link or email already sent for the adjusted amount must be cancelled first.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="rde-reason">Reason <span className="text-destructive">*</span> <span className="text-muted-foreground font-normal">(min 10 characters)</span></Label>
+            <Textarea id="rde-reason" rows={2} value={removeExceptionReason} onChange={(e) => setRemoveExceptionReason(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRemoveExceptionOpen(false)} disabled={removeExceptionSubmitting}>Keep it</Button>
+            <Button variant="destructive" onClick={submitRemoveException} disabled={removeExceptionSubmitting || removeExceptionReason.trim().length < 10}>
+              {removeExceptionSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Remove exception
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

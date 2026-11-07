@@ -23,6 +23,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
 import { STAGES, fmtINR, fmtDate, pickStageIndex, resolveIntro } from "@/lib/payment-reminder";
 import { ladderMaxStageFor, type ReceivableKind } from "@/lib/receivables";
+import { fetchReceivableAttachment } from "@/lib/reminder-receivable-attachment";
+import { ensureReceivableLink, insertReminderHistory, LINK_UNAVAILABLE_NOTE } from "@/lib/payment-link-guard";
 
 /** Where each kind keeps its due date and reminder bookkeeping. */
 const TABLE_MAP: Record<Exclude<ReceivableKind, "statement">, {
@@ -59,6 +61,10 @@ export interface ReceivableReminderInput {
   daysOverdue: number;
   stageIdx: number;
   payLinkUrl: string | null;
+  /** Razorpay link id stored with the receivable; lets the link be checked before sending. */
+  payLinkId?: string | null;
+  /** Base URL of the app, for a replacement link's callback. */
+  appUrl?: string;
   triggeredBy: "cron" | "manual";
   triggeredByUserId?: string | null;
   ccPools: { accounts: string[]; managerAndAdmin: string[]; adminOnly: string[] };
@@ -70,6 +76,10 @@ export interface ReceivableReminderResult {
   emailSent: boolean;
   whatsAppSent: boolean;
   errors: string[];
+  /** Set when nothing was sent on purpose (not a failure). */
+  skipped?: string;
+  /** True when the email went without a Pay button because no working link could be secured. */
+  linkIssue?: boolean;
 }
 
 /**
@@ -130,6 +140,9 @@ function renderEmail(o: {
   customerName: string; reference: string; dueDate: string;
   amountStr: string; payLinkUrl: string | null; intro: string;
   toneLabel: string; daysOverdue: number;
+  /** Name of the attached document, or null when nothing is attached. */
+  attachedDoc: string | null;
+  linkIssue: boolean;
 }): string {
   const d = o.daysOverdue;
   const banner = d > 0
@@ -151,7 +164,7 @@ function renderEmail(o: {
       </div>
       <div style="padding:28px;">
         <p style="color:#333;font-size:14px;">Dear ${o.customerName},</p>
-        <p style="color:#333;font-size:14px;">${o.intro}</p>
+        <p style="color:#333;font-size:14px;">${o.intro}${o.attachedDoc ? ` The ${o.attachedDoc} is attached.` : ""}</p>
         ${banner}
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
           <tr><td style="padding:6px 0;color:#666;">${refLabel}</td><td style="padding:6px 0;font-weight:600;">${o.reference}</td></tr>
@@ -162,6 +175,7 @@ function renderEmail(o: {
         <div style="text-align:center;margin:24px 0;">
           <a href="${o.payLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
         </div>` : ""}
+        ${o.linkIssue ? `<p style="color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:8px 12px;font-size:12px;">${LINK_UNAVAILABLE_NOTE}</p>` : ""}
         <p style="color:#666;font-size:12px;margin-top:24px;">If you've already made the payment, please ignore this reminder. For any queries, reply to this email or contact our accounts team.</p>
         <p style="color:#666;font-size:12px;">Regards,<br/>Accounts Team — The WorkVilla</p>
       </div>
@@ -173,9 +187,10 @@ function renderEmail(o: {
 }
 
 /** Deposit copy differs from invoice copy — a deposit isn't an unpaid bill. */
-function introFor(kind: Exclude<ReceivableKind, "statement">, stageIdx: number): string {
-  // Ad-hoc PIs and deposits never carry a GST invoice — always "proforma".
-  if (kind === "adhoc_invoice") return resolveIntro(STAGES[stageIdx].intro, "proforma");
+function introFor(kind: Exclude<ReceivableKind, "statement">, stageIdx: number, taxInvoiceIssued = false): string {
+  // Deposits never carry a GST invoice. An ad-hoc invoice does once one is
+  // issued, and the wording follows the document the customer is chased for.
+  if (kind === "adhoc_invoice") return resolveIntro(STAGES[stageIdx].intro, taxInvoiceIssued ? "tax invoice" : "proforma");
 
   const what = kind === "deposit" ? "security deposit" : "additional security deposit";
   switch (stageIdx) {
@@ -218,11 +233,28 @@ export async function sendReceivableReminder(
 ): Promise<ReceivableReminderResult> {
   const {
     kind, id, reference, partyName, email, phone, amount, dueDate,
-    daysOverdue, stageIdx, payLinkUrl, triggeredBy, triggeredByUserId, ccPools,
+    daysOverdue, stageIdx, triggeredBy, triggeredByUserId, ccPools,
   } = input;
 
   const stage = STAGES[stageIdx];
   const errors: string[] = [];
+
+  // The Pay link must work before the customer is sent to it. A link that
+  // already shows a payment is not chased (and not replaced): the money is
+  // waiting to be reconciled.
+  const link = await ensureReceivableLink(admin, {
+    kind, id, reference, amount, partyName, email, phone,
+    linkId: input.payLinkId ?? null, linkUrl: input.payLinkUrl,
+    appUrl: input.appUrl ?? (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim(),
+  });
+  if (link.outcome === "paid") {
+    return {
+      stageIdx, toneLabel: stage.toneLabel, emailSent: false, whatsAppSent: false, errors: [],
+      skipped: "the payment link shows a payment that is not reconciled yet",
+    };
+  }
+  const payLinkUrl = link.url;
+  const linkIssue = link.outcome === "unconfirmed";
   const amountStr = fmtINR(amount);
   const dueStr = fmtDate(dueDate);
   const isSoft = ladderMaxStageFor(kind) !== null;
@@ -236,20 +268,28 @@ export async function sendReceivableReminder(
   const uniqCc = Array.from(new Set(cc.filter((e) => e && e !== email)));
 
   const logSend = async (channel: "email" | "whatsapp", ok: boolean, recipient: string | null) => {
-    await admin.from("receivable_reminder_sends").insert({
+    await insertReminderHistory(admin, "receivable_reminder_sends", [{
       kind, receivable_id: id, stage_index: stageIdx, stage_label: stage.toneLabel,
       channel, recipient, status: ok ? "sent" : "failed",
       error: ok ? null : errors[errors.length - 1] || "unknown",
       triggered_by: triggeredBy, triggered_by_user_id: triggeredByUserId || null,
-    });
+      pay_link_url: channel === "email" ? payLinkUrl : null,
+      pay_link_created_at: channel === "email" ? link.createdAt : null,
+      pay_link_outcome: channel === "email" ? link.outcome : null,
+    }]);
   };
 
   let emailSent = false;
   if (email) {
+    const attachment = await fetchReceivableAttachment(admin, {
+      kind, id, reference, partyName, amount, dueDate, payLinkUrl,
+    });
     const html = renderEmail({
       kind, customerName: partyName, reference, dueDate: dueStr,
-      amountStr, payLinkUrl, intro: introFor(kind, stageIdx),
+      amountStr, payLinkUrl, intro: introFor(kind, stageIdx, attachment?.docNoun === "tax invoice"),
       toneLabel: stage.toneLabel, daysOverdue,
+      attachedDoc: attachment?.docNoun ?? null,
+      linkIssue,
     });
     try {
       const r = await resend.emails.send({
@@ -259,6 +299,9 @@ export async function sendReceivableReminder(
         cc: uniqCc.length > 0 ? uniqCc : undefined,
         subject: subjectFor(kind, reference, daysOverdue, amountStr, stageIdx),
         html,
+        ...(attachment
+          ? { attachments: [{ filename: attachment.filename, content: attachment.content, contentType: attachment.contentType }] }
+          : {}),
       });
       emailSent = !r.error;
       if (r.error) errors.push(`email: ${r.error.message || JSON.stringify(r.error)}`);
@@ -291,5 +334,5 @@ export async function sendReceivableReminder(
       .eq("id", id);
   }
 
-  return { stageIdx, toneLabel: stage.toneLabel, emailSent, whatsAppSent, errors };
+  return { stageIdx, toneLabel: stage.toneLabel, emailSent, whatsAppSent, errors, ...(linkIssue && emailSent ? { linkIssue: true } : {}) };
 }
