@@ -188,7 +188,7 @@ export default function ElectricityBillsPage() {
   const [pendingAction, setPendingAction] = useState<{ kind: "approve" | "revise" | "send"; id: string; label: string; detail?: string; title?: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; billSide: "landlord" | "customer"; label: string } | null>(null);
   const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
-  const [previewsByBillId, setPreviewsByBillId] = useState<Record<string, ApprovalPreviewItem[] | "loading">>({});
+  const [previewsByBillId, setPreviewsByBillId] = useState<Record<string, ApprovalPreviewItem[] | "loading" | "error">>({});
 
   // Form state
   const [locations, setLocations] = useState<Location[]>([]);
@@ -239,9 +239,14 @@ export default function ElectricityBillsPage() {
 
   const fetchApprovalPreview = useCallback(async (billId: string) => {
     setPreviewsByBillId((prev) => ({ ...prev, [billId]: "loading" }));
-    const res = await fetch(`/api/electricity-bills/${billId}/approval-preview`);
-    const json = await res.json();
-    setPreviewsByBillId((prev) => ({ ...prev, [billId]: res.ok ? (json.data ?? []) : [] }));
+    let result: ApprovalPreviewItem[] | "error" = "error";
+    try {
+      const res = await fetch(`/api/electricity-bills/${billId}/approval-preview`);
+      if (res.ok) result = (await res.json()).data ?? [];
+    } catch {
+      // network failure — falls through to the "error" state below
+    }
+    setPreviewsByBillId((prev) => ({ ...prev, [billId]: result }));
   }, []);
 
   // Fetch the customer-bill preview for every draft bill currently expanded
@@ -1223,6 +1228,9 @@ export default function ElectricityBillsPage() {
                               const preview = previewsByBillId[bill.id];
                               if (preview === undefined || preview === "loading") {
                                 return <p className="text-muted-foreground">Loading preview…</p>;
+                              }
+                              if (preview === "error") {
+                                return <p className="text-red-600">Couldn&apos;t load the customer-bill preview. Reload the page to retry.</p>;
                               }
                               if (preview.length === 0) {
                                 return (
