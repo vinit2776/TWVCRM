@@ -124,19 +124,16 @@ function NewVendorBillForm() {
     });
   }, []);
 
-  // Companies — for standalone bills (no PO), default to the first once loaded.
+  // Companies — deliberately not preselected for standalone bills (no PO): a default is easy to
+  // overlook and books the bill to the wrong company. The user must choose; submit is gated on it.
   useEffect(() => {
     fetch("/api/companies")
       .then((r) => r.json())
       .then((j) => {
         const all: Company[] = j.data || [];
         setCompanies(all);
-        if (!poId && !companyId && all.length > 0) {
-          setCompanyId(all[0].id);
-        }
       })
       .catch(() => setCompanies([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // When ?replaces=<id> is present, fetch the predecessor bill so we can show its
