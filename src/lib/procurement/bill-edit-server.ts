@@ -33,7 +33,7 @@ export function editedStamp(
 /** Checks a corrected pre-GST amount against the bill's PO (value or cycle cost, plus price tolerance). */
 export async function checkBillAmountAgainstPo(
   supabase: SupabaseClient,
-  bill: { id: string; po_id: string | null },
+  bill: { id: string; po_id: string | null; total_amount?: number | string | null },
   newTotal: number,
 ): Promise<CeilingResult> {
   if (!bill.po_id) return { ok: true, outcome: { kind: "ok" } };
@@ -61,7 +61,7 @@ export async function checkBillAmountAgainstPo(
     priorInvoiced = (others ?? []).reduce((sum, b) => sum + Number(b.total_amount), 0);
   }
 
-  return checkAmountAgainstCeiling({ newTotal, isService, ceiling, priorInvoiced, tolerancePercent: po.tolerance_percent });
+  return checkAmountAgainstCeiling({ newTotal, isService, ceiling, priorInvoiced, tolerancePercent: po.tolerance_percent, currentTotal: bill.total_amount == null ? null : Number(bill.total_amount) });
 }
 
 /**
