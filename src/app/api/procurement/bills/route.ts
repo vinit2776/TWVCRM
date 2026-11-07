@@ -14,6 +14,14 @@ import { tryAutoApproveBill } from "@/lib/procurement/recurring-bill-rules-serve
 import { tryAutoApproveAmcBill } from "@/lib/procurement/amc-bill-auto-approve";
 import { decideElectricityContext, type ElectricityBillExtra, type RememberName } from "@/lib/electricity-bill-match";
 import { findDuplicateVendorBill, loadElectricityFacts, rememberConnectionName } from "@/lib/electricity-bill-context-server";
+import { checkJoin } from "@/lib/procurement/shared-invoice";
+import {
+  applySharePlan,
+  cannotJoinReason,
+  distinctPoValues,
+  findSameInvoiceBills,
+  type SharePlan,
+} from "@/lib/procurement/shared-invoice-server";
 
 // Any 8-4-4-4-12 hex id, which is what Postgres accepts. Zod's strict .uuid() also demands an RFC version
 // nibble, which would reject perfectly valid database ids (e.g. a hand-seeded location).
@@ -50,6 +58,11 @@ const createBillSchema = z.object({
   acknowledge_mismatch: z.boolean().default(false),
   // Required when the invoice falls outside the PO's price tolerance.
   tolerance_exception_reason: z.string().trim().max(500).optional().nullable(),
+  // One vendor invoice covering several POs: total_amount is then this PO's share, and
+  // invoice_total is what the vendor's invoice adds up to.
+  invoice_total: z.number().positive().nullish(),
+  // The person confirmed this is the same invoice as bills already recorded under the number.
+  join_existing_invoice: z.boolean().default(false),
   // Teach the connection this wording so the next bill carrying it is recognised by itself.
   remember_name: z.boolean().default(false),
 }).refine(
@@ -222,6 +235,9 @@ export async function POST(request: NextRequest) {
   // any company_id the client also sent), otherwise taken directly from the
   // request — enforced by the schema refine() above.
   let billCompanyId = parsed.data.company_id ?? null;
+  // For the shared-invoice checks further down (poTotalAmount may be lowered to the received value).
+  let linkedPoType: string | null = null;
+  let linkedPoValue: number | null = null;
   if (parsed.data.po_id) {
     const { data: po } = await supabase
       .from("purchase_orders")
@@ -239,6 +255,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Company does not match the linked purchase order" }, { status: 422 });
     }
     billCompanyId = po.company_id;
+    linkedPoType = po.po_type;
+    linkedPoValue = Number(po.total_ordered_amount);
 
     poTotalAmount = Number(po.total_ordered_amount);
     if (po.po_type !== "service") tolerancePercent = clampTolerancePercent(po.tolerance_percent);
@@ -402,22 +420,74 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // ── Hard-block exact duplicate invoices ───────────────────────────────────
-  // Same vendor + same invoice number on any non-rejected bill = duplicate.
-  // Rejected bills are excluded so a re-submission after rejection is allowed.
-  if (parsed.data.invoice_number?.trim()) {
-    const { count: dupCount } = await supabase
-      .from("vendor_bills")
-      .select("*", { count: "exact", head: true })
-      .eq("vendor_id", parsed.data.vendor_id)
-      .eq("invoice_number", parsed.data.invoice_number.trim())
-      .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
+  // ── Duplicate invoices — and one invoice shared across several POs ───────
+  // Same vendor + company + invoice number on any live bill is a duplicate, unless the person
+  // confirms it is one vendor invoice covering several goods POs: then this bill is the next
+  // PO's share of it. Rejected/withdrawn bills are ignored so a re-submission is allowed.
+  const invoiceNo = parsed.data.invoice_number?.trim() ?? "";
+  const shareAdmin = createAdminClient();
+  let sharePlan: SharePlan | null = null;
+  let existingForShare: Awaited<ReturnType<typeof findSameInvoiceBills>> = [];
+  if (invoiceNo) {
+    try {
+      existingForShare = await findSameInvoiceBills(shareAdmin, {
+        vendorId: parsed.data.vendor_id,
+        companyId: billCompanyId!,
+        invoiceNumber: invoiceNo,
+        excludeBillId: parsed.data.replaces_bill_id,
+      });
+    } catch (err) {
+      console.error("[bills] same-invoice lookup failed:", err instanceof Error ? err.message : "unknown error");
+      return NextResponse.json({ error: "Could not check this invoice number" }, { status: 500 });
+    }
+    const share = parsed.data.total_amount;
+    const askedTotal = parsed.data.invoice_total ?? null;
+    const next = { poId: parsed.data.po_id ?? null, poType: linkedPoType };
 
-    if (dupCount && dupCount > 0) {
-      return NextResponse.json(
-        { error: `Invoice number "${parsed.data.invoice_number.trim()}" already exists for this vendor. Check Vendor Payments to avoid duplicate processing.` },
-        { status: 409 }
-      );
+    if (existingForShare.length === 0) {
+      // First PO on an invoice that is bigger than this PO's share.
+      if (askedTotal !== null && askedTotal > share + 0.01) {
+        const why = cannotJoinReason([], next);
+        if (why) return NextResponse.json({ error: why }, { status: 422 });
+        sharePlan = { kind: "open", invoiceTotal: askedTotal };
+      }
+    } else {
+      const why = cannotJoinReason(existingForShare, next);
+      if (!parsed.data.join_existing_invoice || why) {
+        return NextResponse.json(
+          {
+            error: why ?? `Invoice number "${invoiceNo}" already exists for this vendor. Check Vendor Payments to avoid duplicate processing.`,
+            code: why ? "DUPLICATE_INVOICE" : "INVOICE_NUMBER_EXISTS",
+          },
+          { status: 409 }
+        );
+      }
+
+      const groupIds = [...new Set(existingForShare.map((b) => b.invoice_group_id).filter((g): g is string => !!g))];
+      if (groupIds.length > 1) {
+        return NextResponse.json({ error: "These bills belong to different shared invoices. Ask an admin to look at it." }, { status: 409 });
+      }
+      let currentTotal = existingForShare.reduce((s, b) => s + b.total_amount, 0);
+      if (groupIds[0]) {
+        const { data: group } = await shareAdmin.from("vendor_invoice_groups").select("invoice_total").eq("id", groupIds[0]).single();
+        if (group) currentTotal = Number(group.invoice_total);
+      }
+      const newTotal = askedTotal ?? currentTotal;
+      const check = checkJoin({
+        currentTotal,
+        newTotal,
+        otherShares: existingForShare.map((b) => b.total_amount),
+        share,
+        poValues: distinctPoValues([...existingForShare, { po_id: next.poId, po_value: linkedPoValue }]),
+      });
+      if (!check.ok) return NextResponse.json({ error: check.message, code: check.code }, { status: 422 });
+      sharePlan = {
+        kind: "join",
+        groupId: groupIds[0] ?? null,
+        invoiceTotal: newTotal,
+        currentTotal,
+        attachBillIds: existingForShare.filter((b) => !b.invoice_group_id).map((b) => b.id),
+      };
     }
   }
 
@@ -472,9 +542,26 @@ export async function POST(request: NextRequest) {
     poAdvanceCredit > 0 ? "partially_paid" :
     "unpaid";
 
+  let invoiceGroupId: string | null = null;
+  if (sharePlan) {
+    try {
+      invoiceGroupId = await applySharePlan(shareAdmin, sharePlan, {
+        companyId: billCompanyId!,
+        vendorId: parsed.data.vendor_id,
+        invoiceNumber: invoiceNo,
+        userId: dbUser.id,
+        existingBillIds: existingForShare.map((b) => b.id),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not set up the shared invoice";
+      return NextResponse.json({ error: msg }, { status: msg.startsWith("Someone just") ? 409 : 500 });
+    }
+  }
+
   let bill: { id: string; bill_number: string };
   try {
     bill = await createVendorBill(supabase, {
+      invoice_group_id: invoiceGroupId,
       company_id: billCompanyId!,
       po_id: parsed.data.po_id ?? null,
       vendor_id: parsed.data.vendor_id,
@@ -495,13 +582,21 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to create bill";
+    // Two people adding to the same invoice at once: the database lets one through and stops the other.
+    if (msg.includes("SHARED_INVOICE_OVER_ALLOCATED")) {
+      return NextResponse.json(
+        { error: "Someone else just added a bill to this invoice and there is no longer enough left for this share. Reload and check the balance." },
+        { status: 409 }
+      );
+    }
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
   // If this vendor has an active recurring bill rule, see if it clears the
   // guardrails to skip manual approval entirely.
   // An out-of-tolerance bill always waits for a human; no rule may wave it through.
-  const needsHumanReview = !!toleranceFacts?.out_of_tolerance;
+  // A bill on a shared invoice does too: the approval gate looks at the whole invoice.
+  const needsHumanReview = !!toleranceFacts?.out_of_tolerance || !!invoiceGroupId;
   let autoApproval: { autoApproved: boolean; note?: string } = { autoApproved: false };
   if (!needsHumanReview) autoApproval = await tryAutoApproveBill(supabase, bill.id, parsed.data.vendor_id);
   let autoApprovalSource: "recurring_rule" | "amc_cycle" | null = autoApproval.autoApproved ? "recurring_rule" : null;
@@ -536,6 +631,13 @@ export async function POST(request: NextRequest) {
 
   // Teach the connection the wording on this bill, if asked. Best-effort: it never undoes the bill.
   const warnings: string[] = [];
+  if (sharePlan) {
+    const allocated = existingForShare.reduce((s, b) => s + b.total_amount, 0) + parsed.data.total_amount;
+    const unallocated = Math.round((sharePlan.invoiceTotal - allocated) * 100) / 100;
+    if (unallocated > 0.01) {
+      warnings.push(`₹${unallocated.toLocaleString("en-IN")} of this invoice is not on any PO yet. Add the other PO by uploading the same invoice number.`);
+    }
+  }
   if (rememberName) {
     const r = await rememberConnectionName(createAdminClient(), {
       connectionId: rememberName.connection_id,
