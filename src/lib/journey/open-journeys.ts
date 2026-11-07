@@ -20,6 +20,8 @@ export interface OpenJourney {
   since: string;
   /** ISO activation time, if activated. */
   activatedAt: string | null;
+  /** The lead's assigned rep, if any. */
+  assignedTo: string | null;
   journey: Journey;
 }
 
@@ -61,7 +63,7 @@ export async function listOpenJourneys(admin: SupabaseClient): Promise<OpenJourn
   const [contractsRes, proposalsRes] = await Promise.all([
     admin
       .from("contracts")
-      .select("id, contract_number, lead_id, status, created_at, activated_at, lead:leads(company, first_name, last_name)")
+      .select("id, contract_number, lead_id, status, created_at, activated_at, lead:leads(company, first_name, last_name, assigned_to)")
       .in("status", ["draft", "sent", "viewed", "accepted", "active"])
       .gte("created_at", since)
       .order("created_at", { ascending: false })
@@ -86,6 +88,7 @@ export async function listOpenJourneys(admin: SupabaseClient): Promise<OpenJourn
     proposalId: string | null;
     since: string;
     activatedAt: string | null;
+    assignedTo: string | null;
   }
   const candidates: Candidate[] = [];
   const leadsWithContract = new Set<string>();
@@ -99,6 +102,7 @@ export async function listOpenJourneys(admin: SupabaseClient): Promise<OpenJourn
       proposalId: null,
       since: ((c.activated_at as string) ?? (c.created_at as string)),
       activatedAt: (c.activated_at as string) ?? null,
+      assignedTo: ((c.lead as Row | undefined)?.assigned_to as string) ?? null,
     });
   }
   // A proposal only gets its own entry while its lead has no live contract;
@@ -113,6 +117,7 @@ export async function listOpenJourneys(admin: SupabaseClient): Promise<OpenJourn
       proposalId: p.id as string,
       since: p.created_at as string,
       activatedAt: null,
+      assignedTo: null,
     });
   }
 
@@ -120,7 +125,7 @@ export async function listOpenJourneys(admin: SupabaseClient): Promise<OpenJourn
     try {
       const journey = await loadJourney(admin, c.leadId, { contractId: c.contractId, proposalId: c.proposalId });
       return journey && !journey.complete
-        ? ({ leadId: c.leadId, customer: c.customer, ref: c.ref, contractId: c.contractId, since: c.since, activatedAt: c.activatedAt, journey } as OpenJourney)
+        ? ({ leadId: c.leadId, customer: c.customer, ref: c.ref, contractId: c.contractId, since: c.since, activatedAt: c.activatedAt, assignedTo: c.assignedTo, journey } as OpenJourney)
         : null;
     } catch (err) {
       console.error("[journey] open-journeys load failed", c.leadId, err);

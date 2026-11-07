@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowRight, ListChecks } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import type { NextStepItem } from "@/app/api/dashboard/next-steps/route";
+import { DueBadge } from "@/components/journey/due-badge";
 
 function daysSince(iso: string): string {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
@@ -67,7 +68,10 @@ export function NextStepsWidget() {
                 {i.detail ? ` · ${i.detail}` : ""} · {i.ref} · {daysSince(i.since)}
               </div>
             </div>
-            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="flex shrink-0 items-center gap-2">
+              <DueBadge due={i.due} />
+              <ArrowRight className="h-4 w-4 text-muted-foreground" />
+            </div>
           </Link>
         ))}
       </div>
