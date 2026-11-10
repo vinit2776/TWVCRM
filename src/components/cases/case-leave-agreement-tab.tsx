@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
+import { StampUploadedDocument } from "@/components/cases/stamp-uploaded-document";
 import {
   FileText,
   Send,
@@ -583,7 +584,12 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
         const err = await res.json();
         throw new Error(err.error || "Failed to cancel the stamp");
       }
-      toast.success("Sign & seal stamp cancelled — the agreement is editable again");
+      const { data: cancelled } = await res.json().catch(() => ({ data: null }));
+      toast.success(
+        cancelled?.status === "executed"
+          ? "Sign & seal stamp cancelled — the uploaded signed copy is the current document again"
+          : "Sign & seal stamp cancelled — the agreement is editable again"
+      );
       setCancelStampOpen(false);
       fetchAgreement();
     } catch (err) {
@@ -923,6 +929,17 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
                 )}
                 Stamp with company seal
               </Button>
+            )}
+
+            {/* A signed copy was uploaded (which executes the agreement) before TWV's
+                stamp went on: stamp that copy itself, keeping the customer's signature. */}
+            {agreement.status === "executed" && agreement.signed_document_id && !agreement.stamp_reference && userRole === "admin" && (
+              <StampUploadedDocument
+                caseId={caseId}
+                agreementId={agreement.id}
+                signedDocumentId={agreement.signed_document_id}
+                onStamped={fetchAgreement}
+              />
             )}
 
             {agreement.signed_document_id && agreement.stamp_reference && userRole === "admin" && (
@@ -1296,7 +1313,9 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
             <DialogDescription>
               This removes the stamped signed document and reverts the agreement to its
               status before stamping — Edit Agreement becomes available again if that status
-              is draft or internally approved. You can re-stamp it afterward if needed.
+              is draft or internally approved. You can re-stamp it afterward if needed. If the
+              stamp was put on an uploaded signed copy, only the stamp is removed: that copy
+              stays as the signed agreement.
             </DialogDescription>
           </DialogHeader>
           {stampError && (
