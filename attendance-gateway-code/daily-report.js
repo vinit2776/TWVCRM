@@ -18,6 +18,20 @@ const REPORTS = {
   evening: { cutoff: '19:00', title: 'Punch-out report' },
 };
 
+const CRON_PATH = '/internal/daily-report';
+
+// Which report a cron request asks for. Vercel's cron config documents `path` as a
+// path and is silent on query strings, so the kind travels as a path segment
+// (/internal/daily-report/morning) rather than ?kind=: a query string the platform
+// dropped would leave the route answering 400 every morning, and a cron log nobody
+// reads is the only place that would show. ?kind= still works for a hand-run retry.
+// Returns null for anything that isn't a known report.
+function reportKindFromPath(pathname, kindParam = null) {
+  if (pathname !== CRON_PATH && !pathname.startsWith(`${CRON_PATH}/`)) return null;
+  const kind = pathname.slice(CRON_PATH.length + 1) || kindParam;
+  return Object.hasOwn(REPORTS, kind || '') ? kind : null;
+}
+
 const SOURCE_LABELS = {
   biometric: 'Biometric', office: 'App', wifi: 'App', remote: 'Remote', correction: 'Correction',
 };
@@ -253,4 +267,4 @@ async function sendEmail({ apiKey, from, to, subject, html, text }, fetchImpl = 
   return (await res.json()).id;
 }
 
-module.exports = { createDailyReport, renderReportEmail, parseRecipients, sendEmail, REPORTS };
+module.exports = { createDailyReport, renderReportEmail, parseRecipients, sendEmail, reportKindFromPath, CRON_PATH, REPORTS };

@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { DatabaseSync } = require('node:sqlite');
 const { createAttendanceLogic } = require('../attendance-logic');
-const { createDailyReport, renderReportEmail, parseRecipients, sendEmail } = require('../daily-report');
+const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, reportKindFromPath, CRON_PATH } = require('../daily-report');
 
 const DAY = '2026-10-26'; // a Monday
 
@@ -168,4 +168,31 @@ test('sendEmail: posts to Resend with the key, and throws on an error response',
 
   const bad = async () => ({ ok: false, status: 403, text: async () => 'domain not verified' });
   await assert.rejects(sendEmail({ apiKey: 'k', from: 'f', to: ['b@y.com'], subject: 's', html: 'h', text: 't' }, bad), /Resend 403: domain not verified/);
+});
+
+test('cron path: the report kind travels as a path segment, not a query string', () => {
+  // These two are what vercel.json schedules. If they ever stop resolving, the crons
+  // answer 400 and the emails silently never start.
+  assert.equal(reportKindFromPath(`${CRON_PATH}/morning`), 'morning');
+  assert.equal(reportKindFromPath(`${CRON_PATH}/evening`), 'evening');
+
+  // ?kind= still works, for a retry run by hand.
+  assert.equal(reportKindFromPath(CRON_PATH, 'morning'), 'morning');
+  assert.equal(reportKindFromPath(`${CRON_PATH}/`, 'evening'), 'evening');
+
+  // The path wins over a contradicting query string.
+  assert.equal(reportKindFromPath(`${CRON_PATH}/morning`, 'evening'), 'morning');
+
+  // Anything else is refused rather than guessed at.
+  for (const [pathname, param] of [
+    [CRON_PATH, null],
+    [`${CRON_PATH}/`, null],
+    [`${CRON_PATH}/weekly`, null],
+    [`${CRON_PATH}/morning/extra`, null],
+    [CRON_PATH, 'constructor'],
+    ['/internal/daily-reports/morning', null],
+    ['/internal/auto-checkout', 'morning'],
+  ]) {
+    assert.equal(reportKindFromPath(pathname, param), null, `${pathname} ?kind=${param}`);
+  }
 });

@@ -141,9 +141,9 @@ The crons are declared in this directory's own [vercel.json](vercel.json) and ar
 protected by `CRON_SECRET`:
 
 - `/internal/auto-checkout`, 19:00 IST.
-- `/internal/daily-report?kind=morning`, 10:00 IST: emails who has punched in,
+- `/internal/daily-report/morning`, 10:00 IST: emails who has punched in,
   who is late, who isn't in yet and who is on leave.
-- `/internal/daily-report?kind=evening`, 19:00 IST: emails who punched out, who
+- `/internal/daily-report/evening`, 19:00 IST: emails who punched out, who
   left before their shift ended, who is still in and who was absent.
 
 The reports go to the recipients set at `/admin/settings` (Daily report recipients),
