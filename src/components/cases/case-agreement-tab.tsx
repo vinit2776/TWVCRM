@@ -272,6 +272,10 @@ export function CaseAgreementTab({ caseId, clauseGate: clauseGateFromCase, caseA
   };
 
   const isEditable = agreement?.status === "draft" || agreement?.status === "internally_approved";
+  // A sent, unsigned agreement whose address is out of step with the case can't
+  // go anywhere until it is rebuilt, so Regenerate is offered there too.
+  const canRegenerate = isEditable ||
+    (["sent_to_client", "client_approved"].includes(agreement?.status ?? "") && (addressStale || addressGate.blocked));
 
   if (loading) {
     return <div className="text-center py-8 text-muted-foreground">Loading proposal...</div>;
@@ -411,8 +415,8 @@ export function CaseAgreementTab({ caseId, clauseGate: clauseGateFromCase, caseA
               </Button>
             )}
 
-            {/* Regenerate — only in draft / internally_approved */}
-            {isEditable && (
+            {/* Regenerate — draft / internally_approved, or a sent one stuck on its address */}
+            {canRegenerate && (
               <Button
                 size="sm"
                 variant="outline"

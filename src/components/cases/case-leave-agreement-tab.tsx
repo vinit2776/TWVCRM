@@ -588,6 +588,10 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
   };
 
   const isEditable = agreement?.status === "draft" || agreement?.status === "internally_approved";
+  // A sent, unsigned agreement whose address is out of step with the case can't
+  // go anywhere until it is rebuilt, so Regenerate is offered there too.
+  const canRegenerate = isEditable ||
+    (["sent_to_client", "client_approved"].includes(agreement?.status ?? "") && (addressStale || addressGate.blocked));
   const canStampSignSeal =
     userRole === "admin" &&
     !!agreement &&
@@ -834,7 +838,7 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
               </Button>
             )}
 
-            {isEditable && (
+            {canRegenerate && (
               <Button size="sm" variant="outline" onClick={handleRegenerate} disabled={generating}>
                 {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Regenerate

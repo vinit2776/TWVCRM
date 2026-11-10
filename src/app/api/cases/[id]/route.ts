@@ -242,10 +242,11 @@ export async function PATCH(
   }
 
   // The case is the one source for the client address: rebuild any agreement
-  // that hasn't gone out yet. Signed/sent ones are left alone. Failures are
+  // that isn't signed, including one already sent (it returns to a draft and
+  // must be sent again). Signed ones go through the reset below. Failures are
   // logged inside, and the send gate still stops a stale draft going out.
   if (touchesAddress) {
-    await regenerateCaseAgreementPdfs(await createAdminClient(), id);
+    await regenerateCaseAgreementPdfs(await createAdminClient(), id, { includeSent: true });
   }
 
   // Audit log
