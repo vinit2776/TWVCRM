@@ -207,6 +207,8 @@ export function CollectPaymentDialog({
   // is within tolerance of nothing.
   const collectable = Math.max(0, totalAmount - verifiedTotal - pendingUpiTotal);
   const canCollectMore = collectable > tolerance;
+  // Balances are collected in whole rupees; legacy bookings can still carry paise.
+  const rupees = (n: number) => formatCurrency(Math.round(n));
   const fullyVerified = balanceDue <= tolerance;
 
   // Default amount to what is left to collect, in whole rupees.
@@ -236,8 +238,8 @@ export function CollectPaymentDialog({
     if (amt > collectable + tolerance) {
       toast.error(
         pendingUpiTotal > 0
-          ? `Only ${formatCurrency(collectable)} is left to collect — ${formatCurrency(pendingUpiTotal)} is already reported and waiting for accounts`
-          : `Amount exceeds balance due (${formatCurrency(collectable)})`,
+          ? `Only ${rupees(collectable)} is left to collect — ${rupees(pendingUpiTotal)} is already reported and waiting for accounts`
+          : `Amount exceeds balance due (${rupees(collectable)})`,
       );
       return;
     }
@@ -387,25 +389,25 @@ export function CollectPaymentDialog({
           <div className="grid grid-cols-3 gap-3 text-center">
             <div className="rounded-md bg-muted/50 p-2.5">
               <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">Total <InfoTooltip text="Full amount due for this booking" /></p>
-              <p className="text-lg font-bold">{formatCurrency(totalAmount)}</p>
+              <p className="text-lg font-bold">{rupees(totalAmount)}</p>
             </div>
             <div className="rounded-md bg-green-50 p-2.5">
               <p className="text-xs text-green-600 flex items-center justify-center gap-1">Paid <InfoTooltip text="Amount verified and collected from the customer" /></p>
-              <p className="text-lg font-bold text-green-700">{formatCurrency(verifiedTotal)}</p>
+              <p className="text-lg font-bold text-green-700">{rupees(verifiedTotal)}</p>
             </div>
             <div className={`rounded-md p-2.5 ${balanceDue > 0 ? "bg-amber-50" : "bg-green-50"}`}>
               <p className={`text-xs flex items-center justify-center gap-1 ${balanceDue > 0 ? "text-amber-600" : "text-green-600"}`}>
                 {balanceDue > 0 ? "Balance Due" : "Fully Paid"} <InfoTooltip text="Remaining amount to collect. Auto-closes when fully paid." />
               </p>
               <p className={`text-lg font-bold ${balanceDue > 0 ? "text-amber-700" : "text-green-700"}`}>
-                {formatCurrency(balanceDue)}
+                {rupees(balanceDue)}
               </p>
             </div>
           </div>
 
           {pendingTotal > 0 && (
             <p className="text-xs text-amber-600 text-center">
-              + {formatCurrency(pendingTotal)} pending verification
+              + {rupees(pendingTotal)} pending verification
             </p>
           )}
 
@@ -496,7 +498,7 @@ export function CollectPaymentDialog({
                     max={Math.round(collectable + tolerance)}
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
-                    placeholder={`Max ${formatCurrency(collectable)}`}
+                    placeholder={`Max ${rupees(collectable)}`}
                   />
                 </div>
 
@@ -710,7 +712,7 @@ export function CollectPaymentDialog({
             <div className="text-center py-4">
               <p className="text-sm font-medium text-amber-700">Everything is reported</p>
               <p className="text-xs text-muted-foreground mt-1">
-                {formatCurrency(pendingUpiTotal)} is waiting for accounts to verify it. Nothing more to collect.
+                {rupees(pendingUpiTotal)} is waiting for accounts to verify it. Nothing more to collect.
               </p>
             </div>
           )}
