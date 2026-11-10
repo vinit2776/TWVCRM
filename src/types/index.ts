@@ -62,6 +62,8 @@ export interface Location {
   ruijie_group_id?: number | null;
   /** Icon keys shown in the proposal PDF amenities strip. Defaults to ["wifi","coffee","printer","meeting"]. */
   proposal_amenity_icons?: string[];
+  /** Per-location wording for the agreement Schedule; null = standard wording. See src/lib/agreement-terms.ts. */
+  agreement_terms?: import("@/lib/agreement-terms").AgreementTerms | null;
   created_at: string;
   updated_at: string;
 }

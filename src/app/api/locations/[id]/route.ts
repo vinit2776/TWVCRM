@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { agreementTermsSchema, canEditAgreementTerms, cleanAgreementTerms } from "@/lib/agreement-terms";
 
 export async function GET(
   request: NextRequest,
@@ -37,15 +38,21 @@ export async function PUT(
     .eq("auth_id", user.id)
     .single();
 
-  if (!dbUser || !["admin", "manager", "it_manager"].includes(dbUser.role)) {
+  if (!dbUser || !["admin", "manager", "it_manager", "sales_rep"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Admin, Manager or IT Manager access required" }, { status: 403 });
   }
 
   const body = await request.json();
+
+  // A sales rep may set the location's agreement wording and nothing else.
+  const agreementTermsOnly = dbUser.role === "sales_rep";
+  if (agreementTermsOnly && Object.keys(body).some((k) => k !== "agreement_terms")) {
+    return NextResponse.json({ error: "Admin, Manager or IT Manager access required" }, { status: 403 });
+  }
   const {
     name, code, address, city, state, is_active, capacity_config, requires_headcount,
     latitude, longitude, incharge_user_id_1, incharge_user_id_2,
-    unifi_site_id, unifi_console_id, wifi_voucher_mode, proposal_amenity_icons,
+    unifi_site_id, unifi_console_id, wifi_voucher_mode, proposal_amenity_icons, agreement_terms,
   } = body as {
     name?: string;
     code?: string;
@@ -63,6 +70,7 @@ export async function PUT(
     unifi_console_id?: string | null;
     wifi_voucher_mode?: string | null;
     proposal_amenity_icons?: string[];
+    agreement_terms?: unknown;
   };
 
   // Same-user-twice guard mirrors the POST route + DB constraint so we
@@ -97,6 +105,24 @@ export async function PUT(
     }
   }
 
+  // Agreement wording is legal text: admin, manager and sales rep only (the route also admits it_manager).
+  // null puts the location back on the standard wording.
+  let cleanedTerms: unknown;
+  if (agreement_terms !== undefined) {
+    if (!canEditAgreementTerms(dbUser.role)) {
+      return NextResponse.json({ error: "Only an admin, manager or sales rep can change agreement terms" }, { status: 403 });
+    }
+    if (agreement_terms === null) {
+      cleanedTerms = null;
+    } else {
+      const parsed = agreementTermsSchema.safeParse(agreement_terms);
+      if (!parsed.success) {
+        return NextResponse.json({ error: "Agreement terms are invalid: keep each line under 300 characters and at most 12 lines per list" }, { status: 400 });
+      }
+      cleanedTerms = cleanAgreementTerms(parsed.data);
+    }
+  }
+
   const updates: Record<string, unknown> = {};
   if (name !== undefined) updates.name = name;
   if (code !== undefined) updates.code = code.toUpperCase();
@@ -114,8 +140,12 @@ export async function PUT(
   if (unifi_console_id !== undefined) updates.unifi_console_id = unifi_console_id || null;
   if (wifi_voucher_mode !== undefined) updates.wifi_voucher_mode = wifi_voucher_mode || null;
   if (proposal_amenity_icons !== undefined) updates.proposal_amenity_icons = proposal_amenity_icons;
+  if (agreement_terms !== undefined) updates.agreement_terms = cleanedTerms;
 
-  const { data, error } = await supabase
+  // The locations update policy is admin/manager/IT manager only, so the sales-rep path
+  // writes with the service client — safe because the body was limited to agreement_terms above.
+  const writer = agreementTermsOnly ? createAdminClient() : supabase;
+  const { data, error } = await writer
     .from("locations")
     .update(updates)
     .eq("id", id)
