@@ -31,9 +31,13 @@ export function agreementAddressGate(address: string | null | undefined): Addres
 
 const squash = (t: string | null | undefined) => (t ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 
+export const ADDRESS_STALE_REASON =
+  "The case address has changed since this agreement was generated. Regenerate the agreement to pick up the new address, then try again.";
+
 /** True when the case now has an address that the stored agreement doesn't carry
- *  (the agreement is a snapshot taken when it was generated). Warning only: staff
- *  may deliberately edit the address on the agreement itself. */
+ *  (the agreement is a snapshot taken when it was generated). The case is the one
+ *  source for the address, so a stale agreement must be regenerated before it can
+ *  be sent or signed. */
 export function agreementAddressIsStale(caseAddress: string | null | undefined, agreementAddress: string | null | undefined): boolean {
   const c = squash(caseAddress);
   if (!c) return false;

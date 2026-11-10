@@ -39,7 +39,7 @@ import {
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
 import type { CaseAgreement } from "@/types";
-import { agreementAddressGate, agreementAddressIsStale } from "@/lib/agreement-address-gate";
+import { ADDRESS_STALE_REASON, agreementAddressGate, agreementAddressIsStale } from "@/lib/agreement-address-gate";
 
 interface LeegalityHealth {
   environment: string;
@@ -69,12 +69,18 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
   const addressGate = agreement
     ? agreementAddressGate(((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined)
     : { blocked: false, reason: null };
-  const clauseGate = clauseGateFromCase?.blocked ? clauseGateFromCase : addressGate;
-  const clauseBlocked = clauseGate.blocked;
   const addressStale = !!agreement && agreementAddressIsStale(
     caseAddress,
     ((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined,
   );
+  // The case address moved on after this was generated: until it is regenerated,
+  // Regenerate is the only action offered. A signed one never gets here, because
+  // changing the address resets it to a draft first.
+  const needsRegenerate = addressStale && !["executed", "signing"].includes(agreement?.status ?? "");
+  const clauseGate = clauseGateFromCase?.blocked
+    ? clauseGateFromCase
+    : needsRegenerate ? { blocked: true, reason: ADDRESS_STALE_REASON } : addressGate;
+  const clauseBlocked = clauseGate.blocked;
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -267,7 +273,7 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
         const err = await res.json();
         throw new Error(err.error || "Failed to regenerate agreement");
       }
-      toast.success("Agreement regenerated from case data");
+      toast.success("Agreement regenerated with the current address. Next: send it to the customer or upload the signed copy.");
       fetchAgreement();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Regeneration failed");
@@ -689,13 +695,20 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {addressStale && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>
-                The case address has changed since this agreement was generated, so the PDF may show an old
-                address. Regenerate the agreement to pick up the current address before sending.
-              </span>
+          {needsRegenerate && (
+            <div className="flex flex-col gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  The case address has changed since this agreement was generated. <strong>Step 1:</strong> regenerate
+                  it to pick up the new address. <strong>Step 2:</strong> send it to the customer or upload the signed copy. The other
+                  actions stay locked until step 1 is done.
+                </span>
+              </div>
+              <Button size="sm" className="shrink-0" onClick={handleRegenerate} disabled={generating}>
+                {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Regenerate agreement
+              </Button>
             </div>
           )}
           {!!agreement && !!(agreement.variables as Record<string, unknown> | null)?.address_reset_at && agreement.status !== "executed" && (
@@ -822,19 +835,19 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
               View PDF
             </Button>
 
-            <Button size="sm" variant="outline" onClick={handleDownloadForStampPaper} disabled={viewing}>
+            <Button size="sm" variant="outline" onClick={handleDownloadForStampPaper} disabled={viewing || needsRegenerate}>
               {viewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
               Download for Stamp Paper
             </Button>
 
-            {isEditable && (
+            {isEditable && !needsRegenerate && (
               <Button size="sm" variant="outline" onClick={openEditDialog}>
                 <Pencil className="mr-2 h-4 w-4" />
                 Edit Agreement
               </Button>
             )}
 
-            {isEditable && (
+            {isEditable && !needsRegenerate && (
               <Button size="sm" variant="outline" onClick={handleRegenerate} disabled={generating}>
                 {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Regenerate

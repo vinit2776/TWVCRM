@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateCaseSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
-import { regenerateCaseAgreementPdfs } from "@/lib/special-clause/case-regenerate";
 import { caseAddressText } from "@/lib/agreement-address-gate";
 import {
   AGREEMENT_RESET_MIN_REASON,
@@ -152,11 +151,13 @@ export async function PATCH(
   let signedToReset: SignedAgreementRow[] = [];
   let newAddress = "";
   let resetReason = "";
+  let addressChanged = false;
   const touchesAddress = ["client_address", "client_city", "client_state", "client_pincode"].some((k) => k in patch);
   if (touchesAddress && oldCase) {
     newAddress = caseAddressText({ ...oldCase, ...patch } as Record<string, string | null>);
     const squash = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
     const changed = !!newAddress && squash(newAddress) !== squash(caseAddressText(oldCase as Record<string, string | null>));
+    addressChanged = changed;
     if (changed) {
       const adminForReset = await createAdminClient();
       signedToReset = await findSignedAgreements(adminForReset, id);
@@ -241,12 +242,9 @@ export async function PATCH(
     }
   }
 
-  // The case is the one source for the client address: rebuild any agreement
-  // that hasn't gone out yet. Signed/sent ones are left alone. Failures are
-  // logged inside, and the send gate still stops a stale draft going out.
-  if (touchesAddress) {
-    await regenerateCaseAgreementPdfs(await createAdminClient(), id);
-  }
+  // An address change never rebuilds an agreement by itself. The stored
+  // agreement is now out of step with the case, which locks send/sign/upload
+  // (caseAgreementGateError) until a person clicks Regenerate on the agreement tab.
 
   // Audit log
   const { data: dbUser } = await supabase
@@ -256,7 +254,7 @@ export async function PATCH(
     .single();
 
   if (signedToReset.length > 0) {
-    const outcome = await resetAgreementsForNewAddress(await createAdminClient(), id, signedToReset, newAddress, resetReason);
+    const outcome = await resetAgreementsForNewAddress(await createAdminClient(), id, signedToReset, resetReason);
     if (dbUser?.id) {
       for (const agreementId of outcome.reset) {
         logAudit(supabase, {
@@ -270,7 +268,7 @@ export async function PATCH(
     }
     if (outcome.failed.length > 0) {
       return NextResponse.json(
-        { data, warning: "The address was saved, but the signed agreement could not be reset. Regenerate it from the agreement tab." },
+        { data, warning: "The address was saved, but the signed agreement could not be reset. Try saving the case again." },
         { status: 207 }
       );
     }
@@ -289,7 +287,19 @@ export async function PATCH(
     });
   }
 
-  return NextResponse.json({ data });
+  // Tell the form which tab now holds an agreement waiting to be regenerated.
+  let regenerateTab: "agreement" | "proposal" | null = null;
+  if (addressChanged) {
+    const { data: unsigned } = await supabase
+      .from("case_agreements")
+      .select("type")
+      .eq("case_id", id)
+      .not("status", "in", "(executed,signing)");
+    const types = (unsigned ?? []).map((a) => a.type);
+    regenerateTab = types.includes("leave_license") ? "agreement" : types.includes("proposal") ? "proposal" : null;
+  }
+
+  return NextResponse.json({ data, ...(regenerateTab ? { regenerate_tab: regenerateTab } : {}) });
 }
 
 export async function DELETE(

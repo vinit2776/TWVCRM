@@ -1,12 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { writeAgreementPdf } from "@/lib/special-clause/case-regenerate";
 import { cancelSigningRequest } from "@/lib/leegality";
 
 // Changing a case's client address after its agreement is signed (or out for
 // e-signature) makes that signature cover the wrong address. The change is only
-// applied after a person accepts the warning; the agreement then goes back to a
-// draft carrying the new address and must be signed again. The old signed file
-// is kept: the new draft's document points at it as its parent.
+// applied after a person accepts the warning; the agreement then goes back to an
+// unsigned draft that still carries the old address, so it is locked until a
+// person clicks Regenerate, and must then be signed again. The old signed file
+// is kept: it stays the draft's document, and Regenerate chains the new PDF to it
+// (previousAgreementDocumentId).
 
 // Same roles that can send the agreement out again afterwards.
 export const AGREEMENT_RESET_ROLES = ["admin", "manager", "sales_rep"];
@@ -48,13 +49,12 @@ export async function cancelOpenSigningRequests(agreements: SignedAgreementRow[]
   return null;
 }
 
-/** Rebuilds each signed/signing agreement with the new address as an unsigned
- *  draft. Returns ids it reset; throws nothing, failures are logged and reported. */
+/** Puts each signed/signing agreement back to an unsigned draft. Nothing is
+ *  rebuilt here. Returns ids it reset; throws nothing, failures are logged and reported. */
 export async function resetAgreementsForNewAddress(
   admin: SupabaseClient,
   caseId: string,
   agreements: SignedAgreementRow[],
-  address: string,
   reason: string,
 ): Promise<{ reset: string[]; failed: string[] }> {
   const reset: string[] = [];
@@ -62,12 +62,10 @@ export async function resetAgreementsForNewAddress(
   const now = new Date().toISOString();
   for (const a of agreements) {
     try {
-      const vars = { ...(a.variables ?? {}), client_address: address, address_reset_at: now, address_reset_reason: reason } as Record<string, unknown>;
-      const parent = a.signed_document_id ?? a.generated_document_id;
-      const docId = await writeAgreementPdf(admin, caseId, a, vars, parent);
+      const vars = { ...(a.variables ?? {}), address_reset_at: now, address_reset_reason: reason } as Record<string, unknown>;
       const { error } = await admin.from("case_agreements").update({
         variables: vars,
-        generated_document_id: docId,
+        generated_document_id: a.signed_document_id ?? a.generated_document_id,
         signed_document_id: null,
         signed_at: null,
         status: "draft",
@@ -84,4 +82,23 @@ export async function resetAgreementsForNewAddress(
     }
   }
   return { reset, failed };
+}
+
+/** The document a regenerated agreement supersedes: the current document of the
+ *  case's latest agreement of that type, so version history keeps the old file. */
+export async function previousAgreementDocumentId(
+  supabase: SupabaseClient,
+  caseId: string,
+  type: "leave_license" | "proposal",
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("case_agreements")
+    .select("signed_document_id, generated_document_id")
+    .eq("case_id", caseId)
+    .eq("type", type)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const prev = data as { signed_document_id: string | null; generated_document_id: string | null } | null;
+  return prev?.signed_document_id ?? prev?.generated_document_id ?? null;
 }
