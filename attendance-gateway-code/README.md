@@ -162,8 +162,8 @@ to On at `/admin/settings`, and needs each employee's email on their profile. Th
 AM) or Follow shift timings (earliest shift start to latest grace end). It is not in
 `vercel.json`: Hobby cron can't run every 5 minutes, so an outside scheduler has to
 call it every 5 minutes (it only sends what is due, once per person per day,
-`punchin_reminder_runs`). The device's check-ins also run it, but they come only
-every 15 minutes, so they can't be relied on alone.
+`punchin_reminder_runs`). That schedule is the only thing that triggers it: with no
+caller set up, no reminder is ever sent.
 
 A day closed only by that auto-checkout is a **Missed Checkout** (MC): it counts as
 a Half Day, with hours counted up to the shift end, until the employee files a

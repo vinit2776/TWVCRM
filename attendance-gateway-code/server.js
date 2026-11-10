@@ -1924,14 +1924,13 @@ async function runPunchinReminders(now = new Date()) {
   if (sent > 0) console.log(`Punch-in reminders sent: ${sent}`);
   return { outcome: 'ran', sent, failed };
 }
-// From the device routes: at most once a minute per instance, and never lets a
-// reminder problem break the device's own request.
-let lastDeviceReminderRun = 0;
-async function runPunchinRemindersFromDevice() {
-  if (CONFIG.PUNCHIN_REMINDERS !== 'on' || Date.now() - lastDeviceReminderRun < 60 * 1000) return;
-  lastDeviceReminderRun = Date.now();
-  try { await runPunchinReminders(); } catch (err) { console.error('punch-in reminders (device trigger) failed:', err.message); }
-}
+// Only the outside every-5-minute schedule calls this. The device's check-ins used to
+// as well, which couldn't work: the device polls about every 15 minutes while each
+// person is due for only 5, so it caught a given window perhaps a third of the time.
+// What it did do was put email latency on the device's critical path — the send loop
+// is sequential with a 15-second timeout per message, awaited inside the punch-upload
+// handler, with no maxDuration set. Killed partway, the claims already written have no
+// email behind them and the next run skips those people, so they silently get nothing.
 
 async function checkAndRunAutoCheckout() {
   const now = new Date();
@@ -5498,8 +5497,6 @@ async function handleRequest(req, res) {
       // The device resends its unacknowledged log on every retry, so a batch
       // showing up again in full (all duplicates) is normal, not an error.
       if (duplicates > 0) console.log(`[adms] skipped ${duplicates} duplicate punch(es) from device ${sn}`);
-      // After the punches are stored, so someone who just punched isn't reminded.
-      await runPunchinRemindersFromDevice();
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('OK');
     }
@@ -5518,7 +5515,6 @@ async function handleRequest(req, res) {
         }
       }
       await resumeHeldAutoCheckout(sn);
-      await runPunchinRemindersFromDevice();
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('OK');
     }
