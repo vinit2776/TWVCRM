@@ -107,3 +107,8 @@ export function drawCompanyStampInBox(
     }
   }
 }
+
+/** File-name prefix of "the uploaded signed copy with TWV's stamp on top" for a
+ *  case agreement. cancel-stamp reads it to put the uploaded copy back rather
+ *  than clearing the signed document. */
+export const STAMPED_EXISTING_PREFIX = "stamped-existing-";

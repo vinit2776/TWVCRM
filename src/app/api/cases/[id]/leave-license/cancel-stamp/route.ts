@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { STAMPED_EXISTING_PREFIX } from "@/lib/company-stamp";
 
 /**
  * POST /api/cases/[id]/leave-license/cancel-stamp
@@ -12,6 +13,10 @@ import { logAudit } from "@/lib/audit";
  * stamp_reference is set — i.e. this execution was produced by the stamp
  * feature, not a genuine Leegality completion or a manually uploaded signed
  * copy, neither of which this route may touch.
+ *
+ * When the stamp was put on top of an uploaded signed copy
+ * (stamp-existing-document), only the stamp is undone: the uploaded copy
+ * becomes the signed document again and the agreement stays executed.
  */
 export async function POST(
   request: NextRequest,
@@ -63,6 +68,41 @@ export async function POST(
       { error: "This agreement's signed document wasn't produced by the stamp feature — nothing to cancel." },
       { status: 400 }
     );
+  }
+
+  if (agreement.signed_document_id) {
+    const { data: stampedDoc } = await (await createAdminClient())
+      .from("documents")
+      .select("file_path, parent_document_id")
+      .eq("id", agreement.signed_document_id)
+      .maybeSingle();
+    const uploadedCopyId = stampedDoc?.file_path?.includes(`/${STAMPED_EXISTING_PREFIX}`)
+      ? stampedDoc.parent_document_id
+      : null;
+    if (uploadedCopyId) {
+      const { data: restored, error: restoreErr } = await supabase
+        .from("case_agreements")
+        .update({ signed_document_id: uploadedCopyId, stamp_reference: null })
+        .eq("id", agreementId)
+        .eq("case_id", caseId)
+        .select("*")
+        .single();
+      if (restoreErr) {
+        return NextResponse.json({ error: restoreErr.message }, { status: 500 });
+      }
+      logAudit(supabase, {
+        entityType: "case_agreement",
+        entityId: agreementId,
+        action: "update",
+        performedBy: dbUser.id,
+        changes: {
+          action: { old: null, new: "sign_seal_cancelled" },
+          signed_document_id: { old: agreement.signed_document_id, new: uploadedCopyId },
+          stamp_reference: { old: agreement.stamp_reference, new: null },
+        },
+      });
+      return NextResponse.json({ data: restored });
+    }
   }
 
   const restoredStatus = agreement.pre_stamp_status || "draft";
