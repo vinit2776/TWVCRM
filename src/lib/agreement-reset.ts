@@ -8,7 +8,8 @@ import { cancelSigningRequest } from "@/lib/leegality";
 // draft carrying the new address and must be signed again. The old signed file
 // is kept: the new draft's document points at it as its parent.
 
-export const AGREEMENT_RESET_ROLES = ["admin", "manager"];
+// Same roles that can send the agreement out again afterwards.
+export const AGREEMENT_RESET_ROLES = ["admin", "manager", "sales_rep"];
 export const AGREEMENT_RESET_MIN_REASON = 10;
 const SIGNED_STATES = ["executed", "signing"];
 
