@@ -164,7 +164,7 @@ export async function PATCH(
         const { data: actor } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
         if (!actor || !AGREEMENT_RESET_ROLES.includes(actor.role)) {
           return NextResponse.json(
-            { error: "This case has a signed agreement. Only an admin or manager can change the client address, which requires the agreement to be signed again." },
+            { error: "This case has a signed agreement. Only an admin, manager or sales rep can change the client address, which requires the agreement to be signed again." },
             { status: 403 }
           );
         }
