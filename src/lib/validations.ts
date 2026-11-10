@@ -10,6 +10,12 @@ export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; deta
   return { error: message, details: fieldErrors };
 }
 
+// The first location (migration 00006) has the hand-written id
+// 00000000-0000-0000-0000-000000000001, which .uuid() rejects because it
+// carries no RFC version digit. Location ids are checked for shape only, so
+// records at that location can still be saved.
+const locationId = z.guid("Invalid location ID");
+
 // ==========================================
 // Lead Validations
 // ==========================================
@@ -64,7 +70,7 @@ export const createLeadSchema = z.object({
     .optional(),
   seat_capacity: z.number().int().positive().optional(),
   preferred_location: z.string().optional(),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   pan_number: z.string().optional(),
   gst_number: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, "Invalid GST number format (e.g. 33AAAAA0000A1Z5)").optional().or(z.literal("")).transform(v => v || undefined),
   working_hours: z.string().optional(),
@@ -219,7 +225,7 @@ export const lineItemSchema = z.object({
 
 const proposalBaseSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   title: z.string().min(1, "Title is required"),
   description: z.string().optional(),
   items: z.array(lineItemSchema).min(1, "At least one line item is required"),
@@ -300,7 +306,7 @@ export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 export const createContractSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
   proposal_id: z.string().uuid("A linked accepted proposal is required"),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   tenure_months: z.number().int().positive("Tenure must be positive"),
   start_date: z.string().min(1, "Start date is required"),
@@ -410,7 +416,7 @@ const operatingDaySchema = z.object({
 
 export const createSpaceSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  location_id: z.string().uuid("Invalid location ID"),
+  location_id: locationId,
   capacity: z.number().int().positive("Capacity must be positive"),
   pricing_model: z.enum(["hourly", "daily"]).default("hourly"),
   // Hourly rate: required for hourly-priced spaces, can be 0 for daily-priced.
@@ -720,7 +726,7 @@ const caseFieldsSchema = z.object({
   case_source: z.enum(["aggregator", "direct"]),
   aggregator_id: z.string().uuid("Invalid aggregator ID").optional().or(z.literal("")).transform(v => v || undefined),
   aggregator_contact_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   purpose: z.enum(["gst_registration", "mca_registration", "branch_office", "mail_handling", "business_address"]),
   is_renewal: z.boolean(),
   parent_case_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
