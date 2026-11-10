@@ -9,6 +9,7 @@ import { drawCompanyStamp } from "@/lib/company-stamp";
 import { composeProposalTerms } from "@/lib/proposal-terms";
 import { programmedEscalation } from "@/lib/auto-renewal";
 import { sanitizeForPdf } from "@/lib/pdf-text";
+import { buildScheduleLines, formatScheduleRow, readAgreementTerms } from "@/lib/agreement-terms";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -1401,28 +1402,21 @@ export function generateMembershipAgreementPDF(
   doc.text("SCHEDULE", pageWidth / 2, y, { align: "center" });
   y += 8;
 
+  // Saved wording is typed by staff, so strip characters helvetica can't draw (e.g. the rupee sign).
+  const scheduleLines = buildScheduleLines(readAgreementTerms(location?.agreement_terms), location?.proposal_amenity_icons);
+  for (const row of [scheduleLines.inclusions, scheduleLines.paid, scheduleLines.rates]) {
+    row.forEach((line, i) => { row[i] = sanitizeForPdf(line); });
+  }
   const scheduleData: [string, string, string][] = [
     ["1", "Location / Premises", `${locationName}\n${locationAddress}`],
     ["2", "Work Space Description", contract.workspace_description || "As per agreement"],
     ["3", "Parking Space", contract.parking_space || "Nil"],
-    ["4", "Inclusions",
-      "\u2022 Electricity & air conditioning consumed during office hours.\n" +
-      "\u2022 Wi-Fi and Internet as per fair usage Policy\n" +
-      "\u2022 Housekeeping, security and maintenance services\n" +
-      "\u2022 Hot tea & coffee from specified vending machine 12 cups per week, per seat."],
+    ["4", "Inclusions", formatScheduleRow(scheduleLines.inclusions)],
     ["5", "Complimentary Services\n(subject to availability)", (contract.complimentary_services || "TBD") +
       "\n\nThese Complimentary Services will not be rolled over from month to month. If these allocated Complimentary Services are exceeded, Member will be responsible for paying fees for such overages as per applicable rates at that time."],
-    ["6", "Additional Paid Services",
-      "\u2022 Conference Room beyond Complimentary Services (if any)\n" +
-      "\u2022 Printouts beyond Complimentary Services\n" +
-      "\u2022 Other Food & Beverages sales counters including Cafe / Vending Machine and others.\n" +
-      "\u2022 Other value-added member services as available.\n" +
-      "\u2022 Additional charges of Rs.2500/- per hour will be implemented after office hours and on Public Holidays."],
+    ["6", "Additional Paid Services", formatScheduleRow(scheduleLines.paid)],
     ["7", "Rack Rate of select paid services\n(subject to availability and revision\nwithout prior intimation by management)",
-      "\u2022 Conference Room @ INR 1000 per hour plus GST\n" +
-      "\u2022 Additional printouts - A4 - Color Rs.20 per sheet / B&W Rs. 5 per sheet. A3 - Color Rs.25 per sheet.\n" +
-      "\u2022 Coffee/Tea twice a day compliment, additional cups @ Rs.20/-\n" +
-      "\u2022 Additional Car & Bike parking slots - subject to availability."],
+      formatScheduleRow(scheduleLines.rates)],
     ["8", "Monthly Membership Fees (MMF)", (() => {
       const phases = contract.rate_phases ?? [];
       if (phases.length === 0) {

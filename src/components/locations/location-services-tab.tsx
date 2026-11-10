@@ -12,6 +12,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Plus, Pencil, Wifi, Coffee, Printer, Users, Zap, Car, Camera, ConciergeBell } from "lucide-react";
 import { toast } from "sonner";
 import type { LocationService } from "@/types";
+import type { AgreementTerms } from "@/lib/agreement-terms";
+import { AgreementTermsCard } from "@/components/locations/agreement-terms-card";
 
 // ── Amenity catalogue (must stay in sync with pdf-generator.ts) ──────────────
 const AMENITY_CATALOG: Array<{ key: string; label: string; icon: React.ReactNode }> = [
@@ -30,10 +32,13 @@ const DEFAULT_ICONS = ["wifi", "coffee", "printer", "meeting"];
 interface LocationServicesTabProps {
   locationId: string;
   canEdit: boolean;
+  /** Sales reps may set agreement wording without editing the rest of the location. */
+  canEditAgreementTerms?: boolean;
   initialAmenityIcons?: string[];
+  initialAgreementTerms?: AgreementTerms | null;
 }
 
-export function LocationServicesTab({ locationId, canEdit, initialAmenityIcons }: LocationServicesTabProps) {
+export function LocationServicesTab({ locationId, canEdit, canEditAgreementTerms = canEdit, initialAmenityIcons, initialAgreementTerms }: LocationServicesTabProps) {
   // ── Billable services ──────────────────────────────────────────────────────
   const [services, setServices] = useState<LocationService[]>([]);
   const [loading, setLoading] = useState(true);
@@ -224,6 +229,13 @@ export function LocationServicesTab({ locationId, canEdit, initialAmenityIcons }
           )}
         </CardContent>
       </Card>
+
+      <AgreementTermsCard
+        locationId={locationId}
+        canEdit={canEditAgreementTerms}
+        amenityIcons={amenityIcons}
+        initialTerms={initialAgreementTerms}
+      />
 
       {/* ── Add / Edit Service Dialog ─────────────────────────────────────── */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
