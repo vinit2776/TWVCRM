@@ -24,6 +24,7 @@ const {
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
 const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, REPORTS: DAILY_REPORTS } = require('./daily-report');
+const { createPunchinReminder, renderReminderEmail, WINDOW_MODES: REMINDER_WINDOW_MODES } = require('./punchin-reminder');
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
   ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
@@ -357,7 +358,31 @@ const SETTING_DEFS = [
     help: "The From line on the daily report emails. Its domain must be verified in the Resend account the key above belongs to.",
     fallback: 'TWV Attendance <contact@theworkvilla.com>',
   },
+  {
+    key: 'PUNCHIN_REMINDERS',
+    label: 'Punch-in reminder emails',
+    help: "Emails each employee 10 minutes after their shift starts if they haven't punched in, 5 minutes before the 15-minute grace ends. Skips Sundays, holidays, approved leave, people already in, and anyone without an email. Uses the Resend key and sender above.",
+    fallback: 'off',
+    options: [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }],
+  },
+  {
+    key: 'PUNCHIN_REMINDER_WINDOW',
+    label: 'Punch-in reminder window',
+    help: "When the every-5-minute check may send. Anyone whose reminder time falls outside the window doesn't get one.",
+    fallback: 'fixed',
+    options: [
+      { value: 'fixed', label: 'Fixed: 9:30 to 10:00 AM', help: 'Covers the standard 09:30 shift.' },
+      { value: 'shifts', label: 'Follow shift timings: earliest shift start to latest grace end', help: "Works out the window from everyone's shifts each day, so people on later or earlier shifts also get reminded." },
+    ],
+  },
 ];
+// A setting with fixed choices only accepts one of them.
+for (const def of SETTING_DEFS) {
+  if (def.options && !def.validate) {
+    const allowed = def.options.map(o => o.value);
+    def.validate = (value) => allowed.includes(value) ? null : `${def.label} must be one of: ${allowed.join(', ')}.`;
+  }
+}
 const SETTING_DEFS_BY_KEY = Object.fromEntries(SETTING_DEFS.map(d => [d.key, d]));
 
 // Last-resort punch key. Regenerated per process when neither the database nor the
@@ -729,6 +754,14 @@ const SCHEMA_SQL = `
     sent_at TEXT NOT NULL,
     PRIMARY KEY (kind, date)
   );
+  -- One row per punch-in reminder actually sent, so the every-5-minute runs (and the
+  -- device check-ins that also trigger them) never email someone twice in a day.
+  CREATE TABLE IF NOT EXISTS punchin_reminder_runs (
+    employee_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY (employee_id, date)
+  );
   CREATE TABLE IF NOT EXISTS branches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
@@ -785,6 +818,9 @@ const {
 } = createAttendanceLogic(db);
 const dailyReport = createDailyReport(db, {
   getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate, getApprovedPermissionForDate,
+});
+const punchinReminder = createPunchinReminder(db, {
+  getPunchesForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate,
 });
 
 const LEAVE_TYPES = ['Casual Leave', 'Sick Leave', 'Comp Off'];
@@ -1855,6 +1891,46 @@ async function runDailyReport(kind) {
   }
   console.log(`Daily ${kind} report sent to ${to.length} recipients`);
   return 'sent';
+}
+
+// --- Punch-in reminder emails (see punchin-reminder.js) ---
+// Sends whatever is due right now. Called by /internal/punchin-reminder (an outside
+// every-5-minute schedule) and on the biometric device's check-ins.
+async function runPunchinReminders(now = new Date()) {
+  if (CONFIG.PUNCHIN_REMINDERS !== 'on') return { outcome: 'off' };
+  if (!CONFIG.RESEND_API_KEY) return { outcome: 'not_configured' };
+  const date = todayStr(now);
+  const mode = REMINDER_WINDOW_MODES.includes(CONFIG.PUNCHIN_REMINDER_WINDOW) ? CONFIG.PUNCHIN_REMINDER_WINDOW : 'fixed';
+  const result = await punchinReminder.dueReminders(date, now.getHours() * 60 + now.getMinutes(), mode);
+  if (result.skipped) return { outcome: 'skipped', reason: result.skipped };
+  let sent = 0;
+  let failed = 0;
+  for (const reminder of result.due) {
+    // Claim first so two overlapping runs can't both send; a failed send releases it
+    // so the next run (still inside the 5-minute gap) can try again.
+    const claim = await db.prepare('INSERT OR IGNORE INTO punchin_reminder_runs (employee_id, date, sent_at) VALUES (?, ?, ?)')
+      .run(reminder.employeeId, date, formatTimestamp(new Date()));
+    if (!claim.changes) continue;
+    try {
+      const email = renderReminderEmail(reminder, { appUrl: 'https://twv-attendance.vercel.app' });
+      await sendEmail({ apiKey: CONFIG.RESEND_API_KEY, from: CONFIG.REPORT_EMAIL_FROM, to: [reminder.email], ...email });
+      sent++;
+    } catch (err) {
+      await db.prepare('DELETE FROM punchin_reminder_runs WHERE employee_id = ? AND date = ?').run(reminder.employeeId, date);
+      console.error(`punch-in reminder for ${reminder.employeeId} failed:`, err.message);
+      failed++;
+    }
+  }
+  if (sent > 0) console.log(`Punch-in reminders sent: ${sent}`);
+  return { outcome: 'ran', sent, failed };
+}
+// From the device routes: at most once a minute per instance, and never lets a
+// reminder problem break the device's own request.
+let lastDeviceReminderRun = 0;
+async function runPunchinRemindersFromDevice() {
+  if (CONFIG.PUNCHIN_REMINDERS !== 'on' || Date.now() - lastDeviceReminderRun < 60 * 1000) return;
+  lastDeviceReminderRun = Date.now();
+  try { await runPunchinReminders(); } catch (err) { console.error('punch-in reminders (device trigger) failed:', err.message); }
 }
 
 async function checkAndRunAutoCheckout() {
@@ -4653,7 +4729,15 @@ async function renderAdminSettings(user, opts = {}) {
     // Secrets are never rendered back into the page. A blank submission leaves the
     // stored value alone, so an admin editing an unrelated field cannot wipe a key
     // by simply not retyping it; clearing one is an explicit checkbox.
-    const input = def.secret
+    const current = String(inDb ? row.value : (process.env[def.key] || def.fallback || ''));
+    const input = def.options
+      ? `<div style="display:flex;flex-direction:column;gap:8px;">${def.options.map(opt => `
+          <label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid ${opt.value === current ? '#1565C0;background:#F0F6FD' : '#D0D5DA;background:#fff'};cursor:pointer;">
+            <input type="radio" name="${def.key}" value="${escapeHtml(opt.value)}"${opt.value === current ? ' checked' : ''} style="width:auto;margin-top:3px;">
+            <span><span style="font-weight:600;">${escapeHtml(opt.label)}</span>${opt.help ? `<br><span style="font-size:0.85em;color:#7C8896;">${escapeHtml(opt.help)}</span>` : ''}</span>
+          </label>`).join('')}
+        </div>`
+      : def.secret
       ? `<input type="password" name="${def.key}" value="" autocomplete="new-password" placeholder="${inDb ? 'Set — leave blank to keep unchanged' : 'Not set'}" style="width:100%;padding:8px;border-radius:6px;border:1px solid #D0D5DA;">
          <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:0.82em;color:#7C8896;">
            <input type="checkbox" name="__clear__${def.key}" value="1" style="width:auto;"> Clear this value
@@ -5414,6 +5498,8 @@ async function handleRequest(req, res) {
       // The device resends its unacknowledged log on every retry, so a batch
       // showing up again in full (all duplicates) is normal, not an error.
       if (duplicates > 0) console.log(`[adms] skipped ${duplicates} duplicate punch(es) from device ${sn}`);
+      // After the punches are stored, so someone who just punched isn't reminded.
+      await runPunchinRemindersFromDevice();
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('OK');
     }
@@ -5432,6 +5518,7 @@ async function handleRequest(req, res) {
         }
       }
       await resumeHeldAutoCheckout(sn);
+      await runPunchinRemindersFromDevice();
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('OK');
     }
@@ -5515,6 +5602,25 @@ async function handleRequest(req, res) {
     } catch (err) {
       console.error(`daily ${kind} report failed:`, err.message);
       return sendJson(res, 502, { ok: false, error: 'Report email failed' });
+    }
+  }
+
+  // Punch-in reminders. Meant to be called every 5 minutes by an outside scheduler
+  // (Vercel Hobby cron can't run that often). Safe to call any time: it only sends
+  // what is due now, once per person per day. Same CRON_SECRET guard as above.
+  if (parsed.pathname === '/internal/punchin-reminder') {
+    const expected = process.env.CRON_SECRET;
+    const provided = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+    if (!expected || provided !== expected) {
+      logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
+      return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+    try {
+      const result = await runPunchinReminders();
+      return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', ...result });
+    } catch (err) {
+      console.error('punch-in reminders failed:', err.message);
+      return sendJson(res, 502, { ok: false, error: 'Punch-in reminders failed' });
     }
   }
 
