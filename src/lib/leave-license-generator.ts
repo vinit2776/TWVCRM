@@ -21,6 +21,7 @@ import {
   createPdfContext,
 } from "@/lib/pdf-utils";
 import { drawCompanyStampInBox } from "@/lib/company-stamp";
+import { cleanAddressText } from "@/lib/agreement-address-gate";
 import type { VoPurpose, EntityType } from "@/types";
 
 // ================================================================
@@ -129,7 +130,7 @@ export function mergeLeaveLicenseVariables(params: {
     client_company_name: params.clientCompanyName,
     client_entity_type: params.clientEntityType,
     entity_type_label: ENTITY_TYPE_LABELS[params.clientEntityType] || params.clientEntityType,
-    client_address: params.clientAddress || "To be provided",
+    client_address: cleanAddressText(params.clientAddress) || "To be provided",
     client_gst_number: params.clientGstNumber,
     client_pan_number: params.clientPanNumber,
     client_cin_number: params.clientCinNumber,
@@ -338,12 +339,12 @@ export function generateLeaveLicensePdf(
     const signatoryIdText = variables.lessee_signatory_id_number
       ? ` (${variables.lessee_signatory_id_label}: ${variables.lessee_signatory_id_number})`
       : "";
-    lesseeDesc = `${variables.client_company_name}, through its ${variables.lessee_signatory_designation || "Director"} ${variables.lessee_signatory_name}${signatoryIdText}, having registered office at ${variables.client_address}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
+    lesseeDesc = `${variables.client_company_name}, through its ${variables.lessee_signatory_designation || "Director"} ${variables.lessee_signatory_name}${signatoryIdText}, having registered office at ${cleanAddressText(variables.client_address)}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
   } else {
     const panText = variables.client_pan_number
       ? `, with PAN Number ${variables.client_pan_number}`
       : "";
-    lesseeDesc = `${variables.client_name}, residing at ${variables.client_address}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
+    lesseeDesc = `${variables.client_name}, residing at ${cleanAddressText(variables.client_address)}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
   }
   addBodyText(lesseeDesc);
   ctx.y += 6;
