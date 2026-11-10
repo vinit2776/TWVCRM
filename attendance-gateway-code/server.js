@@ -23,7 +23,7 @@ const {
   parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
-const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, REPORTS: DAILY_REPORTS } = require('./daily-report');
+const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, reportKindFromPath, REPORTS: DAILY_REPORTS } = require('./daily-report');
 const { createPunchinReminder, renderReminderEmail, WINDOW_MODES: REMINDER_WINDOW_MODES } = require('./punchin-reminder');
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
@@ -5587,15 +5587,15 @@ async function handleRequest(req, res) {
 
   // Daily report emails for Vercel Cron: ?kind=morning (10:00 IST) or evening (19:00 IST).
   // Same CRON_SECRET guard as the auto-checkout above.
-  if (parsed.pathname === '/internal/daily-report') {
+  if (parsed.pathname === '/internal/daily-report' || parsed.pathname.startsWith('/internal/daily-report/')) {
     const expected = process.env.CRON_SECRET;
     const provided = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
     if (!expected || provided !== expected) {
       logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
-    const kind = parsed.searchParams.get('kind');
-    if (!Object.hasOwn(DAILY_REPORTS, kind)) return sendJson(res, 400, { error: 'kind must be morning or evening' });
+    const kind = reportKindFromPath(parsed.pathname, parsed.searchParams.get('kind'));
+    if (!kind) return sendJson(res, 400, { error: 'kind must be morning or evening' });
     try {
       const outcome = await runDailyReport(kind);
       return sendJson(res, 200, { ok: true, ran: `daily-report:${kind}`, outcome });
