@@ -71,7 +71,8 @@ export default function CaseDetailPage({
   const router = useRouter();
   // The Renewals desk links straight to the Renewal tab, and can open Start renewal.
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") === "renewal" ? "renewal" : "overview";
+  const tabParam = searchParams.get("tab") ?? "";
+  const initialTab = ["renewal", "agreement", "proposal"].includes(tabParam) ? tabParam : "overview";
   const { data: caseData, loading, refetch } = useCase(id);
   const { user } = useCurrentUser();
   // Special clause not yet approved: neither agreement may be sent, signed or stamped.

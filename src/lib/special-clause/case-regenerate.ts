@@ -7,21 +7,13 @@ import { caseAddressText } from "@/lib/agreement-address-gate";
 // case's approved clause or client address changes, rebuild every agreement that
 // hasn't gone out yet so the stored copy matches. Agreements already sent/signed are left
 // alone; submit/withdraw refuse to change a clause once one is out for signature.
-// The one exception is an address change (`includeSent`): an agreement that was
-// sent but never signed is rebuilt too and goes back to a draft, because nothing
-// else can refresh it and its old address would block every way forward.
 // Failures are logged, not thrown: agreementClauseGate then blocks sending a
 // stale PDF, so the safe state holds even when this step doesn't complete.
 
 const REGENERABLE = ["draft", "internally_approved"];
-export const SENT_UNSIGNED = ["sent_to_client", "client_approved"];
 const norm = (t: unknown) => (typeof t === "string" ? t.replace(/\s+/g, " ").trim() : "");
 
-export async function regenerateCaseAgreementPdfs(
-  admin: SupabaseClient,
-  caseId: string,
-  opts: { includeSent?: boolean } = {},
-): Promise<void> {
+export async function regenerateCaseAgreementPdfs(admin: SupabaseClient, caseId: string): Promise<void> {
   const { data: kase } = await admin
     .from("cases")
     .select("special_clause_status, special_clause_text, client_address, client_city, client_state, client_pincode")
@@ -37,15 +29,13 @@ export async function regenerateCaseAgreementPdfs(
 
   const { data: agreements } = await admin
     .from("case_agreements").select("id, type, template_key, variables, status")
-    .eq("case_id", caseId).in("status", opts.includeSent ? [...REGENERABLE, ...SENT_UNSIGNED] : REGENERABLE);
+    .eq("case_id", caseId).in("status", REGENERABLE);
 
-  for (const a of (agreements ?? []) as { id: string; type: string; template_key: string; variables: Record<string, unknown> | null; status: string }[]) {
+  for (const a of (agreements ?? []) as { id: string; type: string; template_key: string; variables: Record<string, unknown> | null }[]) {
     try {
-      // A sent agreement keeps the clause it went out with; only its address follows the case.
-      const sent = SENT_UNSIGNED.includes(a.status);
-      const vars = (sent ? { ...(a.variables ?? {}) } : { ...(a.variables ?? {}), special_clause_text: text }) as Record<string, unknown>;
+      const vars = { ...(a.variables ?? {}), special_clause_text: text } as Record<string, unknown>;
       if (address) vars.client_address = address;
-      const clauseSame = sent || norm(a.variables?.special_clause_text) === norm(text);
+      const clauseSame = norm(a.variables?.special_clause_text) === norm(text);
       const addressSame = !address || norm(a.variables?.client_address) === norm(address);
       if (clauseSame && addressSame) continue;
 

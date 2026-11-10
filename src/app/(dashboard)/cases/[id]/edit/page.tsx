@@ -49,8 +49,11 @@ export default function EditCasePage({
 
     const body = await res.json().catch(() => ({}));
     if (body.warning) toast.warning(body.warning);
-    else toast.success(reset ? "Case updated. The agreement was reset and must be signed again." : "Case updated successfully");
-    router.push(`/cases/${id}`);
+    else if (reset) toast.success("Case updated. The agreement was reset: regenerate it, then get it signed again.");
+    else if (body.regenerate_tab) toast.success("Case updated. Regenerate the agreement to pick up the new address.");
+    else toast.success("Case updated successfully");
+    // Land on the agreement that now needs regenerating, when there is one.
+    router.push(body.regenerate_tab ? `/cases/${id}?tab=${body.regenerate_tab}` : `/cases/${id}`);
   };
 
   const handleSubmit = (data: CreateCaseInput) => save(data);
@@ -105,7 +108,7 @@ export default function EditCasePage({
             </DialogDescription>
           </DialogHeader>
           <ul className="list-disc space-y-1 pl-5 text-sm">
-            <li>The agreement goes back to a draft with the new address, and must be <strong>signed again</strong>.</li>
+            <li>The agreement goes back to a draft. You regenerate it with the new address from the Agreement tab, and it must be <strong>signed again</strong>.</li>
             <li>Any e-signature request still open is withdrawn.</li>
             <li>The old signed file is kept as the previous version.</li>
             <li>The case, billing and invoices are not changed.</li>
