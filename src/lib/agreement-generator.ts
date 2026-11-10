@@ -403,8 +403,11 @@ export function generateAgreementPdf(
   doc.setFontSize(9);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
-  doc.text("For " + BRAND_NAME, col1X, ctx.y);
+  doc.text("For " + COMPANY_NAME, col1X, ctx.y, { maxWidth: colWidth });
   doc.text("For " + (variables.client_company_name || variables.client_name), col2X, ctx.y);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.text(`(trading as "${BRAND_NAME}")`, col1X, ctx.y + 8);
   ctx.y += 20;
 
   doc.setDrawColor(150, 150, 150);

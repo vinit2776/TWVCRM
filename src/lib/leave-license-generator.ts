@@ -13,6 +13,7 @@ import {
   BRAND_TEAL,
   BRAND_DARK,
   COMPANY_NAME,
+  BRAND_NAME,
   LESSOR_DIRECTOR,
   formatCurrency,
   formatDate,
@@ -309,7 +310,7 @@ export function generateLeaveLicensePdf(
     5
   );
   ctx.addWrappedText(
-    `${COMPANY_NAME}, having registered office address at ${LL_LESSOR_REG_OFFICE}, through its Authorized Signatory, ${variables.lessor_signatory_name}, hereinafter referred to as "Lessor / Service Provider".`,
+    `${COMPANY_NAME}, carrying on business under the trade name and style "${BRAND_NAME}", having registered office address at ${LL_LESSOR_REG_OFFICE}, through its Authorized Signatory, ${variables.lessor_signatory_name}, hereinafter referred to as "Lessor / Service Provider".`,
     ctx.marginLeft,
     ctx.contentWidth,
     9,
@@ -726,7 +727,7 @@ export function generateLeaveLicensePdf(
 
   autoTable(doc, {
     startY: ctx.y,
-    head: [["For Lessor", "For Lessee"]],
+    head: [[`For Lessor: ${COMPANY_NAME} (trading as "${BRAND_NAME}")`, "For Lessee"]],
     body: [
       [
         "Signature: ____________________",
