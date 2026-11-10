@@ -16,6 +16,7 @@ import {
   createPdfContext,
 } from "@/lib/pdf-utils";
 import { drawCompanyStamp } from "@/lib/company-stamp";
+import { cleanAddressText } from "@/lib/agreement-address-gate";
 import type { VoPurpose, EntityType } from "@/types";
 
 // ================================================================
@@ -275,7 +276,7 @@ export function mergeVariables(params: {
     client_company_name: params.clientCompanyName,
     client_entity_type: params.clientEntityType,
     entity_type_label: ENTITY_TYPE_LABELS[params.clientEntityType] || params.clientEntityType,
-    client_address: params.clientAddress || "To be provided",
+    client_address: cleanAddressText(params.clientAddress) || "To be provided",
     client_gst_number: params.clientGstNumber,
     client_pan_number: params.clientPanNumber,
     client_cin_number: params.clientCinNumber,
@@ -314,7 +315,8 @@ export function renderAgreementText(
   }
 
   const template = Handlebars.compile(templateSource);
-  return template(variables);
+  // Agreements stored before addresses were cleaned on the way in still print on one line.
+  return template({ ...variables, client_address: cleanAddressText(variables.client_address) });
 }
 
 /**

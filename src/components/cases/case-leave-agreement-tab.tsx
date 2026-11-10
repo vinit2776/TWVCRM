@@ -695,6 +695,14 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* The address itself can't go out (missing, no pincode, unprintable letters): say so
+              on the page, with the fix, rather than only in a tooltip on a disabled button. */}
+          {!needsRegenerate && addressGate.blocked && !["executed", "signing"].includes(agreement.status) && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{addressGate.reason}</span>
+            </div>
+          )}
           {needsRegenerate && (
             <div className="flex flex-col gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-2">
