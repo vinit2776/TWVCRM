@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
@@ -80,7 +80,9 @@ export function useLandlordInvoice(onRead?: (extracted: ExtractedInvoice) => voi
     check.status === "ok" ? buildInvoiceCheckRecord(check.extracted, findingsFor(entered), overrideReason) : null;
 
   /** null when the bill may be saved; otherwise what is in the way. */
-  const blockedReason = (entered: EnteredBill): string | null => {
+  const blockedReason = (entered: EnteredBill, duplicate: string | null = null): string | null => {
+    if (!entered.invoiceNumber.trim()) return "Enter the bill number — it is printed on the landlord's invoice";
+    if (duplicate) return duplicate;
     if (check.status === "loading") return "Still reading the invoice — wait a moment";
     if (findingsFor(entered).length > 0 && overrideReason.trim().length < 5) {
       return "What you entered doesn't match the invoice. Correct it, or explain the difference below";
@@ -89,6 +91,24 @@ export function useLandlordInvoice(onRead?: (extracted: ExtractedInvoice) => voi
   };
 
   return { file, check, inputRef, pick, clear, upload, findingsFor, recordFor, blockedReason, overrideReason, setOverrideReason };
+}
+
+/** Warns as soon as a bill number is known if that bill is already on file. */
+export function useDuplicateWarning(locationId: string, billNumber: string): string | null {
+  const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => {
+    const number = billNumber.trim();
+    if (!locationId || !number) { setMessage(null); return; }
+    let live = true;
+    const timer = setTimeout(() => {
+      fetch(`/api/electricity-bills/duplicate-check?location_id=${encodeURIComponent(locationId)}&bill_number=${encodeURIComponent(number)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (live) setMessage(j?.duplicate?.message ?? null); })
+        .catch(() => { if (live) setMessage(null); });
+    }, 500);
+    return () => { live = false; clearTimeout(timer); };
+  }, [locationId, billNumber]);
+  return message;
 }
 
 /** GST rate worth switching on when the invoice prints GST; null when it shows none. */
@@ -102,11 +122,12 @@ export function gstRateFromInvoice(extracted: ExtractedInvoice): number | null {
 
 interface FieldProps {
   invoice: ReturnType<typeof useLandlordInvoice>;
+  duplicate?: string | null;
   entered: EnteredBill;
   onApply: (field: SuggestionField, value: string) => void;
 }
 
-export function LandlordInvoiceField({ invoice, entered, onApply }: FieldProps) {
+export function LandlordInvoiceField({ invoice, duplicate, entered, onApply }: FieldProps) {
   const { file, check, inputRef, pick, clear } = invoice;
   const findings = invoice.findingsFor(entered);
   return (
@@ -130,6 +151,12 @@ export function LandlordInvoiceField({ invoice, entered, onApply }: FieldProps) 
         </button>
       )}
       <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="sr-only" onChange={pick} />
+      {duplicate && (
+        <p className="flex items-start gap-1.5 text-xs text-red-800 rounded border border-red-200 bg-red-50 px-2.5 py-1.5">
+          <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+          {duplicate}
+        </p>
+      )}
       <InvoiceCheckCard state={check} entered={entered} poCeiling={null} onApply={onApply} />
       {findings.length > 0 && (
         <p className="flex items-start gap-1.5 text-xs text-amber-800 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5">

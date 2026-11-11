@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { LandlordInvoiceField, gstRateFromInvoice, useLandlordInvoice } from "@/components/electricity/landlord-invoice";
+import { LandlordInvoiceField, gstRateFromInvoice, useDuplicateWarning, useLandlordInvoice } from "@/components/electricity/landlord-invoice";
 import type { ExtractedInvoice, SuggestionField } from "@/lib/procurement/invoice-check";
 import {
   Dialog,
@@ -245,11 +245,15 @@ export function ElectricityBillsTab({ initialLocationId, autoCapture }: { initia
   const [invoiceGstRate, setInvoiceGstRate] = useState<number | null>(null);
   const [landlordVendor, setLandlordVendor] = useState<{ id: string; name: string } | null>(null);
   const onInvoiceRead = useCallback((extracted: ExtractedInvoice) => {
+    // Take the number and date off the invoice when they have not been typed yet.
+    setFormLandlordBillNumber((n) => n || extracted.invoiceNumber || "");
+    setFormLandlordBillDate((d) => d || extracted.invoiceDate || "");
     const rate = gstRateFromInvoice(extracted);
     setInvoiceGstRate(rate);
     if (rate !== null) toast.message(`The invoice shows GST — it will be saved at ${rate}%.`);
   }, []);
   const invoice = useLandlordInvoice(onInvoiceRead);
+  const duplicateWarning = useDuplicateWarning(formLocationId, formLandlordBillNumber);
   const [formConfig, setFormConfig] = useState<Record<string, unknown> | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -349,7 +353,7 @@ export function ElectricityBillsTab({ initialLocationId, autoCapture }: { initia
   const handleSubmit = async () => {
     if (!formLocationId) { toast.error("Select a location"); return; }
     if (!invoice.file) { toast.error("Upload the landlord's invoice first — it is used to check what you entered"); return; }
-    { const blocked = invoice.blockedReason(enteredForCheck); if (blocked) { toast.error(blocked); return; } }
+    { const blocked = invoice.blockedReason(enteredForCheck, duplicateWarning); if (blocked) { toast.error(blocked); return; } }
 
     const apiLines = formLines.map((l, i) => ({
       line_type: l.line_type,
@@ -592,7 +596,7 @@ export function ElectricityBillsTab({ initialLocationId, autoCapture }: { initia
             {/* Landlord reference */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Landlord Bill No. <span className="text-muted-foreground">(optional)</span></Label>
+                <Label>Landlord Bill No. <span className="text-red-500">*</span></Label>
                 <Input
                   value={formLandlordBillNumber}
                   onChange={(e) => setFormLandlordBillNumber(e.target.value)}
@@ -711,7 +715,7 @@ export function ElectricityBillsTab({ initialLocationId, autoCapture }: { initia
               </div>
             </div>
 
-            <LandlordInvoiceField invoice={invoice} entered={enteredForCheck} onApply={applyInvoiceSuggestion} />
+            <LandlordInvoiceField invoice={invoice} duplicate={duplicateWarning} entered={enteredForCheck} onApply={applyInvoiceSuggestion} />
 
             {/* Live preview */}
             <BillPreview lines={formLines} config={formConfig} />

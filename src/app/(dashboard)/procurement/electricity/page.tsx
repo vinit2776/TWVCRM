@@ -31,7 +31,7 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
-import { LandlordInvoiceField, gstRateFromInvoice, useLandlordInvoice } from "@/components/electricity/landlord-invoice";
+import { LandlordInvoiceField, gstRateFromInvoice, useDuplicateWarning, useLandlordInvoice } from "@/components/electricity/landlord-invoice";
 import type { ExtractedInvoice, SuggestionField } from "@/lib/procurement/invoice-check";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -212,12 +212,19 @@ export default function ElectricityBillsPage() {
 
   // If the invoice prints GST, switch the landlord-GST toggle on (and take its rate); the person can still change it.
   const onInvoiceRead = useCallback((extracted: ExtractedInvoice) => {
+    // Take the number and date off the invoice when they have not been typed yet.
+    setForm((f) => ({
+      ...f,
+      landlord_bill_number: f.landlord_bill_number || extracted.invoiceNumber || "",
+      landlord_bill_date: f.landlord_bill_date || extracted.invoiceDate || "",
+    }));
     const rate = gstRateFromInvoice(extracted);
     if (rate === null) return;
     setForm((f) => ({ ...f, landlord_gst_applicable: true, landlord_gst_rate: rate }));
     toast.message(`The invoice shows GST — switched on at ${rate}%. Change it below if that's wrong.`);
   }, []);
   const invoice = useLandlordInvoice(onInvoiceRead);
+  const duplicateWarning = useDuplicateWarning(form.location_id, form.landlord_bill_number);
 
   const fetchBills = useCallback(async () => {
     setLoading(true);
@@ -404,7 +411,7 @@ export default function ElectricityBillsPage() {
     if (!form.location_id) { toast.error("Select a location"); return; }
     if (lines.length === 0) { toast.error("Add at least one line"); return; }
     if (!editingBillId && !invoice.file) { toast.error("Upload the landlord's invoice first — it is used to check what you entered"); return; }
-    if (!editingBillId) { const blocked = invoice.blockedReason(enteredForCheck); if (blocked) { toast.error(blocked); return; } }
+    if (!editingBillId) { const blocked = invoice.blockedReason(enteredForCheck, duplicateWarning); if (blocked) { toast.error(blocked); return; } }
     setSubmitting(true);
     const linesPayload = lines.map((l) => ({
       line_type: l.line_type,
@@ -1528,9 +1535,9 @@ export default function ElectricityBillsPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Bill number</Label>
+                <Label>Bill number <span className="text-red-500">*</span></Label>
                 <Input
-                  placeholder="Optional"
+                  placeholder="As printed on the invoice"
                   value={form.landlord_bill_number}
                   onChange={(e) => setForm((f) => ({ ...f, landlord_bill_number: e.target.value }))}
                 />
@@ -1694,7 +1701,7 @@ export default function ElectricityBillsPage() {
               </div>
             </div>
 
-            {!editingBillId && <LandlordInvoiceField invoice={invoice} entered={enteredForCheck} onApply={applyInvoiceSuggestion} />}
+            {!editingBillId && <LandlordInvoiceField invoice={invoice} duplicate={duplicateWarning} entered={enteredForCheck} onApply={applyInvoiceSuggestion} />}
 
             <div className="space-y-1">
               <Label>Notes</Label>

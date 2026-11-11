@@ -133,3 +133,34 @@ export async function findDuplicateVendorBill(
   const hit = (data ?? []).find((b) => invoiceKey(b.invoice_number as string) === key);
   return hit ? ({ ...hit, total_amount: Number(hit.total_amount) } as DuplicateBill) : null;
 }
+
+export interface DuplicateLandlordBill {
+  id: string;
+  bill_month: number;
+  bill_year: number;
+  status: string;
+}
+
+/**
+ * A live landlord electricity bill at the same location with the same bill number, ignoring case,
+ * spacing and punctuation. A "revised" bill is dead and never counts.
+ */
+export async function findDuplicateLandlordBill(
+  admin: SupabaseClient,
+  locationId: string,
+  billNumber: string | null | undefined
+): Promise<DuplicateLandlordBill | null> {
+  const key = invoiceKey(billNumber);
+  if (!key) return null;
+  const { data, error } = await admin
+    .from("electricity_bills")
+    .select("id, bill_month, bill_year, status, landlord_bill_number")
+    .eq("location_id", locationId)
+    .eq("bill_side", "landlord")
+    .neq("status", "revised")
+    .not("landlord_bill_number", "is", null)
+    .limit(2000);
+  if (error) throw new Error(error.message);
+  const hit = (data ?? []).find((b) => invoiceKey(b.landlord_bill_number as string) === key);
+  return hit ? { id: hit.id as string, bill_month: hit.bill_month as number, bill_year: hit.bill_year as number, status: hit.status as string } : null;
+}
