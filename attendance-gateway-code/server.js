@@ -32,6 +32,7 @@ const {
 const {
   formatEmployeeId, parseEmployeeNumber, nextEmployeeNumber, renameEmployeeStatements,
 } = require('./employee-ids');
+const { computeSalaryWallet } = require('./salary-wallet');
 
 // Two roles have full run of the app — 'admin' and 'manager' are equivalent almost
 // everywhere, including settings and password resets. The main distinction is
@@ -892,6 +893,16 @@ const SCHEMA_SQL = `
     uploaded_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_employee_documents_emp ON employee_documents(employee_id, doc_type);
+  -- Monthly salary, for the employee's own Salary Wallet card. Kept out of the employees
+  -- table on purpose: several places read whole employee rows (SELECT *, /api/employees),
+  -- and none of them should ever carry pay. Only admins can read or set it; the employee
+  -- sees their own figure on their dashboard. No row = no card.
+  CREATE TABLE IF NOT EXISTS employee_salaries (
+    employee_id TEXT PRIMARY KEY,
+    monthly_salary INTEGER NOT NULL,
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `;
 
 const {
@@ -1421,6 +1432,32 @@ async function getLeaveRequests(employeeId) {
 }
 async function getAllLeaveRequests() {
   return await db.prepare('SELECT * FROM leave_requests ORDER BY requested_at DESC').all();
+}
+async function getEmployeeSalary(employeeId) {
+  const row = await db.prepare('SELECT monthly_salary FROM employee_salaries WHERE employee_id = ?').get(employeeId);
+  return row ? Number(row.monthly_salary) : null;
+}
+// value: whole rupees, or null to remove. Returns whether anything changed.
+async function setEmployeeSalary(employeeId, value, actor) {
+  const current = await getEmployeeSalary(employeeId);
+  if (current === value) return false;
+  if (value == null) {
+    await db.prepare('DELETE FROM employee_salaries WHERE employee_id = ?').run(employeeId);
+  } else {
+    await db.prepare(
+      'INSERT INTO employee_salaries (employee_id, monthly_salary, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(employee_id) DO UPDATE SET monthly_salary = excluded.monthly_salary, updated_by = excluded.updated_by, updated_at = excluded.updated_at'
+    ).run(employeeId, value, actor, formatTimestamp(new Date()));
+  }
+  return true;
+}
+// "30000", "30,000" or "₹30,000" → 30000; empty → null (remove).
+function parseMonthlySalary(raw) {
+  const text = String(raw == null ? '' : raw).replace(/[₹,\s]/g, '');
+  if (!text) return { value: null };
+  if (!/^\d+$/.test(text) || Number(text) < 1 || Number(text) > 10000000) {
+    return { error: 'Enter the monthly salary in whole rupees, e.g. 30000.' };
+  }
+  return { value: Number(text) };
 }
 function countLeaveDays(startDate, endDate) {
   const start = new Date(`${startDate}T00:00:00`);
@@ -2732,7 +2769,157 @@ function shiftSourceSuffix(shift, lang) {
   return shift.branch ? ` (${escapeHtml(shift.branch)})` : '';
 }
 
-async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = []) {
+// This month's Salary Wallet for one employee, or null when no salary is on file (no card).
+// Past days and today use the same computeDayStatus as the Calendar, so the two always
+// agree; later days are simply upcoming and need no lookup.
+async function buildSalaryWallet(employee) {
+  const monthlySalary = await getEmployeeSalary(employee.id);
+  if (!monthlySalary) return null;
+  const today = todayStr();
+  const year = Number(today.slice(0, 4));
+  const month = Number(today.slice(5, 7));
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const dates = [];
+  for (let d = 1; d <= daysInMonth; d++) dates.push(`${today.slice(0, 8)}${String(d).padStart(2, '0')}`);
+  const days = await Promise.all(dates.map(date => (date <= today ? computeDayStatus(employee.id, date) : { date, status: 'Upcoming' })));
+  return computeSalaryWallet({
+    monthlySalary, year, month, today,
+    dateJoined: employee.date_joined || null,
+    days,
+    monthlyPaidLeave: { types: MONTHLY_PAID_LEAVE_TYPES, cap: MONTHLY_PAID_LEAVE_CAP },
+  });
+}
+
+function rupees(amount) {
+  return '₹' + Math.round(amount).toLocaleString('en-IN');
+}
+function clock12(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
+const WALLET_BLOCK_STYLE = {
+  secured: 'background:#2E7D32;color:#fff;',
+  half: 'background:linear-gradient(90deg,#C24914 50%,#FBE7DE 50%);color:#1B2430;',
+  lost: 'background:#C62828;color:#fff;',
+  paid: 'background:#B0BEC5;color:#fff;',
+  hold: 'background:repeating-linear-gradient(45deg,#FBE7DE 0 4px,#fff 4px 8px);color:#C24914;',
+  today: 'background:#fff;color:#1565C0;outline:2px dashed #1565C0;outline-offset:-2px;',
+  upcoming: 'background:#EEF1F3;color:#9AA5B1;',
+  not_joined: 'background:#F5F6F8;color:#C9D0D6;',
+};
+
+function salaryWalletCard(wallet, employee, dayStatus, todayShift, lang) {
+  const rate = rupees(wallet.dailyRate);
+  const half = rupees(wallet.dailyRate / 2);
+  const monthName = new Date(`${todayStr()}T00:00:00`).toLocaleDateString(lang === 'ta' ? 'ta-IN' : 'en-US', { month: 'long' });
+  const calendarUrl = `/calendar?employee_id=${encodeURIComponent(employee.id)}&year=${todayStr().slice(0, 4)}&month=${Number(todayStr().slice(5, 7))}`;
+
+  const detailFor = b => {
+    if (b.outcome === 'secured') return t(lang, 'wallet.d_secured', { amount: rate });
+    if (b.outcome === 'half') return t(lang, b.status === 'Missed Checkout' ? 'wallet.d_missed' : 'wallet.d_half', { amount: half, lost: half });
+    if (b.outcome === 'paid') return t(lang, 'wallet.d_paid', { amount: rate });
+    if (b.outcome === 'lost') return b.status === 'On Leave' ? t(lang, 'wallet.d_unpaid_leave', { amount: rate }) : t(lang, 'wallet.d_lost', { amount: rate });
+    if (b.outcome === 'hold') return t(lang, 'wallet.d_hold');
+    if (b.outcome === 'not_joined') return t(lang, 'wallet.d_not_joined');
+    return '';
+  };
+  const tappable = new Set(['secured', 'half', 'lost', 'paid', 'hold']);
+  const blocks = wallet.blocks.map(b => {
+    const dateLabel = new Date(`${b.date}T00:00:00`).toLocaleDateString(lang === 'ta' ? 'ta-IN' : 'en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    const style = `${WALLET_BLOCK_STYLE[b.outcome] || WALLET_BLOCK_STYLE.upcoming}height:22px;border-radius:4px;font-size:10px;font-weight:700;line-height:22px;text-align:center;font-variant-numeric:tabular-nums;`;
+    if (!tappable.has(b.outcome)) return `<div style="${style}" title="${escapeHtml(dateLabel)}">${b.day}</div>`;
+    const statusText = b.label && b.status === 'On Leave' ? b.label : t(lang, `status.${b.status}`);
+    return `<div role="button" tabindex="0" class="wallet-day" style="${style}cursor:pointer;" title="${escapeHtml(dateLabel)}"
+      data-date="${escapeHtml(dateLabel)}" data-status="${escapeHtml(statusText)}" data-detail="${escapeHtml(detailFor(b))}">${b.day}</div>`;
+  }).join('');
+
+  let todayLine = '';
+  const tb = wallet.todayBlock;
+  if (tb && tb.outcome === 'today') {
+    todayLine = dayStatus.status === 'Active'
+      ? `${t(lang, 'wallet.today_stay', { time: clock12(todayShift.end), amount: `<span class="money">${rate}</span>` })} <span id="walletLeft" style="opacity:0.85;"></span>`
+      : t(lang, 'wallet.today_punch_in', { amount: `<span class="money">${rate}</span>` });
+  } else if (tb) {
+    const map = {
+      secured: t(lang, 'wallet.today_secured', { amount: `<span class="money">${rate}</span>` }),
+      half: t(lang, 'wallet.today_half', { amount: `<span class="money">${half}</span>`, lost: `<span class="money">${half}</span>` }),
+      paid: t(lang, 'wallet.today_paid'),
+      hold: t(lang, 'wallet.today_hold'),
+      lost: t(lang, 'wallet.today_lost', { amount: `<span class="money">${rate}</span>` }),
+    };
+    todayLine = map[tb.outcome] || '';
+  }
+
+  return `
+    <div id="salaryWallet" class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div style="font-weight:700;">${t(lang, 'wallet.title')} <span style="color:#7C8896;font-weight:600;font-size:0.85em;">· ${escapeHtml(monthName)}</span></div>
+        <button type="button" id="walletHide" style="border:1px solid #E1E5E9;background:#fff;color:#4C5A68;border-radius:8px;padding:4px 10px;font-size:0.8em;font-weight:600;cursor:pointer;">${t(lang, 'wallet.hide')}</button>
+      </div>
+      <div style="color:#7C8896;font-size:0.8em;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">${t(lang, 'wallet.take_home')}</div>
+      <div class="money" style="font-size:2.1em;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1;">${rupees(wallet.takeHome)}</div>
+      <div style="color:#7C8896;font-size:0.85em;margin-bottom:12px;">${t(lang, 'wallet.take_home_sub')}</div>
+      <div style="display:grid;grid-template-columns:repeat(${wallet.blocks.length > 30 ? 16 : 15},minmax(0,1fr));gap:3px;">${blocks}</div>
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:0.86em;color:#4C5A68;">
+        <span>${t(lang, 'wallet.secured', { amount: `<b class="money" style="color:#1B2430;">${rupees(wallet.secured)}</b>` })}</span>
+        <span>${t(lang, 'wallet.lost', { amount: `<b class="money" style="color:#C62828;">${rupees(wallet.lost)}</b>` })}</span>
+        <span>${t(lang, wallet.streak === 1 ? 'wallet.streak_one' : 'wallet.streak', { n: `<b style="color:#1B2430;">${wallet.streak}</b>` })}</span>
+      </div>
+      <div id="walletDetail" style="margin-top:10px;font-size:0.84em;color:#4C5A68;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;min-height:1.6em;">${t(lang, 'wallet.tap_hint')}</div>
+      ${todayLine ? `<div style="margin-top:12px;background:#E3F2FD;color:#1565C0;border-radius:10px;padding:9px 12px;font-size:0.86em;font-weight:600;">${todayLine}</div>` : ''}
+      <div style="display:flex;justify-content:flex-end;margin-top:12px;padding-top:12px;border-top:1px solid #EEF1F3;font-size:0.86em;">
+        <a href="${escapeHtml(calendarUrl)}" style="color:#1565C0;font-weight:600;text-decoration:none;">${t(lang, 'wallet.calendar')}</a>
+      </div>
+    </div>
+    <style>#salaryWallet.masked .money{filter:blur(7px);user-select:none}.wallet-day:focus-visible{box-shadow:0 0 0 2px #1565C0}.wallet-day.sel{box-shadow:0 0 0 2px #1B2430}</style>
+    <script>
+      (function () {
+        var card = document.getElementById('salaryWallet');
+        var hideBtn = document.getElementById('walletHide');
+        var HIDE = ${JSON.stringify(t(lang, 'wallet.hide'))}, SHOW = ${JSON.stringify(t(lang, 'wallet.show'))};
+        function setMasked(on) {
+          card.classList.toggle('masked', on);
+          hideBtn.textContent = on ? SHOW : HIDE;
+          try { localStorage.setItem('walletHidden', on ? '1' : '0'); } catch (e) {}
+        }
+        var startHidden = false;
+        try { startHidden = localStorage.getItem('walletHidden') === '1'; } catch (e) {}
+        setMasked(startHidden);
+        hideBtn.addEventListener('click', function () { setMasked(!card.classList.contains('masked')); });
+
+        var detail = document.getElementById('walletDetail');
+        var calLink = ${JSON.stringify(t(lang, 'wallet.see_calendar'))};
+        var calUrl = ${JSON.stringify(calendarUrl)};
+        function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+        function pick(el) {
+          card.querySelectorAll('.wallet-day.sel').forEach(function (x) { x.classList.remove('sel'); });
+          el.classList.add('sel');
+          detail.innerHTML = '<span><b style="color:#1B2430;">' + esc(el.dataset.date) + '</b> · ' + esc(el.dataset.status) + ' · <span class="money">' + esc(el.dataset.detail) + '</span></span>'
+            + '<a href="' + esc(calUrl) + '" style="color:#1565C0;font-weight:600;text-decoration:none;">' + esc(calLink) + '</a>';
+        }
+        card.querySelectorAll('.wallet-day').forEach(function (el) {
+          el.addEventListener('click', function () { pick(el); });
+          el.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(el); } });
+        });
+
+        var left = document.getElementById('walletLeft');
+        if (left) {
+          var endAt = new Date(${JSON.stringify(`${todayStr()}T${todayShift.end}:00`)}).getTime();
+          var LEFT = ${JSON.stringify(t(lang, 'wallet.today_left'))};
+          function tickLeft() {
+            var ms = endAt - Date.now();
+            if (ms <= 0) { left.textContent = ''; return; }
+            var h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+            left.textContent = '· ' + LEFT.replace('{{time}}', h + 'h ' + String(m).padStart(2, '0') + 'm');
+          }
+          tickLeft(); setInterval(tickLeft, 30000);
+        }
+      })();
+    </script>`;
+}
+
+async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = [], salaryWallet = null) {
   const lang = langOf(user);
   const todayShift = getShiftForDate(employee, todayStr(), punches);
   const onBreak = !!dayStatus.onBreak;
@@ -2838,6 +3025,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
       <div style="margin-top:14px;">${selfPunchBlock(dayStatus, lang)}</div>
       ${breakBlock}
     </div>
+    ${salaryWallet ? salaryWalletCard(salaryWallet, employee, dayStatus, todayShift, lang) : ''}
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'dashboard.todays_activity')}</div>
       <table><tr><th>${t(lang, 'dashboard.event')}</th><th>${t(lang, 'dashboard.time')}</th><th>${t(lang, 'dashboard.source')}</th></tr>${punchRows}</table>
@@ -4322,6 +4510,8 @@ async function renderEditEmployee(employee, user, error) {
     .map(e => `<option value="${escapeHtml(e.id)}" ${e.id === employee.reports_to ? 'selected' : ''}>${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`)
     .join('');
   const currentAccountRole = await accountRoleForEmployee(employee.id);
+  // Only an admin's page ever reads the salary; managers can edit employees but not pay.
+  const salary = isAdminRole(user) ? await getEmployeeSalary(employee.id) : null;
 
   const body = `
     ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
@@ -4373,6 +4563,12 @@ ${shiftFieldHtml(employee)}
           <label style="display:block;font-size:0.8em;color:#7C8896;">Date Joined</label>
           <input type="date" name="date_joined" required value="${escapeHtml(employee.date_joined || todayStr())}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
+        ${isAdminRole(user) ? `
+        <div>
+          <label for="monthlySalary" style="display:block;font-size:0.8em;color:#7C8896;">Monthly Salary (₹) <span style="color:#9AA5B1;">· admins only</span></label>
+          <input id="monthlySalary" type="text" inputmode="numeric" name="monthly_salary" value="${salary ? escapeHtml(String(salary)) : ''}" placeholder="e.g. 30000" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:140px;">
+          <div style="font-size:0.72em;color:#9AA5B1;margin-top:2px;">Shows the employee their Salary Wallet. Leave empty to hide it.</div>
+        </div>` : ''}
         <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">Save Changes</button>
         <a href="/admin/employee-registration" style="padding:8px 16px;color:#7C8896;text-decoration:none;font-weight:600;">Cancel</a>
       </form>
@@ -5922,7 +6118,10 @@ async function handleRequest(req, res) {
     const leaveBalances = await getLeaveBalanceDisplay(employeeId);
     const forceOnboardingTour = parsed.searchParams.get('tour') === '1';
     const missedCheckoutDays = await getUncorrectedMissedCheckouts(employeeId);
-    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour, missedCheckoutDays));
+    // Only on the employee's own dashboard — never when a manager or admin opens someone
+    // else's through the employee switcher.
+    const salaryWallet = user.employeeId === employeeId ? await buildSalaryWallet(employee) : null;
+    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour, missedCheckoutDays, salaryWallet));
   }
 
   // Marks the current onboarding content as seen — called when the tour finishes
@@ -6683,6 +6882,13 @@ async function handleRequest(req, res) {
         return sendHtml(res, await renderEditEmployee(employee, user, `${newId} is already used by ${holder}. Change that employee's Emp ID # first.`));
       }
     }
+    // Salary: admins only, and only when the field was sent — a manager's save (which
+    // has no salary field) or an old cached form leaves it as it is. Empty removes it.
+    const salaryInput = isAdminRole(user) && Object.prototype.hasOwnProperty.call(form, 'monthly_salary')
+      ? parseMonthlySalary(form.monthly_salary) : null;
+    if (salaryInput && salaryInput.error) {
+      return sendHtml(res, await renderEditEmployee(employee, user, salaryInput.error));
+    }
     const currentAccountRole = await accountRoleForEmployee(employeeId);
     // Same "absent or invalid keeps the current value" rule as branch above — an old
     // cached form or a stray request without this field must not silently demote
@@ -6708,6 +6914,11 @@ async function handleRequest(req, res) {
       // the old permission level would keep working until the account's next login.
       await db.prepare('DELETE FROM sessions WHERE employee_id = ?').run(newId);
       await logAdminAction(user.username, 'change_account_role', 'employee', newId, `${name}: ${currentAccountRole} -> ${accountRole}`);
+    }
+    if (salaryInput) {
+      const changed = await setEmployeeSalary(newId, salaryInput.value, user.username);
+      // The amount itself stays out of the activity log.
+      if (changed) await logAdminAction(user.username, salaryInput.value ? 'set_salary' : 'clear_salary', 'employee', newId, name);
     }
     await logAdminAction(user.username, 'edit_employee', 'employee', newId, name);
     res.writeHead(302, {
