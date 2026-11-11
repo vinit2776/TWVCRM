@@ -1,3 +1,4 @@
+import { invoiceCheckRecordSchema } from "@/lib/procurement/invoice-check";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -34,6 +35,9 @@ const createSchema = z.object({
   landlord_bill_number: z.string().nullish(),
   landlord_bill_date: z.string().nullish(),
   notes: z.string().nullish(),
+  // Required: the landlord's invoice is what the entries are checked against and what the approver compares with.
+  invoice_file_url: z.string().url({ message: "Upload the landlord's invoice" }),
+  invoice_check: invoiceCheckRecordSchema.nullish(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
   // Per-bill override — some landlords charge GST, some don't, and it can
   // change month to month, so this isn't fixed at the location config level.
@@ -211,7 +215,7 @@ export async function POST(request: NextRequest) {
 
   const {
     location_id, bill_month, bill_year, landlord_bill_number, landlord_bill_date, notes, lines,
-    landlord_gst_applicable, landlord_gst_rate,
+    landlord_gst_applicable, landlord_gst_rate, invoice_file_url, invoice_check,
   } = parsed.data;
 
   // ── Fetch config ──────────────────────────────────────────────────────────
@@ -374,6 +378,8 @@ export async function POST(request: NextRequest) {
         total_amount: landlordTotal,
         gst_amount: landlordGstAmount,
         notes: notes ?? null,
+        invoice_file_url,
+        invoice_check: invoice_check ?? null,
         electricity_bill_id: bill.id,
         created_by: dbUser.id,
       });

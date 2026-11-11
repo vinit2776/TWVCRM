@@ -1,6 +1,7 @@
 // Advisory comparison between what a user typed on the bill form and what was read
 // off the uploaded invoice. Pure — nothing here blocks submission or edits a field;
 // every finding that has a `suggestion` is applied only if the user clicks it.
+import { z } from "zod";
 
 export type ExtractionConfidence = "high" | "medium" | "low";
 
@@ -165,4 +166,20 @@ export function checkInvoice({
   }
 
   return findings;
+}
+
+/** What is kept with the bill so the approver sees the same warning the form showed (migration 00676). */
+export const invoiceCheckRecordSchema = z.object({
+  checked_at: z.string().max(40),
+  confidence: z.enum(["high", "medium", "low"]),
+  findings: z.array(z.object({ code: z.string().max(60), message: z.string().max(400) })).max(20),
+});
+export type InvoiceCheckRecord = z.infer<typeof invoiceCheckRecordSchema>;
+
+export function buildInvoiceCheckRecord(extracted: ExtractedInvoice, findings: InvoiceFinding[]): InvoiceCheckRecord {
+  return {
+    checked_at: new Date().toISOString(),
+    confidence: extracted.confidence,
+    findings: findings.map((f) => ({ code: f.code, message: f.message })),
+  };
 }

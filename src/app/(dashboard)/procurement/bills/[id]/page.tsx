@@ -711,6 +711,20 @@ export default function VendorBillDetailPage() {
         </div>
       )}
 
+      {/* What the invoice check found when this bill was entered — so the approver sees the warning the form showed */}
+      {bill.invoice_check && bill.invoice_check.findings.length > 0 && !["approved", "paid"].includes(bill.approval_status) && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-900">
+            <p className="font-medium">When this bill was entered, the uploaded invoice differed from what was typed</p>
+            <ul className="mt-1 list-disc pl-4 space-y-0.5">
+              {bill.invoice_check.findings.map((f) => <li key={f.code}>{f.message}</li>)}
+            </ul>
+            <p className="mt-1 text-xs text-amber-800">Compare with the invoice before approving. This is a guide, read automatically from the file.</p>
+          </div>
+        </div>
+      )}
+
       {/* Pending approval banner */}
       {bill.approval_status === "pending" && (
         <div className="rounded-md border border-yellow-200 bg-yellow-50 px-4 py-3 flex items-center gap-3">

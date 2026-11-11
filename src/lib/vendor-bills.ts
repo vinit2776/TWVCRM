@@ -1,5 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
+import type { InvoiceCheckRecord } from "@/lib/procurement/invoice-check";
 
 /** Price-tolerance columns (migration 00610). Only passed for a bill whose PO is flexible and the invoice went past the PO value. */
 export interface ToleranceFacts {
@@ -19,6 +20,8 @@ export interface CreateVendorBillInput extends Partial<ToleranceFacts> {
   gst_amount?: number;
   notes?: string | null;
   invoice_file_url?: string | null;
+  /** Advisory invoice check made on the form (migration 00676). Only passed when a check ran. */
+  invoice_check?: InvoiceCheckRecord | null;
   po_id?: string | null;
   service_report_id?: string | null;
   replaces_bill_id?: string | null;
@@ -64,6 +67,7 @@ export async function createVendorBill(
       notes: input.notes ?? null,
       invoice_file_url: input.invoice_file_url ?? null,
       service_report_id: input.service_report_id ?? null,
+      ...(input.invoice_check ? { invoice_check: input.invoice_check } : {}),
       electricity_bill_id: input.electricity_bill_id ?? null,
       ...(input.location_id
         ? {

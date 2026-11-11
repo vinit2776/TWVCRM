@@ -1,3 +1,4 @@
+import { invoiceCheckRecordSchema } from "@/lib/procurement/invoice-check";
 import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
@@ -34,6 +35,7 @@ const createBillSchema = z.object({
   gst_amount: z.number().min(0).default(0),
   notes: z.string().nullish(),
   invoice_file_url: z.string().url().nullish(),
+  invoice_check: invoiceCheckRecordSchema.nullish(),
   service_report_id: z.string().uuid().nullish(),
   replaces_bill_id: z.string().uuid().nullish(),
   // Lets the uploader opt a specific AMC cycle back into manual review (e.g.
@@ -485,6 +487,7 @@ export async function POST(request: NextRequest) {
       gst_amount: parsed.data.gst_amount ?? 0,
       notes: parsed.data.notes ?? null,
       invoice_file_url: parsed.data.invoice_file_url ?? null,
+      invoice_check: parsed.data.invoice_check ?? null,
       service_report_id: parsed.data.service_report_id ?? null,
       replaces_bill_id: parsed.data.replaces_bill_id ?? null,
       amount_paid: poAdvanceCredit,
