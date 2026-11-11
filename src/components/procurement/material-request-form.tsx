@@ -1213,7 +1213,15 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                       <SearchableSelect
                         options={assets
                           .filter((a) => !takenByOthers.has(a.id))
-                          .map((a) => ({ value: a.id, label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}` }))}
+                          .map((a) => ({
+                            value: a.id,
+                            label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}`,
+                            // Similar units share names; the model and serial tell them apart.
+                            detail: [
+                              [a.make, a.model].filter(Boolean).join(" ") || null,
+                              a.serial_number ? `Serial ${a.serial_number}` : null,
+                            ].filter(Boolean).join(" · ") || undefined,
+                          }))}
                         value={l.assetId}
                         onValueChange={(v) => handleAssetSelect(l.id, v)}
                         placeholder="Select the asset this line covers..."
