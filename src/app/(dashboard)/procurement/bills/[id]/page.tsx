@@ -157,7 +157,7 @@ export default function VendorBillDetailPage() {
 
   // Edit-amount-and-resubmit dialog (rejected bills only)
   const [editDialog, setEditDialog] = useState(false);
-  const [openQueries, setOpenQueries] = useState<Array<{ id: string; last_message: { body: string } | null; created_by: { full_name: string } | null }>>([]);
+  const [openQueries, setOpenQueries] = useState<Array<{ id: string; lifecycle: "open" | "answered"; answered_by: { full_name: string } | null; paid_nudged_at: string | null; last_message: { body: string } | null; created_by: { full_name: string } | null }>>([]);
   const [resubmitDialog, setResubmitDialog] = useState(false);
   const [resubmitAmount, setResubmitAmount] = useState<string>("");
   const [resubmitLoading, setResubmitLoading] = useState(false);
@@ -211,7 +211,7 @@ export default function VendorBillDetailPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((json) => {
         if (cancelled || !json) return;
-        setOpenQueries((json.items as Array<{ id: string; status: string; last_message: { body: string } | null; created_by: { full_name: string } | null }>).filter((q) => q.status === "open"));
+        setOpenQueries((json.items as Array<{ id: string; status: string; lifecycle: "open" | "answered"; answered_by: { full_name: string } | null; paid_nudged_at: string | null; last_message: { body: string } | null; created_by: { full_name: string } | null }>).filter((q) => q.status === "open"));
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -456,6 +456,12 @@ export default function VendorBillDetailPage() {
   });
   const userCanEdit = canEditBill({ role: currentUserRole, userId: user?.id, createdBy: bill.created_by });
   const onHold = bill.payment_hold_status === "on_hold";
+  // Once paid, nobody is blocked on this bill any more, so a query that is
+  // still open gets a quiet note instead of the red "Accounts is waiting" call.
+  const billPaid = bill.payment_status === "paid";
+  const blockingQueries = billPaid ? [] : openQueries;
+  const allAnswered = blockingQueries.length > 0 && blockingQueries.every((q) => q.lifecycle === "answered");
+  const answeredOnly = allAnswered && !onHold;
   const poRow = bill.purchase_orders as { po_type?: string; total_ordered_amount?: number | null; unit_cost_per_cycle?: number | null } | null;
   const poValue = poRow
     ? Number(poRow.po_type === "service" && poRow.unit_cost_per_cycle ? poRow.unit_cost_per_cycle : poRow.total_ordered_amount ?? 0) || null
@@ -649,13 +655,15 @@ export default function VendorBillDetailPage() {
       <ChainLockBanner chain={cycle} ref={{ billId: id }} isAdmin={currentUserRole === "admin"} onChanged={() => { fetchAll(); reloadChain(); }} />
 
       {/* Loud call to action: someone is waiting on this bill and the viewer can fix it */}
-      {(onHold || openQueries.length > 0) && bill.approval_status !== "withdrawn" && (
-        <div className="rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3" data-testid="bill-needs-fix-banner">
+      {(onHold || blockingQueries.length > 0) && bill.approval_status !== "withdrawn" && (
+        <div className={`rounded-lg border-2 px-4 py-3 ${answeredOnly ? "border-blue-300 bg-blue-50" : "border-red-300 bg-red-50"}`} data-testid="bill-needs-fix-banner">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="h-6 w-6 text-red-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1 space-y-1.5 text-sm text-red-900">
-              <p className="text-base font-semibold text-red-800">
-                {editLockReason ? "Accounts is waiting on this bill" : "Accounts can't pay this bill until it's corrected"}
+            <AlertTriangle className={`h-6 w-6 flex-shrink-0 mt-0.5 ${answeredOnly ? "text-blue-600" : "text-red-600"}`} />
+            <div className={`flex-1 space-y-1.5 text-sm ${answeredOnly ? "text-blue-900" : "text-red-900"}`}>
+              <p className={`text-base font-semibold ${answeredOnly ? "text-blue-900" : "text-red-800"}`}>
+                {answeredOnly
+                  ? `Answered by ${blockingQueries[0].answered_by?.full_name ?? "someone"}, waiting for ${blockingQueries[0].created_by?.full_name ?? "the asker"} to confirm`
+                  : editLockReason ? "Accounts is waiting on this bill" : "Accounts can't pay this bill until it's corrected"}
               </p>
               {onHold && (
                 <p>
@@ -663,7 +671,7 @@ export default function VendorBillDetailPage() {
                   {bill.payment_hold_notes ? ` ${bill.payment_hold_notes}` : ""}
                 </p>
               )}
-              {openQueries.map((q) => (
+              {blockingQueries.map((q) => (
                 <p key={q.id} className="flex items-start gap-1.5">
                   <MessageCircleQuestion className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <span>
@@ -684,6 +692,19 @@ export default function VendorBillDetailPage() {
               </Button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Paid, but someone's question is still open: say so, quietly */}
+      {billPaid && openQueries.length > 0 && bill.approval_status !== "withdrawn" && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2.5 flex items-start gap-2 text-sm text-amber-900" data-testid="bill-paid-query-open-note">
+          <MessageCircleQuestion className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span>
+            Bill paid, this query is still open.{" "}
+            {openQueries.map((q) => q.created_by?.full_name ?? "The asker").filter((n, i, a) => a.indexOf(n) === i).join(", ")}{" "}
+            can confirm and close it.
+            {openQueries.some((q) => q.paid_nudged_at) ? " A reminder has been sent." : ""}
+          </span>
         </div>
       )}
 

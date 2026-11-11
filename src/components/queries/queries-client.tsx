@@ -464,8 +464,10 @@ function QueryCard({
               ) : (
                 <Pill tone="good">Payment verified</Pill>
               )
+            ) : isResolved && item.resolution_kind === "payment" ? (
+              <Pill tone="warning">Resolved by payment</Pill>
             ) : isResolved ? (
-              <Pill tone="good">Resolved</Pill>
+              <Pill tone="good">Closed</Pill>
             ) : item.kind === "payment_reported" ? (
               <Pill tone="warning">Payment reported</Pill>
             ) : item.kind === "action_needed" ? (
@@ -473,6 +475,7 @@ function QueryCard({
             ) : (
               <Pill>Question</Pill>
             )}
+            {!isResolved && item.lifecycle === "answered" && <Pill tone="muted">Answered</Pill>}
             {overdue > 0 && <Pill tone="warning">Overdue · {overdue}d</Pill>}
             {!isResolved && <Pill tone="muted">→ {audienceText}</Pill>}
             <span className="font-medium text-sm">

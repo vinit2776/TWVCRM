@@ -37,7 +37,8 @@ export type DigestBadgeKind =
   | "rerouted"
   | "payment_verified"
   | "payment_rejected"
-  | "payment_not_found";
+  | "payment_not_found"
+  | "auto_resolved";
 
 export interface DigestBadge {
   kind: DigestBadgeKind;
@@ -113,6 +114,7 @@ const STATE_EVENTS: Record<string, { kind: DigestBadgeKind; label: string }> = {
   payment_verified: { kind: "payment_verified", label: "Payment verified" },
   payment_rejected: { kind: "payment_rejected", label: "Payment rejected" },
   payment_not_found: { kind: "payment_not_found", label: "Not in the bank yet" },
+  auto_resolved: { kind: "auto_resolved", label: "Closed automatically — bill paid" },
 };
 
 /** Lower sorts first. */
@@ -126,6 +128,7 @@ const BADGE_URGENCY: Record<DigestBadgeKind, number> = {
   payment_not_found: 5,
   payment_rejected: 6,
   payment_verified: 7,
+  auto_resolved: 8,
   resolved: 8,
 };
 
@@ -173,7 +176,7 @@ export function buildQueryDigest(params: {
     const ordered = sortedByTime(thread.messages);
     // Auto-nudges are stamped with the asker as author, so they must not be
     // mistaken for the asker speaking — either as a participant or as activity.
-    const human = ordered.filter((m) => m.event_type !== "nudged");
+    const human = ordered.filter((m) => m.event_type !== "nudged" && m.event_type !== "paid_nudge");
     const openingMessageId = human.find((m) => m.event_type === "message")?.id ?? null;
     // A "not found yet" answer is accounts speaking, so it counts as the last
     // word for whose turn it is; it just isn't a reply (it earns its own badge).
