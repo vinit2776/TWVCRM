@@ -240,8 +240,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       .then((j) => {
         const all: Company[] = j.data || [];
         setCompanies(all);
-        if (!isEdit && !companyId && all.length > 0) {
-          setCompanyId(all[0].id);
+        if (!isEdit && all.length > 0) {
+          // Functional update: an asset shortcut may already have chosen the asset's company.
+          setCompanyId((cur) => cur || all[0].id);
         }
       })
       .catch(() => setCompanies([]));
@@ -286,7 +287,17 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
         setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]));
         setAmcLines((prev) => (prev[0] && !prev[0].assetId ? prev.map((l, i) => (i === 0 ? { ...l, assetId: a.id } : l)) : prev));
         setServiceItemName((cur) => cur || `Annual Maintenance Contract — ${a.name}`);
-        if (a.location_id) setLocationId((cur) => cur || (a.location_id as string));
+        if (a.location_id) {
+          setLocationId((cur) => cur || (a.location_id as string));
+          // The centre only exists under its own company, so switch to that company too.
+          fetch("/api/locations")
+            .then((r) => r.json())
+            .then((lj) => {
+              const loc = (lj.data ?? []).find((l: { id: string; company_id?: string | null }) => l.id === a.location_id);
+              if (loc?.company_id) setCompanyId(loc.company_id);
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => {});
   }, [initialAssetId, department, isEdit]);
