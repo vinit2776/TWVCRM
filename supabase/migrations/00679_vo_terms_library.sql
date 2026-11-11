@@ -116,7 +116,8 @@ INSERT INTO vo_clauses (code, title) VALUES
   ('T09', 'Renewal offer'),
   ('T10', 'Renewal fee'),
   ('T11', 'KYC on file'),
-  ('T12', 'Multi-year term')
+  ('T12', 'Multi-year term'),
+  ('T13', 'Holdover')
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO vo_clause_versions (clause_id, version, body, documents, purposes, company_types, min_term_months)
@@ -147,7 +148,9 @@ FROM (VALUES
   ('T11', 'KYC documents already on file are reused unless details have changed.',
     ARRAY['renewal'], ARRAY['gst_new','gst_existing'], NULL, NULL),
   ('T12', 'For a term of 24 months or more, the fee for the whole term is payable in advance. The fee is not revised during the term.',
-    ARRAY['proposal','agreement'], ARRAY['gst_new','gst_existing'], 24, NULL)
+    ARRAY['proposal','agreement'], ARRAY['gst_new','gst_existing'], 24, NULL),
+  ('T13', 'If the customer continues to use our address after the agreement ends, a holdover fee applies for each month of use, at the current fee plus the uplift set out in the proposal, until the customer removes our address from all registrations and confirms in writing.',
+    ARRAY['agreement','renewal'], ARRAY['gst_new','gst_existing'], NULL, NULL)
 ) AS s(code, body, documents, purposes, min_term, company_types)
 JOIN vo_clauses c ON c.code = s.code
 ON CONFLICT (clause_id, version) DO NOTHING;
