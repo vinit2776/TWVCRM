@@ -148,7 +148,7 @@ describe("noticeSchedule", () => {
     expect(s[4].label).toBe("Final notice");
   });
   it("marks sent notices with channels and flags overdue pending ones", () => {
-    const s = noticeSchedule({ end_date: "2026-11-10" }, [sent(1, "2026-10-12T04:00:00Z")], TODAY);
+    const s = noticeSchedule({ end_date: "2026-11-05" }, [sent(1, "2026-10-12T04:00:00Z")], TODAY);
     expect(s[0]).toMatchObject({ status: "sent", channels: ["Email", "WhatsApp"], overdue: false });
     expect(s[1]).toMatchObject({ status: "pending", overdue: true });
     expect(s[3]).toMatchObject({ status: "pending", overdue: false });
