@@ -1,5 +1,7 @@
 'use strict';
 
+const { employeeBranches } = require('./geofence');
+
 // Extracted from server.js so computeDayStatus() can be unit-tested against an
 // isolated database instead of the app's real attendance.db (see
 // docs/designs/security-hardening.md, item 7 / outside-voice finding #17).
@@ -62,7 +64,125 @@ function effectivePunches(dayPunches) {
   return real;
 }
 
-function createAttendanceLogic(db) {
+// --- Which shift applies on a day ---
+// Branches carry their own weekday shift and, if they have half Saturdays (2nd and 4th),
+// a half-Saturday shift; an employee either
+// follows the branch (shift_custom 0) or has their own weekday timings (shift_custom 1).
+// The branch is the one they first punched in at that day (GPS or the biometric device),
+// so someone at LGF and Perungudi works whichever branch's hours they turned up at;
+// a remote first punch, or no punch yet, falls back to their own branch.
+const DEFAULT_SHIFT = { start: '09:30', end: '18:30' };
+const AUTO_CHECKOUT_AFTER_SHIFT_MINUTES = 15;
+
+function isHalfSaturday(dateStr) {
+  return isSaturday(dateStr) && HALF_DAY_SATURDAYS.includes(saturdayOccurrenceInMonth(dateStr));
+}
+
+function validTime(v) {
+  return typeof v === 'string' && /^\d{2}:\d{2}$/.test(v) ? v : '';
+}
+
+// The branch a day counts as worked at: the branch of the first real punch, else the
+// employee's own branch (the first, for someone at a few), else none.
+function dayBranchName(employee, dayPunches = []) {
+  const first = (dayPunches || []).find(p => p.source !== 'auto');
+  if (first && first.branch) return first.branch;
+  const { all, names } = employeeBranches(employee && employee.branch);
+  return !all && names.length ? names[0] : null;
+}
+
+// Pure. branches: [{ name, shift_start, shift_end, half_saturdays, sat_start, sat_end }] ('' = not set).
+// Returns { start, end, source: 'branch' | 'custom' | 'employee' | 'default', branch }.
+function resolveShift(employee, dateStr, dayPunches = [], branches = []) {
+  const branchName = dayBranchName(employee, dayPunches);
+  const branch = branchName ? (branches || []).find(b => b.name === branchName) || null : null;
+  // Half Saturdays are a per-branch choice (LGF has them; other branches work every
+  // Saturday in full). Someone with no branch keeps the old company-wide rule.
+  if (isHalfSaturday(dateStr) && (!branch || Number(branch.half_saturdays))) {
+    const start = validTime(branch && branch.sat_start);
+    const end = validTime(branch && branch.sat_end);
+    if (start && end) return { start, end, source: 'branch', branch: branchName };
+    return { ...SATURDAY_HALF_SHIFT, source: 'default', branch: branchName };
+  }
+  const own = { start: validTime(employee && employee.shift_start), end: validTime(employee && employee.shift_end) };
+  if (employee && Number(employee.shift_custom) && own.start && own.end) {
+    return { ...own, source: 'custom', branch: branchName };
+  }
+  const start = validTime(branch && branch.shift_start);
+  const end = validTime(branch && branch.shift_end);
+  if (start && end) return { start, end, source: 'branch', branch: branchName };
+  // A branch with no timings yet (or no branch): what's saved on the employee.
+  if (own.start && own.end) return { ...own, source: 'employee', branch: branchName };
+  return { ...DEFAULT_SHIFT, source: 'default', branch: branchName };
+}
+
+// When a still-open day gets its auto punch-out: AUTO_CHECKOUT_AFTER_SHIFT_MINUTES after
+// that day's shift end, as "YYYY-MM-DD HH:MM:SS". Capped at 23:59 so it stays that day.
+function autoCheckoutTimestamp(dateStr, shift) {
+  const minutes = Math.min(parseTimeToMinutes(shift.end) + AUTO_CHECKOUT_AFTER_SHIFT_MINUTES, 23 * 60 + 59);
+  return `${dateStr} ${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}:00`;
+}
+
+// Pure. The auto punch-out an open day is due, as a timestamp, or null when it needs
+// none yet: the day already pairs up, already had one, isn't due until later than `now`
+// ("YYYY-MM-DD HH:MM:SS"), or was punched into after the due time (a checkout stamped
+// before the check-in can't close it). A real punch-out made after it still replaces
+// it — see effectivePunches.
+function autoCheckoutDue(employee, dateStr, dayPunches, branches, now) {
+  const punches = dayPunches || [];
+  if (!punches.length) return null;
+  if (effectivePunches(punches).length % 2 === 0) return null;
+  if (punches.some(p => p.source === 'auto')) return null;
+  const dueTs = autoCheckoutTimestamp(dateStr, resolveShift(employee, dateStr, punches, branches));
+  if (dueTs > now) return null;
+  if (punches[punches.length - 1].timestamp >= dueTs) return null;
+  return dueTs;
+}
+
+// When a day ended for someone, for closing anything still left running at that point —
+// today that means a break they never resumed. The day's real punch-out if it has one,
+// else the time its auto punch-out is due; null while the day hasn't got there yet, so a
+// break still inside the shift is left alone. Pass the punches as they were read: an auto
+// punch-out recorded from them in the meantime leaves the count odd, and the due time is
+// the same answer anyway.
+function dayEndTimestamp(employee, dateStr, dayPunches, branches, now) {
+  const dueTs = autoCheckoutTimestamp(dateStr, resolveShift(employee, dateStr, dayPunches, branches));
+  if (dueTs > now) return null;
+  const punches = effectivePunches(dayPunches || []);
+  return punches.length > 0 && punches.length % 2 === 0 ? punches[punches.length - 1].timestamp : dueTs;
+}
+
+// Picks the timings a branch's employees mostly work, for seeding a branch's shift the
+// first time: [{ shift_start, shift_end }] -> { start, end } or null.
+function mostCommonShift(employees) {
+  const counts = new Map();
+  for (const e of employees || []) {
+    const start = validTime(e.shift_start);
+    const end = validTime(e.shift_end);
+    if (!start || !end) continue;
+    const key = `${start}-${end}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let best = null;
+  let bestCount = 0;
+  for (const [key, count] of counts) {
+    if (count > bestCount) { best = key; bestCount = count; }
+  }
+  if (!best) return null;
+  const [start, end] = best.split('-');
+  return { start, end };
+}
+
+// getBranches: () => the branch list (server.js passes its cached copy). Without it,
+// branches are read from the db on each call, which only the unit tests rely on.
+function createAttendanceLogic(db, { getBranches = null } = {}) {
+  function branchList() {
+    if (getBranches) return getBranches() || [];
+    try {
+      const rows = db.prepare('SELECT * FROM branches').all();
+      return Array.isArray(rows) ? rows : [];
+    } catch { return []; }
+  }
   function getEmployee(id) {
     return db.prepare('SELECT * FROM employees WHERE id = ?').get(id);
   }
@@ -75,12 +195,11 @@ function createAttendanceLogic(db) {
       .all(employeeId, `${dateStr}%`);
   }
   // Saturdays are working days; the 2nd and 4th Saturday of the month run a shorter shift
-  // (09:30-13:30) rather than being a day off. Everything else uses the employee's normal shift.
-  function getShiftForDate(employee, dateStr) {
-    if (isSaturday(dateStr) && HALF_DAY_SATURDAYS.includes(saturdayOccurrenceInMonth(dateStr))) {
-      return SATURDAY_HALF_SHIFT;
-    }
-    return { start: employee.shift_start, end: employee.shift_end };
+  // rather than being a day off. See resolveShift for how branch, custom and Saturday
+  // timings combine. Pass the day's punches when known, so a day worked at another
+  // branch gets that branch's hours.
+  function getShiftForDate(employee, dateStr, dayPunches = []) {
+    return resolveShift(employee, dateStr, dayPunches, branchList());
   }
   function getHoliday(dateStr) {
     return db.prepare('SELECT * FROM holidays WHERE date = ?').get(dateStr);
@@ -152,7 +271,7 @@ function createAttendanceLogic(db) {
     const checkIn = punches[0];
     const checkOut = punches.length % 2 === 0 ? punches[punches.length - 1] : null;
 
-    const shift = getShiftForDate(employee, dateStr);
+    const shift = getShiftForDate(employee, dateStr, dayPunches);
     const shiftStartMin = parseTimeToMinutes(shift.start);
     const shiftEndMin = parseTimeToMinutes(shift.end);
     const isLate = timeOfDayMinutes(checkIn.timestamp) > shiftStartMin + GRACE_LATE_MINUTES;
@@ -295,4 +414,13 @@ module.exports = {
   isSaturday,
   saturdayOccurrenceInMonth,
   effectivePunches,
+  DEFAULT_SHIFT,
+  AUTO_CHECKOUT_AFTER_SHIFT_MINUTES,
+  isHalfSaturday,
+  dayBranchName,
+  resolveShift,
+  autoCheckoutTimestamp,
+  autoCheckoutDue,
+  dayEndTimestamp,
+  mostCommonShift,
 };
