@@ -8,8 +8,9 @@ const {
 } = require('../attendance-logic');
 
 const BRANCHES = [
-  { name: 'LGF', shift_start: '09:30', shift_end: '18:30', sat_start: '09:30', sat_end: '13:30' },
-  { name: 'Perungudi', shift_start: '10:00', shift_end: '19:00', sat_start: '10:00', sat_end: '14:00' },
+  { name: 'LGF', shift_start: '09:30', shift_end: '18:30', half_saturdays: 1, sat_start: '09:30', sat_end: '13:30' },
+  // Perungudi works every Saturday in full (its Saturday timings are ignored).
+  { name: 'Perungudi', shift_start: '10:00', shift_end: '19:00', half_saturdays: 0, sat_start: '10:00', sat_end: '14:00' },
 ];
 const TUESDAY = '2026-11-10';
 const HALF_SATURDAY = '2026-11-14'; // 2nd Saturday
@@ -48,12 +49,21 @@ test('custom timings win on weekdays at any branch', () => {
   assert.deepEqual(shift, { start: '11:00', end: '20:00', source: 'custom', branch: 'Perungudi' });
 });
 
-test('half Saturdays follow the branch, even for custom timings', () => {
-  const custom = emp({ shift_custom: 1, shift_start: '11:00', shift_end: '20:00' });
-  const sat = [{ timestamp: `${HALF_SATURDAY} 10:00:00`, direction: 'in', source: 'office', branch: 'Perungudi' }];
-  assert.deepEqual(resolveShift(custom, HALF_SATURDAY, sat, BRANCHES), { start: '10:00', end: '14:00', source: 'branch', branch: 'Perungudi' });
-  // 1st Saturday is a normal working day.
+test('half Saturdays only at branches that have them (LGF); other branches work a full Saturday', () => {
+  const sat = branch => [{ timestamp: `${HALF_SATURDAY} 10:00:00`, direction: 'in', source: 'office', branch }];
+  assert.deepEqual(resolveShift(emp(), HALF_SATURDAY, sat('LGF'), BRANCHES), { start: '09:30', end: '13:30', source: 'branch', branch: 'LGF' });
+  assert.deepEqual(resolveShift(emp({ branch: 'Perungudi' }), HALF_SATURDAY, sat('Perungudi'), BRANCHES), { start: '10:00', end: '19:00', source: 'branch', branch: 'Perungudi' });
+  // LGF staff working the 2nd Saturday at Perungudi work Perungudi's full day.
+  assert.equal(resolveShift(emp(), HALF_SATURDAY, sat('Perungudi'), BRANCHES).end, '19:00');
+  // 1st Saturday is a normal working day everywhere.
   assert.equal(resolveShift(emp(), FULL_SATURDAY, [], BRANCHES).end, '18:30');
+});
+
+test('custom timings: LGF half Saturday still applies; a full Saturday uses their own hours', () => {
+  const custom = emp({ shift_custom: 1, shift_start: '11:00', shift_end: '20:00' });
+  const sat = branch => [{ timestamp: `${HALF_SATURDAY} 10:00:00`, direction: 'in', source: 'office', branch }];
+  assert.equal(resolveShift(custom, HALF_SATURDAY, sat('LGF'), BRANCHES).end, '13:30');
+  assert.deepEqual(resolveShift(custom, HALF_SATURDAY, sat('Perungudi'), BRANCHES), { start: '11:00', end: '20:00', source: 'custom', branch: 'Perungudi' });
 });
 
 test('a branch with no timings, or no branches at all, falls back to the employee, then the default', () => {
@@ -114,7 +124,7 @@ function setupDb() {
       direction TEXT NOT NULL, source TEXT NOT NULL, note TEXT DEFAULT '', location TEXT DEFAULT '', marked_by TEXT DEFAULT '',
       branch TEXT DEFAULT '', deviation INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE branches (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, shift_start TEXT NOT NULL DEFAULT '',
-      shift_end TEXT NOT NULL DEFAULT '', sat_start TEXT NOT NULL DEFAULT '', sat_end TEXT NOT NULL DEFAULT '');
+      shift_end TEXT NOT NULL DEFAULT '', half_saturdays INTEGER NOT NULL DEFAULT 0, sat_start TEXT NOT NULL DEFAULT '', sat_end TEXT NOT NULL DEFAULT '');
     CREATE TABLE deviation_reviews (employee_id TEXT NOT NULL, date TEXT NOT NULL, decision TEXT NOT NULL, PRIMARY KEY (employee_id, date));
     CREATE TABLE holidays (date TEXT PRIMARY KEY, name TEXT NOT NULL);
     CREATE TABLE leave_requests (id INTEGER PRIMARY KEY, employee_id TEXT, leave_type TEXT, start_date TEXT, end_date TEXT, status TEXT);
@@ -123,7 +133,7 @@ function setupDb() {
     CREATE TABLE breaks (id INTEGER PRIMARY KEY, employee_id TEXT, start_ts TEXT, end_ts TEXT);
   `);
   for (const b of BRANCHES) {
-    db.prepare('INSERT INTO branches (name, shift_start, shift_end, sat_start, sat_end) VALUES (?, ?, ?, ?, ?)').run(b.name, b.shift_start, b.shift_end, b.sat_start, b.sat_end);
+    db.prepare('INSERT INTO branches (name, shift_start, shift_end, half_saturdays, sat_start, sat_end) VALUES (?, ?, ?, ?, ?, ?)').run(b.name, b.shift_start, b.shift_end, b.half_saturdays, b.sat_start, b.sat_end);
   }
   db.prepare("INSERT INTO employees (id, name, shift_start, shift_end, branch) VALUES ('EMP-1', 'Test', '09:30', '18:30', ?)").run(JSON.stringify(['LGF', 'Perungudi']));
   const add = (time, direction, source, branch = '') => db.prepare('INSERT INTO punches (employee_id, timestamp, direction, source, branch) VALUES (?, ?, ?, ?, ?)')

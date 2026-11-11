@@ -411,7 +411,7 @@ function applyBranches(rows) {
   CONFIG.BRANCH_LIST = rows.map(r => ({
     id: r.id, name: r.name, locationText: r.location || '', location: parseLatLng(r.location), has_device: !!r.has_device,
     // Weekday shift and 2nd/4th-Saturday half shift ('' = not set; see resolveShift).
-    shift_start: r.shift_start || '', shift_end: r.shift_end || '', sat_start: r.sat_start || '', sat_end: r.sat_end || '',
+    shift_start: r.shift_start || '', shift_end: r.shift_end || '', half_saturdays: Number(r.half_saturdays) ? 1 : 0, sat_start: r.sat_start || '', sat_end: r.sat_end || '',
   }));
   CONFIG.BRANCHES = CONFIG.BRANCH_LIST.map(b => b.name);
 }
@@ -559,7 +559,7 @@ function shiftFieldHtml(employee = null) {
             <div><label style="display:block;font-size:0.8em;color:#7C8896;">Start</label><input type="time" name="shift_start" value="${escapeHtml(start)}" style="${input}"></div>
             <div><label style="display:block;font-size:0.8em;color:#7C8896;">End</label><input type="time" name="shift_end" value="${escapeHtml(end)}" style="${input}"></div>
           </div>
-          <div style="font-size:0.8em;color:#7C8896;margin:4px 0 0 24px;">Custom timings apply on weekdays at any branch. Half Saturdays always follow the branch.</div>
+          <div style="font-size:0.8em;color:#7C8896;margin:4px 0 0 24px;">Custom timings apply on weekdays and full Saturdays at any branch. Half Saturdays (LGF-style) always follow the branch.</div>
           <script>
             (function () {
               const shifts = ${JSON.stringify(shifts).replace(/</g, '\\u003c')};
@@ -1022,6 +1022,12 @@ async function init() {
   for (const col of ["shift_end TEXT NOT NULL DEFAULT ''", "sat_start TEXT NOT NULL DEFAULT ''", "sat_end TEXT NOT NULL DEFAULT ''"]) {
     try { await db.exec(`ALTER TABLE branches ADD COLUMN ${col}`); } catch { /* already exists */ }
   }
+  // Whether a branch has 2nd/4th-Saturday half days. Only LGF does; every other branch
+  // works every Saturday in full. Seeded once from the name, editable on the Branches card.
+  try {
+    await db.exec('ALTER TABLE branches ADD COLUMN half_saturdays INTEGER NOT NULL DEFAULT 0');
+    await db.exec("UPDATE branches SET half_saturdays = 1 WHERE lower(name) LIKE '%lgf%'");
+  } catch { /* already exists */ }
   const allEmployeeShifts = await db.prepare('SELECT id, branch, shift_start, shift_end FROM employees').all();
   if (branchShiftsAdded) {
     for (const b of await db.prepare('SELECT id, name FROM branches').all()) {
@@ -4769,7 +4775,7 @@ async function renderBranchesCard() {
         <td><div style="display:flex;gap:6px;"><input type="text" name="location" value="${b ? escapeHtml(b.locationText) : ''}" placeholder="latitude, longitude" style="${input}width:100%;min-width:150px;">
           <button type="button" onclick="branchUseMyLocation(this)" title="Use my current location" style="padding:6px 10px;border-radius:6px;border:1px solid #D0D5DA;background:#fff;cursor:pointer;">📍</button></div></td>
         <td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap;"><input type="time" name="shift_start" value="${escapeHtml(b ? b.shift_start || DEFAULT_SHIFT.start : DEFAULT_SHIFT.start)}" style="${input}">–<input type="time" name="shift_end" value="${escapeHtml(b ? b.shift_end || DEFAULT_SHIFT.end : DEFAULT_SHIFT.end)}" style="${input}"></div></td>
-        <td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap;"><input type="time" name="sat_start" value="${escapeHtml(b ? b.sat_start || SATURDAY_HALF_SHIFT.start : SATURDAY_HALF_SHIFT.start)}" style="${input}">–<input type="time" name="sat_end" value="${escapeHtml(b ? b.sat_end || SATURDAY_HALF_SHIFT.end : SATURDAY_HALF_SHIFT.end)}" style="${input}"></div></td>
+        <td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap;"><select name="half_saturdays" style="${input}"><option value="0" ${b && b.half_saturdays ? '' : 'selected'}>No, full day</option><option value="1" ${b && b.half_saturdays ? 'selected' : ''}>Yes</option></select><input type="time" name="sat_start" value="${escapeHtml(b ? b.sat_start || SATURDAY_HALF_SHIFT.start : SATURDAY_HALF_SHIFT.start)}" style="${input}">–<input type="time" name="sat_end" value="${escapeHtml(b ? b.sat_end || SATURDAY_HALF_SHIFT.end : SATURDAY_HALF_SHIFT.end)}" style="${input}"></div></td>
         <td style="text-align:center;"><input type="radio" name="device_branch" value="${b ? b.id : 'new'}" ${b && b.has_device ? 'checked' : ''} style="width:auto;"></td>
         <td style="color:#7C8896;font-size:0.85em;">${b ? `${counts[b.name] || 0}` : ''}</td>
         <td>${b ? `<label style="font-size:0.82em;color:#7C8896;white-space:nowrap;"><input type="checkbox" name="delete" value="${b.id}" style="width:auto;" ${counts[b.name] ? 'disabled title="Move its employees to another branch first"' : ''}> Delete</label>` : ''}</td>
@@ -4778,9 +4784,9 @@ async function renderBranchesCard() {
     <form method="POST" action="/admin/branches" class="card" id="branches">
       <div style="font-weight:700;margin-bottom:6px;">Branches</div>
       <p style="color:#7C8896;font-size:0.88em;margin-top:0;">A Punch-button punch within the branch radius (below, under Settings) of a branch's location is made at that branch: office if it's the employee's own branch, otherwise remote and flagged on Deviations. A branch with no location is never matched. Tap 📍 while standing in a branch to fill in its location. Renaming a branch updates the employees in it.</p>
-      <p style="color:#7C8896;font-size:0.88em;margin-top:0;"><strong>Shift timings.</strong> Each day uses the shift of the branch the employee first punched in at (their own branch if that punch was remote), so someone at two branches works whichever one's hours they turned up at. Employees with custom timings keep their own on weekdays. The half Saturday is the 2nd and 4th Saturday of the month. Anyone still punched in is auto punched-out 15 minutes after that day's shift ends, and a real punch-out afterwards replaces it.</p>
+      <p style="color:#7C8896;font-size:0.88em;margin-top:0;"><strong>Shift timings.</strong> Each day uses the shift of the branch the employee first punched in at (their own branch if that punch was remote), so someone at two branches works whichever one's hours they turned up at. Employees with custom timings keep their own on weekdays. A branch with half Saturdays works the half-Saturday timings on the 2nd and 4th Saturday of the month; any other branch works every Saturday as a normal day. Anyone still punched in is auto punched-out 15 minutes after that day's shift ends, and a real punch-out afterwards replaces it.</p>
       <div style="overflow-x:auto;"><table>
-        <tr><th>Name</th><th>Location (latitude, longitude)</th><th>Weekday shift</th><th>Half Saturday</th><th>Biometric device here</th><th>Employees</th><th></th></tr>
+        <tr><th>Name</th><th>Location (latitude, longitude)</th><th>Weekday shift</th><th>Half Saturdays (2nd &amp; 4th)</th><th>Biometric device here</th><th>Employees</th><th></th></tr>
         ${CONFIG.BRANCH_LIST.map(row).join('')}
         ${row(null)}
       </table></div>
@@ -6937,11 +6943,13 @@ async function handleRequest(req, res) {
     const list = v => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
     const ids = list(form.id), names = list(form.name), locations = list(form.location);
     const shiftStarts = list(form.shift_start), shiftEnds = list(form.shift_end), satStarts = list(form.sat_start), satEnds = list(form.sat_end);
+    const halfSaturdays = list(form.half_saturdays);
     const deleting = new Set(list(form.delete).map(Number));
     const rows = ids.map((id, i) => ({
       id: id ? Number(id) : null, name: String(names[i] || '').trim(), location: String(locations[i] || '').trim(),
       shift_start: String(shiftStarts[i] || '').trim(), shift_end: String(shiftEnds[i] || '').trim(),
       sat_start: String(satStarts[i] || '').trim(), sat_end: String(satEnds[i] || '').trim(),
+      half_saturdays: halfSaturdays[i] === '1' ? 1 : 0,
     }))
       // The always-present blank "new branch" row, left empty (its timings are prefilled).
       .filter(r => r.id || r.name || r.location);
@@ -6954,9 +6962,10 @@ async function handleRequest(req, res) {
       else if (r.name.startsWith('[')) error = 'A branch name can\'t start with "[".';
       else if (seen.has(r.name.toLowerCase())) error = `There are two branches called ${r.name}.`;
       else if (r.location && !parseLatLng(r.location)) error = `${r.name}'s location must be "latitude, longitude", e.g. 13.06184, 80.24674.`;
-      else if (![r.shift_start, r.shift_end, r.sat_start, r.sat_end].every(v => /^\d{2}:\d{2}$/.test(v))) error = `${r.name} needs a start and end time for both its weekday shift and its half Saturday.`;
+      else if (![r.shift_start, r.shift_end].every(v => /^\d{2}:\d{2}$/.test(v))) error = `${r.name} needs a start and end time for its weekday shift.`;
       else if (parseTimeToMinutes(r.shift_end) <= parseTimeToMinutes(r.shift_start)) error = `${r.name}'s weekday shift must end after it starts.`;
-      else if (parseTimeToMinutes(r.sat_end) <= parseTimeToMinutes(r.sat_start)) error = `${r.name}'s half Saturday must end after it starts.`;
+      else if (r.half_saturdays && ![r.sat_start, r.sat_end].every(v => /^\d{2}:\d{2}$/.test(v))) error = `${r.name} needs a start and end time for its half Saturday.`;
+      else if (r.half_saturdays && parseTimeToMinutes(r.sat_end) <= parseTimeToMinutes(r.sat_start)) error = `${r.name}'s half Saturday must end after it starts.`;
       if (error) break;
       seen.add(r.name.toLowerCase());
     }
@@ -6984,21 +6993,22 @@ async function handleRequest(req, res) {
     for (const [i, r] of kept.entries()) {
       const before = r.id ? existing[r.id] : null;
       if (before) {
-        await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ?, shift_start = ?, shift_end = ?, sat_start = ?, sat_end = ? WHERE id = ?')
-          .run(r.name, r.location, i, r.shift_start, r.shift_end, r.sat_start, r.sat_end, r.id);
+        await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ?, shift_start = ?, shift_end = ?, half_saturdays = ?, sat_start = ?, sat_end = ? WHERE id = ?')
+          .run(r.name, r.location, i, r.shift_start, r.shift_end, r.half_saturdays, r.sat_start, r.sat_end, r.id);
+        if (before.half_saturdays !== r.half_saturdays) changed.push(`${r.name} half Saturdays ${r.half_saturdays ? 'on' : 'off'}`);
         if (before.shift_start !== r.shift_start || before.shift_end !== r.shift_end) {
           changed.push(`${r.name} shift ${r.shift_start}-${r.shift_end}`);
           shiftChanges.push(r);
         }
-        if (before.sat_start !== r.sat_start || before.sat_end !== r.sat_end) changed.push(`${r.name} half Saturday ${r.sat_start}-${r.sat_end}`);
+        if (r.half_saturdays && (before.sat_start !== r.sat_start || before.sat_end !== r.sat_end)) changed.push(`${r.name} half Saturday ${r.sat_start}-${r.sat_end}`);
         if (before.name !== r.name) {
           renames.set(before.name, r.name);
           changed.push(`${before.name} renamed to ${r.name}`);
         }
         if (before.locationText !== r.location) changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
       } else {
-        const result = await db.prepare('INSERT INTO branches (name, location, sort_order, shift_start, shift_end, sat_start, sat_end) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(r.name, r.location, i, r.shift_start, r.shift_end, r.sat_start, r.sat_end);
+        const result = await db.prepare('INSERT INTO branches (name, location, sort_order, shift_start, shift_end, half_saturdays, sat_start, sat_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(r.name, r.location, i, r.shift_start, r.shift_end, r.half_saturdays, r.sat_start, r.sat_end);
         newId = Number(result.lastInsertRowid);
         changed.push(`${r.name} added`);
       }

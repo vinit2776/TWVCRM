@@ -65,7 +65,8 @@ function effectivePunches(dayPunches) {
 }
 
 // --- Which shift applies on a day ---
-// Branches carry their own weekday shift and half-Saturday shift; an employee either
+// Branches carry their own weekday shift and, if they have half Saturdays (2nd and 4th),
+// a half-Saturday shift; an employee either
 // follows the branch (shift_custom 0) or has their own weekday timings (shift_custom 1).
 // The branch is the one they first punched in at that day (GPS or the biometric device),
 // so someone at LGF and Perungudi works whichever branch's hours they turned up at;
@@ -90,12 +91,14 @@ function dayBranchName(employee, dayPunches = []) {
   return !all && names.length ? names[0] : null;
 }
 
-// Pure. branches: [{ name, shift_start, shift_end, sat_start, sat_end }] ('' = not set).
+// Pure. branches: [{ name, shift_start, shift_end, half_saturdays, sat_start, sat_end }] ('' = not set).
 // Returns { start, end, source: 'branch' | 'custom' | 'employee' | 'default', branch }.
 function resolveShift(employee, dateStr, dayPunches = [], branches = []) {
   const branchName = dayBranchName(employee, dayPunches);
   const branch = branchName ? (branches || []).find(b => b.name === branchName) || null : null;
-  if (isHalfSaturday(dateStr)) {
+  // Half Saturdays are a per-branch choice (LGF has them; other branches work every
+  // Saturday in full). Someone with no branch keeps the old company-wide rule.
+  if (isHalfSaturday(dateStr) && (!branch || Number(branch.half_saturdays))) {
     const start = validTime(branch && branch.sat_start);
     const end = validTime(branch && branch.sat_end);
     if (start && end) return { start, end, source: 'branch', branch: branchName };

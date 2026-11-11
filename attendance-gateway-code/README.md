@@ -168,12 +168,13 @@ caller set up, no reminder is ever sent, and auto punch-outs only happen at the
 daily safety runs or when someone opens their dashboard.
 
 **Shift timings** are set per branch at `/admin/settings` → Branches: a weekday
-shift and a half-Saturday shift (2nd and 4th Saturday). Each day uses the shift of the
+shift, and whether the branch has half Saturdays (2nd and 4th Saturday, with their
+own timings; only LGF does, so other branches work every Saturday in full). Each day uses the shift of the
 branch the employee first punched in at (GPS or the biometric device; their own branch
 if that punch was remote), so someone at LGF and Perungudi works whichever branch's
 hours they turned up at. An employee can instead have **custom timings** (Edit
-Employee → Custom timings), which apply on weekdays at any branch; half Saturdays
-always follow the branch. See `resolveShift` in `attendance-logic.js`.
+Employee → Custom timings), which apply on weekdays and full Saturdays at any branch;
+half Saturdays always follow the branch. See `resolveShift` in `attendance-logic.js`.
 
 **Auto punch-out.** Anyone still punched in is auto punched-out 15 minutes after that
 day's shift end, stamped at exactly that time however late the run is. It gets its
