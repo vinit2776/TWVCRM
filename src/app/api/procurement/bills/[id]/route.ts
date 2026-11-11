@@ -177,6 +177,12 @@ const patchBillSchema = z.discriminatedUnion("action", [
   }),
 ]);
 
+// Once approved, the amount on an electricity-linked bill is the sum of its meter lines and the customer
+// bills are calculated from those same lines, so changing only the total would leave both on the old
+// figures. Before approval corrections stay open.
+const ELECTRICITY_AMOUNT_LOCKED =
+  "This bill comes from an electricity bill, so its amount follows the meter lines. Change the lines on the Electricity page instead; if the bill is already approved, an admin has to un-approve it first (Correct menu).";
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -921,6 +927,10 @@ export async function PATCH(
         return NextResponse.json({ error: "This bill is already fully paid — the amount can no longer be corrected" }, { status: 422 });
       }
 
+      if (bill.electricity_bill_id) {
+        return NextResponse.json({ error: ELECTRICITY_AMOUNT_LOCKED }, { status: 422 });
+      }
+
       const correctedTotal = parsed.data.total_amount;
       const gstAmount = Number(bill.gst_amount ?? 0);
       const alreadyPaid = Number(bill.amount_paid ?? 0);
@@ -1275,6 +1285,9 @@ export async function PATCH(
 
       const newTotal = Math.round(parsed.data.total_amount * 100) / 100;
       const oldTotal = Number(bill.total_amount ?? 0);
+      if (bill.electricity_bill_id && bill.approval_status === "approved" && Math.abs(newTotal - oldTotal) >= 0.01) {
+        return NextResponse.json({ error: ELECTRICITY_AMOUNT_LOCKED }, { status: 422 });
+      }
       const amountChange = classifyAmountChange(oldTotal, newTotal);
       const wasApproved = bill.approval_status === "approved";
       const changeReason = parsed.data.reason?.trim() || null;
