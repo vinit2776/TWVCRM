@@ -251,9 +251,13 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   // Fetch facility assets for the AMC asset-picker (only when AMC is selected)
   useEffect(() => {
     if (department !== "amc" || assets.length > 0) return;
-    fetch("/api/facility/assets?status=active")
-      .then((r) => r.json())
-      .then((j) => setAssets(j.data ?? []))
+    // Assets in maintenance are the ones most likely to need an AMC, so they are listed too (labelled).
+    Promise.all(
+      ["active", "maintenance"].map((st) =>
+        fetch(`/api/facility/assets?status=${st}`).then((r) => r.json()).then((j) => (j.data ?? []) as FacilityAsset[])
+      )
+    )
+      .then(([active, maintenance]) => setAssets([...active, ...maintenance]))
       .catch(() => setAssets([]));
   }, [department, assets.length]);
 
@@ -1216,6 +1220,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           .map((a) => ({
                             value: a.id,
                             label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}`,
+                            badge: a.status === "maintenance" ? { text: "Maintenance", className: "bg-amber-100 text-amber-800" } : undefined,
                             // Similar units share names; the model and serial tell them apart.
                             detail: [
                               [a.make, a.model].filter(Boolean).join(" ") || null,
@@ -1225,7 +1230,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                         value={l.assetId}
                         onValueChange={(v) => handleAssetSelect(l.id, v)}
                         placeholder="Select the asset this line covers..."
-                        emptyMessage="No active assets found"
+                        emptyMessage="No assets found"
                       />
                       <AssetOverlapNote conflicts={l.assetId ? amcOverlaps[l.assetId] : undefined} />
                     </div>
