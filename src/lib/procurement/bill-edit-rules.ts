@@ -59,6 +59,12 @@ export interface CeilingInput {
   priorInvoiced: number;
   tolerancePercent: unknown;
   fullyReceived?: boolean;
+  /**
+   * The bill's total before this correction. A correction that only lowers it is
+   * never refused for being over the limit: a bill already approved as an
+   * exception must still be fixable downwards, and doing so only improves things.
+   */
+  currentTotal?: number | null;
 }
 
 export type CeilingResult =
@@ -71,6 +77,26 @@ export type CeilingResult =
  * is no exception path here — outside the band the correction is refused.
  */
 export function checkAmountAgainstCeiling(input: CeilingInput): CeilingResult {
+  const result = checkAgainstLimit(input);
+  const lowersOnly = input.currentTotal != null && round2(input.newTotal) < round2(input.currentTotal);
+  if (result.ok || !lowersOnly) return result;
+
+  // Lowering an over-limit bill is allowed; keep the exception flag if it is still outside the band.
+  const tolerance = input.isService ? 0 : clampTolerancePercent(input.tolerancePercent);
+  if (tolerance === 0 || !input.ceiling) return { ok: true, outcome: { kind: "ok" } };
+  return {
+    ok: true,
+    outcome: evaluateInvoiceTolerance({
+      invoiceTotal: input.newTotal,
+      base: input.ceiling,
+      tolerancePercent: tolerance,
+      priorInvoiced: input.priorInvoiced,
+      fullyReceived: input.fullyReceived ?? true,
+    }),
+  };
+}
+
+function checkAgainstLimit(input: CeilingInput): CeilingResult {
   const { newTotal, isService, ceiling, priorInvoiced } = input;
   if (ceiling === null || !(ceiling > 0)) return { ok: true, outcome: { kind: "ok" } };
 

@@ -82,6 +82,18 @@ describe("checkAmountAgainstCeiling", () => {
     expect(checkAmountAgainstCeiling({ ...svc, newTotal: 5000 }).ok).toBe(true);
     expect(checkAmountAgainstCeiling({ ...svc, newTotal: 5100 }).ok).toBe(false);
   });
+  it("allows lowering a bill that is still over its band, and keeps it flagged", () => {
+    const flex = { ...base, tolerancePercent: 5 };
+    const r = checkAmountAgainstCeiling({ ...flex, newTotal: 16400, currentTotal: 16900 });
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.outcome.kind).toBe("exception");
+  });
+  it("still refuses raising an over-limit bill or raising a firm-PO bill past its ceiling", () => {
+    const flex = { ...base, tolerancePercent: 5 };
+    expect(checkAmountAgainstCeiling({ ...flex, newTotal: 17000, currentTotal: 16900 }).ok).toBe(false);
+    expect(checkAmountAgainstCeiling({ ...base, newTotal: 18000, currentTotal: 19000 }).ok).toBe(true);
+    expect(checkAmountAgainstCeiling({ ...base, newTotal: 18000, currentTotal: 16000 }).ok).toBe(false);
+  });
   it("has nothing to check without a ceiling", () => {
     expect(checkAmountAgainstCeiling({ ...base, ceiling: null, newTotal: 999999 }).ok).toBe(true);
   });
