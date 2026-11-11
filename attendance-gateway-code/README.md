@@ -176,6 +176,22 @@ hours they turned up at. An employee can instead have **custom timings** (Edit
 Employee → Custom timings), which apply on weekdays and full Saturdays at any branch;
 half Saturdays always follow the branch. See `resolveShift` in `attendance-logic.js`.
 
+Those rules only apply **from the date in Settings → Branch shift rules apply from**
+(`SHIFT_RULES_EFFECTIVE_FROM`, 2026-11-12 by default: the first whole day worked under
+them). An earlier day is read the way it was worked at the time — one company-wide half
+shift on the 2nd and 4th Saturday, and everyone on their own saved timings, with the
+branch not coming into it. The cut-off exists because a day's status is worked out each
+time a report is opened and nothing records what that day's shift was: without it,
+turning half Saturdays off for a branch would turn a Present Saturday into a Half Day in
+months that have already been reported on. Moving the date backwards re-measures those
+days, so only do it for a period whose branch timings are what was actually worked.
+
+One gap remains, the same one the gateway has always had: editing a branch's weekday
+shift also rewrites the saved timings of the employees who follow it, and the old rule
+reads those saved timings — so a weekday before the cut-off is measured against the new
+hours. Only a per-employee shift history would close that, which nothing stores. Half
+Saturdays, custom timings and which branch a day counts as worked at are unaffected.
+
 **Auto punch-out.** Anyone still punched in is auto punched-out 15 minutes after that
 day's shift end, stamped at exactly that time however late the run is. It gets its
 timing from the same outside every-5-minute schedule as the punch-in reminders
