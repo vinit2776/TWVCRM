@@ -34,6 +34,22 @@ function Hint({ children }: { children: React.ReactNode }) {
   return <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{children}</p>;
 }
 
+/** "In maintenance" was being picked to mean "covered by an AMC"; say what each choice means. */
+function StatusNote({ status }: { status: string }) {
+  if (status === "maintenance") {
+    return (
+      <p className="mt-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+        &quot;In maintenance&quot; means the asset is out of use for repair right now. It does <b>not</b> mean it is
+        covered by an AMC — for that, set <b>Lifecycle stage</b> to &quot;Under AMC&quot; and keep Status as &quot;Active&quot;.
+      </p>
+    );
+  }
+  if (status === "retired") {
+    return <Hint>Retired assets are decommissioned and are left out of the AMC request asset list.</Hint>;
+  }
+  return <Hint>&quot;Active&quot; is right for anything in service, including assets under an AMC.</Hint>;
+}
+
 function StepIndicator({ step, total }: { step: number; total: number }) {
   return (
     <div className="flex items-center gap-1.5">
@@ -468,10 +484,10 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
         >
           <option value="active">Active — in normal use</option>
-          <option value="maintenance">In maintenance — being serviced</option>
+          <option value="maintenance">In maintenance — out of use, being repaired</option>
           <option value="retired">Retired — decommissioned</option>
         </select>
-        <Hint>Almost always &quot;Active&quot; for new assets. Change when the asset goes for repair.</Hint>
+        <StatusNote status={form.status} />
       </div>
 
       {/* Category-specific custom fields */}
@@ -700,10 +716,11 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       <div>
         <Label className="text-xs">Status</Label>
         <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as "active" | "maintenance" | "retired" })} className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm">
-          <option value="active">Active</option>
-          <option value="maintenance">In maintenance</option>
-          <option value="retired">Retired</option>
+          <option value="active">Active — in normal use</option>
+          <option value="maintenance">In maintenance — out of use, being repaired</option>
+          <option value="retired">Retired — decommissioned</option>
         </select>
+        <StatusNote status={form.status} />
       </div>
       {customFields.length > 0 && (
         <div className="border-t pt-3 space-y-2.5">
