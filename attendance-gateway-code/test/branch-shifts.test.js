@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { DatabaseSync } = require('node:sqlite');
 const {
-  createAttendanceLogic, resolveShift, autoCheckoutTimestamp, autoCheckoutDue, mostCommonShift, effectivePunches,
+  createAttendanceLogic, resolveShift, autoCheckoutTimestamp, autoCheckoutDue, dayEndTimestamp, mostCommonShift, effectivePunches,
 } = require('../attendance-logic');
 
 const BRANCHES = [
@@ -165,4 +165,44 @@ test('computeDayStatus: a manual punch-out after the auto one clears the Missed 
   const status = await logic.computeDayStatus('EMP-1', TUESDAY);
   assert.equal(status.status, 'Present');
   assert.equal(status.checkOut, `${TUESDAY} 20:30:00`);
+});
+
+// --- When a day is over, for closing a break the employee never resumed ---
+
+test('dayEndTimestamp: nothing to close until the shift end has passed', () => {
+  const punches = [p('09:25', 'in', { branch: 'LGF' })];
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, punches, BRANCHES, `${TUESDAY} 17:00:00`), null);
+  // 18:30 + 15.
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, punches, BRANCHES, `${TUESDAY} 18:45:00`), `${TUESDAY} 18:45:00`);
+});
+
+test('dayEndTimestamp: a day that pairs up ends at its own punch-out, early or late', () => {
+  const early = [p('09:25', 'in', { branch: 'LGF' }), p('17:00', 'out', { branch: 'LGF' })];
+  const late = [p('09:25', 'in', { branch: 'LGF' }), p('20:30', 'out', { branch: 'LGF' })];
+  const now = `${TUESDAY} 23:00:00`;
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, early, BRANCHES, now), `${TUESDAY} 17:00:00`);
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, late, BRANCHES, now), `${TUESDAY} 20:30:00`);
+});
+
+test('dayEndTimestamp: an open day ends at the auto punch-out time, per branch', () => {
+  const now = `${TUESDAY} 23:00:00`;
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, [p('09:25', 'in', { branch: 'LGF' })], BRANCHES, now), `${TUESDAY} 18:45:00`);
+  assert.equal(
+    dayEndTimestamp(emp({ branch: 'Perungudi' }), TUESDAY, [p('09:58', 'in', { branch: 'Perungudi' })], BRANCHES, now),
+    `${TUESDAY} 19:15:00`,
+  );
+});
+
+test('dayEndTimestamp: punches read before the auto punch-out was recorded still give its time', () => {
+  // performAutoCheckout passes the punches as it read them, so the day still looks open.
+  const punches = [p('09:25', 'in', { branch: 'LGF' })];
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, punches, BRANCHES, `${TUESDAY} 22:00:00`), `${TUESDAY} 18:45:00`);
+});
+
+test('dayEndTimestamp: a custom shift ends on its own hours', () => {
+  const night = emp({ shift_custom: 1, shift_start: '06:00', shift_end: '08:00' });
+  assert.equal(
+    dayEndTimestamp(night, TUESDAY, [p('06:00', 'in', { branch: 'LGF' })], BRANCHES, `${TUESDAY} 12:00:00`),
+    `${TUESDAY} 08:15:00`,
+  );
 });

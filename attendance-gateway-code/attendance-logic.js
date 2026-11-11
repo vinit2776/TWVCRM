@@ -139,6 +139,19 @@ function autoCheckoutDue(employee, dateStr, dayPunches, branches, now) {
   return dueTs;
 }
 
+// When a day ended for someone, for closing anything still left running at that point —
+// today that means a break they never resumed. The day's real punch-out if it has one,
+// else the time its auto punch-out is due; null while the day hasn't got there yet, so a
+// break still inside the shift is left alone. Pass the punches as they were read: an auto
+// punch-out recorded from them in the meantime leaves the count odd, and the due time is
+// the same answer anyway.
+function dayEndTimestamp(employee, dateStr, dayPunches, branches, now) {
+  const dueTs = autoCheckoutTimestamp(dateStr, resolveShift(employee, dateStr, dayPunches, branches));
+  if (dueTs > now) return null;
+  const punches = effectivePunches(dayPunches || []);
+  return punches.length > 0 && punches.length % 2 === 0 ? punches[punches.length - 1].timestamp : dueTs;
+}
+
 // Picks the timings a branch's employees mostly work, for seeding a branch's shift the
 // first time: [{ shift_start, shift_end }] -> { start, end } or null.
 function mostCommonShift(employees) {
@@ -408,5 +421,6 @@ module.exports = {
   resolveShift,
   autoCheckoutTimestamp,
   autoCheckoutDue,
+  dayEndTimestamp,
   mostCommonShift,
 };
