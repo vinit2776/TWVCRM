@@ -1,7 +1,7 @@
 import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { sendPushToProcurementRoles } from "@/lib/push";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
@@ -1202,6 +1202,12 @@ export async function PATCH(
           { status: 422 }
         );
       }
+      if (bill.electricity_bill_id) {
+        return NextResponse.json(
+          { error: "This bill comes from an electricity bill. Correct its lines on the Electricity page — changing only the total would leave the lines and customer bills on the old figures." },
+          { status: 422 },
+        );
+      }
       const newTotal = Math.round(parsed.data.total_amount * 100) / 100;
 
       const ceilingCheck = await checkBillAmountAgainstPo(supabase, bill, newTotal);
@@ -1455,6 +1461,22 @@ export async function PATCH(
     .single();
 
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+  // A rejected landlord bill means the customer bills computed from it are wrong too. Put the
+  // electricity bill back to draft (and drop the unsent customer bills) so it is recalculated
+  // once corrected. The RPC leaves anything already handed off to accounts untouched.
+  if (parsed.data.action === "reject" && bill.electricity_bill_id) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: resetResult, error: resetErr } = await (createAdminClient() as any).rpc(
+      "reset_electricity_bill_for_rejected_vendor_bill",
+      { p_vendor_bill_id: id },
+    );
+    if (resetErr) {
+      console.error(`[bills/${id}] electricity reset after reject failed:`, resetErr.message);
+    } else if (resetResult?.reset) {
+      extraAuditChanges.electricity_bill_reset = { old: null, new: resetResult.electricity_bill_id };
+    }
+  }
 
   if (afterBillUpdate) {
     await (afterBillUpdate as () => Promise<void>)();
