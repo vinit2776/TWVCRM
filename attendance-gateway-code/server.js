@@ -14,7 +14,7 @@ const { createClient } = require('@libsql/client');
 const {
   createAttendanceLogic,
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
-  effectivePunches, autoCheckoutDue, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
+  effectivePunches, autoCheckoutDue, dayEndTimestamp, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const {
@@ -1010,48 +1010,64 @@ async function init() {
       await db.prepare('INSERT OR IGNORE INTO branches (name, sort_order) VALUES (?, ?)').run(name, i);
     }
   }
-  // Shift timings per branch: weekday shift_start/shift_end and the 2nd/4th-Saturday half
-  // shift sat_start/sat_end. Seeded once, when the columns are first added: each branch
-  // gets the shift most of its employees already work (09:30-18:30 if none), Saturdays
-  // the old fixed 09:30-13:30.
-  let branchShiftsAdded = false;
-  try {
-    await db.exec("ALTER TABLE branches ADD COLUMN shift_start TEXT NOT NULL DEFAULT ''");
-    branchShiftsAdded = true;
-  } catch { /* already exists */ }
-  for (const col of ["shift_end TEXT NOT NULL DEFAULT ''", "sat_start TEXT NOT NULL DEFAULT ''", "sat_end TEXT NOT NULL DEFAULT ''"]) {
+  // Shift timings per branch: weekday shift_start/shift_end, the 2nd/4th-Saturday half
+  // shift sat_start/sat_end, and whether the branch has half Saturdays at all (only LGF
+  // does; every other branch works every Saturday in full). Each ALTER is independently
+  // safe to re-run on every cold start; the seeding below is deliberately *not* tied to
+  // which of them this particular start happened to add.
+  for (const col of [
+    "shift_start TEXT NOT NULL DEFAULT ''", "shift_end TEXT NOT NULL DEFAULT ''",
+    "sat_start TEXT NOT NULL DEFAULT ''", "sat_end TEXT NOT NULL DEFAULT ''",
+    'half_saturdays INTEGER NOT NULL DEFAULT 0',
+  ]) {
     try { await db.exec(`ALTER TABLE branches ADD COLUMN ${col}`); } catch { /* already exists */ }
   }
-  // Whether a branch has 2nd/4th-Saturday half days. Only LGF does; every other branch
-  // works every Saturday in full. Seeded once from the name, editable on the Branches card.
-  try {
-    await db.exec('ALTER TABLE branches ADD COLUMN half_saturdays INTEGER NOT NULL DEFAULT 0');
-    await db.exec("UPDATE branches SET half_saturdays = 1 WHERE lower(name) LIKE '%lgf%'");
-  } catch { /* already exists */ }
   const allEmployeeShifts = await db.prepare('SELECT id, branch, shift_start, shift_end FROM employees').all();
-  if (branchShiftsAdded) {
-    for (const b of await db.prepare('SELECT id, name FROM branches').all()) {
+  // Seed any branch that still has no weekday timings: the shift most of its employees
+  // already work (09:30-18:30 if none), the old fixed 09:30-13:30 for half Saturdays, and
+  // half Saturdays on for LGF only. Keyed on the data rather than on "this start added the
+  // column", so a seeding run that fails partway (this is a network-backed db) is retried
+  // on the next start instead of leaving branches blank and half Saturdays undecided
+  // forever. A branch created on the Branches card always posts timings, so an empty
+  // shift_start can only mean "never seeded" — never an admin's choice being overwritten.
+  const unseededBranches = await db.prepare("SELECT id, name FROM branches WHERE shift_start = '' OR shift_end = ''").all();
+  if (unseededBranches.length) {
+    // One transaction: half-seeded branches would hand people hours nobody chose.
+    await db.batch(unseededBranches.map(b => {
       const theirs = allEmployeeShifts.filter(e => { const eb = employeeBranches(e.branch); return !eb.all && eb.names.length === 1 && eb.names[0] === b.name; });
       const shift = mostCommonShift(theirs) || DEFAULT_SHIFT;
-      await db.prepare('UPDATE branches SET shift_start = ?, shift_end = ?, sat_start = ?, sat_end = ? WHERE id = ?')
-        .run(shift.start, shift.end, SATURDAY_HALF_SHIFT.start, SATURDAY_HALF_SHIFT.end, b.id);
-    }
+      return {
+        sql: 'UPDATE branches SET shift_start = ?, shift_end = ?, sat_start = ?, sat_end = ?, half_saturdays = ? WHERE id = ?',
+        args: [shift.start, shift.end, SATURDAY_HALF_SHIFT.start, SATURDAY_HALF_SHIFT.end, /lgf/.test(String(b.name).toLowerCase()) ? 1 : 0, b.id],
+      };
+    }));
   }
   // 1 = the employee keeps their own weekday timings at any branch; 0 = they follow the
-  // branch they punch in at. Backfilled once so nobody's hours change on the day this
-  // ships: only someone whose current shift already matches every branch that could
-  // apply to them starts out following the branch; everyone else is marked custom.
-  try {
-    await db.exec('ALTER TABLE employees ADD COLUMN shift_custom INTEGER NOT NULL DEFAULT 0');
+  // branch they punch in at. Backfilled so nobody's hours change on the day this ships:
+  // only someone whose current shift already matches every branch that could apply to
+  // them starts out following the branch; everyone else is marked custom.
+  try { await db.exec('ALTER TABLE employees ADD COLUMN shift_custom INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
+  // Guarded by the data, not by the ALTER above: a backfill that died partway through
+  // would otherwise never run again, and the employees it hadn't reached would silently
+  // start following their branch's hours — the one thing this backfill exists to prevent.
+  // Re-running marks nobody new, because changing a branch's shift also updates the saved
+  // shift of every employee following it (see the Branches card handler), so a follower
+  // keeps matching. It settles after the first start that marks anyone.
+  const customBackfilled = await db.prepare('SELECT 1 FROM employees WHERE shift_custom = 1 LIMIT 1').get();
+  if (!customBackfilled && allEmployeeShifts.length) {
     const branchShift = new Map((await db.prepare('SELECT name, shift_start, shift_end FROM branches').all()).map(b => [b.name, `${b.shift_start}-${b.shift_end}`]));
+    const custom = [];
     for (const e of allEmployeeShifts) {
       const eb = employeeBranches(e.branch);
       const names = eb.all || !eb.names.length ? [...branchShift.keys()] : eb.names;
       const own = `${e.shift_start}-${e.shift_end}`;
       const matches = names.length > 0 && names.every(n => branchShift.get(n) === own);
-      if (!matches) await db.prepare('UPDATE employees SET shift_custom = 1 WHERE id = ?').run(e.id);
+      if (!matches) custom.push({ sql: 'UPDATE employees SET shift_custom = 1 WHERE id = ?', args: [e.id] });
     }
-  } catch { /* already exists */ }
+    // One transaction, so there is no state where some people were marked and others
+    // weren't — un-batched, a lambda timing out midway would leave exactly that.
+    if (custom.length) await db.batch(custom);
+  }
   // Existing employees (registered before this column existed) will have mobile = NULL —
   // required going forward on the registration/edit forms, but not backfilled.
   try { await db.exec('ALTER TABLE employees ADD COLUMN mobile TEXT'); } catch { /* already exists */ }
@@ -1927,6 +1943,21 @@ function computeMusterReport(grid) {
 // a check-in the device only uploaded later, would otherwise stay open forever.
 const AUTO_CHECKOUT_CATCHUP_DAYS = 7;
 function autoCheckoutClock(ts) { return ts.slice(11, 16); }
+// A break the employee never resumed, closed when the day it belongs to is over —
+// whether or not that day also needed an auto punch-out. Nothing else ever closes one:
+// /api/break only ends a break while the day is still Active, so once the day has
+// resolved the employee can't either, and computeDayStatus skips rows with no end_ts, so
+// the break quietly counts as time worked. Before this swept every day, anyone who forgot
+// to resume and then punched out normally was paid for the break.
+async function closeOpenBreak(employee, dateStr, dayPunches, nowTs) {
+  const endTs = dayEndTimestamp(employee, dateStr, dayPunches, CONFIG.BRANCH_LIST, nowTs);
+  if (!endTs) return; // the day hasn't reached its shift end — this break may still be real
+  // max(..., start_ts) because a break can start after the day ended (a late sweep, or a
+  // device punch-out that landed earlier than the break): ending one before it began would
+  // subtract negative minutes from the day's break total and inflate the hours worked.
+  await db.prepare('UPDATE breaks SET end_ts = max(?, start_ts) WHERE employee_id = ? AND end_ts IS NULL AND start_ts LIKE ?')
+    .run(endTs, employee.id, `${dateStr}%`);
+}
 async function performAutoCheckout({ employeeId = null, now = new Date() } = {}) {
   // The branch timings live in CONFIG.BRANCH_LIST; the in-process timer runs outside any
   // request, so make sure they're loaded (cached, so this is usually free).
@@ -1952,24 +1983,28 @@ async function performAutoCheckout({ employeeId = null, now = new Date() } = {})
     if (!byEmployee.has(p.employee_id)) byEmployee.set(p.employee_id, []);
     byEmployee.get(p.employee_id).push(p);
   }
+  // Breaks still running from one of these days, read in one query like the punches so the
+  // sweep stays a fixed number of round-trips whatever the headcount. Only the days that
+  // actually have one get a closing update.
+  const openBreaks = employeeId
+    ? await db.prepare('SELECT employee_id, start_ts FROM breaks WHERE employee_id = ? AND end_ts IS NULL AND start_ts >= ?').all(employeeId, since)
+    : await db.prepare('SELECT employee_id, start_ts FROM breaks WHERE end_ts IS NULL AND start_ts >= ?').all(since);
+  const openBreakDays = new Set(openBreaks.map(b => `${b.employee_id}|${b.start_ts.slice(0, 10)}`));
   let closed = 0;
   for (const emp of employees) {
     const mine = byEmployee.get(emp.id) || [];
     for (const dateStr of dateStrs) {
       const dayPunches = mine.filter(p => p.timestamp.startsWith(dateStr));
       const dueTs = autoCheckoutDue(emp, dateStr, dayPunches, CONFIG.BRANCH_LIST, nowTs);
-      if (!dueTs) continue;
-      if (!await recordPunch(emp.id, dueTs, 'out', 'auto', 'auto-checkout')) continue;
-      closed++;
-      // Close a break left open that day too, at the same time, so it never appears to
-      // end after the punch-out it belongs to (breaks are looked up by start_ts).
-      await db.prepare('UPDATE breaks SET end_ts = ? WHERE employee_id = ? AND end_ts IS NULL AND start_ts LIKE ?')
-        .run(dueTs, emp.id, `${dateStr}%`);
-      const when = dateStr === today ? autoCheckoutClock(dueTs) : `${autoCheckoutClock(dueTs)} on ${dateStr}`;
-      await createNotification(emp.id, dateStr === today
-        ? `You didn't punch out, so you were auto punched-out at ${when}. Still working? Punch out from the dashboard before midnight and it replaces the auto punch-out. Otherwise the day counts as a Half Day until you submit a correction. If you punched out on the biometric device, this updates once the device syncs.`
-        : `You didn't punch out, so you were auto punched-out at ${when}. The day counts as a Half Day until you submit a correction from the Corrections page. If you punched out on the biometric device, this updates once the device syncs.`);
-      console.log(`Auto punched-out ${emp.id} for ${dateStr} at ${autoCheckoutClock(dueTs)}`);
+      if (dueTs && await recordPunch(emp.id, dueTs, 'out', 'auto', 'auto-checkout')) {
+        closed++;
+        const when = dateStr === today ? autoCheckoutClock(dueTs) : `${autoCheckoutClock(dueTs)} on ${dateStr}`;
+        await createNotification(emp.id, dateStr === today
+          ? `You didn't punch out, so you were auto punched-out at ${when}. Still working? Punch out from the dashboard before midnight and it replaces the auto punch-out. Otherwise the day counts as a Half Day until you submit a correction. If you punched out on the biometric device, this updates once the device syncs.`
+          : `You didn't punch out, so you were auto punched-out at ${when}. The day counts as a Half Day until you submit a correction from the Corrections page. If you punched out on the biometric device, this updates once the device syncs.`);
+        console.log(`Auto punched-out ${emp.id} for ${dateStr} at ${autoCheckoutClock(dueTs)}`);
+      }
+      if (openBreakDays.has(`${emp.id}|${dateStr}`)) await closeOpenBreak(emp, dateStr, dayPunches, nowTs);
     }
   }
   return closed;
