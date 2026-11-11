@@ -7,6 +7,8 @@
   ],
   "crons": [
     { "path": "/internal/auto-checkout", "schedule": "30 13 * * *" },
+    { "path": "/internal/auto-checkout", "schedule": "30 15 * * *" },
+    { "path": "/internal/auto-checkout", "schedule": "15 18 * * *" },
     { "path": "/internal/daily-report/morning", "schedule": "30 4 * * *" },
     { "path": "/internal/daily-report/evening", "schedule": "30 13 * * *" }
   ]

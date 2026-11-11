@@ -46,7 +46,7 @@ function createDailyReport(db, logic) {
     const dayPunches = (await logic.getPunchesForDay(emp.id, dateStr))
       .filter(p => p.source !== 'auto' && p.timestamp <= cutoffTs);
     const punches = effectivePunches(dayPunches);
-    const shift = logic.getShiftForDate(emp, dateStr);
+    const shift = logic.getShiftForDate(emp, dateStr, dayPunches);
     const base = { name: emp.name, branch: employeeBranchLabel(emp.branch), shiftStart: shift.start, shiftEnd: shift.end };
     if (punches.length === 0) {
       const leave = await logic.getApprovedLeaveForDate(emp.id, dateStr);

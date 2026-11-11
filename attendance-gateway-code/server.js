@@ -14,7 +14,7 @@ const { createClient } = require('@libsql/client');
 const {
   createAttendanceLogic,
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
-  effectivePunches, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
+  effectivePunches, autoCheckoutDue, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const {
@@ -58,7 +58,6 @@ function langOf(user) {
 
 const PORT = process.env.PORT || 3001;
 const DB_FILE = path.join(__dirname, 'attendance.db');
-const AUTO_CHECKOUT_HOUR = 19; // 7 PM, local time
 
 // PWA icons are static files generated once (public/icons/); read into memory at
 // startup so requests don't hit disk, same as everything else in this app.
@@ -409,7 +408,11 @@ applySettings();
 // there) and are cached alongside the settings, refreshed on the same schedule.
 // CONFIG.BRANCHES keeps the plain list of names the employee forms use.
 function applyBranches(rows) {
-  CONFIG.BRANCH_LIST = rows.map(r => ({ id: r.id, name: r.name, locationText: r.location || '', location: parseLatLng(r.location), has_device: !!r.has_device }));
+  CONFIG.BRANCH_LIST = rows.map(r => ({
+    id: r.id, name: r.name, locationText: r.location || '', location: parseLatLng(r.location), has_device: !!r.has_device,
+    // Weekday shift and 2nd/4th-Saturday half shift ('' = not set; see resolveShift).
+    shift_start: r.shift_start || '', shift_end: r.shift_end || '', sat_start: r.sat_start || '', sat_end: r.sat_end || '',
+  }));
   CONFIG.BRANCHES = CONFIG.BRANCH_LIST.map(b => b.name);
 }
 applyBranches([]);
@@ -529,6 +532,86 @@ function branchFromForm(form, current = null) {
   const known = new Set([...CONFIG.BRANCHES, ...employeeBranches(current).names]);
   if (names.some(n => !known.has(n))) return { error: 'Unknown branch.' };
   return { value: employeeBranchValue(names) };
+}
+
+// A branch's weekday shift, or the default when it has none / isn't a branch.
+function branchWeekdayShift(name) {
+  const b = CONFIG.BRANCH_LIST.find(x => x.name === name);
+  return b && b.shift_start && b.shift_end ? { start: b.shift_start, end: b.shift_end } : { ...DEFAULT_SHIFT };
+}
+// The Shift field on the registration and edit forms. Follows the Branch field: picking
+// a branch shows its timings; "Custom timings" unlocks start/end for this employee.
+// Must come after branchFieldHtml in the same <form> (it listens to its changes).
+// shift_form=2 tells the server this is the branch-aware form, not an old cached one.
+function shiftFieldHtml(employee = null) {
+  const custom = !!(employee && Number(employee.shift_custom));
+  const start = employee ? employee.shift_start : DEFAULT_SHIFT.start;
+  const end = employee ? employee.shift_end : DEFAULT_SHIFT.end;
+  const shifts = Object.fromEntries(CONFIG.BRANCH_LIST.map(b => [b.name, branchWeekdayShift(b.name)]));
+  const input = 'padding:6px;border-radius:6px;border:1px solid #D0D5DA;';
+  return `
+        <div style="flex-basis:100%;">
+          <input type="hidden" name="shift_form" value="2">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Shift</label>
+          <div data-shift-summary style="font-size:0.92em;margin:4px 0;"></div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:0.92em;margin:6px 0 4px;"><input type="checkbox" name="shift_custom" value="1" ${custom ? 'checked' : ''} style="width:auto;margin:0;"> Custom timings for this employee</label>
+          <div style="display:flex;gap:12px;margin-left:24px;flex-wrap:wrap;">
+            <div><label style="display:block;font-size:0.8em;color:#7C8896;">Start</label><input type="time" name="shift_start" value="${escapeHtml(start)}" style="${input}"></div>
+            <div><label style="display:block;font-size:0.8em;color:#7C8896;">End</label><input type="time" name="shift_end" value="${escapeHtml(end)}" style="${input}"></div>
+          </div>
+          <div style="font-size:0.8em;color:#7C8896;margin:4px 0 0 24px;">Custom timings apply on weekdays at any branch. Half Saturdays always follow the branch.</div>
+          <script>
+            (function () {
+              const shifts = ${JSON.stringify(shifts).replace(/</g, '\\u003c')};
+              const fallback = ${JSON.stringify(DEFAULT_SHIFT)};
+              const form = document.currentScript.closest('form');
+              const fmt = s => s.start + ' – ' + s.end;
+              function picked() {
+                const mode = (form.querySelector('input[name="branch_mode"]:checked') || {}).value || 'one';
+                if (mode === 'all') return Object.keys(shifts);
+                if (mode === 'some') return [...form.querySelectorAll('input[name="branches"]:checked')].map(c => c.value);
+                const sel = form.querySelector('select[name="branch"]');
+                return sel && sel.value ? [sel.value] : [];
+              }
+              function refresh() {
+                const custom = form.querySelector('input[name="shift_custom"]').checked;
+                const names = picked();
+                const startEl = form.querySelector('input[name="shift_start"]');
+                const endEl = form.querySelector('input[name="shift_end"]');
+                startEl.disabled = endEl.disabled = !custom;
+                startEl.required = endEl.required = custom;
+                const summary = form.querySelector('[data-shift-summary]');
+                if (custom) { summary.textContent = 'Their own timings, at any branch.'; return; }
+                const first = shifts[names[0]] || fallback;
+                startEl.value = first.start; endEl.value = first.end;
+                if (names.length > 1) {
+                  summary.textContent = names.map(n => n + ' ' + fmt(shifts[n] || fallback)).join(' · ') + ' — whichever branch they punch in at.';
+                } else {
+                  summary.textContent = fmt(first) + (names[0] ? ' (from ' + names[0] + ')' : ' (default)');
+                }
+              }
+              form.addEventListener('change', e => { if (/^(branch|branches|branch_mode|shift_custom)$/.test(e.target.name)) refresh(); });
+              refresh();
+            })();
+          </script>
+        </div>`;
+}
+// The timings a Shift field posted (see shiftFieldHtml) for an employee at branch value
+// `branch`: { start, end, custom } or { error }. Not custom = the (first) branch's
+// weekday shift, saved on the employee too so lists and fallbacks match. An old cached
+// form without shift_form posts plain start/end and keeps the current custom flag.
+function shiftFromForm(form, branch, current = null) {
+  const start = String(form.shift_start || '').trim();
+  const end = String(form.shift_end || '').trim();
+  const custom = form.shift_form === '2' ? form.shift_custom === '1' : !!(current && Number(current.shift_custom));
+  if (custom || form.shift_form !== '2') {
+    if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) return { error: 'Enter a shift start and end time.' };
+    if (parseTimeToMinutes(end) <= parseTimeToMinutes(start)) return { error: 'The shift must end after it starts.' };
+    return { start, end, custom };
+  }
+  const { all, names } = employeeBranches(branch);
+  const shift = branchWeekdayShift(all ? (CONFIG.BRANCHES[0] || '') : names[0]);
+  return { start: shift.start, end: shift.end, custom: false };
 }
 
 function logSecurityEvent(type, details = {}) {
@@ -815,7 +898,7 @@ const {
   getEmployee, getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday,
   getApprovedLeaveForDate, getApprovedPermissionForDate, getActiveCorrectionsForMonth, computeDayStatus,
   getDeviationReview,
-} = createAttendanceLogic(db);
+} = createAttendanceLogic(db, { getBranches: () => CONFIG.BRANCH_LIST });
 const dailyReport = createDailyReport(db, {
   getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate, getApprovedPermissionForDate,
 });
@@ -927,6 +1010,42 @@ async function init() {
       await db.prepare('INSERT OR IGNORE INTO branches (name, sort_order) VALUES (?, ?)').run(name, i);
     }
   }
+  // Shift timings per branch: weekday shift_start/shift_end and the 2nd/4th-Saturday half
+  // shift sat_start/sat_end. Seeded once, when the columns are first added: each branch
+  // gets the shift most of its employees already work (09:30-18:30 if none), Saturdays
+  // the old fixed 09:30-13:30.
+  let branchShiftsAdded = false;
+  try {
+    await db.exec("ALTER TABLE branches ADD COLUMN shift_start TEXT NOT NULL DEFAULT ''");
+    branchShiftsAdded = true;
+  } catch { /* already exists */ }
+  for (const col of ["shift_end TEXT NOT NULL DEFAULT ''", "sat_start TEXT NOT NULL DEFAULT ''", "sat_end TEXT NOT NULL DEFAULT ''"]) {
+    try { await db.exec(`ALTER TABLE branches ADD COLUMN ${col}`); } catch { /* already exists */ }
+  }
+  const allEmployeeShifts = await db.prepare('SELECT id, branch, shift_start, shift_end FROM employees').all();
+  if (branchShiftsAdded) {
+    for (const b of await db.prepare('SELECT id, name FROM branches').all()) {
+      const theirs = allEmployeeShifts.filter(e => { const eb = employeeBranches(e.branch); return !eb.all && eb.names.length === 1 && eb.names[0] === b.name; });
+      const shift = mostCommonShift(theirs) || DEFAULT_SHIFT;
+      await db.prepare('UPDATE branches SET shift_start = ?, shift_end = ?, sat_start = ?, sat_end = ? WHERE id = ?')
+        .run(shift.start, shift.end, SATURDAY_HALF_SHIFT.start, SATURDAY_HALF_SHIFT.end, b.id);
+    }
+  }
+  // 1 = the employee keeps their own weekday timings at any branch; 0 = they follow the
+  // branch they punch in at. Backfilled once so nobody's hours change on the day this
+  // ships: only someone whose current shift already matches every branch that could
+  // apply to them starts out following the branch; everyone else is marked custom.
+  try {
+    await db.exec('ALTER TABLE employees ADD COLUMN shift_custom INTEGER NOT NULL DEFAULT 0');
+    const branchShift = new Map((await db.prepare('SELECT name, shift_start, shift_end FROM branches').all()).map(b => [b.name, `${b.shift_start}-${b.shift_end}`]));
+    for (const e of allEmployeeShifts) {
+      const eb = employeeBranches(e.branch);
+      const names = eb.all || !eb.names.length ? [...branchShift.keys()] : eb.names;
+      const own = `${e.shift_start}-${e.shift_end}`;
+      const matches = names.length > 0 && names.every(n => branchShift.get(n) === own);
+      if (!matches) await db.prepare('UPDATE employees SET shift_custom = 1 WHERE id = ?').run(e.id);
+    }
+  } catch { /* already exists */ }
   // Existing employees (registered before this column existed) will have mobile = NULL —
   // required going forward on the registration/edit forms, but not backfilled.
   try { await db.exec('ALTER TABLE employees ADD COLUMN mobile TEXT'); } catch { /* already exists */ }
@@ -1101,7 +1220,7 @@ async function recordPunch(employeeId, timestamp, direction, source, note = '', 
 }
 const PUNCH_SOURCE_DESCRIPTIONS = {
   biometric: 'Biometric device', office: 'Punch button', remote: 'Punch button', wifi: 'Punch button',
-  correction: 'Approved correction', auto: '7 PM auto-checkout',
+  correction: 'Approved correction', auto: 'Auto punch-out',
 };
 // "Punch time 09:31 · Punch button · at Branch 1 (office)". The punch time is spelled
 // out because it can differ from when the log line was written — the device catches up
@@ -1118,8 +1237,7 @@ async function getEmployeeByDevicePin(pin) {
 }
 // --- Biometric device outages (office PC or internet down) ---
 // The device keeps every punch in its own memory while it can't reach the app. These
-// track when it was last heard from, so an outage is visible, the device is asked to
-// resend that period once it's back, and the 19:00 auto-checkout waits for it.
+// track when it was last heard from, so an outage is visible, and the device is asked to resend that period once it's back.
 async function getDeviceStatus(sn) {
   return await db.prepare('SELECT * FROM device_status WHERE sn = ?').get(sn);
 }
@@ -1162,16 +1280,6 @@ async function hasResyncInFlight(sn) {
     "SELECT COUNT(*) AS c FROM device_commands WHERE sn = ? AND (status = 'queued' OR (status = 'sent' AND sent_at > ?) OR (status IN ('done', 'failed') AND done_at > ?))"
   ).get(sn, sentCutoff, doneCutoff);
   return Number(row.c) > 0;
-}
-// Runs an auto-checkout that was held while the device was offline, once the device
-// is back and any catch-up re-sync has finished.
-async function resumeHeldAutoCheckout(sn) {
-  const row = await getDeviceStatus(sn);
-  if (!row || !row.auto_checkout_held || await hasResyncInFlight(sn)) return;
-  const claimed = await db.prepare('UPDATE device_status SET auto_checkout_held = 0 WHERE sn = ? AND auto_checkout_held = 1').run(sn);
-  if (!claimed.changes) return;
-  console.log('[adms] device back and caught up: running the held auto-checkout');
-  await performAutoCheckout();
 }
 // Attendance records from either the device's regular push or its reply to a re-sync.
 // Counts are added to the re-sync they belong to (cmdId), or else to one sent within
@@ -1425,7 +1533,8 @@ const OVERTIME_ROUND_MINUTES = 15; // ignore anything under a quarter-hour past 
 // (authorized/unauthorized hours worked beyond the shift), not an attendance status,
 // so it never overrides or interacts with Late/Half Day/Present.
 async function computeOvertimeMinutes(employee, dateStr, fetchPunches = getPunchesForDay) {
-  const punches = effectivePunches(await fetchPunches(employee.id, dateStr));
+  const dayPunches = await fetchPunches(employee.id, dateStr);
+  const punches = effectivePunches(dayPunches);
   // Unresolved day (no punches, or an odd count — still "in progress" or a punch error):
   // no verified overtime until the day actually resolves to a real checkout.
   if (punches.length === 0 || punches.length % 2 !== 0) return 0;
@@ -1436,7 +1545,7 @@ async function computeOvertimeMinutes(employee, dateStr, fetchPunches = getPunch
   // check-out: it's a time the employee typed in, not one the device recorded.
   if (checkOut.source === 'auto' || checkOut.source === 'correction') return 0;
 
-  const shift = getShiftForDate(employee, dateStr);
+  const shift = getShiftForDate(employee, dateStr, dayPunches);
   const scheduledMinutes = parseTimeToMinutes(shift.end) - parseTimeToMinutes(shift.start);
   const inMs = new Date(checkIn.timestamp.replace(' ', 'T')).getTime();
   const outMs = new Date(checkOut.timestamp.replace(' ', 'T')).getTime();
@@ -1617,7 +1726,7 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
     },
   };
 
-  const snapshotLogic = createAttendanceLogic(snapshotDb);
+  const snapshotLogic = createAttendanceLogic(snapshotDb, { getBranches: () => CONFIG.BRANCH_LIST });
   return {
     employees,
     correctionsFor: (employeeId, monthPrefix) => correctionsByKey.get(`${employeeId}|${monthPrefix}`) || [],
@@ -1798,15 +1907,25 @@ function computeMusterReport(grid) {
   return { daysInMonth: grid.daysInMonth, rows, dailyPresentCounts };
 }
 
-// --- Auto-checkout: unmatched punch-in gets a synthetic punch-out once per day at/after AUTO_CHECKOUT_HOUR ---
+// --- Auto punch-out: an open day gets a synthetic punch-out 15 minutes after that day's shift end ---
+// The shift is the one that applied that day (branch they punched in at, or their custom
+// timings — see resolveShift), so each person's is due at a different time. The time is
+// fixed in advance, so it doesn't matter which caller gets there first or how late:
+// the punch is always stamped at the due time. Callers: the outside every-5-minute
+// schedule (/internal/punchin-reminder), the daily Vercel crons, the in-process timer
+// when running as a long-lived server, and an employee opening their dashboard.
+// It never waits for the biometric device: a real punch-out the device uploads later
+// replaces the auto one (effectivePunches), and the day updates by itself.
 // Also sweeps the previous AUTO_CHECKOUT_CATCHUP_DAYS days: a run that didn't fire or
 // failed (2026-09-29: no auto-checkouts for anyone, open days left as Punch Error), or
-// a check-in the device only uploaded after that evening's run, would otherwise stay
-// open forever — each run only ever looked at its own day.
+// a check-in the device only uploaded later, would otherwise stay open forever.
 const AUTO_CHECKOUT_CATCHUP_DAYS = 7;
-let lastAutoCheckoutDate = null;
-async function performAutoCheckout() {
-  const now = new Date();
+function autoCheckoutClock(ts) { return ts.slice(11, 16); }
+async function performAutoCheckout({ employeeId = null, now = new Date() } = {}) {
+  // The branch timings live in CONFIG.BRANCH_LIST; the in-process timer runs outside any
+  // request, so make sure they're loaded (cached, so this is usually free).
+  await loadSettings();
+  const nowTs = formatTimestamp(now);
   const today = todayStr(now);
   const dateStrs = [];
   for (let i = AUTO_CHECKOUT_CATCHUP_DAYS; i >= 0; i--) {
@@ -1814,54 +1933,44 @@ async function performAutoCheckout() {
     d.setDate(d.getDate() - i);
     dateStrs.push(todayStr(d));
   }
-  // Can run before 19:00 when a run held for a device outage resumes in the morning —
-  // today isn't over yet, so leave it alone then.
-  const includeToday = now.getHours() >= AUTO_CHECKOUT_HOUR;
-  if (!includeToday) dateStrs.pop();
-  const employees = await db.prepare('SELECT id FROM employees').all();
+  const since = `${dateStrs[0]} 00:00:00`;
+  const employees = employeeId
+    ? [await getEmployee(employeeId)].filter(Boolean)
+    : await db.prepare('SELECT * FROM employees').all();
+  // One query for everyone's recent punches rather than one per employee.
+  const recent = employeeId
+    ? await db.prepare('SELECT * FROM punches WHERE employee_id = ? AND timestamp >= ? ORDER BY timestamp ASC').all(employeeId, since)
+    : await db.prepare('SELECT * FROM punches WHERE timestamp >= ? ORDER BY timestamp ASC').all(since);
+  const byEmployee = new Map();
+  for (const p of recent) {
+    if (!byEmployee.has(p.employee_id)) byEmployee.set(p.employee_id, []);
+    byEmployee.get(p.employee_id).push(p);
+  }
+  let closed = 0;
   for (const emp of employees) {
-    const recent = await db.prepare('SELECT * FROM punches WHERE employee_id = ? AND timestamp >= ? ORDER BY timestamp ASC')
-      .all(emp.id, `${dateStrs[0]} 00:00:00`);
+    const mine = byEmployee.get(emp.id) || [];
     for (const dateStr of dateStrs) {
-      const dayPunches = recent.filter(p => p.timestamp.startsWith(dateStr));
-      // An auto-checkout already recorded means this day was handled once; if it's
-      // still open (a real punch after 19:00), leave it for an admin rather than
-      // stacking a second synthetic punch — and a second notification — every night.
-      if (effectivePunches(dayPunches).length % 2 === 0 || dayPunches.some(p => p.source === 'auto')) continue;
-      // Vercel's Hobby cron only guarantees per-hour precision, so this can actually run
-      // any time in the 19:00-19:59 window. Pin the recorded time to AUTO_CHECKOUT_HOUR
-      // sharp rather than stamping whenever the invocation happened to land.
-      const cutoffTs = `${dateStr} ${pad(AUTO_CHECKOUT_HOUR)}:00:00`;
-      // A check-in after the cutoff can't be closed by a checkout stamped before it.
-      if (dayPunches[dayPunches.length - 1].timestamp >= cutoffTs) continue;
-      if (!await recordPunch(emp.id, cutoffTs, 'out', 'auto', 'auto-checkout')) continue;
-      const when = dateStr === today ? `${AUTO_CHECKOUT_HOUR}:00` : `${AUTO_CHECKOUT_HOUR}:00 on ${dateStr}`;
-      await createNotification(emp.id, `You didn't check out, so you were auto-checked out at ${when}. That day counts as a Half Day until you submit a correction from the Corrections page.`);
-      console.log(`Auto-checked-out ${emp.id} for ${dateStr} (forgot to punch out)`);
+      const dayPunches = mine.filter(p => p.timestamp.startsWith(dateStr));
+      const dueTs = autoCheckoutDue(emp, dateStr, dayPunches, CONFIG.BRANCH_LIST, nowTs);
+      if (!dueTs) continue;
+      if (!await recordPunch(emp.id, dueTs, 'out', 'auto', 'auto-checkout')) continue;
+      closed++;
+      // Close a break left open that day too, at the same time, so it never appears to
+      // end after the punch-out it belongs to (breaks are looked up by start_ts).
+      await db.prepare('UPDATE breaks SET end_ts = ? WHERE employee_id = ? AND end_ts IS NULL AND start_ts LIKE ?')
+        .run(dueTs, emp.id, `${dateStr}%`);
+      const when = dateStr === today ? autoCheckoutClock(dueTs) : `${autoCheckoutClock(dueTs)} on ${dateStr}`;
+      await createNotification(emp.id, dateStr === today
+        ? `You didn't punch out, so you were auto punched-out at ${when}. Still working? Punch out from the dashboard before midnight and it replaces the auto punch-out. Otherwise the day counts as a Half Day until you submit a correction. If you punched out on the biometric device, this updates once the device syncs.`
+        : `You didn't punch out, so you were auto punched-out at ${when}. The day counts as a Half Day until you submit a correction from the Corrections page. If you punched out on the biometric device, this updates once the device syncs.`);
+      console.log(`Auto punched-out ${emp.id} for ${dateStr} at ${autoCheckoutClock(dueTs)}`);
     }
-    if (!includeToday) continue;
-    const cutoffTs = `${today} ${pad(AUTO_CHECKOUT_HOUR)}:00:00`;
-    // Also close out any break left open past end of day, so it doesn't linger open
-    // forever and keep skewing tomorrow's queries (breaks are looked up by start_ts).
-    // Same pinned cutoff as above, so a break never appears to end after the
-    // synthetic checkout it's attached to.
-    await db.prepare("UPDATE breaks SET end_ts = ? WHERE employee_id = ? AND end_ts IS NULL AND start_ts LIKE ?")
-      .run(cutoffTs, emp.id, `${today}%`);
   }
+  return closed;
 }
-// The scheduled 19:00 run. While the device is offline the evening's real check-outs
-// are probably still sitting on it, so hold off rather than auto-checking everyone out
-// and telling them they forgot — resumeHeldAutoCheckout runs it once the device is back.
 async function runScheduledAutoCheckout() {
-  const sn = CONFIG.ZK_DEVICE_SN;
-  const device = sn ? await getDeviceStatus(sn) : null;
-  if (device && isDeviceOffline(device.last_seen)) {
-    await db.prepare('UPDATE device_status SET auto_checkout_held = 1 WHERE sn = ?').run(sn);
-    console.log(`Auto-checkout held: biometric device offline since ${device.last_seen}`);
-    return 'held';
-  }
-  await performAutoCheckout();
-  return 'ran';
+  const closed = await performAutoCheckout();
+  return { outcome: 'ran', closed };
 }
 // --- Daily report emails (10 AM punch-in, 7 PM punch-out), called by Vercel Cron ---
 async function renderDailyReport(kind, dateStr) {
@@ -1932,13 +2041,9 @@ async function runPunchinReminders(now = new Date()) {
 // handler, with no maxDuration set. Killed partway, the claims already written have no
 // email behind them and the next run skips those people, so they silently get nothing.
 
+// The in-process timer (long-lived server only; on Vercel the callers above do this).
 async function checkAndRunAutoCheckout() {
-  const now = new Date();
-  const today = todayStr(now);
-  if (lastAutoCheckoutDate === today) return;
-  if (now.getHours() < AUTO_CHECKOUT_HOUR) return;
-  await runScheduledAutoCheckout();
-  lastAutoCheckoutDate = today;
+  try { await performAutoCheckout(); } catch (err) { console.error('auto punch-out failed:', err.message); }
 }
 // The catch-up call and interval are started after init() (see startup at the bottom),
 // since the DB schema isn't ready at module load anymore.
@@ -2508,13 +2613,18 @@ function renderChangePassword(error, username) {
 // punch sends the phone's location, and the server works out which branch, if any, it
 // was made at. The hint under the button is only a preview — selfPunchScript fills it
 // in once it has a location.
+// Whether today was closed only by the auto punch-out, so the button offers a real
+// punch-out that replaces it (until midnight, when the day is over).
+function autoPunchedOutToday(dayStatus) {
+  return !!dayStatus && dayStatus.status === 'Missed Checkout' && dayStatus.date === todayStr();
+}
 function selfPunchBlock(dayStatus, lang) {
   const hint = CONFIG.BRANCH_LIST.some(b => b.location)
     ? t(lang, 'dashboard.location_hint', { radius: CONFIG.OFFICE_RADIUS_METERS })
     : t(lang, 'dashboard.remote_hint');
   return `
       <div id="selfPunchStatus" style="font-size:0.85em;opacity:0.9;margin-bottom:8px;min-height:1.2em;"></div>
-      <button id="selfPunchBtn" onclick="selfPunch()" style="padding:10px 22px;border-radius:8px;border:none;background:#fff;color:#1565C0;font-weight:700;cursor:pointer;">${dayStatus.status === 'Active' ? t(lang, 'dashboard.punch_out') : t(lang, 'dashboard.punch_in')}</button>
+      <button id="selfPunchBtn" onclick="selfPunch()" style="padding:10px 22px;border-radius:8px;border:none;background:#fff;color:#1565C0;font-weight:700;cursor:pointer;">${dayStatus.status === 'Active' || autoPunchedOutToday(dayStatus) ? t(lang, 'dashboard.punch_out') : t(lang, 'dashboard.punch_in')}</button>
       <div id="selfPunchHint" style="font-size:0.75em;opacity:0.8;margin-top:6px;">📍 ${escapeHtml(hint)}</div>`;
 }
 
@@ -2610,9 +2720,15 @@ function selfPunchScript(employee, lang) {
       }`;
 }
 
+// " (Perungudi)" / " (custom)" after a shift, so it's clear where the timings come from.
+function shiftSourceSuffix(shift, lang) {
+  if (shift.source === 'custom') return ` (${escapeHtml(t(lang, 'dashboard.shift_custom'))})`;
+  return shift.branch ? ` (${escapeHtml(shift.branch)})` : '';
+}
+
 async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = []) {
   const lang = langOf(user);
-  const todayShift = getShiftForDate(employee, todayStr());
+  const todayShift = getShiftForDate(employee, todayStr(), punches);
   const onBreak = !!dayStatus.onBreak;
   const timerBlock = dayStatus.status === 'Active'
     ? `<div id="liveTimer" style="font-size:2.4em;font-weight:700;font-variant-numeric:tabular-nums;">00:00:00</div>
@@ -2657,8 +2773,13 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
     ]).flat(),
   ].sort((a, b) => a.time.localeCompare(b.time));
 
+  // An auto punch-out that a real punch-out later replaced stays on the timeline, crossed out.
+  const usedPunches = new Set(effectivePunches(punches).map(p => p.timestamp));
   const punchRows = activityEvents.map(e => {
     const isAuto = e.source === 'auto';
+    if (isAuto && !usedPunches.has(e.time)) {
+      return `<tr style="color:#9AA5B1;"><td><s>${escapeHtml(e.label)}</s> <span style="font-size:0.78em;">${t(lang, 'dashboard.auto_replaced')}</span></td><td><s>${escapeHtml(e.time.split(' ')[1])}</s></td><td>${escapeHtml(e.source)}</td></tr>`;
+    }
     const rowStyle = isAuto ? ' style="color:#B26A00;font-weight:600;"' : '';
     const label = isAuto ? `${escapeHtml(e.label)} <span style="background:#FFF3E0;border-radius:6px;padding:1px 6px;font-size:0.72em;font-weight:700;">${t(lang, 'dashboard.auto_tag')}</span>` : escapeHtml(e.label);
     return `<tr${rowStyle}><td>${label}</td><td>${escapeHtml(e.time.split(' ')[1])}</td><td>${escapeHtml(e.source)}</td></tr>`;
@@ -2672,7 +2793,12 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
 
   // One banner per uncorrected missed check-out this month, each linking to a
   // pre-filled correction request.
-  const missedCheckoutBanners = missedCheckoutDays.map(d => {
+  const autoOutToday = autoPunchedOutToday(dayStatus);
+  const autoOutBanner = autoOutToday ? `
+      <div style="margin-top:12px;background:rgba(255,255,255,0.14);border-radius:8px;padding:10px 12px;font-size:0.9em;">
+        ⚠ ${t(lang, 'dashboard.auto_out_today', { time: escapeHtml(String(dayStatus.checkOut || '').slice(11, 16)) })}
+      </div>` : '';
+  const missedCheckoutBanners = missedCheckoutDays.filter(d => !(autoOutToday && d === todayStr())).map(d => {
     const dateLabel = new Date(`${d}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
     return `
     <div class="card" style="background:#FFF3E0;border:1px solid #FFCC80;color:#B26A00;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -2696,7 +2822,8 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
     <div id="onbHoursCard" class="card" style="background:#1565C0;color:#fff;">
       <div style="font-size:0.8em;letter-spacing:0.06em;text-transform:uppercase;opacity:0.85;">${t(lang, 'dashboard.working_hours')}</div>
       ${timerBlock}
-      <div style="margin-top:12px;opacity:0.9;font-size:0.92em;">${t(lang, 'dashboard.shift', { start: escapeHtml(todayShift.start), end: escapeHtml(todayShift.end) })}</div>
+      ${autoOutBanner}
+      <div style="margin-top:12px;opacity:0.9;font-size:0.92em;">${t(lang, 'dashboard.shift', { start: escapeHtml(todayShift.start), end: escapeHtml(todayShift.end) })}${shiftSourceSuffix(todayShift, lang)}</div>
       ${overtimeMinutes > 0 ? `
       <div style="margin-top:8px;font-size:0.92em;display:flex;align-items:center;gap:8px;">
         <span style="opacity:0.9;">${t(lang, 'dashboard.overtime', { time: formatMinutesAsHM(overtimeMinutes) })}</span>
@@ -3355,7 +3482,7 @@ function deviceStatusCard({ device, lastCommand, resyncNotice }) {
           <a href="/admin/settings#device" style="font-size:0.82em;color:#1565C0;font-weight:600;text-decoration:none;">Other dates →</a>
         </div>
       </div>
-      ${alert ? `<div style="color:#B71C1C;font-size:0.88em;margin-top:10px;"><strong>⚠ The device hasn't reached the app for ${escapeHtml(formatDuration(minutesSince(device.last_seen)))}.</strong> The office PC may be off or asleep, or the internet may be down. Punches are kept on the device and will come in once it reconnects.${device.auto_checkout_held ? ' The 7 PM auto-checkout is on hold until then.' : ''}</div>` : ''}
+      ${alert ? `<div style="color:#B71C1C;font-size:0.88em;margin-top:10px;"><strong>⚠ The device hasn't reached the app for ${escapeHtml(formatDuration(minutesSince(device.last_seen)))}.</strong> The office PC may be off or asleep, or the internet may be down. Punches are kept on the device and will come in once it reconnects.</div>` : ''}
       ${notice ? `<div style="background:#E3F2FD;border-radius:8px;padding:8px 12px;font-size:0.88em;margin-top:10px;">${notice}</div>` : ''}
     </div>`;
 }
@@ -4067,7 +4194,7 @@ async function renderEmployeeRegistration(user, error, justCreated, renamed) {
       <td>${escapeHtml(e.designation || '—')}</td>
       <td>${escapeHtml(employeeBranchLabel(e.branch) || '—')}</td>
       <td>${accountRoles[e.id] === 'manager' ? '<strong style="color:#1565C0;">Manager</strong>' : 'Employee'}</td>
-      <td>${escapeHtml(e.shift_start)}&ndash;${escapeHtml(e.shift_end)}</td>
+      <td>${escapeHtml(e.shift_start)}&ndash;${escapeHtml(e.shift_end)}<div style="font-size:0.78em;color:#7C8896;">${Number(e.shift_custom) ? 'custom' : employeeBranches(e.branch).all || employeeBranches(e.branch).names.length > 1 ? 'follows branch punched in at' : 'from branch'}</div></td>
       <td style="white-space:nowrap;">
         <a href="/admin/employee/edit?employee_id=${encodeURIComponent(e.id)}" style="color:#1565C0;text-decoration:none;font-weight:600;margin-right:12px;">Edit</a>
         ${actionButton('/admin/employee/reset-password', { employee_id: e.id }, 'Reset password', '#B26A00')}
@@ -4162,14 +4289,7 @@ ${branchFieldHtml()}
             ${reportsToOptions}
           </select>
         </div>
-        <div>
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Shift Start</label>
-          <input type="time" name="shift_start" required value="09:30" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Shift End</label>
-          <input type="time" name="shift_end" required value="18:30" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
-        </div>
+${shiftFieldHtml()}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">Date Joined</label>
           <input type="date" name="date_joined" required value="${escapeHtml(todayStr())}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
@@ -4242,14 +4362,7 @@ ${branchFieldHtml(employee.branch, { allowNone: true })}
             ${reportsToOptions}
           </select>
         </div>
-        <div>
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Shift Start</label>
-          <input type="time" name="shift_start" required value="${escapeHtml(employee.shift_start)}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Shift End</label>
-          <input type="time" name="shift_end" required value="${escapeHtml(employee.shift_end)}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
-        </div>
+${shiftFieldHtml(employee)}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">Date Joined</label>
           <input type="date" name="date_joined" required value="${escapeHtml(employee.date_joined || todayStr())}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
@@ -4607,7 +4720,6 @@ async function renderDeviceCard() {
         ${stat('Last heard from', device ? lastHeardLabel(device.last_seen) : '—')}
         ${stat('Last outage', lastOutage)}
       </div>
-      ${device && device.auto_checkout_held ? '<div style="background:#FFF3E0;border-radius:8px;padding:9px 12px;font-size:0.88em;margin-bottom:12px;">The 7 PM auto-checkout is on hold until the device is back and has sent its punches.</div>' : ''}
       <div style="font-weight:700;margin:6px 0;">Re-sync punches from the device</div>
       <p style="color:#7C8896;font-size:0.88em;margin-top:0;">Asks the device to send every punch it has for these dates again. Punches the app already has are skipped, so nothing is counted twice. This also happens automatically whenever the device comes back after being offline for ${DEVICE_OFFLINE_MINUTES}+ minutes.</p>
       <form method="POST" action="/admin/device/resync" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
@@ -4656,6 +4768,8 @@ async function renderBranchesCard() {
         <td><input type="hidden" name="id" value="${b ? b.id : ''}"><input type="text" name="name" value="${b ? escapeHtml(b.name) : ''}" placeholder="${b ? '' : 'New branch name'}" style="${input}width:100%;min-width:120px;"></td>
         <td><div style="display:flex;gap:6px;"><input type="text" name="location" value="${b ? escapeHtml(b.locationText) : ''}" placeholder="latitude, longitude" style="${input}width:100%;min-width:150px;">
           <button type="button" onclick="branchUseMyLocation(this)" title="Use my current location" style="padding:6px 10px;border-radius:6px;border:1px solid #D0D5DA;background:#fff;cursor:pointer;">📍</button></div></td>
+        <td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap;"><input type="time" name="shift_start" value="${escapeHtml(b ? b.shift_start || DEFAULT_SHIFT.start : DEFAULT_SHIFT.start)}" style="${input}">–<input type="time" name="shift_end" value="${escapeHtml(b ? b.shift_end || DEFAULT_SHIFT.end : DEFAULT_SHIFT.end)}" style="${input}"></div></td>
+        <td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap;"><input type="time" name="sat_start" value="${escapeHtml(b ? b.sat_start || SATURDAY_HALF_SHIFT.start : SATURDAY_HALF_SHIFT.start)}" style="${input}">–<input type="time" name="sat_end" value="${escapeHtml(b ? b.sat_end || SATURDAY_HALF_SHIFT.end : SATURDAY_HALF_SHIFT.end)}" style="${input}"></div></td>
         <td style="text-align:center;"><input type="radio" name="device_branch" value="${b ? b.id : 'new'}" ${b && b.has_device ? 'checked' : ''} style="width:auto;"></td>
         <td style="color:#7C8896;font-size:0.85em;">${b ? `${counts[b.name] || 0}` : ''}</td>
         <td>${b ? `<label style="font-size:0.82em;color:#7C8896;white-space:nowrap;"><input type="checkbox" name="delete" value="${b.id}" style="width:auto;" ${counts[b.name] ? 'disabled title="Move its employees to another branch first"' : ''}> Delete</label>` : ''}</td>
@@ -4664,8 +4778,9 @@ async function renderBranchesCard() {
     <form method="POST" action="/admin/branches" class="card" id="branches">
       <div style="font-weight:700;margin-bottom:6px;">Branches</div>
       <p style="color:#7C8896;font-size:0.88em;margin-top:0;">A Punch-button punch within the branch radius (below, under Settings) of a branch's location is made at that branch: office if it's the employee's own branch, otherwise remote and flagged on Deviations. A branch with no location is never matched. Tap 📍 while standing in a branch to fill in its location. Renaming a branch updates the employees in it.</p>
+      <p style="color:#7C8896;font-size:0.88em;margin-top:0;"><strong>Shift timings.</strong> Each day uses the shift of the branch the employee first punched in at (their own branch if that punch was remote), so someone at two branches works whichever one's hours they turned up at. Employees with custom timings keep their own on weekdays. The half Saturday is the 2nd and 4th Saturday of the month. Anyone still punched in is auto punched-out 15 minutes after that day's shift ends, and a real punch-out afterwards replaces it.</p>
       <div style="overflow-x:auto;"><table>
-        <tr><th>Name</th><th>Location (latitude, longitude)</th><th>Biometric device here</th><th>Employees</th><th></th></tr>
+        <tr><th>Name</th><th>Location (latitude, longitude)</th><th>Weekday shift</th><th>Half Saturday</th><th>Biometric device here</th><th>Employees</th><th></th></tr>
         ${CONFIG.BRANCH_LIST.map(row).join('')}
         ${row(null)}
       </table></div>
@@ -5514,7 +5629,6 @@ async function handleRequest(req, res) {
           return res.end(`C:${command.id}:${command.command}`);
         }
       }
-      await resumeHeldAutoCheckout(sn);
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('OK');
     }
@@ -5566,7 +5680,8 @@ async function handleRequest(req, res) {
     return sendJson(res, 200, { ok: true });
   }
 
-  // Auto-checkout endpoint for Vercel Cron (scheduled at 19:00 IST). In standalone
+  // Auto punch-out endpoint for Vercel Cron (daily safety runs; the outside
+  // every-5-minute schedule gives it its real timing, see /internal/punchin-reminder). In standalone
   // mode a setInterval handles this instead; here Cron POSTs/GETs this path with an
   // "Authorization: Bearer <CRON_SECRET>" header. Rejects anything without the secret
   // so it can't be triggered by the public internet.
@@ -5577,8 +5692,8 @@ async function handleRequest(req, res) {
       logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
-    const outcome = await runScheduledAutoCheckout();
-    return sendJson(res, 200, { ok: true, ran: 'auto-checkout', outcome });
+    const result = await runScheduledAutoCheckout();
+    return sendJson(res, 200, { ok: true, ran: 'auto-checkout', ...result });
   }
 
   // Daily report emails for Vercel Cron: ?kind=morning (10:00 IST) or evening (19:00 IST).
@@ -5611,9 +5726,19 @@ async function handleRequest(req, res) {
       logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
+    // The same every-5-minute schedule also gives auto punch-outs their timing: each
+    // person's is due 15 minutes after their own shift end. Run first and on its own,
+    // so a reminder email failure never holds it up.
+    let autoCheckout;
+    try {
+      autoCheckout = await runScheduledAutoCheckout();
+    } catch (err) {
+      console.error('auto punch-out failed:', err.message);
+      autoCheckout = { outcome: 'failed' };
+    }
     try {
       const result = await runPunchinReminders();
-      return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', ...result });
+      return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', ...result, autoCheckout });
     } catch (err) {
       console.error('punch-in reminders failed:', err.message);
       return sendJson(res, 502, { ok: false, error: 'Punch-in reminders failed' });
@@ -5765,6 +5890,9 @@ async function handleRequest(req, res) {
       // Managers are registered as employees, so they punch like one; the main admin
       // login isn't linked to an employee and gets no card.
       const selfEmployee = user.employeeId ? await getEmployee(user.employeeId) : null;
+      if (selfEmployee) {
+        try { await performAutoCheckout({ employeeId: selfEmployee.id }); } catch (err) { console.error('auto punch-out on dashboard failed:', err.message); }
+      }
       const myAttendance = selfEmployee ? { employee: selfEmployee, dayStatus: await computeDayStatus(selfEmployee.id, todayStr()) } : null;
       const sn = CONFIG.ZK_DEVICE_SN;
       const deviceCard = sn ? {
@@ -5777,6 +5905,9 @@ async function handleRequest(req, res) {
     const employeeId = await resolveEmployeeId();
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
+    // Anything already due is applied before the page is built, so the dashboard never
+    // shows a day still running past its auto punch-out.
+    try { await performAutoCheckout({ employeeId }); } catch (err) { console.error('auto punch-out on dashboard failed:', err.message); }
     const dayStatus = await computeDayStatus(employeeId, todayStr());
     const punches = await getPunchesForDay(employeeId, todayStr());
     const breaks = await getBreaksForDay(employeeId, todayStr());
@@ -6307,16 +6438,14 @@ async function handleRequest(req, res) {
     const role = (form.role || '').trim();
     const designation = (form.designation || '').trim();
     const reportsTo = (form.reports_to || '').trim();
-    const shiftStart = (form.shift_start || '').trim();
-    const shiftEnd = (form.shift_end || '').trim();
     const dateJoined = (form.date_joined || '').trim();
     const email = (form.email || '').trim();
     // Defaults to 'employee' on anything unrecognized rather than erroring the whole
     // registration over it — this field only controls in-app permissions, never
     // employment data, so failing safe (least privilege) beats blocking the form.
     const accountRole = ACCOUNT_ROLES.includes(form.account_role) ? form.account_role : 'employee';
-    if (!name || !shiftStart || !shiftEnd || !dateJoined) {
-      return sendHtml(res, await renderEmployeeRegistration(user, 'Name, shift start, shift end, and date joined are all required.'));
+    if (!name || !dateJoined) {
+      return sendHtml(res, await renderEmployeeRegistration(user, 'Name and date joined are both required.'));
     }
     const mobile = normalizeMobile(form.mobile);
     if (!mobile) {
@@ -6332,6 +6461,12 @@ async function handleRequest(req, res) {
     if (branchError) {
       return sendHtml(res, await renderEmployeeRegistration(user, branchError));
     }
+    const shift = shiftFromForm(form, branch);
+    if (shift.error) {
+      return sendHtml(res, await renderEmployeeRegistration(user, shift.error));
+    }
+    const shiftStart = shift.start;
+    const shiftEnd = shift.end;
     if (reportsTo && !(await getEmployee(reportsTo))) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown "reports to" employee.'));
     }
@@ -6349,8 +6484,8 @@ async function handleRequest(req, res) {
     try {
       await db.batch([
         {
-          sql: 'INSERT INTO employees (id, name, shift_start, shift_end, date_joined, role, designation, branch, reports_to, mobile, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          args: [id, name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null],
+          sql: 'INSERT INTO employees (id, name, shift_start, shift_end, shift_custom, date_joined, role, designation, branch, reports_to, mobile, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          args: [id, name, shiftStart, shiftEnd, shift.custom ? 1 : 0, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null],
         },
         ...BALANCE_POOL_LEAVE_TYPES.map(type => ({
           sql: 'INSERT INTO leave_balances (employee_id, leave_type, balance) VALUES (?, ?, ?)',
@@ -6496,12 +6631,10 @@ async function handleRequest(req, res) {
     const role = (form.role || '').trim();
     const designation = (form.designation || '').trim();
     const reportsTo = (form.reports_to || '').trim();
-    const shiftStart = (form.shift_start || '').trim();
-    const shiftEnd = (form.shift_end || '').trim();
     const dateJoined = (form.date_joined || '').trim();
     const email = (form.email || '').trim();
-    if (!name || !shiftStart || !shiftEnd || !dateJoined) {
-      return sendHtml(res, await renderEditEmployee(employee, user, 'Name, shift start, shift end, and date joined are all required.'));
+    if (!name || !dateJoined) {
+      return sendHtml(res, await renderEditEmployee(employee, user, 'Name and date joined are both required.'));
     }
     const mobile = normalizeMobile(form.mobile);
     if (!mobile) {
@@ -6520,6 +6653,10 @@ async function handleRequest(req, res) {
     const { value: branch, error: branchError } = branchFromForm(form, employee.branch);
     if (branchError) {
       return sendHtml(res, await renderEditEmployee(employee, user, branchError));
+    }
+    const shift = shiftFromForm(form, branch, employee);
+    if (shift.error) {
+      return sendHtml(res, await renderEditEmployee(employee, user, shift.error));
     }
     if (reportsTo === employeeId) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'An employee cannot report to themselves.'));
@@ -6546,8 +6683,8 @@ async function handleRequest(req, res) {
     // someone, since account_role governs what the employee's login can do.
     const accountRole = ACCOUNT_ROLES.includes(form.account_role) ? form.account_role : currentAccountRole;
     await db.prepare(
-      'UPDATE employees SET name = ?, shift_start = ?, shift_end = ?, date_joined = ?, role = ?, designation = ?, branch = ?, reports_to = ?, mobile = ?, email = ? WHERE id = ?'
-    ).run(name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null, employeeId);
+      'UPDATE employees SET name = ?, shift_start = ?, shift_end = ?, shift_custom = ?, date_joined = ?, role = ?, designation = ?, branch = ?, reports_to = ?, mobile = ?, email = ? WHERE id = ?'
+    ).run(name, shift.start, shift.end, shift.custom ? 1 : 0, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null, employeeId);
     if (newId !== employeeId) {
       try {
         await db.batch(renameEmployeeStatements(employeeId, newId));
@@ -6799,9 +6936,14 @@ async function handleRequest(req, res) {
     const form = await readFormBodyLists(req);
     const list = v => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
     const ids = list(form.id), names = list(form.name), locations = list(form.location);
+    const shiftStarts = list(form.shift_start), shiftEnds = list(form.shift_end), satStarts = list(form.sat_start), satEnds = list(form.sat_end);
     const deleting = new Set(list(form.delete).map(Number));
-    const rows = ids.map((id, i) => ({ id: id ? Number(id) : null, name: String(names[i] || '').trim(), location: String(locations[i] || '').trim() }))
-      // The always-present blank "new branch" row, left empty.
+    const rows = ids.map((id, i) => ({
+      id: id ? Number(id) : null, name: String(names[i] || '').trim(), location: String(locations[i] || '').trim(),
+      shift_start: String(shiftStarts[i] || '').trim(), shift_end: String(shiftEnds[i] || '').trim(),
+      sat_start: String(satStarts[i] || '').trim(), sat_end: String(satEnds[i] || '').trim(),
+    }))
+      // The always-present blank "new branch" row, left empty (its timings are prefilled).
       .filter(r => r.id || r.name || r.location);
     const kept = rows.filter(r => !deleting.has(r.id));
     let error = null;
@@ -6812,6 +6954,9 @@ async function handleRequest(req, res) {
       else if (r.name.startsWith('[')) error = 'A branch name can\'t start with "[".';
       else if (seen.has(r.name.toLowerCase())) error = `There are two branches called ${r.name}.`;
       else if (r.location && !parseLatLng(r.location)) error = `${r.name}'s location must be "latitude, longitude", e.g. 13.06184, 80.24674.`;
+      else if (![r.shift_start, r.shift_end, r.sat_start, r.sat_end].every(v => /^\d{2}:\d{2}$/.test(v))) error = `${r.name} needs a start and end time for both its weekday shift and its half Saturday.`;
+      else if (parseTimeToMinutes(r.shift_end) <= parseTimeToMinutes(r.shift_start)) error = `${r.name}'s weekday shift must end after it starts.`;
+      else if (parseTimeToMinutes(r.sat_end) <= parseTimeToMinutes(r.sat_start)) error = `${r.name}'s half Saturday must end after it starts.`;
       if (error) break;
       seen.add(r.name.toLowerCase());
     }
@@ -6835,17 +6980,25 @@ async function handleRequest(req, res) {
     }
     let newId = null;
     const renames = new Map();
+    const shiftChanges = [];
     for (const [i, r] of kept.entries()) {
       const before = r.id ? existing[r.id] : null;
       if (before) {
-        await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ? WHERE id = ?').run(r.name, r.location, i, r.id);
+        await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ?, shift_start = ?, shift_end = ?, sat_start = ?, sat_end = ? WHERE id = ?')
+          .run(r.name, r.location, i, r.shift_start, r.shift_end, r.sat_start, r.sat_end, r.id);
+        if (before.shift_start !== r.shift_start || before.shift_end !== r.shift_end) {
+          changed.push(`${r.name} shift ${r.shift_start}-${r.shift_end}`);
+          shiftChanges.push(r);
+        }
+        if (before.sat_start !== r.sat_start || before.sat_end !== r.sat_end) changed.push(`${r.name} half Saturday ${r.sat_start}-${r.sat_end}`);
         if (before.name !== r.name) {
           renames.set(before.name, r.name);
           changed.push(`${before.name} renamed to ${r.name}`);
         }
         if (before.locationText !== r.location) changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
       } else {
-        const result = await db.prepare('INSERT INTO branches (name, location, sort_order) VALUES (?, ?, ?)').run(r.name, r.location, i);
+        const result = await db.prepare('INSERT INTO branches (name, location, sort_order, shift_start, shift_end, sat_start, sat_end) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(r.name, r.location, i, r.shift_start, r.shift_end, r.sat_start, r.sat_end);
         newId = Number(result.lastInsertRowid);
         changed.push(`${r.name} added`);
       }
@@ -6863,6 +7016,19 @@ async function handleRequest(req, res) {
       for (const e of await db.prepare('SELECT id, branch FROM employees').all()) {
         const renamed = renameEmployeeBranches(e.branch, renames);
         if (renamed !== e.branch) updates.push({ sql: 'UPDATE employees SET branch = ? WHERE id = ?', args: [renamed, e.id] });
+      }
+      if (updates.length) await db.batch(updates);
+    }
+
+    // Keep the timings saved on employees who follow a changed branch (and belong only
+    // to it) in step, so the employee list and any fallback show the same hours.
+    if (shiftChanges.length) {
+      const updates = [];
+      for (const e of await db.prepare('SELECT id, branch, shift_custom FROM employees').all()) {
+        if (Number(e.shift_custom)) continue;
+        const eb = employeeBranches(e.branch);
+        const r = !eb.all && eb.names.length === 1 ? shiftChanges.find(c => c.name === eb.names[0]) : null;
+        if (r) updates.push({ sql: 'UPDATE employees SET shift_start = ?, shift_end = ? WHERE id = ?', args: [r.shift_start, r.shift_end, e.id] });
       }
       if (updates.length) await db.batch(updates);
     }
@@ -7011,7 +7177,7 @@ module.exports.sendCsv = sendCsv;
 // and there's no long-lived process, listener, or setInterval.
 if (require.main === module) {
   init().then(() => {
-    checkAndRunAutoCheckout(); // catch up if the server started after 7pm (fire-and-forget)
+    checkAndRunAutoCheckout(); // catch up on any auto punch-outs due while the server was down (fire-and-forget)
     setInterval(checkAndRunAutoCheckout, 60 * 1000);
     http.createServer(serve).listen(PORT, '0.0.0.0', () => {
       console.log(`Attendance gateway running at http://localhost:${PORT}`);
