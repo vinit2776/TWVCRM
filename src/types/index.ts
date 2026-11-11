@@ -1306,7 +1306,8 @@ export type AuditEntityType =
   | "unifi_ap_alert"
   | "deposit_adjustment"
   | "deposit_topup"
-  | "recurring_bill_rule";
+  | "recurring_bill_rule"
+  | "vo_clause";
 
 export interface AuditLog {
   id: string;
