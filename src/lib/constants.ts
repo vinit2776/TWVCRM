@@ -1075,6 +1075,22 @@ export const VO_PURPOSE_COLORS: Record<string, string> = {
   business_address: "bg-teal-100 text-teal-800",
 };
 
+// VO rate card purposes (direct and aggregator price lists)
+export const VO_RATE_PURPOSES = ["gst_new", "gst_existing"] as const;
+export type VoRatePurpose = (typeof VO_RATE_PURPOSES)[number];
+
+export const VO_RATE_PURPOSE_LABELS: Record<string, string> = {
+  gst_new: "GST new",
+  gst_existing: "GST existing",
+};
+
+export const VO_RATE_PURPOSE_COLORS: Record<string, string> = {
+  gst_new: "bg-blue-100 text-blue-800",
+  gst_existing: "bg-indigo-100 text-indigo-800",
+};
+
+export const VO_RATE_TERM_OPTIONS = [11, 12, 24, 36, 48] as const;
+
 // ==========================================
 // Entity Type Constants
 // ==========================================
