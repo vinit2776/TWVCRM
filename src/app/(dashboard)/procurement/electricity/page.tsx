@@ -31,6 +31,8 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
+import { LandlordInvoiceField, gstRateFromInvoice, useDuplicateWarning, useLandlordInvoice } from "@/components/electricity/landlord-invoice";
+import type { ExtractedInvoice, SuggestionField } from "@/lib/procurement/invoice-check";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
@@ -193,6 +195,7 @@ export default function ElectricityBillsPage() {
   // Form state
   const [locations, setLocations] = useState<Location[]>([]);
   const [locCfg, setLocCfg] = useState<LocationConfig | null>(null);
+  const [landlordVendor, setLandlordVendor] = useState<{ id: string; name: string } | null>(null);
   const [mappedContracts, setMappedContracts] = useState<MappedContract[] | null>(null);
   const [form, setForm] = useState({
     location_id: "",
@@ -206,6 +209,22 @@ export default function ElectricityBillsPage() {
   });
   const [lines, setLines] = useState<EbLine[]>([emptyLine()]);
   const [submitting, setSubmitting] = useState(false);
+
+  // If the invoice prints GST, switch the landlord-GST toggle on (and take its rate); the person can still change it.
+  const onInvoiceRead = useCallback((extracted: ExtractedInvoice) => {
+    // Take the number and date off the invoice when they have not been typed yet.
+    setForm((f) => ({
+      ...f,
+      landlord_bill_number: f.landlord_bill_number || extracted.invoiceNumber || "",
+      landlord_bill_date: f.landlord_bill_date || extracted.invoiceDate || "",
+    }));
+    const rate = gstRateFromInvoice(extracted);
+    if (rate === null) return;
+    setForm((f) => ({ ...f, landlord_gst_applicable: true, landlord_gst_rate: rate }));
+    toast.message(`The invoice shows GST — switched on at ${rate}%. Change it below if that's wrong.`);
+  }, []);
+  const invoice = useLandlordInvoice(onInvoiceRead);
+  const duplicateWarning = useDuplicateWarning(form.location_id, form.landlord_bill_number);
 
   const fetchBills = useCallback(async () => {
     setLoading(true);
@@ -280,12 +299,13 @@ export default function ElectricityBillsPage() {
 
   const handleLocationChange = async (locId: string) => {
     setForm((f) => ({ ...f, location_id: locId }));
-    if (!locId) { setLocCfg(null); setMappedContracts(null); return; }
+    if (!locId) { setLocCfg(null); setLandlordVendor(null); setMappedContracts(null); return; }
     const res = await fetch(`/api/locations/${locId}/electricity-config`);
     if (res.ok) {
       const json = await res.json();
       const cfg = json.data as LocationConfig | null;
       setLocCfg(cfg);
+      setLandlordVendor((json.landlord_vendor as { id: string; name: string } | null) ?? null);
       setMappedContracts((json.mapped_contracts as MappedContract[] | undefined) ?? []);
       // Pre-fill line rates from location config
       if (cfg) {
@@ -328,6 +348,25 @@ export default function ElectricityBillsPage() {
     : 0;
   const landlordPayableTotal = grandTotal + landlordGstAmount;
 
+  const enteredForCheck = useMemo(
+    () => ({
+      invoiceNumber: form.landlord_bill_number,
+      invoiceDate: form.landlord_bill_date,
+      vendorName: landlordVendor?.name ?? null,
+      amount: grandTotal > 0 ? grandTotal : null,
+      gstAmount: form.landlord_gst_applicable && landlordGstAmount > 0 ? landlordGstAmount : null,
+    }),
+    [form.landlord_bill_number, form.landlord_bill_date, form.landlord_gst_applicable, grandTotal, landlordGstAmount, landlordVendor],
+  );
+
+  // Bill number and date can be taken straight from the invoice; the amounts are built from the lines, so a
+  // difference there is fixed in the lines (the card still shows what the invoice says).
+  const applyInvoiceSuggestion = useCallback((field: SuggestionField, value: string) => {
+    if (field === "invoiceNumber") setForm((f) => ({ ...f, landlord_bill_number: value }));
+    else if (field === "invoiceDate") setForm((f) => ({ ...f, landlord_bill_date: value }));
+    else toast.message("The amount is built from the line items below — adjust the units or rates to match the invoice.");
+  }, []);
+
   const addLine = () =>
     setLines((ls) => [...ls, { line_type: "other", label: "", amount: 0, sort_order: ls.length }]);
 
@@ -364,12 +403,15 @@ export default function ElectricityBillsPage() {
     setDialogOpen(false);
     setEditingBillId(null);
     setLines([emptyLine()]);
+    invoice.clear();
     setForm({ location_id: "", bill_month: new Date().getMonth() + 1, bill_year: new Date().getFullYear(), landlord_bill_number: "", landlord_bill_date: "", notes: "", landlord_gst_applicable: false, landlord_gst_rate: 18 });
   };
 
   const handleSubmit = async () => {
     if (!form.location_id) { toast.error("Select a location"); return; }
     if (lines.length === 0) { toast.error("Add at least one line"); return; }
+    if (!editingBillId && !invoice.file) { toast.error("Upload the landlord's invoice first — it is used to check what you entered"); return; }
+    if (!editingBillId) { const blocked = invoice.blockedReason(enteredForCheck, duplicateWarning); if (blocked) { toast.error(blocked); return; } }
     setSubmitting(true);
     const linesPayload = lines.map((l) => ({
       line_type: l.line_type,
@@ -380,6 +422,11 @@ export default function ElectricityBillsPage() {
       amount: l.line_type === "other" ? (l.amount ?? 0) : null,
       sort_order: l.sort_order,
     }));
+    let invoiceFileUrl: string | null = null;
+    if (!editingBillId) {
+      invoiceFileUrl = await invoice.upload();
+      if (!invoiceFileUrl) { setSubmitting(false); return; }
+    }
     const res = editingBillId
       ? await fetch(`/api/electricity-bills/${editingBillId}`, {
           method: "PATCH",
@@ -401,6 +448,8 @@ export default function ElectricityBillsPage() {
             landlord_bill_number: form.landlord_bill_number || null,
             landlord_bill_date: form.landlord_bill_date || null,
             notes: form.notes || null,
+            invoice_file_url: invoiceFileUrl,
+            invoice_check: invoice.recordFor(enteredForCheck),
             lines: linesPayload,
           }),
         });
@@ -1439,6 +1488,13 @@ export default function ElectricityBillsPage() {
                 {locCfg?.service_number && (
                   <p className="text-xs text-muted-foreground">Meter: <span className="font-mono">{locCfg.service_number}</span></p>
                 )}
+                {form.location_id && locCfg && (
+                  landlordVendor ? (
+                    <p className="text-xs text-muted-foreground">Payable to (landlord): <span className="font-medium text-foreground">{landlordVendor.name}</span></p>
+                  ) : (
+                    <p className="text-xs text-amber-700">No landlord vendor is set for this location — saving will not create a payable in Acc Payables.</p>
+                  )
+                )}
                 {locCfg && !locCfg.enabled && (
                   <p className="text-xs text-destructive">Electricity billing is not enabled for this location.</p>
                 )}
@@ -1479,9 +1535,9 @@ export default function ElectricityBillsPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Bill number</Label>
+                <Label>Bill number <span className="text-red-500">*</span></Label>
                 <Input
-                  placeholder="Optional"
+                  placeholder="As printed on the invoice"
                   value={form.landlord_bill_number}
                   onChange={(e) => setForm((f) => ({ ...f, landlord_bill_number: e.target.value }))}
                 />
@@ -1644,6 +1700,8 @@ export default function ElectricityBillsPage() {
                 </div>
               </div>
             </div>
+
+            {!editingBillId && <LandlordInvoiceField invoice={invoice} duplicate={duplicateWarning} entered={enteredForCheck} onApply={applyInvoiceSuggestion} />}
 
             <div className="space-y-1">
               <Label>Notes</Label>

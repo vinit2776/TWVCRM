@@ -1,10 +1,11 @@
+import { invoiceCheckRecordSchema } from "@/lib/procurement/invoice-check";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createVendorBill } from "@/lib/vendor-bills";
 import { resolveVendorBillRef } from "@/lib/electricity-vendor-bill";
-import { findDuplicateVendorBill } from "@/lib/electricity-bill-context-server";
+import { findDuplicateLandlordBill, findDuplicateVendorBill } from "@/lib/electricity-bill-context-server";
 import { autoApproveCapturedBill } from "@/lib/electricity-auto-approve";
 import { setupGaps, type SetupGap } from "@/lib/electricity-setup-checks";
 import { loadSetupChecks } from "@/lib/electricity-setup-server";
@@ -31,9 +32,12 @@ const createSchema = z.object({
   location_id: z.string().uuid(),
   bill_month: z.number().int().min(1).max(12),
   bill_year: z.number().int().min(2020),
-  landlord_bill_number: z.string().nullish(),
+  landlord_bill_number: z.string().trim().min(1, "Bill number is required — it is on the landlord's invoice"),
   landlord_bill_date: z.string().nullish(),
   notes: z.string().nullish(),
+  // Required: the landlord's invoice is what the entries are checked against and what the approver compares with.
+  invoice_file_url: z.string().url({ message: "Upload the landlord's invoice" }),
+  invoice_check: invoiceCheckRecordSchema.nullish(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
   // Per-bill override — some landlords charge GST, some don't, and it can
   // change month to month, so this isn't fixed at the location config level.
@@ -209,9 +213,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
+  // Differences between the entries and the invoice must have been explained.
+  if (parsed.data.invoice_check && parsed.data.invoice_check.findings.length > 0 && (parsed.data.invoice_check.override_reason ?? "").length < 5) {
+    return NextResponse.json({ error: "What was entered differs from the landlord's invoice. Correct it, or explain the difference." }, { status: 422 });
+  }
+
   const {
     location_id, bill_month, bill_year, landlord_bill_number, landlord_bill_date, notes, lines,
-    landlord_gst_applicable, landlord_gst_rate,
+    landlord_gst_applicable, landlord_gst_rate, invoice_file_url, invoice_check,
   } = parsed.data;
 
   // ── Fetch config ──────────────────────────────────────────────────────────
@@ -256,17 +265,16 @@ export async function POST(request: NextRequest) {
   // Real-world trigger: the same physical bill captured twice under different
   // months by mistake, spawning a duplicate vendor bill + customer bill.
   if (landlord_bill_number) {
-    const { count: dupeNumber } = await supabase
-      .from("electricity_bills")
-      .select("*", { count: "exact", head: true })
-      .eq("location_id", location_id)
-      .eq("bill_side", "landlord")
-      .eq("landlord_bill_number", landlord_bill_number)
-      .neq("status", "revised");
-
-    if (dupeNumber && dupeNumber > 0) {
+    let dupe;
+    try {
+      dupe = await findDuplicateLandlordBill(supabase, location_id, landlord_bill_number);
+    } catch (err) {
+      console.error("[electricity-bills] duplicate bill-number check failed:", err instanceof Error ? err.message : "unknown error");
+      return NextResponse.json({ error: "Could not check for an existing bill" }, { status: 500 });
+    }
+    if (dupe) {
       return NextResponse.json(
-        { error: `Bill number "${landlord_bill_number}" is already in use for this location. Check for a duplicate entry.` },
+        { error: `Bill number "${landlord_bill_number}" is already recorded for this location (${dupe.bill_month}/${dupe.bill_year}). Check for a duplicate entry.` },
         { status: 409 },
       );
     }
@@ -374,6 +382,8 @@ export async function POST(request: NextRequest) {
         total_amount: landlordTotal,
         gst_amount: landlordGstAmount,
         notes: notes ?? null,
+        invoice_file_url,
+        invoice_check: invoice_check ?? null,
         electricity_bill_id: bill.id,
         created_by: dbUser.id,
       });
