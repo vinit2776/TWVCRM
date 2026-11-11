@@ -61,17 +61,53 @@ function vendorTokens(name: string): string[] {
     .filter((t) => t && !COMPANY_NOISE.has(t));
 }
 
+/** Edit distance, bounded: returns max+1 as soon as it is certain to exceed max. */
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      rowMin = Math.min(rowMin, cur[j]);
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// A scanned landlord bill is read with small mistakes (a dropped letter, a split or joined word),
+// so a name still counts as the same when it is close, not only when it is identical.
+const tokenClose = (x: string, y: string) => {
+  if (x === y) return true;
+  const longest = Math.max(x.length, y.length);
+  if (longest < 4) return false; // too short to forgive anything
+  return editDistance(x, y, longest >= 8 ? 2 : 1) <= (longest >= 8 ? 2 : 1);
+};
+
 export function vendorNamesMatch(a: string, b: string): boolean {
   const ta = vendorTokens(a);
   const tb = vendorTokens(b);
   if (ta.length === 0 || tb.length === 0) return true; // nothing comparable — stay quiet
+
+  // "Prakash Chand" vs "Prakashchand": spacing differences vanish when the words are joined.
+  const ja = ta.join("");
+  const jb = tb.join("");
+  if (ja === jb || (Math.max(ja.length, jb.length) >= 8 && editDistance(ja, jb, 2) <= 2)) return true;
+
   const sa = new Set(ta);
   const sb = new Set(tb);
-  const shared = [...sa].filter((t) => sb.has(t)).length;
+  const shared = [...sa].filter((x) => [...sb].some((y) => tokenClose(x, y))).length;
   return shared / Math.min(sa.size, sb.size) >= 0.5;
 }
 
-const normaliseInvoiceNumber = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+// Letters a scan commonly confuses with digits. Only these are forgiven in an invoice number —
+// any other difference is a real mismatch, since a single wrong digit is exactly the mistake to catch.
+const OCR_LOOKALIKES: Record<string, string> = { o: "0", q: "0", i: "1", l: "1", s: "5", b: "8", z: "2" };
+const normaliseInvoiceNumber = (s: string) =>
+  s.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/[oqilsbz]/g, (c) => OCR_LOOKALIKES[c]);
 
 /** Fill the gaps arithmetic allows (subtotal = total − GST etc.) without inventing anything. */
 export function completeAmounts(x: ExtractedInvoice): {
