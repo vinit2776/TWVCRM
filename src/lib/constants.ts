@@ -2879,3 +2879,19 @@ export const NO_ANSWER_REASONS = ["Switched off", "No response", "Not reachable 
 
 /** Roles that can handle (own) a lead: follow-ups, reminders and tour alerts go to this person. */
 export const LEAD_HANDLER_ROLES = ["admin", "manager", "sales_rep"] as const;
+
+// ==========================================
+// Virtual Office terms library
+// ==========================================
+export const VO_TERM_DOCUMENTS = ["proposal", "agreement", "renewal"] as const;
+export const VO_TERM_DOCUMENT_LABELS: Record<string, string> = {
+  proposal: "Proposal",
+  agreement: "Agreement",
+  renewal: "Renewal notice",
+};
+
+export const VO_TERM_PURPOSES = ["gst_new", "gst_existing"] as const;
+export const VO_TERM_PURPOSE_LABELS: Record<string, string> = {
+  gst_new: "New GST registration",
+  gst_existing: "Existing GST registration",
+};
