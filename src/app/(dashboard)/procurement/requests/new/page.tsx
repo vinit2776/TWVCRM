@@ -23,5 +23,7 @@ function NewPurchaseRequestForm() {
   const department = PROCUREMENT_DEPARTMENTS.find((d) => d === requested) as ProcurementDepartment | undefined;
 
   if (!department) return <RequestWizard />;
-  return <MaterialRequestForm mode="create" initialDepartment={department} lockDepartment />;
+  // ?asset_id= comes from an asset's page ("Set up AMC for this asset") and pre-picks it on the first AMC line.
+  const assetId = department === "amc" ? searchParams.get("asset_id") : null;
+  return <MaterialRequestForm mode="create" initialDepartment={department} lockDepartment initialAssetId={assetId} />;
 }

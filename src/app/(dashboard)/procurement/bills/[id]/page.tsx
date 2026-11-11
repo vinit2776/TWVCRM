@@ -905,17 +905,29 @@ export default function VendorBillDetailPage() {
                 )}
                 {/* Resubmit affordance — typical use case: original amount was GST-inclusive. */}
                 <div className="pl-[26px] pt-1">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setResubmitAmount(String(bill.total_amount ?? ""));
-                      setResubmitDialog(true);
-                    }}
-                  >
-                    <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
-                    Edit amount & resubmit
-                  </Button>
+                  {bill.electricity_bill_id ? (
+                    // The amount here is built from the meter lines, so correcting only the total
+                    // would leave the lines and the customer bill on the old figures.
+                    <p className="text-xs text-muted-foreground">
+                      This bill comes from an electricity bill. Correct its lines on the{" "}
+                      <Link href="/procurement/electricity" className="text-primary underline underline-offset-2">
+                        Electricity page
+                      </Link>{" "}
+                      — it goes back to draft when rejected, and saving there resubmits this bill and recalculates the customer bills.
+                    </p>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setResubmitAmount(String(bill.total_amount ?? ""));
+                        setResubmitDialog(true);
+                      }}
+                    >
+                      <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
+                      Edit amount & resubmit
+                    </Button>
+                  )}
                 </div>
               </div>
             )}

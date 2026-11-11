@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -118,8 +118,8 @@ function hydrateItems(pr: PurchaseRequest): LineItem[] {
 }
 
 export type MaterialRequestFormProps =
-  | { mode: "create"; initialDepartment?: ProcurementDepartment | null; lockDepartment?: boolean; pr?: undefined }
-  | { mode: "edit"; pr: PurchaseRequest; initialDepartment?: undefined; lockDepartment?: undefined };
+  | { mode: "create"; initialDepartment?: ProcurementDepartment | null; lockDepartment?: boolean; initialAssetId?: string | null; pr?: undefined }
+  | { mode: "edit"; pr: PurchaseRequest; initialDepartment?: undefined; lockDepartment?: undefined; initialAssetId?: undefined };
 
 export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const isEdit = props.mode === "edit";
@@ -240,8 +240,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       .then((j) => {
         const all: Company[] = j.data || [];
         setCompanies(all);
-        if (!isEdit && !companyId && all.length > 0) {
-          setCompanyId(all[0].id);
+        if (!isEdit && all.length > 0) {
+          // Functional update: an asset shortcut may already have chosen the asset's company.
+          setCompanyId((cur) => cur || all[0].id);
         }
       })
       .catch(() => setCompanies([]));
@@ -251,9 +252,13 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   // Fetch facility assets for the AMC asset-picker (only when AMC is selected)
   useEffect(() => {
     if (department !== "amc" || assets.length > 0) return;
-    fetch("/api/facility/assets?status=active")
-      .then((r) => r.json())
-      .then((j) => setAssets(j.data ?? []))
+    // Assets in maintenance are the ones most likely to need an AMC, so they are listed too (labelled).
+    Promise.all(
+      ["active", "maintenance"].map((st) =>
+        fetch(`/api/facility/assets?status=${st}`).then((r) => r.json()).then((j) => (j.data ?? []) as FacilityAsset[])
+      )
+    )
+      .then(([active, maintenance]) => setAssets([...active, ...maintenance]))
       .catch(() => setAssets([]));
   }, [department, assets.length]);
 
@@ -271,6 +276,35 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const amcOverlaps = useAmcOverlap(amcLines.map((l) => l.assetId), amcStartDate, amcEndDate, isEdit ? pr?.id : undefined);
   const updateAmcLine = (id: string, patch: Partial<AmcLine>) =>
     setAmcLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  // Arrived from an asset's page: pre-pick that asset (and its centre) once, even if it is not
+  // in the Active-only list the picker loads.
+  const assetPrefilled = useRef(false);
+  const initialAssetId = props.initialAssetId;
+  useEffect(() => {
+    if (!initialAssetId || assetPrefilled.current || department !== "amc" || isEdit) return;
+    assetPrefilled.current = true;
+    fetch(`/api/facility/assets/${initialAssetId}`)
+      .then((r) => r.json())
+      .then((j) => {
+        const a = j.data as FacilityAsset | undefined;
+        if (!a?.id) return;
+        setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]));
+        setAmcLines((prev) => (prev[0] && !prev[0].assetId ? prev.map((l, i) => (i === 0 ? { ...l, assetId: a.id } : l)) : prev));
+        setServiceItemName((cur) => cur || `Annual Maintenance Contract — ${a.name}`);
+        if (a.location_id) {
+          setLocationId((cur) => cur || (a.location_id as string));
+          // The centre only exists under its own company, so switch to that company too.
+          fetch("/api/locations")
+            .then((r) => r.json())
+            .then((lj) => {
+              const loc = (lj.data ?? []).find((l: { id: string; company_id?: string | null }) => l.id === a.location_id);
+              if (loc?.company_id) setCompanyId(loc.company_id);
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [initialAssetId, department, isEdit]);
   const handleAssetSelect = (lineId: string, assetId: string) => {
     updateAmcLine(lineId, { assetId });
     if (assetId && !serviceItemName && amcLines[0]?.id === lineId) {
@@ -1213,11 +1247,20 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                       <SearchableSelect
                         options={assets
                           .filter((a) => !takenByOthers.has(a.id))
-                          .map((a) => ({ value: a.id, label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}` }))}
+                          .map((a) => ({
+                            value: a.id,
+                            label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}`,
+                            badge: a.status === "maintenance" ? { text: "Maintenance", className: "bg-amber-100 text-amber-800" } : undefined,
+                            // Similar units share names; the model and serial tell them apart.
+                            detail: [
+                              [a.make, a.model].filter(Boolean).join(" ") || null,
+                              a.serial_number ? `Serial ${a.serial_number}` : null,
+                            ].filter(Boolean).join(" · ") || undefined,
+                          }))}
                         value={l.assetId}
                         onValueChange={(v) => handleAssetSelect(l.id, v)}
                         placeholder="Select the asset this line covers..."
-                        emptyMessage="No active assets found"
+                        emptyMessage="No assets found"
                       />
                       <AssetOverlapNote conflicts={l.assetId ? amcOverlaps[l.assetId] : undefined} />
                     </div>

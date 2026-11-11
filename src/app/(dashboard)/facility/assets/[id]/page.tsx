@@ -596,12 +596,17 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
 
               {/* Contracts */}
               <section className="space-y-3">
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">AMC Contracts</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">AMC Contracts</div>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/procurement/requests/new?department=amc&asset_id=${asset.id}`}>Set up AMC</Link>
+                  </Button>
+                </div>
                 {amcContracts.length === 0 ? (
                   <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
                     <Wrench className="h-6 w-6 mx-auto mb-2 opacity-30" />
                     <p>No AMC contract linked to this asset yet.</p>
-                    <p className="text-xs mt-1">Link this asset from Procurement &gt; AMC when creating or editing a service PO.</p>
+                    <p className="text-xs mt-1">Use &quot;Set up AMC&quot; above to start a request with this asset already picked.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">

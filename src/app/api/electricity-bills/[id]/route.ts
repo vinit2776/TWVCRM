@@ -97,14 +97,18 @@ export async function PATCH(
   // already approved or paid against it, that number is no longer safe to
   // silently rewrite.
   let vendorBillId: string | null = null;
+  let vendorWasRejected = false;
   if (bill.vendor_bill_id) {
     const { data: vb } = await supabase
       .from("vendor_bills")
       .select("id, approval_status, amount_paid")
       .eq("id", bill.vendor_bill_id)
       .single();
+    vendorWasRejected = vb?.approval_status === "rejected";
 
-    if (vb && (vb.approval_status !== "pending" || Number(vb.amount_paid ?? 0) > 0)) {
+    // A rejected vendor bill is the case this edit exists for: the landlord figures were entered
+    // wrongly, rejection put this bill back to draft, and the corrected numbers resubmit it.
+    if (vb && (!["pending", "rejected"].includes(vb.approval_status) || Number(vb.amount_paid ?? 0) > 0)) {
       return NextResponse.json(
         {
           error:
@@ -200,6 +204,15 @@ export async function PATCH(
         gst_amount: landlordGstAmount,
         base_amount: landlordTotal,
         notes: notes ?? null,
+        ...(vendorWasRejected
+          ? {
+              approval_status: "pending",
+              approved_by: null,
+              approved_at: null,
+              rejection_reason: null,
+              rejection_outcome: null,
+            }
+          : {}),
       })
       .eq("id", vendorBillId);
     if (vbUpdateErr) {
