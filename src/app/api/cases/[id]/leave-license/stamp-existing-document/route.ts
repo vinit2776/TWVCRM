@@ -59,7 +59,7 @@ export async function POST(
 
   const { data: agreement } = await supabase
     .from("case_agreements")
-    .select("id, status, signed_document_id, stamp_reference")
+    .select("id, status, signed_document_id, generated_document_id, stamp_reference, leegality_status")
     .eq("id", agreementId)
     .eq("case_id", caseId)
     .eq("type", "leave_license")
@@ -69,9 +69,21 @@ export async function POST(
     return NextResponse.json({ error: "L&L Agreement not found" }, { status: 404 });
   }
 
-  if (agreement.status !== "executed" || !agreement.signed_document_id) {
+  // manual-sign keeps the uploaded copy in generated_document_id, so that is
+  // where an executed, never-stamped agreement's signed copy usually lives.
+  const currentDocId = agreement.signed_document_id ?? agreement.generated_document_id;
+
+  if (agreement.status !== "executed" || !currentDocId) {
     return NextResponse.json(
       { error: "This agreement has no uploaded signed document to stamp." },
+      { status: 400 }
+    );
+  }
+
+  // Drawing on an e-signed PDF would invalidate its digital signatures.
+  if (agreement.leegality_status === "COMPLETED") {
+    return NextResponse.json(
+      { error: "This agreement was e-signed, so the company stamp can't be added on top of it." },
       { status: 400 }
     );
   }
@@ -93,7 +105,7 @@ export async function POST(
   const { data: originalDoc, error: originalDocError } = await adminSupabase
     .from("documents")
     .select("id, version")
-    .eq("id", agreement.signed_document_id)
+    .eq("id", currentDocId)
     .single();
 
   if (originalDocError || !originalDoc) {
