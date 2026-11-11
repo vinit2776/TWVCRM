@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -118,8 +118,8 @@ function hydrateItems(pr: PurchaseRequest): LineItem[] {
 }
 
 export type MaterialRequestFormProps =
-  | { mode: "create"; initialDepartment?: ProcurementDepartment | null; lockDepartment?: boolean; pr?: undefined }
-  | { mode: "edit"; pr: PurchaseRequest; initialDepartment?: undefined; lockDepartment?: undefined };
+  | { mode: "create"; initialDepartment?: ProcurementDepartment | null; lockDepartment?: boolean; initialAssetId?: string | null; pr?: undefined }
+  | { mode: "edit"; pr: PurchaseRequest; initialDepartment?: undefined; lockDepartment?: undefined; initialAssetId?: undefined };
 
 export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const isEdit = props.mode === "edit";
@@ -240,8 +240,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       .then((j) => {
         const all: Company[] = j.data || [];
         setCompanies(all);
-        if (!isEdit && !companyId && all.length > 0) {
-          setCompanyId(all[0].id);
+        if (!isEdit && all.length > 0) {
+          // Functional update: an asset shortcut may already have chosen the asset's company.
+          setCompanyId((cur) => cur || all[0].id);
         }
       })
       .catch(() => setCompanies([]));
@@ -275,6 +276,35 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const amcOverlaps = useAmcOverlap(amcLines.map((l) => l.assetId), amcStartDate, amcEndDate, isEdit ? pr?.id : undefined);
   const updateAmcLine = (id: string, patch: Partial<AmcLine>) =>
     setAmcLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  // Arrived from an asset's page: pre-pick that asset (and its centre) once, even if it is not
+  // in the Active-only list the picker loads.
+  const assetPrefilled = useRef(false);
+  const initialAssetId = props.initialAssetId;
+  useEffect(() => {
+    if (!initialAssetId || assetPrefilled.current || department !== "amc" || isEdit) return;
+    assetPrefilled.current = true;
+    fetch(`/api/facility/assets/${initialAssetId}`)
+      .then((r) => r.json())
+      .then((j) => {
+        const a = j.data as FacilityAsset | undefined;
+        if (!a?.id) return;
+        setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]));
+        setAmcLines((prev) => (prev[0] && !prev[0].assetId ? prev.map((l, i) => (i === 0 ? { ...l, assetId: a.id } : l)) : prev));
+        setServiceItemName((cur) => cur || `Annual Maintenance Contract — ${a.name}`);
+        if (a.location_id) {
+          setLocationId((cur) => cur || (a.location_id as string));
+          // The centre only exists under its own company, so switch to that company too.
+          fetch("/api/locations")
+            .then((r) => r.json())
+            .then((lj) => {
+              const loc = (lj.data ?? []).find((l: { id: string; company_id?: string | null }) => l.id === a.location_id);
+              if (loc?.company_id) setCompanyId(loc.company_id);
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [initialAssetId, department, isEdit]);
   const handleAssetSelect = (lineId: string, assetId: string) => {
     updateAmcLine(lineId, { assetId });
     if (assetId && !serviceItemName && amcLines[0]?.id === lineId) {
