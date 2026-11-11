@@ -136,7 +136,7 @@
     },
     {
       "path": "/api/cron/attendance-punchin-reminder",
-      "schedule": "*/5 3-6 * * 1-6"
+      "schedule": "0,5,10,15,20,25,30 4 * * 1-6"
     },
     {
       "path": "/api/cron/cosec-booking-cleanup",

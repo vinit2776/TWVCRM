@@ -14,6 +14,17 @@
  * — useless for a five-minute window. This project already runs five-minute crons,
  * so the schedule lives here and the gateway stays the thing that knows the rules.
  *
+ * Why the schedule is narrow. Everyone currently starts at 09:30, and in the
+ * gateway's default "fixed" window mode it refuses to send outside 09:30-10:00 IST
+ * however often it is asked. So the cron runs only 04:00-04:30 UTC (09:30-10:00
+ * IST), Mon-Sat: 7 runs a day instead of 48, covering the gateway's whole window
+ * twice over with nothing lost.
+ *
+ * If shift timings ever spread out, this schedule becomes the binding constraint
+ * and must be widened FIRST. Switching the gateway to "shifts" window mode alone
+ * will not help — anyone whose reminder falls outside 09:30-10:00 IST silently
+ * never gets one, because this route is not awake to ask.
+ *
  * ATTENDANCE_CRON_SECRET is the *gateway's* CRON_SECRET, which is a different
  * value from this project's. Unset, the route no-ops rather than failing, so a
  * deploy before the variable is configured doesn't light up the health monitor.

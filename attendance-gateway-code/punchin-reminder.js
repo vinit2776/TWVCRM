@@ -6,7 +6,8 @@
 //
 // Something has to call this every few minutes. Vercel's Hobby cron can't (it runs at
 // most daily and lands anywhere in the hour), so /internal/punchin-reminder is called
-// by an outside every-5-minute schedule, and also on the biometric device's check-ins.
+// by an outside every-5-minute schedule — the CRM's own cron, which is awake only
+// during the send window (09:30-10:00 IST, Mon-Sat).
 // Each run only sends what is due right now; punchin_reminder_runs stops repeats.
 //
 // The admin setting PUNCHIN_REMINDER_WINDOW decides when runs may send anything:
