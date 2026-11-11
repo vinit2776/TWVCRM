@@ -1,0 +1,208 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { DatabaseSync } = require('node:sqlite');
+const {
+  createAttendanceLogic, resolveShift, autoCheckoutTimestamp, autoCheckoutDue, dayEndTimestamp, mostCommonShift, effectivePunches,
+} = require('../attendance-logic');
+
+const BRANCHES = [
+  { name: 'LGF', shift_start: '09:30', shift_end: '18:30', half_saturdays: 1, sat_start: '09:30', sat_end: '13:30' },
+  // Perungudi works every Saturday in full (its Saturday timings are ignored).
+  { name: 'Perungudi', shift_start: '10:00', shift_end: '19:00', half_saturdays: 0, sat_start: '10:00', sat_end: '14:00' },
+];
+const TUESDAY = '2026-11-10';
+const HALF_SATURDAY = '2026-11-14'; // 2nd Saturday
+const FULL_SATURDAY = '2026-11-07'; // 1st Saturday: a normal shift
+
+const emp = (fields = {}) => ({ id: 'EMP-1', branch: 'LGF', shift_start: '09:30', shift_end: '18:30', shift_custom: 0, ...fields });
+const p = (time, direction, fields = {}) => ({ timestamp: `${TUESDAY} ${time}:00`, direction, source: 'office', branch: '', ...fields });
+
+test('follows their own branch when they have not punched in yet', () => {
+  const shift = resolveShift(emp({ branch: 'Perungudi' }), TUESDAY, [], BRANCHES);
+  assert.deepEqual(shift, { start: '10:00', end: '19:00', source: 'branch', branch: 'Perungudi' });
+});
+
+test('someone at two branches works the hours of the branch they first punched in at', () => {
+  const both = emp({ branch: JSON.stringify(['LGF', 'Perungudi']) });
+  assert.equal(resolveShift(both, TUESDAY, [p('09:55', 'in', { branch: 'Perungudi' })], BRANCHES).end, '19:00');
+  assert.equal(resolveShift(both, TUESDAY, [p('09:25', 'in', { branch: 'LGF' })], BRANCHES).end, '18:30');
+  // No punch yet: their first listed branch.
+  assert.equal(resolveShift(both, TUESDAY, [], BRANCHES).branch, 'LGF');
+});
+
+test('a visiting day uses the branch visited, not their own', () => {
+  const shift = resolveShift(emp(), TUESDAY, [p('10:00', 'in', { branch: 'Perungudi', deviation: 1 })], BRANCHES);
+  assert.equal(shift.branch, 'Perungudi');
+  assert.equal(shift.end, '19:00');
+});
+
+test('a remote first punch falls back to their own branch', () => {
+  const shift = resolveShift(emp({ branch: 'Perungudi' }), TUESDAY, [p('10:00', 'in', { source: 'remote', branch: '' })], BRANCHES);
+  assert.equal(shift.branch, 'Perungudi');
+});
+
+test('custom timings win on weekdays at any branch', () => {
+  const custom = emp({ shift_custom: 1, shift_start: '11:00', shift_end: '20:00' });
+  const shift = resolveShift(custom, TUESDAY, [p('11:00', 'in', { branch: 'Perungudi' })], BRANCHES);
+  assert.deepEqual(shift, { start: '11:00', end: '20:00', source: 'custom', branch: 'Perungudi' });
+});
+
+test('half Saturdays only at branches that have them (LGF); other branches work a full Saturday', () => {
+  const sat = branch => [{ timestamp: `${HALF_SATURDAY} 10:00:00`, direction: 'in', source: 'office', branch }];
+  assert.deepEqual(resolveShift(emp(), HALF_SATURDAY, sat('LGF'), BRANCHES), { start: '09:30', end: '13:30', source: 'branch', branch: 'LGF' });
+  assert.deepEqual(resolveShift(emp({ branch: 'Perungudi' }), HALF_SATURDAY, sat('Perungudi'), BRANCHES), { start: '10:00', end: '19:00', source: 'branch', branch: 'Perungudi' });
+  // LGF staff working the 2nd Saturday at Perungudi work Perungudi's full day.
+  assert.equal(resolveShift(emp(), HALF_SATURDAY, sat('Perungudi'), BRANCHES).end, '19:00');
+  // 1st Saturday is a normal working day everywhere.
+  assert.equal(resolveShift(emp(), FULL_SATURDAY, [], BRANCHES).end, '18:30');
+});
+
+test('custom timings: LGF half Saturday still applies; a full Saturday uses their own hours', () => {
+  const custom = emp({ shift_custom: 1, shift_start: '11:00', shift_end: '20:00' });
+  const sat = branch => [{ timestamp: `${HALF_SATURDAY} 10:00:00`, direction: 'in', source: 'office', branch }];
+  assert.equal(resolveShift(custom, HALF_SATURDAY, sat('LGF'), BRANCHES).end, '13:30');
+  assert.deepEqual(resolveShift(custom, HALF_SATURDAY, sat('Perungudi'), BRANCHES), { start: '11:00', end: '20:00', source: 'custom', branch: 'Perungudi' });
+});
+
+test('a branch with no timings, or no branches at all, falls back to the employee, then the default', () => {
+  assert.deepEqual(resolveShift(emp({ shift_start: '08:00', shift_end: '17:00' }), TUESDAY, [], []),
+    { start: '08:00', end: '17:00', source: 'employee', branch: 'LGF' });
+  assert.deepEqual(resolveShift({ branch: null }, TUESDAY, [], []), { start: '09:30', end: '18:30', source: 'default', branch: null });
+  assert.deepEqual(resolveShift(emp(), HALF_SATURDAY, [], []), { start: '09:30', end: '13:30', source: 'default', branch: 'LGF' });
+});
+
+test('auto punch-out is 15 minutes after the shift end', () => {
+  assert.equal(autoCheckoutTimestamp(TUESDAY, { end: '19:00' }), `${TUESDAY} 19:15:00`);
+  assert.equal(autoCheckoutTimestamp(TUESDAY, { end: '13:30' }), `${TUESDAY} 13:45:00`);
+  // Never spills into the next day.
+  assert.equal(autoCheckoutTimestamp(TUESDAY, { end: '23:50' }), `${TUESDAY} 23:59:00`);
+});
+
+test('autoCheckoutDue: due only once the time has passed, stamped at the due time', () => {
+  const day = [p('09:58', 'in', { branch: 'Perungudi' })];
+  const e = emp({ branch: 'Perungudi' });
+  assert.equal(autoCheckoutDue(e, TUESDAY, day, BRANCHES, `${TUESDAY} 19:14:59`), null);
+  assert.equal(autoCheckoutDue(e, TUESDAY, day, BRANCHES, `${TUESDAY} 19:15:00`), `${TUESDAY} 19:15:00`);
+  // A run hours later still stamps 19:15.
+  assert.equal(autoCheckoutDue(e, TUESDAY, day, BRANCHES, `${TUESDAY} 23:45:00`), `${TUESDAY} 19:15:00`);
+  // LGF staff punching in at Perungudi get Perungudi's time.
+  assert.equal(autoCheckoutDue(emp(), TUESDAY, day, BRANCHES, `${TUESDAY} 23:00:00`), `${TUESDAY} 19:15:00`);
+  assert.equal(autoCheckoutDue(emp(), TUESDAY, [p('09:20', 'in', { branch: 'LGF' })], BRANCHES, `${TUESDAY} 23:00:00`), `${TUESDAY} 18:45:00`);
+});
+
+test('autoCheckoutDue: nothing to do for a closed day, a day already auto punched-out, or a late check-in', () => {
+  const e = emp();
+  const now = `${TUESDAY} 23:00:00`;
+  assert.equal(autoCheckoutDue(e, TUESDAY, [], BRANCHES, now), null);
+  assert.equal(autoCheckoutDue(e, TUESDAY, [p('09:30', 'in'), p('18:30', 'out')], BRANCHES, now), null);
+  assert.equal(autoCheckoutDue(e, TUESDAY, [p('09:30', 'in'), p('18:45', 'out', { source: 'auto' })], BRANCHES, now), null);
+  assert.equal(autoCheckoutDue(e, TUESDAY, [p('19:30', 'in')], BRANCHES, now), null);
+});
+
+test('a real punch-out after the auto punch-out replaces it (app or a late device sync)', () => {
+  const day = [p('09:30', 'in'), p('18:45', 'out', { source: 'auto' }), p('20:30', 'out', { source: 'biometric' })];
+  const used = effectivePunches(day);
+  assert.deepEqual(used.map(x => x.timestamp.slice(11, 16)), ['09:30', '20:30']);
+});
+
+test('mostCommonShift picks the timings most employees work', () => {
+  assert.deepEqual(mostCommonShift([
+    { shift_start: '10:00', shift_end: '19:00' }, { shift_start: '10:00', shift_end: '19:00' }, { shift_start: '09:30', shift_end: '18:30' },
+  ]), { start: '10:00', end: '19:00' });
+  assert.equal(mostCommonShift([]), null);
+});
+
+// End to end through computeDayStatus, with the branches table in the db.
+function setupDb() {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`
+    CREATE TABLE employees (id TEXT PRIMARY KEY, name TEXT NOT NULL, shift_start TEXT NOT NULL, shift_end TEXT NOT NULL,
+      shift_custom INTEGER NOT NULL DEFAULT 0, branch TEXT, date_joined TEXT);
+    CREATE TABLE punches (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, timestamp TEXT NOT NULL,
+      direction TEXT NOT NULL, source TEXT NOT NULL, note TEXT DEFAULT '', location TEXT DEFAULT '', marked_by TEXT DEFAULT '',
+      branch TEXT DEFAULT '', deviation INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE branches (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, shift_start TEXT NOT NULL DEFAULT '',
+      shift_end TEXT NOT NULL DEFAULT '', half_saturdays INTEGER NOT NULL DEFAULT 0, sat_start TEXT NOT NULL DEFAULT '', sat_end TEXT NOT NULL DEFAULT '');
+    CREATE TABLE deviation_reviews (employee_id TEXT NOT NULL, date TEXT NOT NULL, decision TEXT NOT NULL, PRIMARY KEY (employee_id, date));
+    CREATE TABLE holidays (date TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE leave_requests (id INTEGER PRIMARY KEY, employee_id TEXT, leave_type TEXT, start_date TEXT, end_date TEXT, status TEXT);
+    CREATE TABLE permission_requests (id INTEGER PRIMARY KEY, employee_id TEXT, date TEXT, leave_time TEXT, status TEXT);
+    CREATE TABLE correction_requests (id INTEGER PRIMARY KEY, employee_id TEXT, date TEXT, kind TEXT, status TEXT);
+    CREATE TABLE breaks (id INTEGER PRIMARY KEY, employee_id TEXT, start_ts TEXT, end_ts TEXT);
+  `);
+  for (const b of BRANCHES) {
+    db.prepare('INSERT INTO branches (name, shift_start, shift_end, half_saturdays, sat_start, sat_end) VALUES (?, ?, ?, ?, ?, ?)').run(b.name, b.shift_start, b.shift_end, b.half_saturdays, b.sat_start, b.sat_end);
+  }
+  db.prepare("INSERT INTO employees (id, name, shift_start, shift_end, branch) VALUES ('EMP-1', 'Test', '09:30', '18:30', ?)").run(JSON.stringify(['LGF', 'Perungudi']));
+  const add = (time, direction, source, branch = '') => db.prepare('INSERT INTO punches (employee_id, timestamp, direction, source, branch) VALUES (?, ?, ?, ?, ?)')
+    .run('EMP-1', `${TUESDAY} ${time}:00`, direction, source, branch);
+  return { db, add, logic: createAttendanceLogic(db) };
+}
+
+test('computeDayStatus uses the punched-in branch: leaving at 18:40 from Perungudi is a Half Day', async () => {
+  const { add, logic } = setupDb();
+  add('09:58', 'in', 'office', 'Perungudi');
+  add('18:40', 'out', 'office', 'Perungudi');
+  const status = await logic.computeDayStatus('EMP-1', TUESDAY);
+  assert.equal(status.status, 'Half Day');
+});
+
+test('computeDayStatus: the same times at LGF are a full day', async () => {
+  const { add, logic } = setupDb();
+  add('09:28', 'in', 'office', 'LGF');
+  add('18:40', 'out', 'office', 'LGF');
+  assert.equal((await logic.computeDayStatus('EMP-1', TUESDAY)).status, 'Present');
+});
+
+test('computeDayStatus: a manual punch-out after the auto one clears the Missed Checkout', async () => {
+  const { add, logic } = setupDb();
+  add('09:58', 'in', 'office', 'Perungudi');
+  add('19:15', 'out', 'auto');
+  assert.equal((await logic.computeDayStatus('EMP-1', TUESDAY)).status, 'Missed Checkout');
+  add('20:30', 'out', 'office', 'Perungudi');
+  const status = await logic.computeDayStatus('EMP-1', TUESDAY);
+  assert.equal(status.status, 'Present');
+  assert.equal(status.checkOut, `${TUESDAY} 20:30:00`);
+});
+
+// --- When a day is over, for closing a break the employee never resumed ---
+
+test('dayEndTimestamp: nothing to close until the shift end has passed', () => {
+  const punches = [p('09:25', 'in', { branch: 'LGF' })];
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, punches, BRANCHES, `${TUESDAY} 17:00:00`), null);
+  // 18:30 + 15.
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, punches, BRANCHES, `${TUESDAY} 18:45:00`), `${TUESDAY} 18:45:00`);
+});
+
+test('dayEndTimestamp: a day that pairs up ends at its own punch-out, early or late', () => {
+  const early = [p('09:25', 'in', { branch: 'LGF' }), p('17:00', 'out', { branch: 'LGF' })];
+  const late = [p('09:25', 'in', { branch: 'LGF' }), p('20:30', 'out', { branch: 'LGF' })];
+  const now = `${TUESDAY} 23:00:00`;
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, early, BRANCHES, now), `${TUESDAY} 17:00:00`);
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, late, BRANCHES, now), `${TUESDAY} 20:30:00`);
+});
+
+test('dayEndTimestamp: an open day ends at the auto punch-out time, per branch', () => {
+  const now = `${TUESDAY} 23:00:00`;
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, [p('09:25', 'in', { branch: 'LGF' })], BRANCHES, now), `${TUESDAY} 18:45:00`);
+  assert.equal(
+    dayEndTimestamp(emp({ branch: 'Perungudi' }), TUESDAY, [p('09:58', 'in', { branch: 'Perungudi' })], BRANCHES, now),
+    `${TUESDAY} 19:15:00`,
+  );
+});
+
+test('dayEndTimestamp: punches read before the auto punch-out was recorded still give its time', () => {
+  // performAutoCheckout passes the punches as it read them, so the day still looks open.
+  const punches = [p('09:25', 'in', { branch: 'LGF' })];
+  assert.equal(dayEndTimestamp(emp(), TUESDAY, punches, BRANCHES, `${TUESDAY} 22:00:00`), `${TUESDAY} 18:45:00`);
+});
+
+test('dayEndTimestamp: a custom shift ends on its own hours', () => {
+  const night = emp({ shift_custom: 1, shift_start: '06:00', shift_end: '08:00' });
+  assert.equal(
+    dayEndTimestamp(night, TUESDAY, [p('06:00', 'in', { branch: 'LGF' })], BRANCHES, `${TUESDAY} 12:00:00`),
+    `${TUESDAY} 08:15:00`,
+  );
+});

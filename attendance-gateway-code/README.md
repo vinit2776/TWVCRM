@@ -140,7 +140,8 @@ build step so a commit touching only one of them does not redeploy the other.
 The crons are declared in this directory's own [vercel.json](vercel.json) and are
 protected by `CRON_SECRET`:
 
-- `/internal/auto-checkout`, 19:00 IST.
+- `/internal/auto-checkout`, 19:00, 21:00 and 23:45 IST: safety runs for the auto
+  punch-out (see below). Hobby cron can't run often enough to give it its timing.
 - `/internal/daily-report/morning`, 10:00 IST: emails who has punched in,
   who is late, who isn't in yet and who is on leave.
 - `/internal/daily-report/evening`, 19:00 IST: emails who punched out, who
@@ -163,7 +164,27 @@ AM) or Follow shift timings (earliest shift start to latest grace end). It is no
 `vercel.json`: Hobby cron can't run every 5 minutes, so an outside scheduler has to
 call it every 5 minutes (it only sends what is due, once per person per day,
 `punchin_reminder_runs`). That schedule is the only thing that triggers it: with no
-caller set up, no reminder is ever sent.
+caller set up, no reminder is ever sent, and auto punch-outs only happen at the
+daily safety runs or when someone opens their dashboard.
+
+**Shift timings** are set per branch at `/admin/settings` → Branches: a weekday
+shift, and whether the branch has half Saturdays (2nd and 4th Saturday, with their
+own timings; only LGF does, so other branches work every Saturday in full). Each day uses the shift of the
+branch the employee first punched in at (GPS or the biometric device; their own branch
+if that punch was remote), so someone at LGF and Perungudi works whichever branch's
+hours they turned up at. An employee can instead have **custom timings** (Edit
+Employee → Custom timings), which apply on weekdays and full Saturdays at any branch;
+half Saturdays always follow the branch. See `resolveShift` in `attendance-logic.js`.
+
+**Auto punch-out.** Anyone still punched in is auto punched-out 15 minutes after that
+day's shift end, stamped at exactly that time however late the run is. It gets its
+timing from the same outside every-5-minute schedule as the punch-in reminders
+(`/internal/punchin-reminder` runs it first, before any email), plus the daily Vercel
+crons above and whenever an employee opens their dashboard. It never waits for the
+biometric device: a real punch-out the device uploads later replaces the auto one.
+Until midnight the dashboard offers **Punch Out** again; a real punch-out made then
+replaces the auto one, so the day isn't a Missed Checkout and any time past the shift
+counts as overtime.
 
 A day closed only by that auto-checkout is a **Missed Checkout** (MC): it counts as
 a Half Day, with hours counted up to the shift end, until the employee files a

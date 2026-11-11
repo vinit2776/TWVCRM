@@ -21,7 +21,7 @@ import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } fro
 import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
 import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
-import { checkInvoice, type SuggestionField } from "@/lib/procurement/invoice-check";
+import { buildInvoiceCheckRecord, checkInvoice, type SuggestionField } from "@/lib/procurement/invoice-check";
 import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
@@ -495,6 +495,7 @@ function NewVendorBillForm() {
         gst_amount: parseFloat(gstAmount) || 0,
         notes: notes.trim() || null,
         invoice_file_url: invoiceFileUrl,
+        invoice_check: invoiceCheck.status === "ok" ? buildInvoiceCheckRecord(invoiceCheck.extracted, invoiceFindings) : null,
         replaces_bill_id: replacesBill?.id ?? null,
         ...(needsToleranceReason ? { tolerance_exception_reason: toleranceReason.trim() } : {}),
         ...(showElectricity

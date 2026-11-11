@@ -85,3 +85,18 @@ describe("vendorNamesMatch", () => {
     expect(vendorNamesMatch("Sharma Office Supplies", "Acme Cleaning")).toBe(false);
   });
 });
+
+describe("tolerance for scanned bills", () => {
+  it("forgives small spelling slips and spacing in vendor names", () => {
+    expect(vendorNamesMatch("Prakashchand Chordia", "Prakash Chand Chordia")).toBe(true);
+    expect(vendorNamesMatch("H Prakashchand Chordia", "H Prakashchand Chordya")).toBe(true);
+    expect(vendorNamesMatch("Godrej Finance Limited", "Godrei Finance Ltd")).toBe(true);
+  });
+  it("forgives letter/digit look-alikes in an invoice number but not a wrong digit", () => {
+    expect(codes({ invoiceNumber: "INV/26-27/O412" })).toEqual([]);
+    expect(codes({ invoiceNumber: "INV/26-27/0413" })).toContain("invoice_number_mismatch");
+  });
+  it("still rejects a different vendor", () => {
+    expect(vendorNamesMatch("H Prakashchand Chordia", "Sharma Office Supplies")).toBe(false);
+  });
+});
