@@ -608,6 +608,10 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
       agreement.status
     );
 
+  // "Upload Signed Document" keeps the customer's copy in generated_document_id;
+  // signed_document_id is only set by the stamp routes.
+  const uploadedCopyId = agreement?.signed_document_id ?? agreement?.generated_document_id ?? null;
+
   if (loading) {
     return <div className="text-center py-8 text-muted-foreground">Loading agreement...</div>;
   }
@@ -933,11 +937,11 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
 
             {/* A signed copy was uploaded (which executes the agreement) before TWV's
                 stamp went on: stamp that copy itself, keeping the customer's signature. */}
-            {agreement.status === "executed" && agreement.signed_document_id && !agreement.stamp_reference && userRole === "admin" && (
+            {agreement.status === "executed" && uploadedCopyId && !agreement.stamp_reference && agreement.leegality_status !== "COMPLETED" && userRole === "admin" && (
               <StampUploadedDocument
                 caseId={caseId}
                 agreementId={agreement.id}
-                signedDocumentId={agreement.signed_document_id}
+                signedDocumentId={uploadedCopyId}
                 onStamped={fetchAgreement}
               />
             )}
