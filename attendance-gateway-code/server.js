@@ -13,8 +13,9 @@ const { AsyncLocalStorage } = require('async_hooks');
 const { createClient } = require('@libsql/client');
 const {
   createAttendanceLogic,
+  LAUNCH_DATE,
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
-  effectivePunches, autoCheckoutDue, dayEndTimestamp, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
+  effectivePunches, autoCheckoutDue, dayEndTimestamp, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, BRANCH_SHIFT_RULES_FROM, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const {
@@ -363,6 +364,19 @@ const SETTING_DEFS = [
     help: "Emails each employee 10 minutes after their shift starts if they haven't punched in, 5 minutes before the 15-minute grace ends. Skips Sundays, holidays, approved leave, people already in, and anyone without an email. Uses the Resend key and sender above.",
     fallback: 'off',
     options: [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }],
+  },
+  {
+    key: 'SHIFT_RULES_EFFECTIVE_FROM',
+    label: 'Branch shift rules apply from',
+    help: "YYYY-MM-DD. Attendance on and after this date is measured against the branch timings and per-branch half Saturdays below; earlier days keep the rule that was in force when they were worked (one company-wide half shift on the 2nd and 4th Saturday, everyone on their own saved timings). Statuses are worked out each time a report is opened and nothing records what a day's shift was, so moving this date backwards re-measures days that have already been reported on — a Saturday that read Present can become a Half Day. Only move it back for a period whose branch timings are genuinely what was worked.",
+    fallback: BRANCH_SHIFT_RULES_FROM,
+    parse: (raw) => /^\d{4}-\d{2}-\d{2}$/.test(String(raw || '')) ? String(raw) : BRANCH_SHIFT_RULES_FROM,
+    validate: (value) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'Branch shift rules apply from must be a date as YYYY-MM-DD.';
+      if (Number.isNaN(new Date(`${value}T00:00:00`).getTime())) return 'Branch shift rules apply from must be a real date.';
+      if (value < LAUNCH_DATE) return `Branch shift rules apply from cannot be before the launch date (${LAUNCH_DATE}).`;
+      return null;
+    },
   },
   {
     key: 'PUNCHIN_REMINDER_WINDOW',
@@ -898,7 +912,7 @@ const {
   getEmployee, getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday,
   getApprovedLeaveForDate, getApprovedPermissionForDate, getActiveCorrectionsForMonth, computeDayStatus,
   getDeviationReview,
-} = createAttendanceLogic(db, { getBranches: () => CONFIG.BRANCH_LIST });
+} = createAttendanceLogic(db, { getBranches: () => CONFIG.BRANCH_LIST, getShiftRulesEffectiveFrom: () => CONFIG.SHIFT_RULES_EFFECTIVE_FROM });
 const dailyReport = createDailyReport(db, {
   getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate, getApprovedPermissionForDate,
 });
@@ -1748,7 +1762,7 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
     },
   };
 
-  const snapshotLogic = createAttendanceLogic(snapshotDb, { getBranches: () => CONFIG.BRANCH_LIST });
+  const snapshotLogic = createAttendanceLogic(snapshotDb, { getBranches: () => CONFIG.BRANCH_LIST, getShiftRulesEffectiveFrom: () => CONFIG.SHIFT_RULES_EFFECTIVE_FROM });
   return {
     employees,
     correctionsFor: (employeeId, monthPrefix) => correctionsByKey.get(`${employeeId}|${monthPrefix}`) || [],
@@ -1943,6 +1957,11 @@ function computeMusterReport(grid) {
 // a check-in the device only uploaded later, would otherwise stay open forever.
 const AUTO_CHECKOUT_CATCHUP_DAYS = 7;
 function autoCheckoutClock(ts) { return ts.slice(11, 16); }
+// What resolveShift needs to decide a day's shift: the branch timings, and the date from
+// which they apply at all (before it, a day is read the way it was when it was worked).
+function shiftRules() {
+  return { branches: CONFIG.BRANCH_LIST, effectiveFrom: CONFIG.SHIFT_RULES_EFFECTIVE_FROM };
+}
 // A break the employee never resumed, closed when the day it belongs to is over —
 // whether or not that day also needed an auto punch-out. Nothing else ever closes one:
 // /api/break only ends a break while the day is still Active, so once the day has
@@ -1950,7 +1969,7 @@ function autoCheckoutClock(ts) { return ts.slice(11, 16); }
 // the break quietly counts as time worked. Before this swept every day, anyone who forgot
 // to resume and then punched out normally was paid for the break.
 async function closeOpenBreak(employee, dateStr, dayPunches, nowTs) {
-  const endTs = dayEndTimestamp(employee, dateStr, dayPunches, CONFIG.BRANCH_LIST, nowTs);
+  const endTs = dayEndTimestamp(employee, dateStr, dayPunches, shiftRules(), nowTs);
   if (!endTs) return; // the day hasn't reached its shift end — this break may still be real
   // max(..., start_ts) because a break can start after the day ended (a late sweep, or a
   // device punch-out that landed earlier than the break): ending one before it began would
@@ -1995,7 +2014,7 @@ async function performAutoCheckout({ employeeId = null, now = new Date() } = {})
     const mine = byEmployee.get(emp.id) || [];
     for (const dateStr of dateStrs) {
       const dayPunches = mine.filter(p => p.timestamp.startsWith(dateStr));
-      const dueTs = autoCheckoutDue(emp, dateStr, dayPunches, CONFIG.BRANCH_LIST, nowTs);
+      const dueTs = autoCheckoutDue(emp, dateStr, dayPunches, shiftRules(), nowTs);
       if (dueTs && await recordPunch(emp.id, dueTs, 'out', 'auto', 'auto-checkout')) {
         closed++;
         const when = dateStr === today ? autoCheckoutClock(dueTs) : `${autoCheckoutClock(dueTs)} on ${dateStr}`;
@@ -7216,6 +7235,8 @@ module.exports.csvField = csvField;
 // Exported for the unit tests — pure, no server needed.
 module.exports.safeLoginUsername = safeLoginUsername;
 module.exports.sendCsv = sendCsv;
+// Exported for the unit tests — the settings' own parse/validate are pure.
+module.exports.SETTING_DEFS_BY_KEY = SETTING_DEFS_BY_KEY;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped
