@@ -41,12 +41,11 @@ function StatusNote({ status }: { status: string }) {
       <p className="mt-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
         &quot;In maintenance&quot; means the asset is out of use for repair right now. It does <b>not</b> mean it is
         covered by an AMC — for that, set <b>Lifecycle stage</b> to &quot;Under AMC&quot; and keep Status as &quot;Active&quot;.
-        Assets that are not Active do not appear in the AMC request asset list.
       </p>
     );
   }
   if (status === "retired") {
-    return <Hint>Retired assets are decommissioned and are left out of request and AMC lists.</Hint>;
+    return <Hint>Retired assets are decommissioned and are left out of the AMC request asset list.</Hint>;
   }
   return <Hint>&quot;Active&quot; is right for anything in service, including assets under an AMC.</Hint>;
 }
