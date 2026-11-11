@@ -1,11 +1,27 @@
 /**
  * GET /api/cron/attendance-punchin-reminder
  *
- * Pokes the attendance gateway so it can send punch-in reminder emails.
+ * Pokes the attendance gateway so it can send punch-in reminder emails and record
+ * auto punch-outs.
  *
  * The gateway decides everything — who is due, whether the feature is on at all,
  * and whether today is a holiday. This route holds no attendance logic and
  * touches no table; it exists only because the gateway cannot schedule itself.
+ *
+ * Two jobs, two windows. The endpoint runs the auto punch-out first, then the
+ * reminders, so the schedule has to be awake for both:
+ *
+ *   04:00-05:59 UTC (09:30-11:25 IST) — reminders, 10 min after each shift start.
+ *                                       Covers starts from 09:20 to 11:15.
+ *   13:00-15:59 UTC (18:30-21:25 IST) — auto punch-outs, 15 min after shift end.
+ *                                       Covers ends from 18:15 to 21:10.
+ *
+ * Shift timings are per branch, with per-employee overrides, so those spans are
+ * what the configured branches need rather than a guess. A shift outside them gets
+ * nothing from this route: a reminder is simply never sent, and an auto punch-out
+ * falls back to the gateway's own daily safety crons, which still stamp the correct
+ * time but can appear hours late. **Set a shift outside those spans and widen this
+ * schedule in the same change.**
  *
  * Why it lives here. Reminders are per person, 10 minutes after each employee's
  * own shift starts, so each person is due for a five-minute window and something

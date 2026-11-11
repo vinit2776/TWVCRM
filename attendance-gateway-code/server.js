@@ -1894,8 +1894,8 @@ async function runDailyReport(kind) {
 }
 
 // --- Punch-in reminder emails (see punchin-reminder.js) ---
-// Sends whatever is due right now. Called by /internal/punchin-reminder (an outside
-// every-5-minute schedule) and on the biometric device's check-ins.
+// Sends whatever is due right now. Called only by /internal/punchin-reminder, which
+// the CRM's cron pokes every five minutes during the morning reminder window.
 async function runPunchinReminders(now = new Date()) {
   if (CONFIG.PUNCHIN_REMINDERS !== 'on') return { outcome: 'off' };
   if (!CONFIG.RESEND_API_KEY) return { outcome: 'not_configured' };
