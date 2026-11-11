@@ -154,6 +154,17 @@ holidays or Sundays, and at most one of each per day (`daily_report_runs`).
 `/admin/daily-report?kind=morning&date=YYYY-MM-DD` shows any day's email without
 sending it.
 
+**Punch-in reminders.** `/internal/punchin-reminder` (same `CRON_SECRET`) emails each
+employee who hasn't punched in 10 minutes after their own shift starts, 5 minutes
+before the 15-minute grace ends. It is off until **Punch-in reminder emails** is set
+to On at `/admin/settings`, and needs each employee's email on their profile. The
+**Punch-in reminder window** setting picks when it may send: Fixed (9:30 to 10:00
+AM) or Follow shift timings (earliest shift start to latest grace end). It is not in
+`vercel.json`: Hobby cron can't run every 5 minutes, so an outside scheduler has to
+call it every 5 minutes (it only sends what is due, once per person per day,
+`punchin_reminder_runs`). That schedule is the only thing that triggers it: with no
+caller set up, no reminder is ever sent.
+
 A day closed only by that auto-checkout is a **Missed Checkout** (MC): it counts as
 a Half Day, with hours counted up to the shift end, until the employee files a
 correction at `/corrections` and an admin or manager approves it. Each employee
