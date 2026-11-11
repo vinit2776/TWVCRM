@@ -404,6 +404,7 @@ export default function ElectricityBillsPage() {
     if (!form.location_id) { toast.error("Select a location"); return; }
     if (lines.length === 0) { toast.error("Add at least one line"); return; }
     if (!editingBillId && !invoice.file) { toast.error("Upload the landlord's invoice first — it is used to check what you entered"); return; }
+    if (!editingBillId) { const blocked = invoice.blockedReason(enteredForCheck); if (blocked) { toast.error(blocked); return; } }
     setSubmitting(true);
     const linesPayload = lines.map((l) => ({
       line_type: l.line_type,

@@ -349,6 +349,7 @@ export function ElectricityBillsTab({ initialLocationId, autoCapture }: { initia
   const handleSubmit = async () => {
     if (!formLocationId) { toast.error("Select a location"); return; }
     if (!invoice.file) { toast.error("Upload the landlord's invoice first — it is used to check what you entered"); return; }
+    { const blocked = invoice.blockedReason(enteredForCheck); if (blocked) { toast.error(blocked); return; } }
 
     const apiLines = formLines.map((l, i) => ({
       line_type: l.line_type,

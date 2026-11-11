@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { AlertTriangle, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
 import {
@@ -27,6 +28,8 @@ const MAX_BYTES = 10 * 1024 * 1024;
 export function useLandlordInvoice(onRead?: (extracted: ExtractedInvoice) => void) {
   const [file, setFile] = useState<File | null>(null);
   const [check, setCheck] = useState<InvoiceCheckState>({ status: "idle" });
+  // Differences left open on purpose: allowed only with a reason, which is kept with the bill.
+  const [overrideReason, setOverrideReason] = useState("");
   const seq = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -52,6 +55,7 @@ export function useLandlordInvoice(onRead?: (extracted: ExtractedInvoice) => voi
     seq.current++;
     setCheck({ status: "idle" });
     setFile(null);
+    setOverrideReason("");
     if (inputRef.current) inputRef.current.value = "";
   }, []);
 
@@ -73,9 +77,18 @@ export function useLandlordInvoice(onRead?: (extracted: ExtractedInvoice) => voi
     check.status === "ok" ? checkInvoice({ extracted: check.extracted, entered, poCeiling: null }) : [];
 
   const recordFor = (entered: EnteredBill) =>
-    check.status === "ok" ? buildInvoiceCheckRecord(check.extracted, findingsFor(entered)) : null;
+    check.status === "ok" ? buildInvoiceCheckRecord(check.extracted, findingsFor(entered), overrideReason) : null;
 
-  return { file, check, inputRef, pick, clear, upload, findingsFor, recordFor };
+  /** null when the bill may be saved; otherwise what is in the way. */
+  const blockedReason = (entered: EnteredBill): string | null => {
+    if (check.status === "loading") return "Still reading the invoice — wait a moment";
+    if (findingsFor(entered).length > 0 && overrideReason.trim().length < 5) {
+      return "What you entered doesn't match the invoice. Correct it, or explain the difference below";
+    }
+    return null;
+  };
+
+  return { file, check, inputRef, pick, clear, upload, findingsFor, recordFor, blockedReason, overrideReason, setOverrideReason };
 }
 
 /** GST rate worth switching on when the invoice prints GST; null when it shows none. */
@@ -121,8 +134,20 @@ export function LandlordInvoiceField({ invoice, entered, onApply }: FieldProps) 
       {findings.length > 0 && (
         <p className="flex items-start gap-1.5 text-xs text-amber-800 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5">
           <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
-          The invoice differs from what you entered in {findings.length} {findings.length === 1 ? "place" : "places"}. This is a guide only; you can still save, and the approver will see it.
+          What you entered differs from the invoice in {findings.length} {findings.length === 1 ? "place" : "places"}. Correct it to match, or — only if the invoice is the one that is wrong — explain why below. The approver will see this.
         </p>
+      )}
+      {findings.length > 0 && (
+        <Textarea
+          value={invoice.overrideReason}
+          onChange={(e) => invoice.setOverrideReason(e.target.value)}
+          placeholder="Only if the differences are correct: why? (required to save with differences)"
+          rows={2}
+          className="text-sm"
+        />
+      )}
+      {check.status === "unavailable" && file && (
+        <p className="text-xs text-muted-foreground">The invoice could not be read automatically — compare it with your entries by eye before saving.</p>
       )}
     </div>
   );

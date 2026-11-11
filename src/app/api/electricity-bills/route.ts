@@ -213,6 +213,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
+  // Differences between the entries and the invoice must have been explained.
+  if (parsed.data.invoice_check && parsed.data.invoice_check.findings.length > 0 && (parsed.data.invoice_check.override_reason ?? "").length < 5) {
+    return NextResponse.json({ error: "What was entered differs from the landlord's invoice. Correct it, or explain the difference." }, { status: 422 });
+  }
+
   const {
     location_id, bill_month, bill_year, landlord_bill_number, landlord_bill_date, notes, lines,
     landlord_gst_applicable, landlord_gst_rate, invoice_file_url, invoice_check,

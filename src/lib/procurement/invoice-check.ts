@@ -173,13 +173,16 @@ export const invoiceCheckRecordSchema = z.object({
   checked_at: z.string().max(40),
   confidence: z.enum(["high", "medium", "low"]),
   findings: z.array(z.object({ code: z.string().max(60), message: z.string().max(400) })).max(20),
+  /** Why the person saved with differences still open (required by the electricity capture forms). */
+  override_reason: z.string().trim().max(500).optional(),
 });
 export type InvoiceCheckRecord = z.infer<typeof invoiceCheckRecordSchema>;
 
-export function buildInvoiceCheckRecord(extracted: ExtractedInvoice, findings: InvoiceFinding[]): InvoiceCheckRecord {
+export function buildInvoiceCheckRecord(extracted: ExtractedInvoice, findings: InvoiceFinding[], overrideReason?: string): InvoiceCheckRecord {
   return {
     checked_at: new Date().toISOString(),
     confidence: extracted.confidence,
     findings: findings.map((f) => ({ code: f.code, message: f.message })),
+    ...(overrideReason && overrideReason.trim() ? { override_reason: overrideReason.trim() } : {}),
   };
 }

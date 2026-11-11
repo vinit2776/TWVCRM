@@ -2848,7 +2848,7 @@ export interface VendorBill {
   notes?: string;
   invoice_file_url?: string;
   /** What the advisory invoice check found when the bill was entered (migration 00676); null when no check ran. */
-  invoice_check?: { checked_at: string; confidence: "high" | "medium" | "low"; findings: { code: string; message: string }[] } | null;
+  invoice_check?: { checked_at: string; confidence: "high" | "medium" | "low"; findings: { code: string; message: string }[]; override_reason?: string } | null;
   service_report_id?: string | null;
   approval_status: BillApprovalStatus;
   approved_by?: string;

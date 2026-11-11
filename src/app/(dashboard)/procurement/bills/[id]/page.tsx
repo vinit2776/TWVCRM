@@ -720,6 +720,7 @@ export default function VendorBillDetailPage() {
             <ul className="mt-1 list-disc pl-4 space-y-0.5">
               {bill.invoice_check.findings.map((f) => <li key={f.code}>{f.message}</li>)}
             </ul>
+            {bill.invoice_check.override_reason && <p className="mt-1">Reason given for saving anyway: <span className="font-medium">{bill.invoice_check.override_reason}</span></p>}
             <p className="mt-1 text-xs text-amber-800">Compare with the invoice before approving. This is a guide, read automatically from the file.</p>
           </div>
         </div>
