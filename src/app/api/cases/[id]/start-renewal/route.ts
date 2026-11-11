@@ -13,6 +13,7 @@ import {
   sendRenewalWhatsApp,
   type VoCaseForRenewal,
 } from "@/lib/vo-renewal";
+import { caseOwnerEmail, renewalCopies } from "@/lib/vo-renewal-copies";
 import { renewalRecipients } from "@/lib/renewal-recipients";
 import { latestLapseDecision } from "@/lib/vo-lapse-decision";
 import { isProductionDatabase } from "@/lib/environment";
@@ -54,6 +55,7 @@ const CASE_SELECT =
 
 type CaseRow = VoCaseForRenewal & {
   status: string;
+  assigned_to?: string | null;
   metadata?: unknown;
   renewal_notices_enabled?: boolean | null;
 };
@@ -388,7 +390,17 @@ export async function POST(
       razorpayUrl: link.url,
     };
     if (body.send_email) {
-      emailSent = await sendRenewalEmail({ ...notice, pdfBuffer, recipient: routing.billing, cc: body.cc });
+      const copies = renewalCopies({
+        reminderNumber: 1,
+        ownerEmail: await caseOwnerEmail(adminSupabase, caseRow.assigned_to),
+        alreadyAddressed: [routing.billing.email, ...body.cc],
+      });
+      emailSent = await sendRenewalEmail({
+        ...notice,
+        pdfBuffer,
+        recipient: routing.billing,
+        cc: [...body.cc, ...copies],
+      });
       // The client hears too when a partner is billed, as the cron does.
       if (routing.headsUp?.email) {
         headsUpSent = await sendRenewalEmail({ ...notice, recipient: routing.headsUp });
