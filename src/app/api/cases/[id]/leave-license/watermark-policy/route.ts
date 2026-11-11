@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { getPaymentOverride } from "@/lib/vo-execution-gate";
 import { resolveWatermark } from "@/lib/agreement-watermark-server";
 
 /**
@@ -47,8 +48,13 @@ export async function GET(
     agreement,
   });
 
+  const override = await getPaymentOverride(admin, caseId);
+
   return NextResponse.json({
     data: {
+      paymentOverride: override
+        ? { active: true, reason: override.reason, at: override.at }
+        : { active: false },
       route: decision.route,
       forced: decision.forced,
       settled: decision.settled,
