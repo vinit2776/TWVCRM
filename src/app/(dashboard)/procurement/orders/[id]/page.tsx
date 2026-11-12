@@ -1,5 +1,6 @@
 "use client";
 
+import { amcNotReceived, AMC_NOT_RECEIVED_WARNING } from "@/lib/procurement/amc-received";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
 import { RollbackDialog } from "@/components/procurement/rollback-dialog";
@@ -1365,6 +1366,11 @@ export default function PurchaseOrderDetailPage() {
                   <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium border ${liveLc.badgeClass}`}>
                     {liveLc.label}
                   </span>
+                  {amcNotReceived(po) && (
+                    <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                      <AlertTriangle className="h-3 w-3" /> {AMC_NOT_RECEIVED_WARNING}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {!amcEditMode && !isTerminated && (

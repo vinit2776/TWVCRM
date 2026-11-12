@@ -1,5 +1,6 @@
 "use client";
 
+import { amcNotReceived, AMC_NOT_RECEIVED_WARNING } from "@/lib/procurement/amc-received";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -455,6 +456,12 @@ export default function AmcRegisterPage() {
                           >
                             <IndianRupee className="h-3 w-3" />
                             {PAYMENT_STATE_BADGE[row.payment_state]!.label}
+                          </span>
+                        )}
+                        {amcNotReceived(row) && (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full" title={AMC_NOT_RECEIVED_WARNING}>
+                            <AlertTriangle className="h-3 w-3" />
+                            Not received yet
                           </span>
                         )}
                         {(missingContact || missingDates) && row.amc_status !== "expired" && (
