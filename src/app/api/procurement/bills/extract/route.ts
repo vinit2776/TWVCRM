@@ -4,7 +4,8 @@ import { EXTRACTION_MEDIA_TYPES, extractInvoice, type ExtractionMediaType } from
 
 // Read-only: reads the uploaded invoice and returns what it says. Creates or changes
 // no bill, and stores nothing. The form shows the result as advice only.
-const ALLOWED_ROLES = ["admin", "manager", "office_admin"];
+// accounts can capture electricity bills, so they get the same read; without it their check silently never ran.
+const ALLOWED_ROLES = ["admin", "manager", "office_admin", "accounts"];
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_PER_MINUTE = 6;
 
@@ -49,6 +50,6 @@ export async function POST(request: NextRequest) {
   }
 
   const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-  const result = await extractInvoice(base64, file.type as ExtractionMediaType);
+  const result = await extractInvoice(base64, file.type as ExtractionMediaType, { lines: form?.get("mode") === "lines" });
   return NextResponse.json(result);
 }

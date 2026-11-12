@@ -5,6 +5,15 @@ import { z } from "zod";
 
 export type ExtractionConfidence = "high" | "medium" | "low";
 
+/** One charge row printed on the invoice (a meter's grid units, DG units, a fixed charge). Never a total or tax row. */
+export interface ExtractedLine {
+  description: string | null;
+  kind: "utility" | "generator" | "other" | null;
+  units: number | null;
+  rate: number | null;
+  amount: number | null;
+}
+
 export interface ExtractedInvoice {
   invoiceNumber: string | null;
   invoiceDate: string | null; // YYYY-MM-DD
@@ -13,6 +22,16 @@ export interface ExtractedInvoice {
   gstAmount: number | null;
   grandTotal: number | null;
   confidence: ExtractionConfidence;
+  /** Only read for electricity bills; undefined/empty means the charge lines were not read. */
+  lines?: ExtractedLine[] | null;
+}
+
+/** A charge line as typed on the form. */
+export interface EnteredLine {
+  line_type: "utility" | "generator" | "other";
+  units: number | null;
+  rate: number | null;
+  amount: number;
 }
 
 export interface EnteredBill {
@@ -22,9 +41,16 @@ export interface EnteredBill {
   /** The "Invoice Amount" field — expects the pre-GST amount. */
   amount: number | null;
   gstAmount: number | null;
+  /** Electricity bills: the charge lines, compared one by one with the invoice. */
+  lines?: EnteredLine[];
+  /** Electricity bills: GST rate in force (0 when off); part of what the seal is tied to. */
+  gstRate?: number | null;
 }
 
 export type InvoiceFindingCode =
+  | "line_not_on_invoice"
+  | "line_category_differs"
+  | "invoice_line_not_entered"
   | "amount_looks_gst_inclusive"
   | "amount_differs_subtotal"
   | "gst_differs"
@@ -122,6 +148,77 @@ export function completeAmounts(x: ExtractedInvoice): {
   return { subtotal, gst, total };
 }
 
+const UNITS_TOLERANCE = 0.05;
+const RATE_TOLERANCE = 0.01;
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const KIND_LABEL = { utility: "Utility/Grid", generator: "Generator", other: "Other charge" } as const;
+
+function describeEntered(l: EnteredLine): string {
+  if (l.line_type === "other") return `${KIND_LABEL.other} ${inr(l.amount)}`;
+  return `${KIND_LABEL[l.line_type]} ${l.units ?? 0} units × ${inr(l.rate ?? 0)} = ${inr(l.amount)}`;
+}
+function describeInvoiceLine(l: ExtractedLine): string {
+  const name = l.description ? `“${l.description}” ` : "";
+  const figures = l.units !== null && l.rate !== null ? `${l.units} units × ${inr(l.rate)} ` : "";
+  return `${name}${figures}${l.amount !== null ? `= ${inr(l.amount)}` : ""}`.trim();
+}
+
+export type LineMatchStatus = "match" | "category_differs" | "not_on_invoice";
+export interface LineMatch {
+  entered: EnteredLine;
+  status: LineMatchStatus;
+  /** The invoice row it was paired with, when there is one. */
+  invoice: ExtractedLine | null;
+}
+
+/**
+ * Pairs each typed charge line with a row printed on the invoice by its figures (units, rate, amount),
+ * not by wording, because landlords label the same charge in many ways. Each invoice row is used once.
+ * A pair whose figures agree but whose kind (grid versus generator) does not is flagged separately:
+ * the customer's bill is re-split from exactly this, so it is the mistake that matters most.
+ */
+export function compareLines(invoiceLines: ExtractedLine[], enteredLines: EnteredLine[]) {
+  const free = invoiceLines.map((l, i) => ({ l, i, used: false }));
+  const matches: LineMatch[] = [];
+
+  const figuresAgree = (e: EnteredLine, x: ExtractedLine) => {
+    const amountOk = x.amount !== null && near(e.amount, x.amount);
+    if (e.line_type === "other") return amountOk;
+    const unitsOk = x.units !== null && Math.abs((e.units ?? 0) - x.units) <= UNITS_TOLERANCE;
+    const rateOk = x.rate === null || e.rate === null || Math.abs(e.rate - x.rate) <= RATE_TOLERANCE;
+    return unitsOk && rateOk && (x.amount === null || amountOk);
+  };
+
+  for (const e of enteredLines) {
+    const hit = free.find((f) => !f.used && figuresAgree(e, f.l));
+    if (!hit) {
+      matches.push({ entered: e, status: "not_on_invoice", invoice: null });
+      continue;
+    }
+    hit.used = true;
+    const kindDiffers = e.line_type !== "other" && hit.l.kind !== null && hit.l.kind !== "other" && hit.l.kind !== e.line_type;
+    matches.push({ entered: e, status: kindDiffers ? "category_differs" : "match", invoice: hit.l });
+  }
+
+  const findings: InvoiceFinding[] = [];
+  for (const m of matches) {
+    if (m.status === "not_on_invoice") {
+      findings.push({ code: "line_not_on_invoice", message: `You entered ${describeEntered(m.entered)}; nothing on the invoice has those figures.` });
+    } else if (m.status === "category_differs" && m.invoice) {
+      findings.push({
+        code: "line_category_differs",
+        message: `${describeEntered(m.entered)} matches an invoice row that is ${KIND_LABEL[m.invoice.kind as "utility" | "generator"]}, but you entered it as ${KIND_LABEL[m.entered.line_type]}.`,
+      });
+    }
+  }
+  for (const f of free) {
+    if (!f.used && (f.l.amount ?? 0) > AMOUNT_TOLERANCE) {
+      findings.push({ code: "invoice_line_not_entered", message: `The invoice has ${describeInvoiceLine(f.l)} that is not in your entries.` });
+    }
+  }
+  return { matches, findings, unmatchedInvoice: free.filter((f) => !f.used).map((f) => f.l) };
+}
+
 export function checkInvoice({
   extracted,
   entered,
@@ -201,7 +298,24 @@ export function checkInvoice({
     }
   }
 
+  if (entered.lines && extracted.lines && extracted.lines.length > 0) {
+    findings.push(...compareLines(extracted.lines, entered.lines).findings);
+  }
+
   return findings;
+}
+
+/**
+ * Stands for "the charge lines and GST as they were when the invoice was checked". The seal is only
+ * shown while the bill still matches it, so editing a bill after the check can't keep the seal.
+ */
+export function fingerprintLines(lines: EnteredLine[], gstRate: number | null | undefined): string {
+  // Metered rows are identified by units and rate (what is stored); a typed row total can differ from
+  // units × rate by paise, and must not make an untouched bill look edited.
+  const rows = lines.map((l) =>
+    l.line_type === "other" ? `other|${r2(l.amount)}` : `${l.line_type}|${r2(l.units ?? 0)}|${Math.round((l.rate ?? 0) * 10000) / 10000}`,
+  );
+  return `${rows.join(";")}#gst${r2(gstRate ?? 0)}`;
 }
 
 /** What is kept with the bill so the approver sees the same warning the form showed (migration 00676). */
@@ -211,14 +325,49 @@ export const invoiceCheckRecordSchema = z.object({
   findings: z.array(z.object({ code: z.string().max(60), message: z.string().max(400) })).max(20),
   /** Why the person saved with differences still open (required by the electricity capture forms). */
   override_reason: z.string().trim().max(500).optional(),
+  /** True only when the invoice's charge lines were read and compared; absent on older records. */
+  lines_checked: z.boolean().optional(),
+  /** See fingerprintLines; absent on older records. */
+  entered_fingerprint: z.string().max(2000).optional(),
 });
 export type InvoiceCheckRecord = z.infer<typeof invoiceCheckRecordSchema>;
 
-export function buildInvoiceCheckRecord(extracted: ExtractedInvoice, findings: InvoiceFinding[], overrideReason?: string): InvoiceCheckRecord {
+export function buildInvoiceCheckRecord(
+  extracted: ExtractedInvoice,
+  findings: InvoiceFinding[],
+  overrideReason?: string,
+  entered?: EnteredBill,
+): InvoiceCheckRecord {
+  const linesChecked = !!(entered?.lines && extracted.lines && extracted.lines.length > 0);
   return {
     checked_at: new Date().toISOString(),
     confidence: extracted.confidence,
     findings: findings.map((f) => ({ code: f.code, message: f.message })),
     ...(overrideReason && overrideReason.trim() ? { override_reason: overrideReason.trim() } : {}),
+    ...(entered?.lines ? { lines_checked: linesChecked, entered_fingerprint: fingerprintLines(entered.lines, entered.gstRate) } : {}),
   };
+}
+
+export type InvoiceSealState = "verified" | "overridden" | "not_verified" | "changed_after";
+export interface InvoiceSeal {
+  state: InvoiceSealState;
+  /** One line a person can read: why it is, or isn't, sealed. */
+  reason: string;
+}
+
+/**
+ * Verified means: the invoice was read clearly, every charge line and the totals matched, nobody had to
+ * override a difference, and the bill hasn't been edited since. Anything less is never shown as verified.
+ */
+export function invoiceSeal(record: InvoiceCheckRecord | null | undefined, currentFingerprint: string | null): InvoiceSeal {
+  if (!record) return { state: "not_verified", reason: "The invoice was not checked against the entries. Compare them yourself." };
+  if (currentFingerprint !== null && record.entered_fingerprint !== undefined && record.entered_fingerprint !== currentFingerprint) {
+    return { state: "changed_after", reason: "The bill was edited after the invoice was checked. Compare it with the invoice again." };
+  }
+  if (record.findings.length > 0) {
+    return { state: "overridden", reason: record.override_reason ? `reason given: “${record.override_reason}”` : "it differed from the invoice." };
+  }
+  if (record.confidence === "low") return { state: "not_verified", reason: "The invoice was hard to read. Compare it with the entries yourself." };
+  if (!record.lines_checked) return { state: "not_verified", reason: "The charge lines were not read from the invoice. Compare them yourself." };
+  return { state: "verified", reason: "Bill number, date, vendor, every charge line, GST and total match the invoice." };
 }

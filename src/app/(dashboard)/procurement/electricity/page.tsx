@@ -31,6 +31,8 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
+import { InvoiceSealBadge } from "@/components/electricity/invoice-seal";
+import { fingerprintLines, invoiceSeal, type InvoiceCheckRecord } from "@/lib/procurement/invoice-check";
 import { LandlordInvoiceField, gstRateFromInvoice, useDuplicateWarning, useLandlordInvoice } from "@/components/electricity/landlord-invoice";
 import type { ExtractedInvoice, SuggestionField } from "@/lib/procurement/invoice-check";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -59,6 +61,8 @@ interface VendorBillInfo {
   due_date: string | null;
   /** Signed link to the landlord's invoice; null when none is on file. */
   invoice_url?: string | null;
+  /** What the invoice read found when the bill was saved; drives the verified seal. */
+  invoice_check?: InvoiceCheckRecord | null;
   vendor?: { id: string; name: string } | null;
 }
 
@@ -365,8 +369,11 @@ export default function ElectricityBillsPage() {
       vendorName: landlordVendor?.name ?? null,
       amount: grandTotal > 0 ? grandTotal : null,
       gstAmount: form.landlord_gst_applicable && landlordGstAmount > 0 ? landlordGstAmount : null,
+      lines: lines.map((l) => ({ line_type: l.line_type, units: l.line_type === "other" ? null : (l.units ?? 0), rate: l.line_type === "other" ? null : lineRate(l), amount: lineAmount(l) })),
+      gstRate: form.landlord_gst_applicable ? Number(form.landlord_gst_rate ?? 0) : 0,
     }),
-    [form.landlord_bill_number, form.landlord_bill_date, form.landlord_gst_applicable, grandTotal, landlordGstAmount, landlordVendor],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lineRate/lineAmount are plain functions of `lines`
+    [form.landlord_bill_number, form.landlord_bill_date, form.landlord_gst_applicable, form.landlord_gst_rate, grandTotal, landlordGstAmount, landlordVendor, lines],
   );
 
   // Bill number and date can be taken straight from the invoice; the amounts are built from the lines, so a
@@ -1288,6 +1295,22 @@ export default function ElectricityBillsPage() {
                                   {" · "}
                                   <Link href={`/procurement/bills/${vb.id}`} className="text-primary underline underline-offset-2">Open vendor bill</Link>
                                 </p>
+                                {vb.invoice_url && (
+                                  <InvoiceSealBadge
+                                    seal={invoiceSeal(
+                                      vb.invoice_check,
+                                      fingerprintLines(
+                                        bill.electricity_bill_lines.map((l) => ({
+                                          line_type: l.line_type,
+                                          units: l.line_type === "other" ? null : Number(l.units ?? 0),
+                                          rate: l.line_type === "other" ? null : Number(l.rate ?? 0),
+                                          amount: Number(l.amount ?? 0),
+                                        })),
+                                        bill.landlord_gst_applicable ? Number(bill.landlord_gst_rate ?? 0) : 0,
+                                      ),
+                                    )}
+                                  />
+                                )}
                                 {(() => {
                                   const invoiceUrl = vb.invoice_url ?? null;
                                   return invoiceUrl ? (

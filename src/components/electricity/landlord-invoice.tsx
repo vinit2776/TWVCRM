@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Paperclip, X } from "lucide-react";
+import { AlertTriangle, Check, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,12 +10,15 @@ import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procureme
 import {
   buildInvoiceCheckRecord,
   checkInvoice,
+  compareLines,
   completeAmounts,
+  invoiceSeal,
   type EnteredBill,
   type ExtractedInvoice,
   type InvoiceFinding,
   type SuggestionField,
 } from "@/lib/procurement/invoice-check";
+import { InvoiceSealBadge } from "@/components/electricity/invoice-seal";
 import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -44,7 +47,7 @@ export function useLandlordInvoice(onRead?: (extracted: ExtractedInvoice) => voi
     setFile(picked);
     const mine = ++seq.current;
     setCheck({ status: "loading" });
-    requestInvoiceExtraction(picked).then((extracted) => {
+    requestInvoiceExtraction(picked, { lines: true }).then((extracted) => {
       if (mine !== seq.current) return;
       setCheck(extracted ? { status: "ok", extracted } : { status: "unavailable" });
       if (extracted) onRead?.(extracted);
@@ -77,7 +80,7 @@ export function useLandlordInvoice(onRead?: (extracted: ExtractedInvoice) => voi
     check.status === "ok" ? checkInvoice({ extracted: check.extracted, entered, poCeiling: null }) : [];
 
   const recordFor = (entered: EnteredBill) =>
-    check.status === "ok" ? buildInvoiceCheckRecord(check.extracted, findingsFor(entered), overrideReason) : null;
+    check.status === "ok" ? buildInvoiceCheckRecord(check.extracted, findingsFor(entered), overrideReason, entered) : null;
 
   /** null when the bill may be saved; otherwise what is in the way. */
   const blockedReason = (entered: EnteredBill, duplicate: string | null = null): string | null => {
@@ -120,6 +123,47 @@ export function gstRateFromInvoice(extracted: ExtractedInvoice): number | null {
   return pct > 0 && pct <= 40 ? pct : 18;
 }
 
+const inr = (n: number | null) => (n === null ? "—" : `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`);
+const KIND = { utility: "Utility", generator: "Generator", other: "Other" } as const;
+
+/** Each typed charge line beside the invoice row it was matched to, so a wrong unit, rate or category is visible. */
+function LineCheck({ extracted, entered }: { extracted: ExtractedInvoice; entered: EnteredBill }) {
+  if (!entered.lines || entered.lines.length === 0) return null;
+  if (!extracted.lines || extracted.lines.length === 0) {
+    return <p className="text-xs text-muted-foreground">The charge lines could not be read from the invoice, so they are not checked.</p>;
+  }
+  const { matches, unmatchedInvoice } = compareLines(extracted.lines, entered.lines);
+  return (
+    <div className="rounded-md border text-xs overflow-hidden">
+      <table className="w-full">
+        <thead className="bg-muted/40 text-muted-foreground">
+          <tr><th className="text-left font-normal px-2 py-1">You entered</th><th className="text-left font-normal px-2 py-1">The invoice says</th><th className="w-6" /></tr>
+        </thead>
+        <tbody>
+          {matches.map((m, i) => (
+            <tr key={i} className="border-t">
+              <td className="px-2 py-1">
+                {KIND[m.entered.line_type]}{m.entered.line_type !== "other" ? ` · ${m.entered.units ?? 0} × ${inr(m.entered.rate)}` : ""} = {inr(m.entered.amount)}
+              </td>
+              <td className="px-2 py-1 text-muted-foreground">
+                {m.invoice ? `${m.invoice.description ?? KIND[m.invoice.kind ?? "other"]}${m.invoice.units !== null ? ` · ${m.invoice.units} × ${inr(m.invoice.rate)}` : ""} = ${inr(m.invoice.amount)}` : "No row with these figures"}
+              </td>
+              <td className="px-1">{m.status === "match" ? <Check className="h-3.5 w-3.5 text-emerald-600" aria-label="Matches" /> : <X className="h-3.5 w-3.5 text-red-600" aria-label="Differs" />}</td>
+            </tr>
+          ))}
+          {unmatchedInvoice.filter((l) => (l.amount ?? 0) > 1).map((l, i) => (
+            <tr key={`u${i}`} className="border-t">
+              <td className="px-2 py-1 text-muted-foreground">Not entered</td>
+              <td className="px-2 py-1 text-muted-foreground">{l.description ?? KIND[l.kind ?? "other"]}{l.units !== null ? ` · ${l.units} × ${inr(l.rate)}` : ""} = {inr(l.amount)}</td>
+              <td className="px-1"><X className="h-3.5 w-3.5 text-red-600" aria-label="Missing" /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 interface FieldProps {
   invoice: ReturnType<typeof useLandlordInvoice>;
   duplicate?: string | null;
@@ -160,6 +204,14 @@ export function LandlordInvoiceField({ invoice, duplicate, entered, onApply, rep
         </p>
       )}
       <InvoiceCheckCard state={check} entered={entered} poCeiling={null} onApply={onApply} />
+      {check.status === "ok" && <LineCheck extracted={check.extracted} entered={entered} />}
+      {file && check.status !== "idle" && check.status !== "loading" && (
+        <InvoiceSealBadge
+          seal={check.status === "ok"
+            ? invoiceSeal(invoice.recordFor(entered), null)
+            : { state: "not_verified", reason: "The invoice could not be read automatically. Compare it with your entries by eye." }}
+        />
+      )}
       {findings.length > 0 && (
         <p className="flex items-start gap-1.5 text-xs text-amber-800 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5">
           <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />

@@ -128,7 +128,7 @@ export async function GET(request: NextRequest) {
       vendorBillIds.length > 0
         ? supabase
             .from("vendor_bills")
-            .select("id, invoice_number, total_amount, amount_paid, payment_status, approval_status, due_date, invoice_file_url, vendor:procurement_vendors(id, name), documents:vendor_bill_documents(file_url, doc_type)")
+            .select("id, invoice_number, total_amount, amount_paid, payment_status, approval_status, due_date, invoice_file_url, invoice_check, vendor:procurement_vendors(id, name), documents:vendor_bill_documents(file_url, doc_type)")
             .in("id", vendorBillIds)
         : Promise.resolve({ data: [] as Record<string, unknown>[] }),
       !canSeeRebilling
@@ -163,7 +163,7 @@ export async function GET(request: NextRequest) {
       }
     };
     const vendorBillRows = await Promise.all(
-      ((vendorBillsRes.data ?? []) as Record<string, unknown>[]).map(async (v) => {
+      ((vendorBillsRes.data ?? []) as Record<string, unknown>[]).map(async (v): Promise<Record<string, unknown>> => {
         const docs = (v.documents as { file_url: string; doc_type: string }[] | null) ?? [];
         const stored = docs.find((d) => d.doc_type === "invoice")?.file_url ?? (v.invoice_file_url as string | null);
         const { documents: _documents, invoice_file_url: _file, ...rest } = v;
