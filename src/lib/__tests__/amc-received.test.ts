@@ -7,6 +7,10 @@ describe("amcNotReceived", () => {
       expect(amcNotReceived({ status })).toBe(true);
     }
   });
+  it("never applies to a service PO, which has no goods to receive", () => {
+    expect(amcNotReceived({ status: "ordered", po_type: "service" })).toBe(false);
+    expect(amcNotReceived({ status: "ordered", po_type: "goods" })).toBe(true);
+  });
   it("is quiet once received, billed, or when terminated", () => {
     for (const status of ["received", "invoice_received", "invoice_approved"]) {
       expect(amcNotReceived({ status })).toBe(false);

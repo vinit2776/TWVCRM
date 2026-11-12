@@ -1369,6 +1369,23 @@ export default function PurchaseOrderDetailPage() {
                   {amcNotReceived(po) && (
                     <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                       <AlertTriangle className="h-3 w-3" /> {AMC_NOT_RECEIVED_WARNING}
+                      {po.status === "pending" ? (
+                        <span>— mark the PO as ordered (top of the page), then record the delivery.</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="font-medium underline"
+                          onClick={() => {
+                            const initial: Record<string, string> = {};
+                            for (const item of po.purchase_order_items ?? []) initial[item.id] = "";
+                            setDcQtys(initial);
+                            setDcDate(today);
+                            setActionDialog("record_delivery");
+                          }}
+                        >
+                          Record the delivery challan
+                        </button>
+                      )}
                     </span>
                   )}
                 </div>
@@ -1416,7 +1433,7 @@ export default function PurchaseOrderDetailPage() {
                 <div className="mx-6 mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
                   <div className="mb-1 flex items-center gap-1 font-medium"><AlertTriangle className="h-3.5 w-3.5" /> Check the assets on this AMC</div>
                   {notAssets.length > 0 && (
-                    <p className="mb-1">AMC covers assets only. Not linked to an asset: {notAssets.join(", ")}.</p>
+                    <p className="mb-1">AMC covers assets only. Not linked to an asset: {notAssets.join(", ")}. <Link href="/facility/assets" className="font-medium underline">Add the asset in Facility → Assets</Link>, then use its AMC tab → Set up AMC to cover it.</p>
                   )}
                   <ul className="space-y-0.5">
                     {assetsToFix.map(({ asset, gaps }) => (

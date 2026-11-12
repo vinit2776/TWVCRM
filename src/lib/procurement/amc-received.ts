@@ -9,7 +9,9 @@ const NOT_RECEIVED = ["pending", "ordered", "partially_received"];
 export const AMC_NOT_RECEIVED_WARNING =
   "Item not received yet — an AMC normally covers an item that has been received.";
 
-export function amcNotReceived(po: { status: string; amc_terminated_at?: string | null }): boolean {
+export function amcNotReceived(po: { status: string; po_type?: string | null; amc_terminated_at?: string | null }): boolean {
+  // A service PO has no goods to receive; the asset's own purchase PO carries that check.
+  if (po.po_type === "service") return false;
   return !po.amc_terminated_at && NOT_RECEIVED.includes(po.status);
 }
 
