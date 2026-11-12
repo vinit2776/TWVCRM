@@ -18,6 +18,8 @@ const {
   effectivePunches, autoCheckoutDue, dayEndTimestamp, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, BRANCH_SHIFT_RULES_FROM, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
+const { cleanNote, ordinal, earlierAttempts, reapplyError, decisionNoteSuffix, NOTE_MAX_LENGTH } = require('./request-notes');
+const { checkCertificate } = require('./certificate-check');
 const {
   DEVICE_POLL_SECONDS, DEVICE_OFFLINE_MINUTES, DEVICE_COMMAND_TIMEOUT_MINUTES, RESYNC_OVERLAP_MINUTES,
   shiftTs, minutesSince, formatDuration, isDeviceOffline, shouldShowOfflineAlert,
@@ -377,6 +379,20 @@ const SETTING_DEFS = [
       if (value < LAUNCH_DATE) return `Branch shift rules apply from cannot be before the launch date (${LAUNCH_DATE}).`;
       return null;
     },
+  },
+  {
+    key: 'CERTIFICATE_CHECK',
+    label: 'Check medical certificates with Claude',
+    help: "When on, each medical certificate attached to a Sick Leave request is sent to Anthropic's API (Claude) together with the employee's name and the leave dates. Claude reads the name, dates and signature, and managers see whether they match the leave next to the certificate. It's advice only: nothing is approved, rejected or blocked automatically. Needs the Anthropic API key below. While off, certificates still upload and show as not checked.",
+    fallback: 'off',
+    options: [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }],
+  },
+  {
+    key: 'ANTHROPIC_API_KEY',
+    label: 'Anthropic API key',
+    help: 'Used only by the medical certificate check above (console.anthropic.com). While empty no certificate is checked.',
+    secret: true,
+    fallback: '',
   },
   {
     key: 'PUNCHIN_REMINDER_WINDOW',
@@ -906,6 +922,25 @@ const SCHEMA_SQL = `
     uploaded_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_employee_documents_emp ON employee_documents(employee_id, doc_type);
+  -- Medical certificates attached to Sick Leave requests. An employee can replace one
+  -- while the request is pending, so the newest row per request is the one that counts.
+  -- check_* hold the optional Claude check (see certificate-check.js): 'not_checked',
+  -- 'ok', 'flagged' or 'error', with a one-line summary and the findings as JSON.
+  CREATE TABLE IF NOT EXISTS leave_certificates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    leave_request_id INTEGER NOT NULL,
+    employee_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    uploaded_at TEXT NOT NULL,
+    check_status TEXT NOT NULL DEFAULT 'not_checked',
+    check_summary TEXT NOT NULL DEFAULT '',
+    check_findings TEXT NOT NULL DEFAULT '[]',
+    checked_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_leave_certificates_req ON leave_certificates(leave_request_id, id);
 `;
 
 const {
@@ -1117,6 +1152,18 @@ async function init() {
     await db.exec("UPDATE field_trips SET status = 'approved'");
   } catch { /* already exists */ }
   try { await db.exec('ALTER TABLE field_trips ADD COLUMN decided_at TEXT'); } catch { /* already exists */ }
+
+  // Every apply/approve flow keeps the manager's note and who decided, and a request
+  // filed again after a rejection points back at the one it replaces (see
+  // request-notes.js). Older decisions simply have no note. Field trips get the
+  // employee's reason too, which they never had. One try per column, as above.
+  for (const table of ['leave_requests', 'permission_requests', 'correction_requests', 'overtime_requests', 'field_trips']) {
+    for (const col of ['decision_note TEXT', 'decided_by TEXT', 'previous_request_id INTEGER']) {
+      try { await db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch { /* already exists */ }
+    }
+    try { await db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_prev ON ${table}(previous_request_id)`); } catch { /* column missing on a very old db */ }
+  }
+  try { await db.exec("ALTER TABLE field_trips ADD COLUMN reason TEXT DEFAULT ''"); } catch { /* already exists */ }
 
   // India's three compulsory national holidays (Republic Day, Independence Day, Gandhi
   // Jayanti) — fixed Gregorian dates, mandated nationwide regardless of state, unlike
@@ -1483,7 +1530,9 @@ const CORRECTION_KINDS = ['check_in', 'check_out', 'both'];
 // between. forApproval skips the "current month, not in the future" window, which only
 // limits what an employee can file — a request filed on the 31st can be approved on the 1st.
 // Returns null if valid, else { key, vars } for an i18n 'corrections.err_*' message.
-async function validateCorrection(employee, c, { excludeId = null, forApproval = false } = {}) {
+// refiling: an "Apply again" for the same date as a rejected request that was filed in
+// time — the manager's rejection may come after the window closed, so it's waived.
+async function validateCorrection(employee, c, { excludeId = null, forApproval = false, refiling = false } = {}) {
   const err = (key, vars) => ({ key: `corrections.err_${key}`, vars });
   if (!CORRECTION_KINDS.includes(c.kind)) return err('kind');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(c.date || '')) return err('date');
@@ -1494,7 +1543,7 @@ async function validateCorrection(employee, c, { excludeId = null, forApproval =
   if (needOut && !isTime(c.check_out_time)) return err('out_time');
   if (c.kind === 'both' && c.check_out_time <= c.check_in_time) return err('out_before_in');
   const today = todayStr();
-  if (!forApproval) {
+  if (!forApproval && !refiling) {
     if (c.date > today) return err('future_date');
     if (c.date.slice(0, 7) !== today.slice(0, 7)) return err('other_month');
     if (employee.date_joined && c.date < employee.date_joined) return err('before_joining');
@@ -1555,6 +1604,242 @@ async function getOvertimeRequests(employeeId) {
 }
 async function getAllOvertimeRequests() {
   return await db.prepare('SELECT * FROM overtime_requests ORDER BY requested_at DESC').all();
+}
+
+// --- Reasons, manager notes and filing again (shared by leave, permission, corrections,
+// overtime and field trips; rules in request-notes.js) ---
+// Only these table names are ever interpolated into the SQL below.
+const REQUEST_TABLE_NAMES = new Set(['leave_requests', 'permission_requests', 'correction_requests', 'overtime_requests', 'field_trips']);
+function requestTable(table) {
+  if (!REQUEST_TABLE_NAMES.has(table)) throw new Error(`Unknown request table ${table}`);
+  return table;
+}
+async function getRequestById(table, id) {
+  return await db.prepare(`SELECT * FROM ${requestTable(table)} WHERE id = ?`).get(id);
+}
+// Ids of requests that have already been filed again, so their "Apply again" is gone.
+async function reappliedIds(table) {
+  const rows = await db.prepare(`SELECT previous_request_id AS id FROM ${requestTable(table)} WHERE previous_request_id IS NOT NULL`).all();
+  return new Set(rows.map(r => r.id));
+}
+// The rejected request an "Apply again" form points at, checked: { previous } or { errorKey }.
+// No previous_request_id at all is a fresh application: { previous: null }.
+async function resolveReapply(table, rawPreviousId, employeeId) {
+  if (!rawPreviousId) return { previous: null };
+  const previous = await getRequestById(table, rawPreviousId);
+  const reapplied = previous
+    ? !!(await db.prepare(`SELECT id FROM ${requestTable(table)} WHERE previous_request_id = ? LIMIT 1`).get(previous.id))
+    : false;
+  const errorKey = reapplyError(previous, employeeId, reapplied);
+  return errorKey ? { errorKey } : { previous };
+}
+// Records the decision only while the request is still pending, so a double-click or two
+// managers deciding at once can't decide it twice. Returns true if this call decided it.
+async function claimDecision(table, id, status, note, user) {
+  const result = await db.prepare(
+    `UPDATE ${requestTable(table)} SET status = ?, decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ? AND status = 'pending'`
+  ).run(status, formatTimestamp(new Date()), user.username, note, id);
+  return !!result.changes;
+}
+// The note a manager typed on a decide form: { action, note } or { error } (i18n key).
+function readDecision(form) {
+  const action = form.action === 'approve' || form.action === 'reject' ? form.action : null;
+  if (!action) return { error: 'notes.err_action' };
+  const note = cleanNote(form.note);
+  return note.error ? { error: note.error } : { action, note: note.value };
+}
+async function sendDecisionError(res, user, errorKey, backPath, activeNav) {
+  return sendHtml(res, await pageShell('Note needed', '', activeNav, `
+    <div class="card" style="color:#C62828;">${escapeHtml(t('en', errorKey, { max: NOTE_MAX_LENGTH }))}</div>
+    <div class="card"><a href="${escapeHtml(backPath)}">&larr; Back</a></div>`, user));
+}
+// Approve/Reject with the required note, replacing the old one-click buttons.
+function decideFormHtml(actionPath, fields) {
+  const inputs = Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(String(v))}">`).join('');
+  return `<form method="POST" action="${actionPath}" class="decide-form" style="min-width:140px;">${inputs}
+    <textarea name="note" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" rows="2" placeholder="Note for the employee (required)" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;border:1px solid #D0D5DA;font:inherit;font-size:0.9em;"></textarea>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">
+      <button type="submit" name="action" value="approve" style="padding:5px 12px;border-radius:6px;border:1px solid #2E7D32;background:#fff;color:#2E7D32;font-weight:600;cursor:pointer;">Approve</button>
+      <button type="submit" name="action" value="reject" style="padding:5px 12px;border-radius:6px;border:1px solid #C62828;background:#fff;color:#C62828;font-weight:600;cursor:pointer;">Reject</button>
+    </div>
+  </form>`;
+}
+// Earlier attempts behind a request, each with what the employee said and why it was
+// turned down. byId is a Map of already-loaded rows; anything older is fetched.
+async function earlierAttemptsHtml(table, request, byId, lang = 'en', describe = null) {
+  const chain = await earlierAttempts(request, async id => byId.get(id) || await getRequestById(table, id));
+  if (!chain.length) return '';
+  const items = chain.map((r, i) => `
+    <div style="margin-top:4px;">
+      <span style="font-weight:600;">${escapeHtml(t(lang, 'notes.attempt', { n: ordinal(i + 1) }))}${describe ? ` · ${escapeHtml(describe(r))}` : ''}</span><br>
+      ${escapeHtml(t(lang, 'notes.their_reason'))} ${escapeHtml(r.reason || '—')}<br>
+      ${escapeHtml(t(lang, 'notes.rejected_by', { who: r.decided_by || '—', date: (r.decided_at || '').slice(0, 10) }))} ${escapeHtml(r.decision_note || '—')}
+    </div>`).join('');
+  return `<div style="border-left:3px solid #D0D5DA;padding:2px 0 2px 8px;margin-top:6px;font-size:0.85em;color:#5F6B7A;">${items}</div>`;
+}
+function attemptBadge(request, attemptsBefore, lang = 'en') {
+  if (!request.previous_request_id) return '';
+  return ` <span style="display:inline-block;padding:1px 8px;border-radius:999px;font-size:0.78em;font-weight:600;background:#FFF4E5;color:#8A5300;">${escapeHtml(t(lang, 'notes.attempt', { n: ordinal(attemptsBefore + 1) }))}</span>`;
+}
+// The manager's note on a decided request, for history tables.
+function decisionNoteHtml(r) {
+  if (!r.decision_note) return '<span style="color:#9AA5B1;">—</span>';
+  return `${escapeHtml(r.decision_note)}${r.decided_by ? `<br><span style="color:#9AA5B1;font-size:0.85em;">${escapeHtml(r.decided_by)}</span>` : ''}`;
+}
+// What sits under a rejected request on the employee's own page.
+function reapplyLinkHtml(href, r, reapplied, lang) {
+  if (r.status !== 'rejected') return '';
+  if (reapplied.has(r.id)) return `<div style="font-size:0.82em;color:#7C8896;margin-top:4px;">${escapeHtml(t(lang, 'notes.reapplied'))}</div>`;
+  return `<div style="margin-top:6px;"><a href="${escapeHtml(href)}" style="font-weight:600;color:#1565C0;">${escapeHtml(t(lang, 'notes.apply_again'))} &rarr;</a></div>`;
+}
+// Banner above a form opened from "Apply again".
+function reapplyBannerHtml(previous, lang, describe) {
+  return `<div style="background:#FFF4E5;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:0.9em;">
+    <div style="font-weight:700;margin-bottom:4px;">${escapeHtml(t(lang, 'notes.reapply_title', { what: describe(previous) }))}</div>
+    <div>${escapeHtml(t(lang, 'notes.your_reason'))} ${escapeHtml(previous.reason || '—')}</div>
+    <div>${escapeHtml(t(lang, 'notes.manager_note', { who: previous.decided_by || '—' }))} ${escapeHtml(previous.decision_note || '—')}</div>
+    <div style="color:#7C8896;margin-top:4px;">${escapeHtml(t(lang, 'notes.reapply_hint'))}</div>
+  </div>`;
+}
+
+// --- Medical certificates on Sick Leave ---
+const CERTIFICATE_LEAVE_TYPE = 'Sick Leave';
+const MAX_CERTIFICATE_FORM_BYTES = 3.5 * 1024 * 1024; // a 2MB file, base64, url-encoded
+// Newest certificate per leave request, without the file itself.
+async function latestCertificatesByRequest(requestIds) {
+  if (!requestIds.length) return new Map();
+  const rows = await db.prepare(
+    `SELECT id, leave_request_id, filename, content_type, size_bytes, uploaded_at, check_status, check_summary, check_findings, checked_at
+     FROM leave_certificates WHERE leave_request_id IN (${requestIds.map(() => '?').join(',')}) ORDER BY id ASC`
+  ).all(...requestIds);
+  return new Map(rows.map(r => [r.leave_request_id, r]));
+}
+// From the hidden certificate_* fields a leave form fills in before submitting:
+// { file } (or { file: null } when none was chosen) or { errorKey }.
+function readCertificateFields(form) {
+  if (!form.certificate_data) return { file: null };
+  const contentType = String(form.certificate_type || '');
+  if (!ALLOWED_DOCUMENT_CONTENT_TYPES.includes(contentType)) return { errorKey: 'leave.cert_err_type' };
+  let data;
+  try { data = Buffer.from(String(form.certificate_data), 'base64'); } catch { return { errorKey: 'leave.cert_err_type' }; }
+  if (data.length === 0 || data.length > MAX_DOCUMENT_BYTES) return { errorKey: 'leave.cert_err_size' };
+  return { file: { filename: String(form.certificate_name || 'certificate').slice(0, 255), contentType, data } };
+}
+async function saveCertificate(leaveRequest, file) {
+  const result = await db.prepare(
+    'INSERT INTO leave_certificates (leave_request_id, employee_id, filename, content_type, size_bytes, data, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(leaveRequest.id, leaveRequest.employee_id, file.filename, file.contentType, file.data.length, file.data, formatTimestamp(new Date()));
+  return Number(result.lastInsertRowid);
+}
+// Runs the Claude check on one stored certificate if the setting is on, and stores the
+// result. A failure is stored as 'error' (the manager can press Check again); a function
+// timeout leaves it 'not_checked', which offers the same button.
+async function runCertificateCheck(certificateId) {
+  if (CONFIG.CERTIFICATE_CHECK !== 'on') return null;
+  const cert = await db.prepare('SELECT * FROM leave_certificates WHERE id = ?').get(certificateId);
+  if (!cert) return null;
+  const request = await getRequestById('leave_requests', cert.leave_request_id);
+  const employee = request && await getEmployee(request.employee_id);
+  if (!employee) return null;
+  const data = Buffer.isBuffer(cert.data) ? cert.data : Buffer.from(cert.data);
+  const result = await checkCertificate({
+    apiKey: CONFIG.ANTHROPIC_API_KEY,
+    employeeName: employee.name,
+    leaveStart: request.start_date,
+    leaveEnd: request.end_date,
+    today: todayStr(),
+    contentType: cert.content_type,
+    dataBase64: data.toString('base64'),
+  });
+  await db.prepare('UPDATE leave_certificates SET check_status = ?, check_summary = ?, check_findings = ?, checked_at = ? WHERE id = ?')
+    .run(result.status, result.summary, JSON.stringify(result.findings || []), formatTimestamp(new Date()), certificateId);
+  return result;
+}
+// The manager's view of a Sick Leave request's certificate: link, check result, and a
+// Check button when the check is on.
+function certificateCellHtml(request, cert) {
+  if (request.leave_type !== CERTIFICATE_LEAVE_TYPE) return '';
+  if (!cert) return `<div style="margin-top:6px;font-size:0.85em;color:#9AA5B1;">No medical certificate attached</div>`;
+  const link = `<a href="/leave/certificate?id=${cert.id}" target="_blank" rel="noopener" style="font-weight:600;">View medical certificate</a>`;
+  const styles = { ok: ['#E8F5E9', '#2E7D32', 'Check: looks right'], flagged: ['#FDECEA', '#C62828', 'Check: needs a look'], error: ['#FFF4E5', '#8A5300', "Check: couldn't run"] };
+  let check = '';
+  if (styles[cert.check_status]) {
+    const [bg, fg, label] = styles[cert.check_status];
+    let findings = [];
+    try { findings = JSON.parse(cert.check_findings || '[]'); } catch { /* shown as summary only */ }
+    const list = findings.length
+      ? `<ul style="margin:4px 0 0 16px;padding:0;">${findings.map(f => `<li style="color:${f.ok ? '#2E7D32' : '#C62828'};">${escapeHtml(f.text)}</li>`).join('')}</ul>`
+      : `<div>${escapeHtml(cert.check_summary)}</div>`;
+    check = `<div style="margin-top:4px;background:${bg};color:${fg};border-radius:6px;padding:6px 8px;font-size:0.85em;"><strong>${label}</strong>${list}<div style="color:#7C8896;margin-top:3px;">Advice only. You decide.</div></div>`;
+  } else if (CONFIG.CERTIFICATE_CHECK !== 'on') {
+    check = `<div style="font-size:0.82em;color:#9AA5B1;margin-top:2px;">Not checked (automatic check is off)</div>`;
+  } else {
+    check = `<div style="font-size:0.82em;color:#9AA5B1;margin-top:2px;">Not checked yet</div>`;
+  }
+  const recheck = CONFIG.CERTIFICATE_CHECK === 'on' && request.status === 'pending'
+    ? actionButton('/leave/certificate/check', { id: cert.id }, cert.check_status === 'not_checked' ? 'Check now' : 'Check again', '#1565C0')
+    : '';
+  return `<div style="margin-top:6px;font-size:0.9em;">${link}${check}${recheck ? `<div style="margin-top:4px;font-size:0.85em;">${recheck}</div>` : ''}</div>`;
+}
+// Client side of the certificate picker: shrinks photos (a phone camera shot can be
+// several MB) and puts the file into hidden fields, since these forms are plain posts.
+// A function, not a constant: MAX_DOCUMENT_BYTES is declared further down the file.
+function certificateFormScript() {
+  return `
+<script>
+function certResize(file) {
+  return new Promise(function (resolve, reject) {
+    var img = new Image(), url = URL.createObjectURL(file);
+    img.onload = function () {
+      var w = img.naturalWidth, h = img.naturalHeight, max = 1600;
+      if (w > max || h > max) { if (w > h) { h = Math.round(h * max / w); w = max; } else { w = Math.round(w * max / h); h = max; } }
+      var c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h); URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+    };
+    img.onerror = function () { reject(new Error('read')); };
+    img.src = url;
+  });
+}
+function certFileToBase64(file) {
+  return new Promise(function (resolve, reject) {
+    var r = new FileReader();
+    r.onload = function () { resolve(String(r.result).split(',')[1]); };
+    r.onerror = reject; r.readAsDataURL(file);
+  });
+}
+document.querySelectorAll('form[data-cert-form]').forEach(function (form) {
+  var busy = false;
+  form.addEventListener('submit', function (e) {
+    var input = form.querySelector('input[type=file]');
+    var file = input && input.files[0];
+    if (busy || !file || form.dataset.ready) return;
+    e.preventDefault();
+    var err = form.querySelector('.cert-error'), btn = form.querySelector('button[type=submit]');
+    var isPdf = file.type === 'application/pdf';
+    if (!isPdf && !/^image\\//.test(file.type)) { err.textContent = form.dataset.errType; return; }
+    busy = true; if (btn) { btn.disabled = true; btn.textContent = form.dataset.busy; }
+    (isPdf ? certFileToBase64(file) : certResize(file)).then(function (b64) {
+      if (b64.length * 0.75 > ${MAX_DOCUMENT_BYTES}) throw new Error('size');
+      form.querySelector('[name=certificate_data]').value = b64;
+      form.querySelector('[name=certificate_type]').value = isPdf ? 'application/pdf' : 'image/jpeg';
+      form.querySelector('[name=certificate_name]').value = file.name;
+      input.value = ''; form.dataset.ready = '1'; form.submit();
+    }).catch(function (x) {
+      busy = false; if (btn) { btn.disabled = false; btn.textContent = form.dataset.label; }
+      err.textContent = x && x.message === 'size' ? form.dataset.errSize : form.dataset.errType;
+    });
+  });
+});
+</script>`;
+}
+function certificateFieldsHtml() {
+  return `<input type="file" accept="image/*,application/pdf" style="font-size:0.85em;max-width:230px;">
+    <input type="hidden" name="certificate_data"><input type="hidden" name="certificate_type"><input type="hidden" name="certificate_name">
+    <div class="cert-error" style="color:#C62828;font-size:0.82em;"></div>`;
+}
+function certificateFormData(lang, label) {
+  return `data-cert-form data-busy="${escapeHtml(t(lang, 'leave.cert_uploading'))}" data-label="${escapeHtml(label)}" data-err-type="${escapeHtml(t(lang, 'leave.cert_err_type'))}" data-err-size="${escapeHtml(t(lang, 'leave.cert_err_size'))}"`;
 }
 async function getApprovedOvertimeForDate(employeeId, dateStr) {
   return await db.prepare(
@@ -3071,37 +3356,62 @@ async function renderCalendar(employee, year, month, user) {
   return pageShell(t(lang, 'calendar.title'), employee.id, 'calendar', body, user);
 }
 
-async function renderLeave(employee, balances, requests, user, error) {
+async function renderLeave(employee, balances, requests, user, error, prefill = {}) {
   const isAdmin = isManagementRole(user);
   const lang = langOf(user);
   const balanceCards = leaveBalanceCardsHtml(balances, lang);
+  const previous = prefill.previous || null;
+  const selectedType = prefill.leave_type || (previous && previous.leave_type) || '';
 
-  const typeOptions = LEAVE_TYPES.map(lt => `<option value="${escapeHtml(lt)}">${escapeHtml(t(lang, `leave_type.${lt}`))}</option>`).join('');
+  const typeOptions = LEAVE_TYPES.map(lt => `<option value="${escapeHtml(lt)}" ${lt === selectedType ? 'selected' : ''}>${escapeHtml(t(lang, `leave_type.${lt}`))}</option>`).join('');
 
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const reapplied = await reappliedIds('leave_requests');
+  const certs = await latestCertificatesByRequest(requests.filter(r => r.leave_type === CERTIFICATE_LEAVE_TYPE).map(r => r.id));
+  const describe = r => `${t(lang, `leave_type.${r.leave_type}`)}, ${r.start_date} – ${r.end_date}`;
+  const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('leave_requests', id))).length;
 
-  const pendingRows = pending.map(r => `
+  // An employee's own Sick Leave: whether a certificate is on file, and a picker to add
+  // or replace one while the request is pending. The check result is for managers only.
+  const certificateStateHtml = r => {
+    if (r.leave_type !== CERTIFICATE_LEAVE_TYPE) return '';
+    const cert = certs.get(r.id);
+    const state = cert
+      ? `<div style="font-size:0.85em;color:#2E7D32;margin-top:4px;">✓ ${escapeHtml(t(lang, 'leave.cert_attached'))}</div>`
+      : `<div style="font-size:0.85em;color:#7C8896;margin-top:4px;">${escapeHtml(t(lang, 'leave.cert_none'))}</div>`;
+    if (r.status !== 'pending' || isAdmin) return state;
+    const label = t(lang, cert ? 'leave.cert_replace' : 'leave.cert_add');
+    return `${state}<form method="POST" action="/leave/certificate" ${certificateFormData(lang, label)} style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <input type="hidden" name="leave_request_id" value="${r.id}">${certificateFieldsHtml()}
+      <button type="submit" style="padding:4px 10px;border-radius:6px;border:1px solid #1565C0;background:#fff;color:#1565C0;font-weight:600;font-size:0.85em;">${escapeHtml(label)}</button>
+    </form>`;
+  };
+
+  const pendingRows = (await Promise.all(pending.map(async r => `
     <tr>
-      <td>${escapeHtml(t(lang, `leave_type.${r.leave_type}`))}</td>
+      <td>${escapeHtml(t(lang, `leave_type.${r.leave_type}`))}${attemptBadge(r, await attemptsBefore(r), lang)}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('leave_requests', r, byId, lang)}</td>
       <td>
         ${isAdmin
-          ? actionButton('/leave/decide', { id: r.id, action: 'approve', employee_id: employee.id }, 'Approve', '#2E7D32', true) +
-            actionButton('/leave/decide', { id: r.id, action: 'reject', employee_id: employee.id }, 'Reject', '#C62828')
+          ? decideFormHtml('/leave/decide', { id: r.id, employee_id: employee.id })
           : statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)}
+        ${certificateStateHtml(r)}
       </td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'leave.no_pending')}</td></tr>`;
+    </tr>`))).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'leave.no_pending')}</td></tr>`;
 
   const historyRows = history.map(r => `
     <tr>
       <td>${escapeHtml(t(lang, `leave_type.${r.leave_type}`))}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
-      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'leave.no_history')}</td></tr>`;
+      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}${certificateStateHtml(r)}${isAdmin ? '' : reapplyLinkHtml(`/leave?reapply=${r.id}`, r, reapplied, lang)}</td>
+      <td>${decisionNoteHtml(r)}</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'leave.no_history')}</td></tr>`;
 
+  const applyLabel = t(lang, previous ? 'notes.submit_again' : 'leave.apply_btn');
   const body = `
     ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
     <div class="card">
@@ -3109,28 +3419,46 @@ async function renderLeave(employee, balances, requests, user, error) {
       <div style="display:flex;gap:12px;flex-wrap:wrap;">${balanceCards}</div>
     </div>
     ${isAdmin ? `<div class="card" style="color:#7C8896;font-size:0.9em;">Employees apply for their own leave — admin can only review and approve/reject below.</div>` : `
-    <div class="card">
+    <div class="card" id="apply">
       <div style="font-weight:700;margin-bottom:12px;">${t(lang, 'leave.apply_title')}</div>
-      <form method="POST" action="/leave/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      ${previous ? reapplyBannerHtml(previous, lang, describe) : ''}
+      <form method="POST" action="/leave/apply" ${certificateFormData(lang, applyLabel)} style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="employee_id" value="${escapeHtml(employee.id)}">
+        ${previous ? `<input type="hidden" name="previous_request_id" value="${previous.id}">` : ''}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.type')}</label>
-          <select name="leave_type" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;">${typeOptions}</select>
+          <select name="leave_type" id="leaveType" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;">${typeOptions}</select>
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.from')}</label>
-          <input type="date" name="start_date" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="start_date" required value="${escapeHtml(prefill.start_date || (previous && previous.start_date) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.to')}</label>
-          <input type="date" name="end_date" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="end_date" required value="${escapeHtml(prefill.end_date || (previous && previous.end_date) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div style="flex:1;min-width:140px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.reason')}</label>
-          <input type="text" name="reason" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.reason')} *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'leave.apply_btn')}</button>
+        <div id="certField" style="flex-basis:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.cert_label')}</label>
+          ${certificateFieldsHtml()}
+          <div style="font-size:0.78em;color:#9AA5B1;">${t(lang, previous && certs.get(previous.id) ? 'leave.cert_hint_reapply' : 'leave.cert_hint')}</div>
+        </div>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${escapeHtml(applyLabel)}</button>
       </form>
+      <script>
+        (function () {
+          var type = document.getElementById('leaveType'), field = document.getElementById('certField');
+          function update() {
+            var sick = type.value === ${JSON.stringify(CERTIFICATE_LEAVE_TYPE)};
+            field.style.display = sick ? '' : 'none';
+            if (!sick) field.querySelector('input[type=file]').value = '';
+          }
+          type.addEventListener('change', update); update();
+        })();
+      </script>
     </div>`}
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'leave.pending')}</div>
@@ -3138,15 +3466,21 @@ async function renderLeave(employee, balances, requests, user, error) {
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'leave.history')}</div>
-      <table><tr><th>${t(lang, 'leave.type')}</th><th>${t(lang, 'leave.dates')}</th><th>${t(lang, 'leave.reason')}</th><th>${t(lang, 'leave.status')}</th></tr>${historyRows}</table>
-    </div>`;
+      <table><tr><th>${t(lang, 'leave.type')}</th><th>${t(lang, 'leave.dates')}</th><th>${t(lang, 'leave.reason')}</th><th>${t(lang, 'leave.status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${historyRows}</table>
+    </div>
+    ${certificateFormScript()}`;
   return pageShell(t(lang, 'leave.title'), employee.id, 'leave', body, user);
 }
 
-async function renderPermission(employee, requests, monthlySummary, user, error) {
+async function renderPermission(employee, requests, monthlySummary, user, error, prefill = {}) {
   const lang = langOf(user);
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const previous = prefill.previous || null;
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const reapplied = await reappliedIds('permission_requests');
+  const describe = r => t(lang, 'notes.describe_permission', { time: r.leave_time, date: r.date });
+  const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('permission_requests', id))).length;
 
   const hoursCell = r => {
     const h = computePermissionHours(employee, r.date, r.leave_time);
@@ -3155,14 +3489,14 @@ async function renderPermission(employee, requests, monthlySummary, user, error)
       : `${h}h`;
   };
 
-  const pendingRows = pending.map(r => `
+  const pendingRows = (await Promise.all(pending.map(async r => `
     <tr>
-      <td>${escapeHtml(r.date)}</td>
+      <td>${escapeHtml(r.date)}${attemptBadge(r, await attemptsBefore(r), lang)}</td>
       <td>${escapeHtml(r.leave_time)}</td>
       <td>${hoursCell(r)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('permission_requests', r, byId, lang)}</td>
       <td>${statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'permission.no_pending')}</td></tr>`;
+    </tr>`))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'permission.no_pending')}</td></tr>`;
 
   const historyRows = history.map(r => `
     <tr>
@@ -3170,8 +3504,9 @@ async function renderPermission(employee, requests, monthlySummary, user, error)
       <td>${escapeHtml(r.leave_time)}</td>
       <td>${hoursCell(r)}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
-      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'permission.no_history')}</td></tr>`;
+      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}${reapplyLinkHtml(`/permission?reapply=${r.id}`, r, reapplied, lang)}</td>
+      <td>${decisionNoteHtml(r)}</td>
+    </tr>`).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">${t(lang, 'permission.no_history')}</td></tr>`;
 
   const summaryCard = `
     <div class="card">
@@ -3194,21 +3529,23 @@ async function renderPermission(employee, requests, monthlySummary, user, error)
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'permission.apply_title')}</div>
       <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'permission.apply_hint')}</p>
+      ${previous ? reapplyBannerHtml(previous, lang, describe) : ''}
       <form method="POST" action="/permission/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="employee_id" value="${escapeHtml(employee.id)}">
+        ${previous ? `<input type="hidden" name="previous_request_id" value="${previous.id}">` : ''}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'permission.date')}</label>
-          <input type="date" name="date" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="date" required value="${escapeHtml(prefill.date || (previous && previous.date) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'permission.leaving_at')}</label>
-          <input type="time" name="leave_time" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="time" name="leave_time" required value="${escapeHtml(prefill.leave_time || (previous && previous.leave_time) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div style="flex:1;min-width:140px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'permission.reason')}</label>
-          <input type="text" name="reason" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'permission.reason')} *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'permission.apply_btn')}</button>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, previous ? 'notes.submit_again' : 'permission.apply_btn')}</button>
       </form>
     </div>
     <div class="card">
@@ -3217,31 +3554,37 @@ async function renderPermission(employee, requests, monthlySummary, user, error)
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'permission.history')}</div>
-      <table><tr><th>${t(lang, 'permission.col_date')}</th><th>${t(lang, 'permission.col_leaving_at')}</th><th>${t(lang, 'permission.col_hours')}</th><th>${t(lang, 'permission.col_reason')}</th><th>${t(lang, 'permission.col_status')}</th></tr>${historyRows}</table>
+      <table><tr><th>${t(lang, 'permission.col_date')}</th><th>${t(lang, 'permission.col_leaving_at')}</th><th>${t(lang, 'permission.col_hours')}</th><th>${t(lang, 'permission.col_reason')}</th><th>${t(lang, 'permission.col_status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${historyRows}</table>
     </div>`;
   return pageShell(t(lang, 'permission.title'), employee.id, 'permission', body, user);
 }
 
-async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAuthorized, user, error) {
+async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAuthorized, user, error, prefill = {}) {
   const lang = langOf(user);
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const previous = prefill.previous || null;
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const reapplied = await reappliedIds('overtime_requests');
+  const describe = r => t(lang, 'notes.describe_overtime', { hours: r.planned_hours, date: r.date });
+  const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('overtime_requests', id))).length;
 
-  const pendingRows = pending.map(r => `
+  const pendingRows = (await Promise.all(pending.map(async r => `
     <tr>
-      <td>${escapeHtml(r.date)}</td>
+      <td>${escapeHtml(r.date)}${attemptBadge(r, await attemptsBefore(r), lang)}</td>
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('overtime_requests', r, byId, lang)}</td>
       <td>${statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'overtime.no_pending')}</td></tr>`;
+    </tr>`))).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'overtime.no_pending')}</td></tr>`;
 
   const historyRows = history.map(r => `
     <tr>
       <td>${escapeHtml(r.date)}</td>
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
-      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'overtime.no_history')}</td></tr>`;
+      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}${reapplyLinkHtml(`/overtime?reapply=${r.id}`, r, reapplied, lang)}</td>
+      <td>${decisionNoteHtml(r)}</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'overtime.no_history')}</td></tr>`;
 
   const todayCard = todayOvertimeMinutes > 0 ? `
     <div class="card">
@@ -3260,21 +3603,23 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'overtime.request_title')}</div>
       <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'overtime.request_hint')}</p>
+      ${previous ? reapplyBannerHtml(previous, lang, describe) : ''}
       <form method="POST" action="/overtime/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="employee_id" value="${escapeHtml(employee.id)}">
+        ${previous ? `<input type="hidden" name="previous_request_id" value="${previous.id}">` : ''}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'overtime.date')}</label>
-          <input type="date" name="date" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="date" required value="${escapeHtml(prefill.date || (previous && previous.date) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'overtime.planned_hours')}</label>
-          <input type="number" name="planned_hours" step="0.5" min="0.5" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:90px;">
+          <input type="number" name="planned_hours" step="0.5" min="0.5" required value="${escapeHtml(String(prefill.planned_hours || (previous && previous.planned_hours) || ''))}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:90px;">
         </div>
         <div style="flex:1;min-width:140px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'overtime.reason')}</label>
-          <input type="text" name="reason" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'overtime.reason')} *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'overtime.request_btn')}</button>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, previous ? 'notes.submit_again' : 'overtime.request_btn')}</button>
       </form>
     </div>
     <div class="card">
@@ -3283,26 +3628,41 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'overtime.history')}</div>
-      <table><tr><th>${t(lang, 'overtime.col_date')}</th><th>${t(lang, 'overtime.col_planned_hours')}</th><th>${t(lang, 'overtime.col_reason')}</th><th>${t(lang, 'overtime.col_status')}</th></tr>${historyRows}</table>
+      <table><tr><th>${t(lang, 'overtime.col_date')}</th><th>${t(lang, 'overtime.col_planned_hours')}</th><th>${t(lang, 'overtime.col_reason')}</th><th>${t(lang, 'overtime.col_status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${historyRows}</table>
     </div>`;
   return pageShell(t(lang, 'overtime.title'), employee.id, 'overtime', body, user);
 }
 
-async function renderFieldTrip(employeeId, trips, user) {
+async function renderFieldTrip(employeeId, trips, user, error) {
   const lang = langOf(user);
+  const reapplied = await reappliedIds('field_trips');
+  // A rejected trip is submitted again right in its row: same trip, new reason.
+  const resubmitHtml = trip => {
+    if (trip.status !== 'rejected') return '';
+    if (reapplied.has(trip.id)) return `<div style="font-size:0.82em;color:#7C8896;margin-top:4px;">${escapeHtml(t(lang, 'notes.reapplied'))}</div>`;
+    return `<form method="POST" action="/field-trip/reapply" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+      <input type="hidden" name="previous_request_id" value="${trip.id}">
+      <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" placeholder="${escapeHtml(t(lang, 'fieldtrip.reason_again_placeholder'))}" style="flex:1;min-width:150px;padding:5px;border-radius:6px;border:1px solid #D0D5DA;font-size:0.88em;">
+      <button type="submit" style="padding:4px 10px;border-radius:6px;border:1px solid #1565C0;background:#fff;color:#1565C0;font-weight:600;font-size:0.85em;">${escapeHtml(t(lang, 'notes.submit_again'))}</button>
+    </form>`;
+  };
+  const tripsById = new Map((trips || []).map(trip => [trip.id, trip]));
+  const attempts = new Map(await Promise.all((trips || []).map(async trip =>
+    [trip.id, (await earlierAttempts(trip, async id => tripsById.get(id) || await getRequestById('field_trips', id))).length])));
   const recentRows = (trips || []).map(trip => {
     const statusCell = trip.status === 'pending'
       ? statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)
       : statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${trip.status}`), lang);
     return `
     <tr>
-      <td>${escapeHtml(trip.date)}</td>
-      <td>${escapeHtml(trip.from_address)}</td>
-      <td>${escapeHtml(trip.to_address)}</td>
+      <td>${escapeHtml(trip.date)}${attemptBadge(trip, attempts.get(trip.id) || 0, lang)}</td>
+      <td>${escapeHtml(trip.from_address)} &rarr; ${escapeHtml(trip.to_address)}</td>
       <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km</td>
-      <td>${statusCell}</td>
+      <td>${escapeHtml(trip.reason || '—')}</td>
+      <td>${statusCell}${resubmitHtml(trip)}</td>
+      <td>${decisionNoteHtml(trip)}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'fieldtrip.no_trips')}</td></tr>`;
+  }).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">${t(lang, 'fieldtrip.no_trips')}</td></tr>`;
   const body = `
     <style>
       .ac-wrap { position: relative; }
@@ -3310,6 +3670,7 @@ async function renderFieldTrip(employeeId, trips, user) {
       .ac-item { padding:8px 10px; font-size:0.9em; cursor:pointer; }
       .ac-item:hover, .ac-item.active { background:#E3F2FD; }
     </style>
+    ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'fieldtrip.title')}</div>
       <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'fieldtrip.hint')}</p>
@@ -3327,6 +3688,10 @@ async function renderFieldTrip(employeeId, trips, user) {
           <input type="hidden" id="tripToLat"><input type="hidden" id="tripToLon">
           <div id="tripToDrop" class="ac-drop"></div>
         </div>
+        <div style="margin-bottom:10px;max-width:340px;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'fieldtrip.reason')} *</label>
+          <input id="tripReason" type="text" maxlength="${NOTE_MAX_LENGTH}" placeholder="${escapeHtml(t(lang, 'fieldtrip.reason_placeholder'))}" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;width:100%;box-sizing:border-box;">
+        </div>
         <button id="calcTripBtn" onclick="calcTrip()" style="padding:9px 18px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">${t(lang, 'fieldtrip.calculate_btn')}</button>
         <div id="tripResult" style="margin-top:12px;font-size:0.95em;"></div>
         <button id="recordTripBtn" onclick="recordTrip()" style="display:none;margin-top:12px;padding:9px 18px;border-radius:6px;border:none;background:#2E7D32;color:#fff;font-weight:600;cursor:pointer;">${t(lang, 'fieldtrip.record_btn')}</button>
@@ -3334,7 +3699,7 @@ async function renderFieldTrip(employeeId, trips, user) {
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'fieldtrip.recent_title')}</div>
-      <table><tr><th>${t(lang, 'fieldtrip.col_date')}</th><th>${t(lang, 'fieldtrip.col_from')}</th><th>${t(lang, 'fieldtrip.col_to')}</th><th>${t(lang, 'fieldtrip.col_distance')}</th><th>${t(lang, 'fieldtrip.col_status')}</th></tr>${recentRows}</table>
+      <table><tr><th>${t(lang, 'fieldtrip.col_date')}</th><th>${t(lang, 'fieldtrip.col_from')} &rarr; ${t(lang, 'fieldtrip.col_to')}</th><th>${t(lang, 'fieldtrip.col_distance')}</th><th>${t(lang, 'fieldtrip.reason')}</th><th>${t(lang, 'fieldtrip.col_status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${recentRows}</table>
     </div>
     <script>
       function showTripForm() {
@@ -3426,6 +3791,12 @@ async function renderFieldTrip(employeeId, trips, user) {
         if (!lastTripPayload) return;
         const recBtn = document.getElementById('recordTripBtn');
         const result = document.getElementById('tripResult');
+        const reasonEl = document.getElementById('tripReason');
+        lastTripPayload.reason = reasonEl.value.trim();
+        if (lastTripPayload.reason.length < 3) {
+          result.innerHTML += '<div style="color:#C62828;margin-top:8px;">' + ${JSON.stringify(t(lang, 'notes.err_reason_required'))} + '</div>';
+          reasonEl.focus(); return;
+        }
         recBtn.disabled = true; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.recording'))};
         fetch('/api/field-trip/record', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3444,19 +3815,21 @@ async function renderFieldTrip(employeeId, trips, user) {
 
 // Accounts-team view: every recorded field trip, for fuel reimbursement.
 async function renderAdminFieldTrips(trips, user) {
+  const byId = new Map(trips.map(trip => [trip.id, trip]));
+  const describe = trip => `${trip.date}, ${trip.distance_km} km`;
   const rows = (await Promise.all(trips.map(async trip => {
     const emp = await getEmployee(trip.employee_id);
+    const before = await earlierAttempts(trip, async id => byId.get(id) || await getRequestById('field_trips', id));
     const statusCell = trip.status === 'pending'
-      ? actionButton('/field-trip/decide', { id: trip.id, action: 'approve' }, 'Approve', '#2E7D32', true) +
-        actionButton('/field-trip/decide', { id: trip.id, action: 'reject' }, 'Reject', '#C62828')
-      : statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', trip.status);
+      ? decideFormHtml('/field-trip/decide', { id: trip.id })
+      : `${statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', trip.status)}<div style="margin-top:4px;font-size:0.9em;">${decisionNoteHtml(trip)}</div>`;
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : trip.employee_id)}</strong> <span style="color:#9AA5B1;">(${escapeHtml(trip.employee_id)})</span></td>
+      <td><strong>${escapeHtml(emp ? emp.name : trip.employee_id)}</strong> <span style="color:#9AA5B1;">(${escapeHtml(trip.employee_id)})</span>${attemptBadge(trip, before.length)}</td>
       <td>${escapeHtml(trip.date)}</td>
-      <td>${escapeHtml(trip.from_address)}</td>
-      <td>${escapeHtml(trip.to_address)}</td>
+      <td>${escapeHtml(trip.from_address)} &rarr; ${escapeHtml(trip.to_address)}</td>
       <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km</td>
+      <td>${escapeHtml(trip.reason || '—')}${trip.status === 'pending' ? await earlierAttemptsHtml('field_trips', trip, byId, 'en', describe) : ''}</td>
       <td>${statusCell}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No field trips recorded yet</td></tr>`;
@@ -3471,7 +3844,7 @@ async function renderAdminFieldTrips(trips, user) {
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Recorded Field Trips</div>
-      <table><tr><th>Employee</th><th>Date</th><th>From</th><th>To</th><th>Distance</th><th>Status</th></tr>${rows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Trip</th><th>Distance</th><th>Reason</th><th>Status</th></tr>${rows}</table>
     </div>`;
   return pageShell('Field Trips', '', 'field-trip', body, user);
 }
@@ -3644,22 +4017,23 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
   return pageShell(title, (rows[0] && rows[0].employee.id) || '', activeNav, body, user);
 }
 
-async function renderAdminLeave(requests, balanceRows, user) {
+async function renderAdminLeave(requests, balanceRows, user, error) {
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const certs = await latestCertificatesByRequest(requests.filter(r => r.leave_type === CERTIFICATE_LEAVE_TYPE).map(r => r.id));
+  const describe = r => `${r.leave_type}, ${r.start_date} – ${r.end_date}`;
 
   const pendingRows = (await Promise.all(pending.map(async r => {
     const emp = await getEmployee(r.employee_id);
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('leave_requests', id));
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span></td>
+      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span>${attemptBadge(r, before.length)}</td>
       <td>${escapeHtml(r.leave_type)}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
-      <td>
-        ${actionButton('/leave/decide', { id: r.id, action: 'approve', employee_id: r.employee_id }, 'Approve', '#2E7D32', true)}
-        ${actionButton('/leave/decide', { id: r.id, action: 'reject', employee_id: r.employee_id }, 'Reject', '#C62828')}
-      </td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('leave_requests', r, byId, 'en', describe)}${certificateCellHtml(r, certs.get(r.id))}</td>
+      <td>${decideFormHtml('/leave/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -3670,10 +4044,11 @@ async function renderAdminLeave(requests, balanceRows, user) {
       <td>${escapeHtml(emp ? emp.name : r.employee_id)} <span style="color:#9AA5B1;">(${escapeHtml(r.employee_id)})</span></td>
       <td>${escapeHtml(r.leave_type)}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${certificateCellHtml(r, certs.get(r.id))}</td>
       <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
+      <td>${decisionNoteHtml(r)}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No history yet</td></tr>`;
+  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No history yet</td></tr>`;
 
   const typeHeaders = LEAVE_TYPES.map(t => `<th>${escapeHtml(t)}</th>`).join('');
   const balanceTableRows = balanceRows.map(r => {
@@ -3689,13 +4064,14 @@ async function renderAdminLeave(requests, balanceRows, user) {
   }).join('');
 
   const body = `
+    ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
-      <table><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Reason</th><th>Action</th></tr>${pendingRows}</table>
+      <table><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Reason</th><th>Decision</th></tr>${pendingRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
-      <table><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Reason</th><th>Status</th></tr>${historyRows}</table>
+      <table><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Reason</th><th>Status</th><th>Note</th></tr>${historyRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">Leave Balances — All Employees</div>
@@ -3720,19 +4096,19 @@ async function renderAdminPermission(requests, hoursReportRows, user) {
       : `${h}h`;
   };
 
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const describe = r => `leave at ${r.leave_time} on ${r.date}`;
   const pendingRows = (await Promise.all(pending.map(async r => {
     const emp = await getEmployee(r.employee_id);
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('permission_requests', id));
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span></td>
+      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span>${attemptBadge(r, before.length)}</td>
       <td>${escapeHtml(r.date)}</td>
       <td>${escapeHtml(r.leave_time)}</td>
       <td>${await hoursCell(r)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
-      <td>
-        ${actionButton('/permission/decide', { id: r.id, action: 'approve', employee_id: r.employee_id }, 'Approve', '#2E7D32', true)}
-        ${actionButton('/permission/decide', { id: r.id, action: 'reject', employee_id: r.employee_id }, 'Reject', '#C62828')}
-      </td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('permission_requests', r, byId, 'en', describe)}</td>
+      <td>${decideFormHtml('/permission/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -3746,8 +4122,9 @@ async function renderAdminPermission(requests, hoursReportRows, user) {
       <td>${await hoursCell(r)}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
       <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
+      <td>${decisionNoteHtml(r)}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No history yet</td></tr>`;
+  }))).join('') || `<tr><td colspan="7" style="color:#9AA5B1;">No history yet</td></tr>`;
 
   const reportRows = hoursReportRows.map(r => `
     <tr>
@@ -3761,11 +4138,11 @@ async function renderAdminPermission(requests, hoursReportRows, user) {
   const body = `
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Leaving At</th><th>Hours</th><th>Reason</th><th>Action</th></tr>${pendingRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Leaving At</th><th>Hours</th><th>Reason</th><th>Decision</th></tr>${pendingRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Leaving At</th><th>Hours</th><th>Reason</th><th>Status</th></tr>${historyRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Leaving At</th><th>Hours</th><th>Reason</th><th>Status</th><th>Note</th></tr>${historyRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Permission Hours — This Month</div>
@@ -3798,22 +4175,28 @@ async function renderCorrections(employee, requests, user, error, prefill = {}) 
   const monthPrefix = todayStr().slice(0, 7);
   const usage = summarizeCorrectionUsage(requests.filter(r => r.date.slice(0, 7) === monthPrefix && (r.status === 'pending' || r.status === 'approved')));
   const overLimit = correctionsOverLimitById(requests);
-  const kind = CORRECTION_KINDS.includes(prefill.kind) ? prefill.kind : 'check_out';
+  const previous = prefill.previous || null;
+  const kind = CORRECTION_KINDS.includes(prefill.kind) ? prefill.kind : (previous ? previous.kind : 'check_out');
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const reapplied = await reappliedIds('correction_requests');
+  const describe = r => `${r.date}, ${t(lang, `corrections.kind.${r.kind}`)}`;
 
-  const rows = requests.map(r => {
+  const rows = (await Promise.all(requests.map(async r => {
     let statusHtml = r.status === 'pending'
       ? statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)
       : statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang);
     if (overLimit.has(r.id)) statusHtml += ` ${statusBadge('Half Day', t(lang, 'corrections.half_day_note'), lang)}`;
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('correction_requests', id));
     return `
     <tr>
-      <td>${escapeHtml(r.date)}</td>
+      <td>${escapeHtml(r.date)}${attemptBadge(r, before.length, lang)}</td>
       <td>${t(lang, `corrections.kind.${r.kind}`)}</td>
       <td>${escapeHtml(correctionTimesText(r, lang))}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
-      <td>${statusHtml}</td>
+      <td>${escapeHtml(r.reason || '—')}${r.status === 'pending' ? await earlierAttemptsHtml('correction_requests', r, byId, lang) : ''}</td>
+      <td>${statusHtml}${reapplyLinkHtml(`/corrections?reapply=${r.id}`, r, reapplied, lang)}</td>
+      <td>${decisionNoteHtml(r)}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'corrections.no_requests')}</td></tr>`;
+  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">${t(lang, 'corrections.no_requests')}</td></tr>`;
 
   const remaining = Math.max(0, CORRECTION_MONTHLY_LIMIT - usage.used);
   const fullDayLeft = Math.max(0, FULL_DAY_CORRECTION_MONTHLY_LIMIT - usage.fullDayUsed);
@@ -3839,10 +4222,12 @@ async function renderCorrections(employee, requests, user, error, prefill = {}) 
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'corrections.apply_title')}</div>
       <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'corrections.apply_hint', { limit: CORRECTION_MONTHLY_LIMIT })}</p>
+      ${previous ? reapplyBannerHtml(previous, lang, describe) : ''}
       <form method="POST" action="/corrections/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        ${previous ? `<input type="hidden" name="previous_request_id" value="${previous.id}">` : ''}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.date')}</label>
-          <input type="date" name="date" required value="${escapeHtml(prefill.date || '')}" min="${monthPrefix}-01" max="${todayStr()}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="date" required value="${escapeHtml(prefill.date || (previous && previous.date) || '')}" ${previous ? `min="${escapeHtml(previous.date < `${monthPrefix}-01` ? previous.date : `${monthPrefix}-01`)}"` : `min="${monthPrefix}-01"`} max="${todayStr()}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.missed')}</label>
@@ -3852,23 +4237,23 @@ async function renderCorrections(employee, requests, user, error, prefill = {}) 
         </div>
         <div id="corrIn">
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.check_in_time')}</label>
-          <input type="time" name="check_in_time" value="${escapeHtml(prefill.check_in_time || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="time" name="check_in_time" value="${escapeHtml(prefill.check_in_time || (previous && previous.check_in_time) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div id="corrOut">
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.check_out_time')}</label>
-          <input type="time" name="check_out_time" value="${escapeHtml(prefill.check_out_time || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="time" name="check_out_time" value="${escapeHtml(prefill.check_out_time || (previous && previous.check_out_time) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div style="flex:1;min-width:160px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.reason')}</label>
-          <input type="text" name="reason" required value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.reason')} *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'corrections.submit')}</button>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, previous ? 'notes.submit_again' : 'corrections.submit')}</button>
       </form>
       ${usage.used >= CORRECTION_MONTHLY_LIMIT ? `<div style="background:#FBE7DE;border-radius:8px;padding:9px 12px;font-size:0.88em;margin-top:12px;">${t(lang, 'corrections.over_limit_warning', { limit: CORRECTION_MONTHLY_LIMIT })}</div>` : ''}
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'corrections.my_requests')}</div>
-      <table><tr><th>${t(lang, 'corrections.col_date')}</th><th>${t(lang, 'corrections.col_missed')}</th><th>${t(lang, 'corrections.col_corrected_to')}</th><th>${t(lang, 'corrections.col_reason')}</th><th>${t(lang, 'corrections.col_status')}</th></tr>${rows}</table>
+      <table><tr><th>${t(lang, 'corrections.col_date')}</th><th>${t(lang, 'corrections.col_missed')}</th><th>${t(lang, 'corrections.col_corrected_to')}</th><th>${t(lang, 'corrections.col_reason')}</th><th>${t(lang, 'corrections.col_status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${rows}</table>
     </div>
     <script>
       (function () {
@@ -3892,8 +4277,11 @@ async function renderAdminCorrections(requests, user, error) {
   };
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const describe = r => `${r.date}, ${t('en', `corrections.kind.${r.kind}`)} (${correctionTimesText(r, 'en')})`;
 
   const pendingRows = (await Promise.all(pending.map(async r => {
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('correction_requests', id));
     const dayPunches = await getPunchesForDay(r.employee_id, r.date);
     const recorded = dayPunches.map(p => `${p.timestamp.slice(11, 16)}${p.source === 'auto' ? ' (auto)' : ''}`).join(', ') || 'No punches';
     // What the day will look like once approved, so a mis-filed request (e.g. a
@@ -3916,17 +4304,14 @@ async function renderAdminCorrections(requests, user, error) {
           : `${position} of ${CORRECTION_MONTHLY_LIMIT}`);
     return `
     <tr>
-      <td>${nameCell(r.employee_id)}</td>
+      <td>${nameCell(r.employee_id)}${attemptBadge(r, before.length)}</td>
       <td>${escapeHtml(r.date)}</td>
       <td>${t('en', `corrections.kind.${r.kind}`)}</td>
       <td>${escapeHtml(recorded)}</td>
       <td>${escapeHtml(afterText)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('correction_requests', r, byId, 'en', describe)}</td>
       <td>${usageCell}</td>
-      <td>
-        ${actionButton('/corrections/decide', { id: r.id, action: 'approve' }, 'Approve', '#2E7D32', true)}
-        ${actionButton('/corrections/decide', { id: r.id, action: 'reject' }, 'Reject', '#C62828')}
-      </td>
+      <td>${decideFormHtml('/corrections/decide', { id: r.id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="8" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -3938,7 +4323,7 @@ async function renderAdminCorrections(requests, user, error) {
       <td>${escapeHtml(correctionTimesText(r, 'en'))}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
       <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
-      <td>${escapeHtml(r.decided_by || '—')}</td>
+      <td>${r.decision_note ? decisionNoteHtml(r) : escapeHtml(r.decided_by || '—')}</td>
     </tr>`).join('') || `<tr><td colspan="7" style="color:#9AA5B1;">No history yet</td></tr>`;
 
   const body = `
@@ -3950,11 +4335,11 @@ async function renderAdminCorrections(requests, user, error) {
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Recorded by App</th><th>After Approval</th><th>Reason</th><th>Used This Month</th><th>Action</th></tr>${pendingRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Recorded by App</th><th>After Approval</th><th>Reason</th><th>Used This Month</th><th>Decision</th></tr>${pendingRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Corrected To</th><th>Reason</th><th>Status</th><th>Decided By</th></tr>${historyRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Corrected To</th><th>Reason</th><th>Status</th><th>Note</th></tr>${historyRows}</table>
     </div>`;
   return pageShell('Corrections', '', 'corrections', body, user);
 }
@@ -3966,18 +4351,18 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
     `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`
   ).join('');
 
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const describe = r => `${r.planned_hours}h on ${r.date}`;
   const pendingRows = (await Promise.all(pending.map(async r => {
     const emp = await getEmployee(r.employee_id);
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('overtime_requests', id));
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span></td>
+      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span>${attemptBadge(r, before.length)}</td>
       <td>${escapeHtml(r.date)}</td>
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
-      <td>
-        ${actionButton('/overtime/decide', { id: r.id, action: 'approve', employee_id: r.employee_id }, 'Approve', '#2E7D32', true)}
-        ${actionButton('/overtime/decide', { id: r.id, action: 'reject', employee_id: r.employee_id }, 'Reject', '#C62828')}
-      </td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('overtime_requests', r, byId, 'en', describe)}</td>
+      <td>${decideFormHtml('/overtime/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -3990,8 +4375,9 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
       <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
+      <td>${decisionNoteHtml(r)}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No history yet</td></tr>`;
+  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No history yet</td></tr>`;
 
   const reportRows = hoursReportRows.map(r => `
     <tr>
@@ -4021,19 +4407,19 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
           <input type="number" name="planned_hours" step="0.5" min="0.5" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:90px;">
         </div>
         <div style="flex:1;min-width:140px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Reason</label>
-          <input type="text" name="reason" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Reason *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
         <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">Record</button>
       </form>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Planned Hours</th><th>Reason</th><th>Action</th></tr>${pendingRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Planned Hours</th><th>Reason</th><th>Decision</th></tr>${pendingRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Planned Hours</th><th>Reason</th><th>Status</th></tr>${historyRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Planned Hours</th><th>Reason</th><th>Status</th><th>Note</th></tr>${historyRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:4px;">Overtime Hours Worked — This Month</div>
@@ -5166,9 +5552,9 @@ async function readJsonBody(req) {
   const raw = await bufferBody(req);
   return raw ? JSON.parse(raw) : {};
 }
-async function readFormBody(req) {
+async function readFormBody(req, maxBytes = MAX_BODY_BYTES) {
   if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
-  return Object.fromEntries(new URLSearchParams(await bufferBody(req)));
+  return Object.fromEntries(new URLSearchParams(await bufferBody(req, maxBytes)));
 }
 // Like readFormBody, but a field posted more than once (one per table row) comes back
 // as an array of every value rather than just the last.
@@ -5640,13 +6026,15 @@ async function handleRequest(req, res) {
     if (!sessionUser || !sessionUser.employeeId) return sendJson(res, 401, { error: 'Only an employee can record a field trip.' });
     let body;
     try { body = await readJsonBody(req); } catch (err) { if (err && err.statusCode === 413) return sendJson(res, 413, { error: 'Request body too large' }); return sendJson(res, 400, { error: 'Invalid JSON body' }); }
+    const reason = cleanNote(body && body.reason);
+    if (reason.error) return sendJson(res, 400, { error: t(langOf(sessionUser), reason.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }) });
     try {
       const r = await resolveTripDistance(body);
       const now = formatTimestamp(new Date());
       await db.prepare(
-        'INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(sessionUser.employeeId, now.split(' ')[0], now, r.fromResolved, r.toResolved, r.distanceKm);
-      await logActivity('field_trip', sessionUser.employeeId, `${r.fromResolved} to ${r.toResolved}, ${r.distanceKm} km`);
+        'INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km, reason) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(sessionUser.employeeId, now.split(' ')[0], now, r.fromResolved, r.toResolved, r.distanceKm, reason.value);
+      await logActivity('field_trip', sessionUser.employeeId, `${r.fromResolved} to ${r.toResolved}, ${r.distanceKm} km · ${reason.value}`);
       return sendJson(res, 200, { recorded: true, ...r });
     } catch (e) {
       return sendJson(res, e.status || 502, { error: e.message || 'Could not record the trip.' });
@@ -6063,34 +6451,65 @@ async function handleRequest(req, res) {
     const employeeId = await resolveEmployeeId();
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
-    return sendHtml(res, await renderLeave(employee, await getLeaveBalanceDisplay(employeeId), await getLeaveRequests(employeeId), user));
+    const lang = langOf(user);
+    const reapply = await resolveReapply('leave_requests', parsed.searchParams.get('reapply'), employeeId);
+    return sendHtml(res, await renderLeave(employee, await getLeaveBalanceDisplay(employeeId), await getLeaveRequests(employeeId), user,
+      reapply.errorKey ? t(lang, reapply.errorKey) : null, { previous: reapply.previous || null }));
   }
 
   if (parsed.pathname === '/leave/apply' && req.method === 'POST') {
     // Leave applications can only be filed by the employee themselves — not by admin on their behalf.
     if (user.role !== 'employee') { res.writeHead(403); return res.end('Only an employee can apply for their own leave.'); }
     const employeeId = user.employeeId;
-    const form = await readFormBody(req);
+    const lang = langOf(user);
+    let form;
+    try { form = await readFormBody(req, MAX_CERTIFICATE_FORM_BYTES); } catch (err) {
+      if (err && err.statusCode === 413) { res.writeHead(413); return res.end(t(lang, 'leave.cert_err_size')); }
+      throw err;
+    }
     const leaveType = form.leave_type;
     const startDate = form.start_date;
     const endDate = form.end_date;
-    const reason = form.reason || '';
     const employee = await getEmployee(employeeId);
-    if (!employee || !leaveType || !startDate || !endDate) {
+    if (!employee || !LEAVE_TYPES.includes(leaveType) || !startDate || !endDate) {
       res.writeHead(400); return res.end('Missing required fields');
     }
+    const reapply = await resolveReapply('leave_requests', form.previous_request_id, employeeId);
+    const previous = reapply.previous || null;
+    const showError = async message => sendHtml(res, await renderLeave(employee, await getLeaveBalanceDisplay(employeeId), await getLeaveRequests(employeeId), user,
+      message, { previous, leave_type: leaveType, start_date: startDate, end_date: endDate, reason: form.reason || '' }));
+    if (reapply.errorKey) return showError(t(lang, reapply.errorKey));
+    const reason = cleanNote(form.reason);
+    if (reason.error) return showError(t(lang, reason.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }));
+    if (endDate < startDate) return showError(t(lang, 'leave.err_dates'));
+    const certificate = leaveType === CERTIFICATE_LEAVE_TYPE ? readCertificateFields(form) : { file: null };
+    if (certificate.errorKey) return showError(t(lang, certificate.errorKey));
     const duplicate = await db.prepare(
       `SELECT id FROM leave_requests WHERE employee_id = ? AND leave_type = ? AND status = 'pending'
        AND date(start_date) <= date(?) AND date(end_date) >= date(?)`
     ).get(employeeId, leaveType, endDate, startDate);
-    if (duplicate) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(await renderLeave(employee, await getLeaveBalanceDisplay(employeeId), await getLeaveRequests(employeeId), user, 'You already have a pending request for these dates.'));
+    if (duplicate) return showError('You already have a pending request for these dates.');
+    const inserted = await db.prepare(
+      'INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(employeeId, leaveType, startDate, endDate, reason.value, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
+    const request = { id: inserted.lastInsertRowid, employee_id: employeeId };
+    if (certificate.file) {
+      await runCertificateCheck(await saveCertificate(request, certificate.file));
+    } else if (previous && leaveType === CERTIFICATE_LEAVE_TYPE) {
+      // Applying again keeps the certificate from the rejected attempt unless a new one
+      // was chosen. It's checked again only if the dates changed.
+      const old = (await latestCertificatesByRequest([previous.id])).get(previous.id);
+      if (old) {
+        const sameDates = previous.start_date === startDate && previous.end_date === endDate && previous.leave_type === leaveType;
+        const copied = await db.prepare(
+          `INSERT INTO leave_certificates (leave_request_id, employee_id, filename, content_type, size_bytes, data, uploaded_at, check_status, check_summary, check_findings, checked_at)
+           SELECT ?, employee_id, filename, content_type, size_bytes, data, uploaded_at, ${sameDates ? 'check_status, check_summary, check_findings, checked_at' : "'not_checked', '', '[]', NULL"}
+           FROM leave_certificates WHERE id = ?`
+        ).run(request.id, old.id);
+        if (!sameDates || old.check_status === 'not_checked' || old.check_status === 'error') await runCertificateCheck(copied.lastInsertRowid);
+      }
     }
-    await db.prepare(
-      'INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(employeeId, leaveType, startDate, endDate, reason, 'pending', formatTimestamp(new Date()));
-    await logActivity('leave_applied', employeeId, `${leaveType}, ${startDate} to ${endDate}${reason ? ` · ${reason}` : ''}`);
+    await logActivity('leave_applied', employeeId, `${leaveType}, ${startDate} to ${endDate} · ${reason.value}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}${certificate.file ? ' · certificate attached' : ''}`);
     res.writeHead(302, { Location: `/leave?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -6099,27 +6518,77 @@ async function handleRequest(req, res) {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject leave.'); }
     const form = await readFormBody(req);
     const id = form.id;
-    const action = form.action;
     const request = await db.prepare('SELECT * FROM leave_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown leave request'); }
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/leave', 'leave');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date} · ${decision.note}`;
 
-    if (action === 'approve') {
-      await db.prepare("UPDATE leave_requests SET status = 'approved', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      // Casual/Sick no longer draw from a balance — see MONTHLY_PAID_LEAVE_TYPES.
-      if (BALANCE_POOL_LEAVE_TYPES.includes(request.leave_type)) {
-        const days = countLeaveDays(request.start_date, request.end_date);
-        await db.prepare('UPDATE leave_balances SET balance = balance - ? WHERE employee_id = ? AND leave_type = ?')
-          .run(days, request.employee_id, request.leave_type);
+    if (decision.action === 'approve') {
+      if (await claimDecision('leave_requests', id, 'approved', decision.note, user)) {
+        // Casual/Sick no longer draw from a balance — see MONTHLY_PAID_LEAVE_TYPES.
+        if (BALANCE_POOL_LEAVE_TYPES.includes(request.leave_type)) {
+          const days = countLeaveDays(request.start_date, request.end_date);
+          await db.prepare('UPDATE leave_balances SET balance = balance - ? WHERE employee_id = ? AND leave_type = ?')
+            .run(days, request.employee_id, request.leave_type);
+        }
+        await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been approved.${suffix}`);
+        await logAdminAction(user.username, 'approve', 'leave_request', id, summary, request.employee_id);
       }
-      await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'leave_request', id, `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date}`, request.employee_id);
-    } else if (action === 'reject') {
-      await db.prepare("UPDATE leave_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been rejected.`);
-      await logAdminAction(user.username, 'reject', 'leave_request', id, `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date}`, request.employee_id);
+    } else if (await claimDecision('leave_requests', id, 'rejected', decision.note, user)) {
+      await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been rejected.${suffix} You can apply again from the Leave page.`);
+      await logAdminAction(user.username, 'reject', 'leave_request', id, summary, request.employee_id);
     }
+    res.writeHead(302, { Location: '/leave' });
+    return res.end();
+  }
+
+  // An employee adds or replaces the medical certificate on their own pending Sick Leave.
+  if (parsed.pathname === '/leave/certificate' && req.method === 'POST') {
+    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only the employee can attach their certificate.'); }
+    const lang = langOf(user);
+    let form;
+    try { form = await readFormBody(req, MAX_CERTIFICATE_FORM_BYTES); } catch (err) {
+      if (err && err.statusCode === 413) { res.writeHead(413); return res.end(t(lang, 'leave.cert_err_size')); }
+      throw err;
+    }
+    const request = await getRequestById('leave_requests', form.leave_request_id);
+    const employee = await getEmployee(user.employeeId);
+    if (!request || !employee || request.employee_id !== user.employeeId) { res.writeHead(404); return res.end('Unknown leave request'); }
+    const showError = async message => sendHtml(res, await renderLeave(employee, await getLeaveBalanceDisplay(employee.id), await getLeaveRequests(employee.id), user, message));
+    if (request.status !== 'pending' || request.leave_type !== CERTIFICATE_LEAVE_TYPE) return showError(t(lang, 'leave.cert_err_not_pending'));
+    const certificate = readCertificateFields(form);
+    if (certificate.errorKey) return showError(t(lang, certificate.errorKey));
+    if (!certificate.file) return showError(t(lang, 'leave.cert_err_type'));
+    await runCertificateCheck(await saveCertificate(request, certificate.file));
+    await logActivity('leave_certificate', employee.id, `Certificate for ${request.leave_type} ${request.start_date} to ${request.end_date}`);
+    res.writeHead(302, { Location: '/leave' });
+    return res.end();
+  }
+
+  // Managers only — same rule as employee documents: once uploaded, the employee sees
+  // that it's on file, not the file.
+  if (parsed.pathname === '/leave/certificate' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const cert = await db.prepare('SELECT * FROM leave_certificates WHERE id = ?').get(parsed.searchParams.get('id'));
+    if (!cert) { res.writeHead(404); return res.end('Not found'); }
+    res.writeHead(200, {
+      'Content-Type': cert.content_type,
+      'Content-Length': cert.size_bytes,
+      'Content-Disposition': `inline; filename="${String(cert.filename).replace(/["\r\n]/g, '')}"`,
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(Buffer.isBuffer(cert.data) ? cert.data : Buffer.from(cert.data));
+  }
+
+  if (parsed.pathname === '/leave/certificate/check' && req.method === 'POST') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const form = await readFormBody(req);
+    const cert = await db.prepare('SELECT id, leave_request_id FROM leave_certificates WHERE id = ?').get(form.id);
+    if (!cert) { res.writeHead(404); return res.end('Not found'); }
+    await runCertificateCheck(cert.id);
+    await logAdminAction(user.username, 'check_certificate', 'leave_request', cert.leave_request_id, `Certificate #${cert.id}`);
     res.writeHead(302, { Location: '/leave' });
     return res.end();
   }
@@ -6137,7 +6606,9 @@ async function handleRequest(req, res) {
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     const monthlySummary = await computeMonthlyPermissionSummary(employeeId, now.getFullYear(), now.getMonth() + 1);
-    return sendHtml(res, await renderPermission(employee, await getPermissionRequests(employeeId), monthlySummary, user));
+    const reapply = await resolveReapply('permission_requests', parsed.searchParams.get('reapply'), employeeId);
+    return sendHtml(res, await renderPermission(employee, await getPermissionRequests(employeeId), monthlySummary, user,
+      reapply.errorKey ? t(langOf(user), reapply.errorKey) : null, { previous: reapply.previous || null }));
   }
 
   if (parsed.pathname === '/permission/apply' && req.method === 'POST') {
@@ -6147,20 +6618,29 @@ async function handleRequest(req, res) {
     const form = await readFormBody(req);
     const date = form.date;
     const leaveTime = form.leave_time;
-    const reason = form.reason || '';
     if (!date || !leaveTime) {
       res.writeHead(400); return res.end('Missing required fields');
     }
     const employee = await getEmployee(employeeId);
+    const lang = langOf(user);
+    const reapply = await resolveReapply('permission_requests', form.previous_request_id, employeeId);
+    const previous = reapply.previous || null;
     async function rejectWithError(message) {
       const now = new Date();
       const monthlySummary = await computeMonthlyPermissionSummary(employeeId, now.getFullYear(), now.getMonth() + 1);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(await renderPermission(employee, await getPermissionRequests(employeeId), monthlySummary, user, message));
+      return res.end(await renderPermission(employee, await getPermissionRequests(employeeId), monthlySummary, user, message,
+        { previous, date, leave_time: leaveTime, reason: form.reason || '' }));
     }
+    if (reapply.errorKey) return rejectWithError(t(lang, reapply.errorKey));
+    const cleaned = cleanNote(form.reason);
+    if (cleaned.error) return rejectWithError(t(lang, cleaned.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }));
+    const reason = cleaned.value;
     // Cuts off last-minute requests: today's permission must be filed with at least 30
-    // minutes' notice before the shift starts, not scrambled in right beforehand.
-    if (date === todayStr()) {
+    // minutes' notice before the shift starts, not scrambled in right beforehand. Applying
+    // again for the same date after a rejection is exempt — the first request was on time.
+    const refiling = previous && previous.date === date;
+    if (date === todayStr() && !refiling) {
       const shift = getShiftForDate(employee, date);
       const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
       if (nowMinutes >= parseTimeToMinutes(shift.start) - 30) {
@@ -6174,9 +6654,9 @@ async function handleRequest(req, res) {
       return rejectWithError('You already have a pending request for this date.');
     }
     await db.prepare(
-      'INSERT INTO permission_requests (employee_id, date, leave_time, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(employeeId, date, leaveTime, reason, 'pending', formatTimestamp(new Date()));
-    await logActivity('permission_applied', employeeId, `Leave at ${leaveTime} on ${date}${reason ? ` · ${reason}` : ''}`);
+      'INSERT INTO permission_requests (employee_id, date, leave_time, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(employeeId, date, leaveTime, reason, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
+    await logActivity('permission_applied', employeeId, `Leave at ${leaveTime} on ${date} · ${reason}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}`);
     res.writeHead(302, { Location: `/permission?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -6185,20 +6665,21 @@ async function handleRequest(req, res) {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject permission requests.'); }
     const form = await readFormBody(req);
     const id = form.id;
-    const action = form.action;
     const request = await db.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown permission request'); }
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/permission', 'permission');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${request.employee_id}: leave at ${request.leave_time} on ${request.date} · ${decision.note}`;
 
-    if (action === 'approve') {
-      await db.prepare("UPDATE permission_requests SET status = 'approved', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`, request.employee_id);
-    } else if (action === 'reject') {
-      await db.prepare("UPDATE permission_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been rejected.`);
-      await logAdminAction(user.username, 'reject', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`, request.employee_id);
+    if (decision.action === 'approve') {
+      if (await claimDecision('permission_requests', id, 'approved', decision.note, user)) {
+        await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been approved.${suffix}`);
+        await logAdminAction(user.username, 'approve', 'permission_request', id, summary, request.employee_id);
+      }
+    } else if (await claimDecision('permission_requests', id, 'rejected', decision.note, user)) {
+      await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been rejected.${suffix} You can apply again from the Permission page.`);
+      await logAdminAction(user.username, 'reject', 'permission_request', id, summary, request.employee_id);
     }
     res.writeHead(302, { Location: '/permission' });
     return res.end();
@@ -6212,7 +6693,9 @@ async function handleRequest(req, res) {
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     const prefill = { date: parsed.searchParams.get('date') || '', kind: parsed.searchParams.get('kind') || '' };
-    return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employeeId), user, null, prefill));
+    const reapply = await resolveReapply('correction_requests', parsed.searchParams.get('reapply'), employeeId);
+    prefill.previous = reapply.previous || null;
+    return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employeeId), user, reapply.errorKey ? { key: reapply.errorKey } : null, prefill));
   }
 
   if (parsed.pathname === '/corrections/apply' && req.method === 'POST') {
@@ -6229,16 +6712,21 @@ async function handleRequest(req, res) {
       check_out_time: kind === 'check_in' ? null : (form.check_out_time || '').trim(),
       reason: (form.reason || '').trim(),
     };
-    const error = request.reason ? await validateCorrection(employee, request) : { key: 'corrections.err_reason' };
+    const reapply = await resolveReapply('correction_requests', form.previous_request_id, employee.id);
+    const previous = reapply.previous || null;
+    const reasonCheck = cleanNote(request.reason);
+    const error = reapply.errorKey ? { key: reapply.errorKey }
+      : reasonCheck.error ? { key: reasonCheck.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'corrections.err_reason', vars: { max: NOTE_MAX_LENGTH } }
+      : await validateCorrection(employee, request, { refiling: !!previous && previous.date === request.date });
     if (error) {
-      return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employee.id), user, error, request));
+      return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employee.id), user, error, { ...request, previous }));
     }
     await db.prepare(
-      'INSERT INTO correction_requests (employee_id, date, kind, check_in_time, check_out_time, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(employee.id, request.date, request.kind, request.check_in_time, request.check_out_time, request.reason, 'pending', formatTimestamp(new Date()));
+      'INSERT INTO correction_requests (employee_id, date, kind, check_in_time, check_out_time, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(employee.id, request.date, request.kind, request.check_in_time, request.check_out_time, request.reason, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
     await logActivity('correction_applied', employee.id, [request.date,
       request.check_in_time && `in ${request.check_in_time}`, request.check_out_time && `out ${request.check_out_time}`,
-      request.reason].filter(Boolean).join(' · '));
+      request.reason, previous && `applied again after #${previous.id} was rejected`].filter(Boolean).join(' · '));
     res.writeHead(302, { Location: `/corrections?employee_id=${encodeURIComponent(employee.id)}` });
     return res.end();
   }
@@ -6252,8 +6740,11 @@ async function handleRequest(req, res) {
       res.writeHead(302, { Location: '/corrections' });
       return res.end();
     }
-    const summary = `${request.employee_id}: ${request.kind} on ${request.date} (${correctionTimesText(request, 'en')})`;
-    if (form.action === 'approve') {
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/corrections', 'corrections');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${request.employee_id}: ${request.kind} on ${request.date} (${correctionTimesText(request, 'en')}) · ${decision.note}`;
+    if (decision.action === 'approve') {
       const employee = await getEmployee(request.employee_id);
       const error = employee
         ? await validateCorrection(employee, request, { excludeId: request.id, forApproval: true })
@@ -6263,21 +6754,15 @@ async function handleRequest(req, res) {
         return sendHtml(res, await renderAdminCorrections(await getAllCorrectionRequests(), user, message));
       }
       // Claim the request first so a double-click can't insert the punches twice.
-      const claimed = await db.prepare("UPDATE correction_requests SET status = 'approved', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
-        .run(formatTimestamp(new Date()), user.username, request.id);
-      if (claimed.changes) {
+      if (await claimDecision('correction_requests', request.id, 'approved', decision.note, user)) {
         if (request.check_in_time) await recordPunch(request.employee_id, `${request.date} ${request.check_in_time}:00`, 'in', 'correction', `Correction #${request.id}`, '', user.username);
         if (request.check_out_time) await recordPunch(request.employee_id, `${request.date} ${request.check_out_time}:00`, 'out', 'correction', `Correction #${request.id}`, '', user.username);
-        await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been approved.`);
+        await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been approved.${suffix}`);
         await logAdminAction(user.username, 'approve', 'correction_request', request.id, summary, request.employee_id);
       }
-    } else if (form.action === 'reject') {
-      const rejected = await db.prepare("UPDATE correction_requests SET status = 'rejected', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
-        .run(formatTimestamp(new Date()), user.username, request.id);
-      if (rejected.changes) {
-        await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been rejected.`);
-        await logAdminAction(user.username, 'reject', 'correction_request', request.id, summary, request.employee_id);
-      }
+    } else if (await claimDecision('correction_requests', request.id, 'rejected', decision.note, user)) {
+      await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been rejected.${suffix} You can apply again from the Corrections page.`);
+      await logAdminAction(user.username, 'reject', 'correction_request', request.id, summary, request.employee_id);
     }
     res.writeHead(302, { Location: '/corrections' });
     return res.end();
@@ -6298,7 +6783,9 @@ async function handleRequest(req, res) {
     const today = todayStr();
     const todayOvertimeMinutes = await computeOvertimeMinutes(employee, today);
     const todayAuthorized = await isOvertimeAuthorized(employeeId, today);
-    return sendHtml(res, await renderOvertime(employee, await getOvertimeRequests(employeeId), todayOvertimeMinutes, todayAuthorized, user));
+    const reapply = await resolveReapply('overtime_requests', parsed.searchParams.get('reapply'), employeeId);
+    return sendHtml(res, await renderOvertime(employee, await getOvertimeRequests(employeeId), todayOvertimeMinutes, todayAuthorized, user,
+      reapply.errorKey ? t(langOf(user), reapply.errorKey) : null, { previous: reapply.previous || null }));
   }
 
   if (parsed.pathname === '/overtime/apply' && req.method === 'POST') {
@@ -6313,50 +6800,55 @@ async function handleRequest(req, res) {
     const employeeId = isAdmin ? form.employee_id : user.employeeId;
     const date = form.date;
     const plannedHours = form.planned_hours;
-    const reason = form.reason || '';
     if (!employeeId || !date || !plannedHours) {
       res.writeHead(400); return res.end('Missing required fields');
     }
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(400); return res.end('Unknown employee'); }
-    const duplicate = await db.prepare(
-      "SELECT id FROM overtime_requests WHERE employee_id = ? AND date = ? AND status = 'pending'"
-    ).get(employeeId, date);
-    if (duplicate) {
+    const lang = langOf(user);
+    const reapply = isAdmin ? { previous: null } : await resolveReapply('overtime_requests', form.previous_request_id, employeeId);
+    const previous = reapply.previous || null;
+    const showError = async (employeeMessage, adminMessage = employeeMessage) => {
       if (isAdmin) {
         const now = new Date();
         const hoursReportRows = await Promise.all((await allEmployees()).map(async e => ({
           employee: e,
           ...(await computeMonthlyOvertimeSummary(e, now.getFullYear(), now.getMonth() + 1)),
         })));
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(await renderAdminOvertime(
-          await getAllOvertimeRequests(), hoursReportRows, user,
-          `${employee.name} already has a pending overtime request for this date.`
-        ));
+        return sendHtml(res, await renderAdminOvertime(await getAllOvertimeRequests(), hoursReportRows, user, adminMessage));
       }
       const today = todayStr();
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(await renderOvertime(
+      return sendHtml(res, await renderOvertime(
         employee, await getOvertimeRequests(employeeId),
         await computeOvertimeMinutes(employee, today), await isOvertimeAuthorized(employeeId, today),
-        user, 'You already have a pending overtime request for this date.'
+        user, employeeMessage, { previous, date, planned_hours: plannedHours, reason: form.reason || '' }
       ));
+    };
+    if (reapply.errorKey) return showError(t(lang, reapply.errorKey));
+    const cleaned = cleanNote(form.reason);
+    if (cleaned.error) return showError(t(isAdmin ? 'en' : lang, cleaned.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }));
+    const reason = cleaned.value;
+    const duplicate = await db.prepare(
+      "SELECT id FROM overtime_requests WHERE employee_id = ? AND date = ? AND status = 'pending'"
+    ).get(employeeId, date);
+    if (duplicate) {
+      return showError('You already have a pending overtime request for this date.', `${employee.name} already has a pending overtime request for this date.`);
     }
     if (isAdmin) {
+      // Recorded by a manager as already authorized, so their reason is also the decision note.
       const timestamp = formatTimestamp(new Date());
       await db.prepare(
-        'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(employeeId, date, Number(plannedHours), reason, 'approved', timestamp, timestamp);
+        'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at, decided_at, decided_by, decision_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(employeeId, date, Number(plannedHours), reason, 'approved', timestamp, timestamp, user.username, reason);
       await logAdminAction(user.username, 'record', 'overtime_request', employeeId, `${employeeId}: ${date}, ${plannedHours}h planned (filed by admin, auto-approved)`, employeeId);
       await createNotification(employeeId, `Your admin recorded ${plannedHours}h of overtime for you on ${date}.`);
       res.writeHead(302, { Location: '/overtime' });
       return res.end();
     }
     await db.prepare(
-      'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(employeeId, date, Number(plannedHours), reason, 'pending', formatTimestamp(new Date()));
-    await logActivity('overtime_applied', employeeId, `${date}, ${plannedHours}h planned${reason ? ` · ${reason}` : ''}`);
+      'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(employeeId, date, Number(plannedHours), reason, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
+    await logActivity('overtime_applied', employeeId, `${date}, ${plannedHours}h planned · ${reason}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}`);
     res.writeHead(302, { Location: `/overtime?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -6365,20 +6857,21 @@ async function handleRequest(req, res) {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject overtime requests.'); }
     const form = await readFormBody(req);
     const id = form.id;
-    const action = form.action;
     const request = await db.prepare('SELECT * FROM overtime_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown overtime request'); }
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/overtime', 'overtime');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned · ${decision.note}`;
 
-    if (action === 'approve') {
-      await db.prepare("UPDATE overtime_requests SET status = 'approved', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(request.employee_id, `Your overtime request for ${request.date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'overtime_request', id, `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned`, request.employee_id);
-    } else if (action === 'reject') {
-      await db.prepare("UPDATE overtime_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await logAdminAction(user.username, 'reject', 'overtime_request', id, `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned`, request.employee_id);
-      await createNotification(request.employee_id, `Your overtime request for ${request.date} has been rejected.`);
+    if (decision.action === 'approve') {
+      if (await claimDecision('overtime_requests', id, 'approved', decision.note, user)) {
+        await createNotification(request.employee_id, `Your overtime request for ${request.date} has been approved.${suffix}`);
+        await logAdminAction(user.username, 'approve', 'overtime_request', id, summary, request.employee_id);
+      }
+    } else if (await claimDecision('overtime_requests', id, 'rejected', decision.note, user)) {
+      await logAdminAction(user.username, 'reject', 'overtime_request', id, summary, request.employee_id);
+      await createNotification(request.employee_id, `Your overtime request for ${request.date} has been rejected.${suffix} You can apply again from the Overtime page.`);
     }
     res.writeHead(302, { Location: '/overtime' });
     return res.end();
@@ -6471,21 +6964,45 @@ async function handleRequest(req, res) {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject field trips.'); }
     const form = await readFormBody(req);
     const id = form.id;
-    const action = form.action;
     const trip = await db.prepare('SELECT * FROM field_trips WHERE id = ?').get(id);
     if (!trip) { res.writeHead(404); return res.end('Unknown field trip'); }
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/field-trip', 'field-trip');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km · ${decision.note}`;
 
-    if (action === 'approve') {
-      await db.prepare("UPDATE field_trips SET status = 'approved', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) has been approved for reimbursement.`);
-      await logAdminAction(user.username, 'approve', 'field_trip', id, `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km`, trip.employee_id);
-    } else if (action === 'reject') {
-      await db.prepare("UPDATE field_trips SET status = 'rejected', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) was not approved for reimbursement.`);
-      await logAdminAction(user.username, 'reject', 'field_trip', id, `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km`, trip.employee_id);
+    if (decision.action === 'approve') {
+      if (await claimDecision('field_trips', id, 'approved', decision.note, user)) {
+        await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) has been approved for reimbursement.${suffix}`);
+        await logAdminAction(user.username, 'approve', 'field_trip', id, summary, trip.employee_id);
+      }
+    } else if (await claimDecision('field_trips', id, 'rejected', decision.note, user)) {
+      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) was not approved for reimbursement.${suffix} You can submit it again from the Field Trips page.`);
+      await logAdminAction(user.username, 'reject', 'field_trip', id, summary, trip.employee_id);
     }
+    res.writeHead(302, { Location: '/field-trip' });
+    return res.end();
+  }
+
+  // Submitting a rejected trip again: the same trip (date, route, distance) with a new
+  // reason, as a fresh pending row pointing back at the rejected one.
+  if (parsed.pathname === '/field-trip/reapply' && req.method === 'POST') {
+    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only the employee can submit their trip again.'); }
+    const form = await readFormBody(req);
+    const lang = langOf(user);
+    const reapply = await resolveReapply('field_trips', form.previous_request_id, user.employeeId);
+    const reason = cleanNote(form.reason);
+    const errorKey = reapply.errorKey || (!reapply.previous && 'notes.err_reapply_unknown')
+      || (reason.error && (reason.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required'));
+    if (errorKey) {
+      const trips = await db.prepare('SELECT * FROM field_trips WHERE employee_id = ? ORDER BY id DESC LIMIT 20').all(user.employeeId);
+      return sendHtml(res, await renderFieldTrip(user.employeeId, trips, user, t(lang, errorKey, { max: NOTE_MAX_LENGTH })));
+    }
+    const previous = reapply.previous;
+    await db.prepare(
+      'INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km, reason, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(previous.employee_id, previous.date, formatTimestamp(new Date()), previous.from_address, previous.to_address, previous.distance_km, reason.value, previous.id);
+    await logActivity('field_trip', previous.employee_id, `Submitted again: ${previous.from_address} to ${previous.to_address}, ${previous.distance_km} km · ${reason.value}`);
     res.writeHead(302, { Location: '/field-trip' });
     return res.end();
   }

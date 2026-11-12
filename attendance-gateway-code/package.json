@@ -10,6 +10,7 @@
     "create-admin": "node --env-file-if-exists=.env scripts/create-admin.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@libsql/client": "^0.17.4"
   }
 }

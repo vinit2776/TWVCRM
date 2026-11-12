@@ -27,6 +27,15 @@ two. The CRM's only reference to this app is an outbound link in the sidebar.
   (shift matching, half-day/late rules, breaks, holidays, leave). The only part
   with unit tests, in [test/](test/).
 - **[i18n.js](i18n.js)** — English and Tamil strings, chosen per employee.
+- **[request-notes.js](request-notes.js)** — rules shared by every
+  apply/approve flow: the employee's reason and the manager's note are required,
+  and a rejected request can be filed again (`previous_request_id` links the
+  attempts into one thread).
+- **[certificate-check.js](certificate-check.js)** — optional Claude check of a
+  Sick Leave medical certificate (name, dates, signature against the request).
+  Advice for the manager only; off unless the `CERTIFICATE_CHECK` setting is on,
+  and it needs `ANTHROPIC_API_KEY`. Turning it on sends the certificate image to
+  Anthropic's API.
 - **[api/index.js](api/index.js)** — Vercel entry point. `vercel.json` rewrites
   every path here, so the router in `server.js` runs unchanged.
 - **[relay/](relay/)** — office-LAN proxy for the biometric device. See below.
@@ -214,8 +223,9 @@ other such day stays Absent. The limits live in `attendance-logic.js`.
 
 Operational settings live in the database, editable by an admin at
 **/admin/settings** — office public IPs, the biometric device serial, the device
-clock correction, the punch API key, the LocationIQ key, and address-search
-biasing. Each resolves in this order:
+clock correction, the punch API key, the LocationIQ key, address-search
+biasing, and the medical certificate check (`CERTIFICATE_CHECK`, off by default,
+with its `ANTHROPIC_API_KEY`). Each resolves in this order:
 
 1. the `app_settings` table (the admin UI)
 2. the environment variable of the same name (a deploy-time default)

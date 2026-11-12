@@ -24,13 +24,21 @@ Dashboard / Calendar / Admin views render the derived status
         │
         ├──▶ 7pm (AUTO_CHECKOUT_HOUR): unmatched punch-in gets synthetic punch-out
         │
-Employee: /leave/apply or /permission/apply ──▶ pending row
-        │
+Employee: /leave/apply, /permission/apply, /corrections/apply, /overtime/apply
+          or records a field trip ──▶ pending row (reason required)
+        │                  Sick Leave may carry a medical certificate (photo/PDF),
+        │                  attachable later while pending; optionally checked by
+        │                  Claude (CERTIFICATE_CHECK) — advice for the manager only
         ▼
-Admin: /leave/decide or /permission/decide (approve/reject)
+Admin: /<flow>/decide (approve/reject, note required) ──▶ decision_note + decided_by
         │
-        ├──▶ approved leave: balance deducted, notification sent
-        └──▶ rejected: notification sent, no balance change
+        ├──▶ approved: side effects as before, notification includes the note
+        └──▶ rejected: notification includes the note
+                 │
+                 ▼
+             Employee: "Apply again" ──▶ new pending row, new reason,
+             previous_request_id → the rejected one (one follow-up per rejection,
+             no limit on rounds; same-date refiling skips the filing deadline)
 ```
 
 ## If-this-then-that scenarios
