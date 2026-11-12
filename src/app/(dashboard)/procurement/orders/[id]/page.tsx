@@ -1,6 +1,6 @@
 "use client";
 
-import { amcNotReceived, assetsNeedingDetails, linesWithoutAsset, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
+import { amcNotReceived, assetsNeedingDetails, linesWithoutAsset, receiptHref, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
 import { RollbackDialog } from "@/components/procurement/rollback-dialog";
@@ -1422,6 +1422,9 @@ export default function PurchaseOrderDetailPage() {
                     {assetsToFix.map(({ asset, gaps }) => (
                       <li key={asset.id ?? asset.asset_code}>
                         <Link href={`/facility/assets/${asset.id}`} className="font-medium underline">{asset.name || asset.asset_code || "Asset"}</Link>: {gaps.join("; ")}
+                        {receiptHref(asset) && (
+                          <> — <Link href={receiptHref(asset)!} className="font-medium underline">Record the delivery challan</Link></>
+                        )}
                       </li>
                     ))}
                   </ul>

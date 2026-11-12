@@ -21,7 +21,7 @@ export async function attachPurchasePos(
   for (const d of dcs ?? []) dcCount.set(d.po_id as string, (dcCount.get(d.po_id as string) ?? 0) + 1);
   const byId = new Map<string, AssetPurchasePo>();
   for (const p of pos ?? []) {
-    byId.set(p.id as string, { po_number: p.po_number as string, status: p.status as string, dc_count: dcCount.get(p.id as string) ?? 0 });
+    byId.set(p.id as string, { id: p.id as string, po_number: p.po_number as string, status: p.status as string, dc_count: dcCount.get(p.id as string) ?? 0 });
   }
   for (const a of assets) {
     if (a.procurement_po_id) a.purchase_po = byId.get(a.procurement_po_id) ?? null;

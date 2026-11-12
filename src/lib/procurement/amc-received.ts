@@ -15,6 +15,7 @@ export function amcNotReceived(po: { status: string; amc_terminated_at?: string 
 
 /** Where the asset was bought: its purchase PO and how many delivery challans are in. */
 export interface AssetPurchasePo {
+  id: string;
   po_number: string;
   status: string;
   dc_count: number;
@@ -77,4 +78,10 @@ export function linesWithoutAsset(
   return items
     .filter((i) => !i.linked_asset_id && !i.linked_asset)
     .map((i) => i.item_name?.trim() || "Unnamed line");
+}
+
+/** Where to record the delivery challan, when the asset's goods are not yet received. */
+export function receiptHref(asset: AssetForAmc): string | null {
+  const po = asset.purchase_po;
+  return po && !purchaseReceived(po) ? `/procurement/orders/${po.id}` : null;
 }
