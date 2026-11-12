@@ -49,9 +49,9 @@ export async function GET(request: NextRequest) {
       locations(id, name),
       companies(id, name, brand_name),
       purchase_requests(id, pr_number, department, expenditure_type),
-      purchase_order_items(id, item_name, unit, linked_asset_id, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id)),
+      purchase_order_items(id, item_name, unit, linked_asset_id, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id, lifecycle_stage)),
       vendor_bills(id, payment_status, approval_status),
-      linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id)
+      linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id, lifecycle_stage)
     `)
     .order("created_at", { ascending: false });
 

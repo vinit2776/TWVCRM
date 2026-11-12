@@ -19,6 +19,7 @@ export interface AssetForAmc {
   asset_code?: string | null;
   serial_number?: string | null;
   location_id?: string | null;
+  lifecycle_stage?: string | null;
 }
 
 /** What an asset still lacks before an AMC on it is fully set up. Warn only; never blocks. */
@@ -27,6 +28,8 @@ export function assetGaps(asset: AssetForAmc): string[] {
   if (!asset.name?.trim()) gaps.push("name");
   if (!asset.serial_number?.trim()) gaps.push("serial number");
   if (!asset.location_id) gaps.push("location");
+  // Still "Procured" means it has not been installed at its location, i.e. not received there.
+  if (asset.lifecycle_stage === "procured") gaps.push("receipt at the location (stage is still Procured)");
   return gaps;
 }
 
