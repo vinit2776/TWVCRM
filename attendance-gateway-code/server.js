@@ -25,7 +25,6 @@ const {
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
 const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, reportKindFromPath, REPORTS: DAILY_REPORTS } = require('./daily-report');
-const { createPunchinReminder, renderReminderEmail, WINDOW_MODES: REMINDER_WINDOW_MODES } = require('./punchin-reminder');
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
   ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
@@ -359,13 +358,6 @@ const SETTING_DEFS = [
     fallback: 'TWV Attendance <contact@theworkvilla.com>',
   },
   {
-    key: 'PUNCHIN_REMINDERS',
-    label: 'Punch-in reminder emails',
-    help: "Emails each employee 10 minutes after their shift starts if they haven't punched in, 5 minutes before the 15-minute grace ends. Skips Sundays, holidays, approved leave, people already in, and anyone without an email. Uses the Resend key and sender above.",
-    fallback: 'off',
-    options: [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }],
-  },
-  {
     key: 'SHIFT_RULES_EFFECTIVE_FROM',
     label: 'Branch shift rules apply from',
     help: "YYYY-MM-DD. Attendance on and after this date is measured against the branch timings and per-branch half Saturdays below; earlier days keep the rule that was in force when they were worked (one company-wide half shift on the 2nd and 4th Saturday, everyone on their own saved timings). Statuses are worked out each time a report is opened and nothing records what a day's shift was, so moving this date backwards re-measures days that have already been reported on — a Saturday that read Present can become a Half Day. Only move it back for a period whose branch timings are genuinely what was worked.",
@@ -377,16 +369,6 @@ const SETTING_DEFS = [
       if (value < LAUNCH_DATE) return `Branch shift rules apply from cannot be before the launch date (${LAUNCH_DATE}).`;
       return null;
     },
-  },
-  {
-    key: 'PUNCHIN_REMINDER_WINDOW',
-    label: 'Punch-in reminder window',
-    help: "When the every-5-minute check may send. Anyone whose reminder time falls outside the window doesn't get one.",
-    fallback: 'fixed',
-    options: [
-      { value: 'fixed', label: 'Fixed: 9:30 to 10:00 AM', help: 'Covers the standard 09:30 shift.' },
-      { value: 'shifts', label: 'Follow shift timings: earliest shift start to latest grace end', help: "Works out the window from everyone's shifts each day, so people on later or earlier shifts also get reminded." },
-    ],
   },
 ];
 // A setting with fixed choices only accepts one of them.
@@ -851,8 +833,8 @@ const SCHEMA_SQL = `
     sent_at TEXT NOT NULL,
     PRIMARY KEY (kind, date)
   );
-  -- One row per punch-in reminder actually sent, so the every-5-minute runs (and the
-  -- device check-ins that also trigger them) never email someone twice in a day.
+  -- Punch-in reminder emails were removed; this table is no longer written or read.
+  -- Kept so existing databases aren't altered.
   CREATE TABLE IF NOT EXISTS punchin_reminder_runs (
     employee_id TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -915,9 +897,6 @@ const {
 } = createAttendanceLogic(db, { getBranches: () => CONFIG.BRANCH_LIST, getShiftRulesEffectiveFrom: () => CONFIG.SHIFT_RULES_EFFECTIVE_FROM });
 const dailyReport = createDailyReport(db, {
   getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate, getApprovedPermissionForDate,
-});
-const punchinReminder = createPunchinReminder(db, {
-  getPunchesForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate,
 });
 
 const LEAVE_TYPES = ['Casual Leave', 'Sick Leave', 'Comp Off'];
@@ -2061,45 +2040,6 @@ async function runDailyReport(kind) {
   console.log(`Daily ${kind} report sent to ${to.length} recipients`);
   return 'sent';
 }
-
-// --- Punch-in reminder emails (see punchin-reminder.js) ---
-// Sends whatever is due right now. Called by /internal/punchin-reminder (an outside
-// every-5-minute schedule) and on the biometric device's check-ins.
-async function runPunchinReminders(now = new Date()) {
-  if (CONFIG.PUNCHIN_REMINDERS !== 'on') return { outcome: 'off' };
-  if (!CONFIG.RESEND_API_KEY) return { outcome: 'not_configured' };
-  const date = todayStr(now);
-  const mode = REMINDER_WINDOW_MODES.includes(CONFIG.PUNCHIN_REMINDER_WINDOW) ? CONFIG.PUNCHIN_REMINDER_WINDOW : 'fixed';
-  const result = await punchinReminder.dueReminders(date, now.getHours() * 60 + now.getMinutes(), mode);
-  if (result.skipped) return { outcome: 'skipped', reason: result.skipped };
-  let sent = 0;
-  let failed = 0;
-  for (const reminder of result.due) {
-    // Claim first so two overlapping runs can't both send; a failed send releases it
-    // so the next run (still inside the 5-minute gap) can try again.
-    const claim = await db.prepare('INSERT OR IGNORE INTO punchin_reminder_runs (employee_id, date, sent_at) VALUES (?, ?, ?)')
-      .run(reminder.employeeId, date, formatTimestamp(new Date()));
-    if (!claim.changes) continue;
-    try {
-      const email = renderReminderEmail(reminder, { appUrl: 'https://twv-attendance.vercel.app' });
-      await sendEmail({ apiKey: CONFIG.RESEND_API_KEY, from: CONFIG.REPORT_EMAIL_FROM, to: [reminder.email], ...email });
-      sent++;
-    } catch (err) {
-      await db.prepare('DELETE FROM punchin_reminder_runs WHERE employee_id = ? AND date = ?').run(reminder.employeeId, date);
-      console.error(`punch-in reminder for ${reminder.employeeId} failed:`, err.message);
-      failed++;
-    }
-  }
-  if (sent > 0) console.log(`Punch-in reminders sent: ${sent}`);
-  return { outcome: 'ran', sent, failed };
-}
-// Only the outside every-5-minute schedule calls this. The device's check-ins used to
-// as well, which couldn't work: the device polls about every 15 minutes while each
-// person is due for only 5, so it caught a given window perhaps a third of the time.
-// What it did do was put email latency on the device's critical path — the send loop
-// is sequential with a 15-second timeout per message, awaited inside the punch-upload
-// handler, with no maxDuration set. Killed partway, the claims already written have no
-// email behind them and the next run skips those people, so they silently get nothing.
 
 // The in-process timer (long-lived server only; on Vercel the callers above do this).
 async function checkAndRunAutoCheckout() {
@@ -5827,9 +5767,10 @@ async function handleRequest(req, res) {
     }
   }
 
-  // Punch-in reminders. Meant to be called every 5 minutes by an outside scheduler
-  // (Vercel Hobby cron can't run that often). Safe to call any time: it only sends
-  // what is due now, once per person per day. Same CRON_SECRET guard as above.
+  // Called every 5 minutes by the CRM's cron (/api/cron/attendance-punchin-reminder;
+  // Vercel Hobby cron can't run that often). It used to send punch-in reminder emails
+  // too; those were removed, so it now only runs the auto punch-out. Same CRON_SECRET
+  // guard as above.
   if (parsed.pathname === '/internal/punchin-reminder') {
     const expected = process.env.CRON_SECRET;
     const provided = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
@@ -5837,9 +5778,8 @@ async function handleRequest(req, res) {
       logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
-    // The same every-5-minute schedule also gives auto punch-outs their timing: each
-    // person's is due 15 minutes after their own shift end. Run first and on its own,
-    // so a reminder email failure never holds it up.
+    // This schedule gives auto punch-outs their timing: each person's is due 15
+    // minutes after their own shift end.
     let autoCheckout;
     try {
       autoCheckout = await runScheduledAutoCheckout();
@@ -5847,13 +5787,7 @@ async function handleRequest(req, res) {
       console.error('auto punch-out failed:', err.message);
       autoCheckout = { outcome: 'failed' };
     }
-    try {
-      const result = await runPunchinReminders();
-      return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', ...result, autoCheckout });
-    } catch (err) {
-      console.error('punch-in reminders failed:', err.message);
-      return sendJson(res, 502, { ok: false, error: 'Punch-in reminders failed' });
-    }
+    return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', reminders: 'removed', autoCheckout });
   }
 
   // PWA static assets — unauthenticated on purpose: the browser fetches these
