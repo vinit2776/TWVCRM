@@ -529,6 +529,21 @@ Staging is exactly what makes clicking through freely safe. Use it.
 
 ---
 
+## Warnings Are Never Dead Ends
+
+Added 2026-11-12. Any warning, flag, chip or blocked-action message shown to a user must also give the **path to fix it**, so the user never has to work out what to do next and the warning clears once they have done it.
+
+- **Link or button right at the warning** to the exact place the fix is made (the page, dialog or action), named in plain words: "Record the delivery challan", not just "Delivery challan missing".
+- **Say what is wrong and what clears it** (which field, which document, which step first). If a prerequisite comes first ("mark the PO as ordered, then record the delivery"), say so in the same line.
+- **The warning disappears by itself once fixed** — it is derived from the data, never a dismissable note someone has to remember to clear. A flag stays visible until the underlying thing is done (e.g. an asset invoice missing stays flagged until it is uploaded).
+- **Do not show a warning that cannot be acted on.** If the user has no way to fix it on that screen or anywhere else, either build the path or do not show it; if a gap remains, say so in the PR so it is picked up, rather than shipping a dead end.
+- **Warn, don't block, unless told otherwise.** Prefer a visible warning with a way forward over a hard stop; blocks are only for the strictly enforced rules written elsewhere in this file.
+- A list row or chip that only summarises (e.g. a register chip) may leave the fix to the detail page, but that page must carry the full link/button.
+
+Applied first to the AMC warnings (item not received, delivery challan, asset details, line not an asset) in `src/lib/procurement/amc-received.ts` and the AMC contract page.
+
+---
+
 ## Code Conventions
 
 - **TypeScript strict mode.** No `any` without a comment explaining why.

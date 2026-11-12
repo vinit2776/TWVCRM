@@ -1,5 +1,6 @@
 "use client";
 
+import { amcNotReceived, assetsNeedingDetails, linesWithoutAsset, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -52,8 +53,8 @@ interface AmcRow {
   procurement_vendors: { id: string; name: string } | null;
   locations: { id: string; name: string } | null;
   purchase_requests: { id: string; pr_number: string; department: string; expenditure_type: string } | null;
-  purchase_order_items: Array<{ id: string; item_name: string; unit: string; linked_asset?: { id: string; name: string; asset_code: string } | null }>;
-  linked_asset: { id: string; name: string; asset_code: string } | null;
+  purchase_order_items: Array<{ id: string; item_name: string; unit: string; linked_asset?: ({ id: string; name: string; asset_code: string } & AssetForAmc) | null }>;
+  linked_asset: ({ id: string; name: string; asset_code: string } & AssetForAmc) | null;
   amc_scope_covered: string | null;
   amc_scope_exclusions: string | null;
   payment_state: "paid" | "partially_paid" | "unpaid" | "no_bill";
@@ -455,6 +456,27 @@ export default function AmcRegisterPage() {
                           >
                             <IndianRupee className="h-3 w-3" />
                             {PAYMENT_STATE_BADGE[row.payment_state]!.label}
+                          </span>
+                        )}
+                        {row.amc_status !== "terminated" && assetsNeedingDetails([
+                          ...row.purchase_order_items.map((i) => i.linked_asset).filter(Boolean) as AssetForAmc[],
+                          ...(row.linked_asset ? [row.linked_asset] : []),
+                        ]).length > 0 && (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                            <AlertTriangle className="h-3 w-3" />
+                            Asset details missing
+                          </span>
+                        )}
+                        {row.amc_status !== "terminated" && !row.linked_asset && linesWithoutAsset(row.purchase_order_items).length > 0 && (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                            <AlertTriangle className="h-3 w-3" />
+                            Not linked to an asset
+                          </span>
+                        )}
+                        {amcNotReceived(row) && (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full" title={AMC_NOT_RECEIVED_WARNING}>
+                            <AlertTriangle className="h-3 w-3" />
+                            Not received yet
                           </span>
                         )}
                         {(missingContact || missingDates) && row.amc_status !== "expired" && (
