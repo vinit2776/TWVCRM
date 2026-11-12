@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logEmailActivity, logWhatsAppActivity } from "@/lib/audit";
+import { isVoProposalExpired } from "@/lib/vo-proposal";
 import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
 
 export const maxDuration = 30;
@@ -75,8 +76,14 @@ export async function POST(
     );
   }
 
+  // Staff cannot accept an offer that has lapsed (VO kind only; standard valid_until stays advisory).
+  if (isVoProposalExpired(proposal)) {
+    return NextResponse.json({ error: "This Virtual Office proposal has expired. Reissue it before accepting." }, { status: 409 });
+  }
+
   // Gate: zero-deposit proposals require admin OTP approval before acceptance
-  if (Number(proposal.security_deposit_months || 0) === 0 && !proposal.deposit_waiver_verified_at) {
+  // Virtual Office proposals carry zero deposit by design, so they need no waiver.
+  if (proposal.kind !== "virtual_office" && Number(proposal.security_deposit_months || 0) === 0 && !proposal.deposit_waiver_verified_at) {
     return NextResponse.json(
       { error: "This proposal has no security deposit. Admin OTP approval is required before accepting. Please use the Deposit Waiver Approval section to get admin sign-off." },
       { status: 403 }

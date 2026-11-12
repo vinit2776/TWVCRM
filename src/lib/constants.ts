@@ -235,6 +235,10 @@ export const PROPOSAL_STATUSES = [
   "rejected",
   "expired",
   "superseded",
+  // Virtual Office direct proposals (kind = virtual_office) only.
+  "withdrawn",
+  "changes_requested",
+  "declined",
 ] as const;
 
 export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
@@ -245,6 +249,9 @@ export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
   rejected: "Rejected",
   expired: "Expired",
   superseded: "Superseded",
+  withdrawn: "Withdrawn",
+  changes_requested: "Changes requested",
+  declined: "Declined",
 };
 
 export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
@@ -255,6 +262,9 @@ export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
   rejected: "bg-red-100 text-red-800",
   expired: "bg-orange-100 text-orange-800",
   superseded: "bg-slate-100 text-slate-600",
+  withdrawn: "bg-slate-100 text-slate-600",
+  changes_requested: "bg-amber-100 text-amber-800",
+  declined: "bg-red-100 text-red-800",
 };
 
 // Content edits (line items, pricing, terms) are only allowed in these

@@ -315,7 +315,7 @@ export interface Task {
 // ==========================================
 // Proposal Types
 // ==========================================
-export type ProposalStatus = "draft" | "sent" | "viewed" | "accepted" | "rejected" | "expired" | "superseded";
+export type ProposalStatus = "draft" | "sent" | "viewed" | "accepted" | "rejected" | "expired" | "superseded" | "withdrawn" | "changes_requested" | "declined";
 
 export interface LineItem {
   description: string;
@@ -466,6 +466,17 @@ export interface Proposal {
   /** Set on the old proposal once a revision replaces it. */
   superseded_by?: string | null;
   superseded_at?: string | null;
+  /** Virtual Office direct proposals (migration 00683). Absent/standard for ordinary proposals. */
+  kind?: "standard" | "virtual_office";
+  vo_term_months?: number | null;
+  vo_guide_price?: number | null;
+  vo_quoted_price?: number | null;
+  expires_at?: string | null;
+  responded_at?: string | null;
+  response_note?: string | null;
+  withdrawn_at?: string | null;
+  withdrawn_reason?: string | null;
+  public_token?: string | null;
   deposit_waiver_verified_by?: string;
   deposit_waiver_verified_by_user?: { id: string; full_name: string } | null;
   deposit_waiver_requested_at?: string;
