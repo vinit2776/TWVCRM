@@ -57,6 +57,8 @@ interface VendorBillInfo {
   payment_status: string;
   approval_status: string;
   due_date: string | null;
+  /** Signed link to the landlord's invoice; null when none is on file. */
+  invoice_url?: string | null;
   vendor?: { id: string; name: string } | null;
 }
 
@@ -79,6 +81,14 @@ interface CustomerBillInfo {
   customer_sgst: number | null;
   customer_round_off: number | null;
   gst_rate: number | null;
+  billing_profile?: {
+    id: string;
+    name: string;
+    utility_markup_type: "per_unit" | "percent";
+    utility_markup_value: number;
+    generator_markup_type: "per_unit" | "percent";
+    generator_markup_value: number;
+  } | null;
   contract?: {
     id: string;
     contract_number: string;
@@ -566,6 +576,21 @@ export default function ElectricityBillsPage() {
   // Full Utility/DG breakdown for accounts to verify before dispatch — mirrors
   // exactly how the dispatch route reconstructs line items from the same
   // stored split % + rate fields, so what's shown here matches the invoice.
+  // "Landlord rate + margin" behind a customer rate, worked back from the stored rate and the
+  // profile's margin so it always agrees with what was billed. Null for bills with no profile.
+  const rateBuildUp = (cb: CustomerBillInfo) => {
+    const p = cb.billing_profile;
+    const split = (rate: number, type: "per_unit" | "percent", value: number) => {
+      const base = type === "per_unit" ? rate - value : rate / (1 + value / 100);
+      return { base: Math.round(base * 100) / 100, margin: type === "per_unit" ? formatCurrency(value) : `${value}%` };
+    };
+    return {
+      profileName: p?.name ?? null,
+      utilityBuildUp: p ? split(Number(cb.customer_utility_rate ?? 0), p.utility_markup_type, Number(p.utility_markup_value)) : null,
+      generatorBuildUp: p ? split(Number(cb.customer_generator_rate ?? 0), p.generator_markup_type, Number(p.generator_markup_value)) : null,
+    };
+  };
+
   const customerBillBreakdown = (cb: CustomerBillInfo) => {
     const totalUnits = Number(cb.customer_units_billed ?? 0);
     const utilityUnits = Math.round((totalUnits * Number(cb.customer_utility_pct ?? 0)) / 100 * 100) / 100;
@@ -581,6 +606,7 @@ export default function ElectricityBillsPage() {
       roundOff: Number(cb.customer_round_off ?? 0),
       gstRate: Number(cb.gst_rate ?? 18),
       total: Number(cb.customer_total ?? 0),
+      ...rateBuildUp(cb),
     };
   };
 
@@ -1262,6 +1288,19 @@ export default function ElectricityBillsPage() {
                                   {" · "}
                                   <Link href={`/procurement/bills/${vb.id}`} className="text-primary underline underline-offset-2">Open vendor bill</Link>
                                 </p>
+                                {(() => {
+                                  const invoiceUrl = vb.invoice_url ?? null;
+                                  return invoiceUrl ? (
+                                    <a href={invoiceUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary underline underline-offset-2">
+                                      <Eye className="h-3.5 w-3.5" /> View landlord invoice
+                                    </a>
+                                  ) : (
+                                    <p className="flex items-center gap-1 text-amber-700">
+                                      <AlertTriangle className="h-3.5 w-3.5" /> Landlord invoice missing —{" "}
+                                      <Link href={`/procurement/bills/${vb.id}`} className="underline underline-offset-2">upload on the vendor bill</Link>
+                                    </p>
+                                  );
+                                })()}
                               </>
                             ) : (
                               <p className="text-muted-foreground">No payable exists for this bill, so nothing is waiting in Acc Payables. Set the landlord for this location, or link the uploaded invoice from Procurement → Bills.</p>
@@ -1356,20 +1395,38 @@ export default function ElectricityBillsPage() {
                                     return (
                                       <div className="rounded border border-blue-200 bg-white/60 px-2 py-1.5 space-y-0.5">
                                         <div className="flex justify-between text-muted-foreground">
+                                          <span>Billing profile</span>
+                                          <span className="font-medium text-foreground">{b.profileName ?? "None — contract's own rates"}</span>
+                                        </div>
+                                        <div className="flex justify-between text-muted-foreground">
                                           <span>Annexure A — total units billed</span>
                                           <span>{Math.round((b.utilityUnits + b.generatorUnits) * 100) / 100}</span>
                                         </div>
                                         {b.utilityUnits > 0 && (
-                                          <div className="flex justify-between text-muted-foreground">
-                                            <span>Utility/Grid: {b.utilityUnits} units × {formatCurrency(b.utilityRate)}</span>
-                                            <span>{formatCurrency(b.utilityAmount)}</span>
-                                          </div>
+                                          <>
+                                            <div className="flex justify-between text-muted-foreground">
+                                              <span>Utility/Grid: {b.utilityUnits} units × {formatCurrency(b.utilityRate)}</span>
+                                              <span>{formatCurrency(b.utilityAmount)}</span>
+                                            </div>
+                                            {b.utilityBuildUp && (
+                                              <p className="pl-3 text-[11px] text-muted-foreground/80">
+                                                Landlord {formatCurrency(b.utilityBuildUp.base)} + {b.utilityBuildUp.margin} margin
+                                              </p>
+                                            )}
+                                          </>
                                         )}
                                         {b.generatorUnits > 0 && (
-                                          <div className="flex justify-between text-muted-foreground">
-                                            <span>DG/Generator: {b.generatorUnits} units × {formatCurrency(b.generatorRate)}</span>
-                                            <span>{formatCurrency(b.generatorAmount)}</span>
-                                          </div>
+                                          <>
+                                            <div className="flex justify-between text-muted-foreground">
+                                              <span>DG/Generator: {b.generatorUnits} units × {formatCurrency(b.generatorRate)}</span>
+                                              <span>{formatCurrency(b.generatorAmount)}</span>
+                                            </div>
+                                            {b.generatorBuildUp && (
+                                              <p className="pl-3 text-[11px] text-muted-foreground/80">
+                                                Landlord {formatCurrency(b.generatorBuildUp.base)} + {b.generatorBuildUp.margin} margin
+                                              </p>
+                                            )}
+                                          </>
                                         )}
                                         <div className="flex justify-between text-muted-foreground border-t border-dashed pt-0.5 mt-0.5">
                                           <span>Subtotal</span>
