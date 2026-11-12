@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createCaseSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { DOCUMENT_CHECKLISTS, COMPLIANCE_CHECKLISTS } from "@/lib/constants";
+import { legacyPurposeFor, isMissingEnumValueError, PURPOSE_MIGRATION_PENDING_MESSAGE } from "@/lib/vo-purpose";
 import { caseEndDate } from "@/lib/case-workflow";
 import { EXPIRY_RELEVANT_STATUSES } from "@/lib/constants";
 
@@ -72,6 +73,9 @@ export async function GET(request: NextRequest) {
 
   const { data, error, count } = await query;
 
+  if (isMissingEnumValueError(error)) {
+    return NextResponse.json({ error: PURPOSE_MIGRATION_PENDING_MESSAGE }, { status: 409 });
+  }
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -192,6 +196,9 @@ export async function POST(request: NextRequest) {
     .select("*")
     .single();
 
+  if (isMissingEnumValueError(error)) {
+    return NextResponse.json({ error: PURPOSE_MIGRATION_PENDING_MESSAGE }, { status: 409 });
+  }
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -200,7 +207,7 @@ export async function POST(request: NextRequest) {
     // Auto-generate document checklist rows from DOCUMENT_CHECKLISTS
     const purpose = result.data.purpose;
     const entityType = result.data.client_entity_type;
-    const docChecklist = DOCUMENT_CHECKLISTS[purpose]?.[entityType] || [];
+    const docChecklist = DOCUMENT_CHECKLISTS[legacyPurposeFor(purpose)]?.[entityType] || [];
 
     const docRows = docChecklist.map((doc) => ({
       case_id: data.id,
@@ -220,7 +227,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Auto-generate compliance check rows from COMPLIANCE_CHECKLISTS
-    const complianceChecklist = COMPLIANCE_CHECKLISTS[purpose] || [];
+    const complianceChecklist = COMPLIANCE_CHECKLISTS[legacyPurposeFor(purpose)] || [];
 
     if (complianceChecklist.length > 0) {
       const complianceRows = complianceChecklist.map((check) => ({

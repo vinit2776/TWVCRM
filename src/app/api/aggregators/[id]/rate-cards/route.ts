@@ -1,15 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
+import { VO_PURPOSES } from "@/lib/constants";
+import { isMissingEnumValueError, PURPOSE_MIGRATION_PENDING_MESSAGE } from "@/lib/vo-purpose";
 
 const createRateCardSchema = z.object({
-  purpose: z.enum([
-    "gst_registration",
-    "mca_registration",
-    "branch_office",
-    "mail_handling",
-    "business_address",
-  ]),
+  purpose: z.enum(VO_PURPOSES),
   location_id: z
     .string()
     .uuid()
@@ -105,6 +101,9 @@ export async function POST(
     )
     .single();
 
+  if (isMissingEnumValueError(error)) {
+    return NextResponse.json({ error: PURPOSE_MIGRATION_PENDING_MESSAGE }, { status: 409 });
+  }
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

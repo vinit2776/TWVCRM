@@ -3,6 +3,7 @@ import { stripSpecialConditionsHeading } from "@/lib/special-clause/membership";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS } from "@/lib/constants";
+import { legacyPurposeFor, type LegacyVoPurpose } from "@/lib/vo-purpose";
 import {
   BRAND_TEAL,
   BRAND_DARK,
@@ -34,14 +35,14 @@ export type AgreementTemplateKey =
  * Map a virtual office purpose to the agreement template key.
  */
 export function getTemplateKey(purpose: VoPurpose): AgreementTemplateKey {
-  const map: Record<VoPurpose, AgreementTemplateKey> = {
+  const map: Record<LegacyVoPurpose, AgreementTemplateKey> = {
     gst_registration: "vo_gst_registration",
     mca_registration: "vo_mca_registration",
     branch_office: "vo_branch_office",
     mail_handling: "vo_mail_handling",
     business_address: "vo_business_address",
   };
-  return map[purpose];
+  return map[legacyPurposeFor(purpose) as LegacyVoPurpose];
 }
 
 // ================================================================
