@@ -7,6 +7,8 @@
  * the same term. A renewed term is a new case row with its own start_date.
  */
 
+import { termFee as canonicalTermFee } from "@/lib/vo-term-fee";
+
 export const AGG_BILLING_MODE_KEY = "vo_agg_billing_mode";
 
 export type AggBillingMode = "legacy" | "once_per_tenure";
@@ -34,10 +36,7 @@ export interface TermBillingCase {
  * term fee is rate x years.
  */
 export function termFee(c: Pick<TermBillingCase, "rate" | "tenure_months">): number {
-  const rate = Number(c.rate) || 0;
-  const months = Number(c.tenure_months) || 0;
-  const fee = months > 12 ? (rate * months) / 12 : rate;
-  return Math.round(fee * 100) / 100;
+  return canonicalTermFee(c.rate, c.tenure_months);
 }
 
 export interface BilledTerm {

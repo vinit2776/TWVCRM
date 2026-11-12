@@ -2,10 +2,12 @@
  * What a Virtual Office renewal costs and covers, as offered by Start renewal.
  *
  * Pure so the dialog's live figures and the route that bills them come from
- * the same arithmetic. The case's `rate` is the fee for its whole term
- * (`tenure_months`), so a renewal for a different length is priced pro rata
- * from that before escalation is applied.
+ * the same arithmetic. The case's whole-term fee is termFee(rate, tenure):
+ * `rate` for a term of 12 months or less, the annual rate x years for a longer
+ * one. A renewal for a different length is priced pro rata from that whole-term
+ * fee before escalation is applied.
  */
+import { termFee } from "@/lib/vo-term-fee";
 import { nextRenewalTerm, type RenewalTerm } from "@/lib/vo-renewal-term";
 
 export const RENEWAL_DURATIONS = [6, 11, 12, 24, 36, 48] as const;
@@ -14,17 +16,7 @@ export type RenewalDuration = (typeof RENEWAL_DURATIONS)[number];
 /** "Choose 6, 11, 12, 24, 36 or 48 months" — for validation messages. */
 export const RENEWAL_DURATIONS_TEXT = `${RENEWAL_DURATIONS.slice(0, -1).join(", ")} or ${RENEWAL_DURATIONS[RENEWAL_DURATIONS.length - 1]} months`;
 
-/**
- * Whole-term fee under the owner's rule: cases.rate is the whole-term fee for
- * a term of 12 months or less, and the ANNUAL rate for a longer one.
- *
- * Not used by renewalOffer(), which still scales rate pro rata as if it were
- * always the whole-term fee. The two differ whenever a term longer than 12
- * months is involved; see the PR notes.
- */
-export function termFee(rate: number, tenureMonths: number): number {
-  return tenureMonths > 12 ? Math.round((rate * tenureMonths) / 12) : rate;
-}
+export { termFee, annualRateFor } from "@/lib/vo-term-fee";
 
 export const RENEWAL_ESCALATION_MODES = ["agreed", "none", "custom"] as const;
 export type RenewalEscalationMode = (typeof RENEWAL_ESCALATION_MODES)[number];
@@ -39,7 +31,7 @@ export const RENEWAL_ESCALATION_MODE_LABELS: Record<RenewalEscalationMode, strin
 export const RENEWAL_GST_PERCENT = 18;
 
 export interface RenewalOfferInput {
-  /** cases.rate — the fee for the current full term. */
+  /** cases.rate — the term fee for terms of 12 months or less, the annual rate for longer ones. */
   currentFee: number;
   currentTenureMonths: number | null | undefined;
   /** cases.renewal_escalation_percentage. */
@@ -75,7 +67,7 @@ export function escalationFor(
 export function renewalOffer(input: RenewalOfferInput): RenewalOffer {
   const tenure =
     input.currentTenureMonths && input.currentTenureMonths > 0 ? input.currentTenureMonths : 12;
-  const baseFee = Math.round((input.currentFee * input.durationMonths) / tenure);
+  const baseFee = Math.round((termFee(input.currentFee, tenure) * input.durationMonths) / tenure);
   const escalationPercentage = escalationFor(
     input.mode,
     input.agreedEscalationPercentage,
