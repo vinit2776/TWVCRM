@@ -13,8 +13,9 @@ const { AsyncLocalStorage } = require('async_hooks');
 const { createClient } = require('@libsql/client');
 const {
   createAttendanceLogic,
+  LAUNCH_DATE,
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
-  effectivePunches, autoCheckoutDue, dayEndTimestamp, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
+  effectivePunches, autoCheckoutDue, dayEndTimestamp, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, BRANCH_SHIFT_RULES_FROM, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const {
@@ -24,7 +25,6 @@ const {
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
 const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, reportKindFromPath, REPORTS: DAILY_REPORTS } = require('./daily-report');
-const { createPunchinReminder, renderReminderEmail, WINDOW_MODES: REMINDER_WINDOW_MODES } = require('./punchin-reminder');
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
   ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
@@ -358,21 +358,17 @@ const SETTING_DEFS = [
     fallback: 'TWV Attendance <contact@theworkvilla.com>',
   },
   {
-    key: 'PUNCHIN_REMINDERS',
-    label: 'Punch-in reminder emails',
-    help: "Emails each employee 10 minutes after their shift starts if they haven't punched in, 5 minutes before the 15-minute grace ends. Skips Sundays, holidays, approved leave, people already in, and anyone without an email. Uses the Resend key and sender above.",
-    fallback: 'off',
-    options: [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }],
-  },
-  {
-    key: 'PUNCHIN_REMINDER_WINDOW',
-    label: 'Punch-in reminder window',
-    help: "When the every-5-minute check may send. Anyone whose reminder time falls outside the window doesn't get one.",
-    fallback: 'fixed',
-    options: [
-      { value: 'fixed', label: 'Fixed: 9:30 to 10:00 AM', help: 'Covers the standard 09:30 shift.' },
-      { value: 'shifts', label: 'Follow shift timings: earliest shift start to latest grace end', help: "Works out the window from everyone's shifts each day, so people on later or earlier shifts also get reminded." },
-    ],
+    key: 'SHIFT_RULES_EFFECTIVE_FROM',
+    label: 'Branch shift rules apply from',
+    help: "YYYY-MM-DD. Attendance on and after this date is measured against the branch timings and per-branch half Saturdays below; earlier days keep the rule that was in force when they were worked (one company-wide half shift on the 2nd and 4th Saturday, everyone on their own saved timings). Statuses are worked out each time a report is opened and nothing records what a day's shift was, so moving this date backwards re-measures days that have already been reported on — a Saturday that read Present can become a Half Day. Only move it back for a period whose branch timings are genuinely what was worked.",
+    fallback: BRANCH_SHIFT_RULES_FROM,
+    parse: (raw) => /^\d{4}-\d{2}-\d{2}$/.test(String(raw || '')) ? String(raw) : BRANCH_SHIFT_RULES_FROM,
+    validate: (value) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'Branch shift rules apply from must be a date as YYYY-MM-DD.';
+      if (Number.isNaN(new Date(`${value}T00:00:00`).getTime())) return 'Branch shift rules apply from must be a real date.';
+      if (value < LAUNCH_DATE) return `Branch shift rules apply from cannot be before the launch date (${LAUNCH_DATE}).`;
+      return null;
+    },
   },
 ];
 // A setting with fixed choices only accepts one of them.
@@ -837,8 +833,8 @@ const SCHEMA_SQL = `
     sent_at TEXT NOT NULL,
     PRIMARY KEY (kind, date)
   );
-  -- One row per punch-in reminder actually sent, so the every-5-minute runs (and the
-  -- device check-ins that also trigger them) never email someone twice in a day.
+  -- Punch-in reminder emails were removed; this table is no longer written or read.
+  -- Kept so existing databases aren't altered.
   CREATE TABLE IF NOT EXISTS punchin_reminder_runs (
     employee_id TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -898,12 +894,9 @@ const {
   getEmployee, getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday,
   getApprovedLeaveForDate, getApprovedPermissionForDate, getActiveCorrectionsForMonth, computeDayStatus,
   getDeviationReview,
-} = createAttendanceLogic(db, { getBranches: () => CONFIG.BRANCH_LIST });
+} = createAttendanceLogic(db, { getBranches: () => CONFIG.BRANCH_LIST, getShiftRulesEffectiveFrom: () => CONFIG.SHIFT_RULES_EFFECTIVE_FROM });
 const dailyReport = createDailyReport(db, {
   getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate, getApprovedPermissionForDate,
-});
-const punchinReminder = createPunchinReminder(db, {
-  getPunchesForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate,
 });
 
 const LEAVE_TYPES = ['Casual Leave', 'Sick Leave', 'Comp Off'];
@@ -1748,7 +1741,7 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
     },
   };
 
-  const snapshotLogic = createAttendanceLogic(snapshotDb, { getBranches: () => CONFIG.BRANCH_LIST });
+  const snapshotLogic = createAttendanceLogic(snapshotDb, { getBranches: () => CONFIG.BRANCH_LIST, getShiftRulesEffectiveFrom: () => CONFIG.SHIFT_RULES_EFFECTIVE_FROM });
   return {
     employees,
     correctionsFor: (employeeId, monthPrefix) => correctionsByKey.get(`${employeeId}|${monthPrefix}`) || [],
@@ -1943,6 +1936,11 @@ function computeMusterReport(grid) {
 // a check-in the device only uploaded later, would otherwise stay open forever.
 const AUTO_CHECKOUT_CATCHUP_DAYS = 7;
 function autoCheckoutClock(ts) { return ts.slice(11, 16); }
+// What resolveShift needs to decide a day's shift: the branch timings, and the date from
+// which they apply at all (before it, a day is read the way it was when it was worked).
+function shiftRules() {
+  return { branches: CONFIG.BRANCH_LIST, effectiveFrom: CONFIG.SHIFT_RULES_EFFECTIVE_FROM };
+}
 // A break the employee never resumed, closed when the day it belongs to is over —
 // whether or not that day also needed an auto punch-out. Nothing else ever closes one:
 // /api/break only ends a break while the day is still Active, so once the day has
@@ -1950,7 +1948,7 @@ function autoCheckoutClock(ts) { return ts.slice(11, 16); }
 // the break quietly counts as time worked. Before this swept every day, anyone who forgot
 // to resume and then punched out normally was paid for the break.
 async function closeOpenBreak(employee, dateStr, dayPunches, nowTs) {
-  const endTs = dayEndTimestamp(employee, dateStr, dayPunches, CONFIG.BRANCH_LIST, nowTs);
+  const endTs = dayEndTimestamp(employee, dateStr, dayPunches, shiftRules(), nowTs);
   if (!endTs) return; // the day hasn't reached its shift end — this break may still be real
   // max(..., start_ts) because a break can start after the day ended (a late sweep, or a
   // device punch-out that landed earlier than the break): ending one before it began would
@@ -1995,7 +1993,7 @@ async function performAutoCheckout({ employeeId = null, now = new Date() } = {})
     const mine = byEmployee.get(emp.id) || [];
     for (const dateStr of dateStrs) {
       const dayPunches = mine.filter(p => p.timestamp.startsWith(dateStr));
-      const dueTs = autoCheckoutDue(emp, dateStr, dayPunches, CONFIG.BRANCH_LIST, nowTs);
+      const dueTs = autoCheckoutDue(emp, dateStr, dayPunches, shiftRules(), nowTs);
       if (dueTs && await recordPunch(emp.id, dueTs, 'out', 'auto', 'auto-checkout')) {
         closed++;
         const when = dateStr === today ? autoCheckoutClock(dueTs) : `${autoCheckoutClock(dueTs)} on ${dateStr}`;
@@ -2042,45 +2040,6 @@ async function runDailyReport(kind) {
   console.log(`Daily ${kind} report sent to ${to.length} recipients`);
   return 'sent';
 }
-
-// --- Punch-in reminder emails (see punchin-reminder.js) ---
-// Sends whatever is due right now. Called by /internal/punchin-reminder (an outside
-// every-5-minute schedule) and on the biometric device's check-ins.
-async function runPunchinReminders(now = new Date()) {
-  if (CONFIG.PUNCHIN_REMINDERS !== 'on') return { outcome: 'off' };
-  if (!CONFIG.RESEND_API_KEY) return { outcome: 'not_configured' };
-  const date = todayStr(now);
-  const mode = REMINDER_WINDOW_MODES.includes(CONFIG.PUNCHIN_REMINDER_WINDOW) ? CONFIG.PUNCHIN_REMINDER_WINDOW : 'fixed';
-  const result = await punchinReminder.dueReminders(date, now.getHours() * 60 + now.getMinutes(), mode);
-  if (result.skipped) return { outcome: 'skipped', reason: result.skipped };
-  let sent = 0;
-  let failed = 0;
-  for (const reminder of result.due) {
-    // Claim first so two overlapping runs can't both send; a failed send releases it
-    // so the next run (still inside the 5-minute gap) can try again.
-    const claim = await db.prepare('INSERT OR IGNORE INTO punchin_reminder_runs (employee_id, date, sent_at) VALUES (?, ?, ?)')
-      .run(reminder.employeeId, date, formatTimestamp(new Date()));
-    if (!claim.changes) continue;
-    try {
-      const email = renderReminderEmail(reminder, { appUrl: 'https://twv-attendance.vercel.app' });
-      await sendEmail({ apiKey: CONFIG.RESEND_API_KEY, from: CONFIG.REPORT_EMAIL_FROM, to: [reminder.email], ...email });
-      sent++;
-    } catch (err) {
-      await db.prepare('DELETE FROM punchin_reminder_runs WHERE employee_id = ? AND date = ?').run(reminder.employeeId, date);
-      console.error(`punch-in reminder for ${reminder.employeeId} failed:`, err.message);
-      failed++;
-    }
-  }
-  if (sent > 0) console.log(`Punch-in reminders sent: ${sent}`);
-  return { outcome: 'ran', sent, failed };
-}
-// Only the outside every-5-minute schedule calls this. The device's check-ins used to
-// as well, which couldn't work: the device polls about every 15 minutes while each
-// person is due for only 5, so it caught a given window perhaps a third of the time.
-// What it did do was put email latency on the device's critical path — the send loop
-// is sequential with a 15-second timeout per message, awaited inside the punch-upload
-// handler, with no maxDuration set. Killed partway, the claims already written have no
-// email behind them and the next run skips those people, so they silently get nothing.
 
 // The in-process timer (long-lived server only; on Vercel the callers above do this).
 async function checkAndRunAutoCheckout() {
@@ -5392,6 +5351,38 @@ async function getSessionUser(req) {
 // exported to CSV, so a password that lands in it cannot be taken back out. Trying to
 // tell a password from a username by its shape doesn't work either — an API key and an
 // employee id are both just short printable strings. Matching against the users table is
+// --- Read-only JSON API (/api/employees, /api/attendance) ---
+// These two predate the login system and were open to the public internet until
+// 2026-11-12: /api/employees answered SELECT * for every employee (including the
+// biometric device_pin, mobile and email) and /api/attendance would then compute any
+// of those people's day for any date. Nothing in this repo or the CRM calls either
+// one, and neither is documented, so the fix is the same two trust levels /api/punch
+// already uses rather than deleting them: a machine with the punch API key, or a
+// logged-in session. An employee session is confined to its own record, matching how
+// every page in here already treats a logged-in employee.
+//
+// device_pin is deliberately not in the field list. It is the credential the device
+// authenticates a person by, so it belongs only to /admin/device-pins, never in a
+// JSON payload — see API_EMPLOYEE_FIELDS.
+const API_EMPLOYEE_FIELDS = 'id, name, shift_start, shift_end, shift_custom, onsite_enabled, date_joined, role, designation, reports_to, branch, mobile, email';
+
+// null means "no read at all" (401). { all: true } is every employee; { employeeId }
+// is that one only. Kept separate from the route so it can be unit-tested.
+function apiReadScope({ authorizedViaApiKey = false, user = null } = {}) {
+  if (authorizedViaApiKey) return { all: true };
+  if (!user) return null;
+  if (isManagementRole(user)) return { all: true };
+  if (user.employeeId) return { employeeId: user.employeeId };
+  return null;
+}
+
+// Same key and header as /api/punch: one shared secret for the device side of this
+// gateway. A request carrying it is never looked up as a session.
+async function apiReadAuth(req) {
+  const authorizedViaApiKey = req.headers['x-api-key'] === CONFIG.PUNCH_API_KEY;
+  return { authorizedViaApiKey, user: authorizedViaApiKey ? null : await getSessionUser(req) };
+}
+
 // the only test that can't be fooled, and a miss tells us all we need: someone tried an
 // account that doesn't exist. The IP, device and time are still recorded, so a real
 // intrusion attempt stays just as visible.
@@ -5704,14 +5695,33 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/api/employees' && req.method === 'GET') {
-    return sendJson(res, 200, await db.prepare('SELECT * FROM employees').all());
+    const scope = apiReadScope(await apiReadAuth(req));
+    if (!scope) {
+      logSecurityEvent('api_read_auth_failed', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+    const rows = scope.all
+      ? await db.prepare(`SELECT ${API_EMPLOYEE_FIELDS} FROM employees`).all()
+      : await db.prepare(`SELECT ${API_EMPLOYEE_FIELDS} FROM employees WHERE id = ?`).all(scope.employeeId);
+    return sendJson(res, 200, rows);
   }
 
   // GET /api/attendance?employee_id=EMP-001&date=2026-07-28
   if (parsed.pathname === '/api/attendance' && req.method === 'GET') {
-    const employee_id = parsed.searchParams.get('employee_id');
+    const scope = apiReadScope(await apiReadAuth(req));
+    if (!scope) {
+      logSecurityEvent('api_read_auth_failed', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+    const employee_id = parsed.searchParams.get('employee_id') || (scope.all ? '' : scope.employeeId);
     const date = parsed.searchParams.get('date');
     if (!employee_id) return sendJson(res, 400, { error: 'employee_id is required' });
+    // 404, not 403: an employee asking about a colleague learns nothing about whether
+    // that id exists, which is the same answer they get for a typo.
+    if (!scope.all && employee_id !== scope.employeeId) {
+      logSecurityEvent('api_read_scope_denied', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
+    }
     const status = await computeDayStatus(employee_id, date || todayStr());
     if (!status) return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
     return sendJson(res, 200, status);
@@ -5757,9 +5767,10 @@ async function handleRequest(req, res) {
     }
   }
 
-  // Punch-in reminders. Meant to be called every 5 minutes by an outside scheduler
-  // (Vercel Hobby cron can't run that often). Safe to call any time: it only sends
-  // what is due now, once per person per day. Same CRON_SECRET guard as above.
+  // Called every 5 minutes by the CRM's cron (/api/cron/attendance-punchin-reminder;
+  // Vercel Hobby cron can't run that often). It used to send punch-in reminder emails
+  // too; those were removed, so it now only runs the auto punch-out. Same CRON_SECRET
+  // guard as above.
   if (parsed.pathname === '/internal/punchin-reminder') {
     const expected = process.env.CRON_SECRET;
     const provided = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
@@ -5767,9 +5778,8 @@ async function handleRequest(req, res) {
       logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
-    // The same every-5-minute schedule also gives auto punch-outs their timing: each
-    // person's is due 15 minutes after their own shift end. Run first and on its own,
-    // so a reminder email failure never holds it up.
+    // This schedule gives auto punch-outs their timing: each person's is due 15
+    // minutes after their own shift end.
     let autoCheckout;
     try {
       autoCheckout = await runScheduledAutoCheckout();
@@ -5777,13 +5787,7 @@ async function handleRequest(req, res) {
       console.error('auto punch-out failed:', err.message);
       autoCheckout = { outcome: 'failed' };
     }
-    try {
-      const result = await runPunchinReminders();
-      return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', ...result, autoCheckout });
-    } catch (err) {
-      console.error('punch-in reminders failed:', err.message);
-      return sendJson(res, 502, { ok: false, error: 'Punch-in reminders failed' });
-    }
+    return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', reminders: 'removed', autoCheckout });
   }
 
   // PWA static assets — unauthenticated on purpose: the browser fetches these
@@ -7216,6 +7220,10 @@ module.exports.csvField = csvField;
 // Exported for the unit tests — pure, no server needed.
 module.exports.safeLoginUsername = safeLoginUsername;
 module.exports.sendCsv = sendCsv;
+// Exported for the unit tests — the settings' own parse/validate are pure.
+module.exports.SETTING_DEFS_BY_KEY = SETTING_DEFS_BY_KEY;
+module.exports.apiReadScope = apiReadScope;
+module.exports.API_EMPLOYEE_FIELDS = API_EMPLOYEE_FIELDS;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped

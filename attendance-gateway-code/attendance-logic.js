@@ -82,6 +82,38 @@ function validTime(v) {
   return typeof v === 'string' && /^\d{2}:\d{2}$/.test(v) ? v : '';
 }
 
+function validDate(v) {
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(new Date(`${v}T00:00:00`).getTime()) ? v : '';
+}
+
+// The first whole day worked under the per-branch shift rules. They reached production
+// late on 2026-11-11, so the 11th was itself worked to the old timings.
+//
+// Days before this date are read with the rule that was in force when they happened
+// (legacyShift); days from it on use the branch rules. A cut-off is needed because
+// statuses are computed on read and nothing stores what a day's shift was: without one,
+// every past day is re-measured against today's branch settings, so turning half
+// Saturdays off for a branch quietly turns a Present day into a Half Day in months that
+// have already been reported on.
+//
+// Admin-overridable (SHIFT_RULES_EFFECTIVE_FROM). Setting it to LAUNCH_DATE applies the
+// branch rules to all of history, which is only right if the branch timings are also
+// what those days were actually worked to.
+const BRANCH_SHIFT_RULES_FROM = '2026-11-12';
+
+// The rule in force before BRANCH_SHIFT_RULES_FROM: the 2nd and 4th Saturday ran one
+// company-wide half shift, and every other day used the timings saved on the employee.
+// Which branch they belonged to, and which branch they punched in at, did not come into
+// it. Kept as its own function rather than a flag inside the branch rules, because it is
+// a historical record, not a configuration — it should never drift.
+function legacyShift(employee, dateStr) {
+  if (isHalfSaturday(dateStr)) return { ...SATURDAY_HALF_SHIFT, source: 'legacy', branch: null };
+  const start = validTime(employee && employee.shift_start);
+  const end = validTime(employee && employee.shift_end);
+  if (start && end) return { start, end, source: 'legacy', branch: null };
+  return { ...DEFAULT_SHIFT, source: 'legacy', branch: null };
+}
+
 // The branch a day counts as worked at: the branch of the first real punch, else the
 // employee's own branch (the first, for someone at a few), else none.
 function dayBranchName(employee, dayPunches = []) {
@@ -93,7 +125,9 @@ function dayBranchName(employee, dayPunches = []) {
 
 // Pure. branches: [{ name, shift_start, shift_end, half_saturdays, sat_start, sat_end }] ('' = not set).
 // Returns { start, end, source: 'branch' | 'custom' | 'employee' | 'default', branch }.
-function resolveShift(employee, dateStr, dayPunches = [], branches = []) {
+// Only reached for days on or after the rules' effective-from date — go through
+// resolveShift, which is the one entry point that honours it.
+function branchShift(employee, dateStr, dayPunches = [], branches = []) {
   const branchName = dayBranchName(employee, dayPunches);
   const branch = branchName ? (branches || []).find(b => b.name === branchName) || null : null;
   // Half Saturdays are a per-branch choice (LGF has them; other branches work every
@@ -116,6 +150,19 @@ function resolveShift(employee, dateStr, dayPunches = [], branches = []) {
   return { ...DEFAULT_SHIFT, source: 'default', branch: branchName };
 }
 
+// Which shift applied on a day. The one entry point for that question: it decides
+// between the branch rules and the rule that was in force before they went live, so no
+// caller can read a past day against today's branch settings by forgetting to.
+// rules: { branches, effectiveFrom }. A missing or malformed effectiveFrom reads every
+// day the old way rather than re-measuring history — wrong-but-visible (per-branch
+// Saturdays stop) beats wrong-and-silent (reported months move).
+function resolveShift(employee, dateStr, dayPunches = [], rules = {}) {
+  const { branches = [], effectiveFrom = BRANCH_SHIFT_RULES_FROM } = rules || {};
+  const from = validDate(effectiveFrom);
+  if (!from || dateStr < from) return legacyShift(employee, dateStr);
+  return branchShift(employee, dateStr, dayPunches, branches);
+}
+
 // When a still-open day gets its auto punch-out: AUTO_CHECKOUT_AFTER_SHIFT_MINUTES after
 // that day's shift end, as "YYYY-MM-DD HH:MM:SS". Capped at 23:59 so it stays that day.
 function autoCheckoutTimestamp(dateStr, shift) {
@@ -128,12 +175,12 @@ function autoCheckoutTimestamp(dateStr, shift) {
 // ("YYYY-MM-DD HH:MM:SS"), or was punched into after the due time (a checkout stamped
 // before the check-in can't close it). A real punch-out made after it still replaces
 // it — see effectivePunches.
-function autoCheckoutDue(employee, dateStr, dayPunches, branches, now) {
+function autoCheckoutDue(employee, dateStr, dayPunches, rules, now) {
   const punches = dayPunches || [];
   if (!punches.length) return null;
   if (effectivePunches(punches).length % 2 === 0) return null;
   if (punches.some(p => p.source === 'auto')) return null;
-  const dueTs = autoCheckoutTimestamp(dateStr, resolveShift(employee, dateStr, punches, branches));
+  const dueTs = autoCheckoutTimestamp(dateStr, resolveShift(employee, dateStr, punches, rules));
   if (dueTs > now) return null;
   if (punches[punches.length - 1].timestamp >= dueTs) return null;
   return dueTs;
@@ -145,8 +192,8 @@ function autoCheckoutDue(employee, dateStr, dayPunches, branches, now) {
 // break still inside the shift is left alone. Pass the punches as they were read: an auto
 // punch-out recorded from them in the meantime leaves the count odd, and the due time is
 // the same answer anyway.
-function dayEndTimestamp(employee, dateStr, dayPunches, branches, now) {
-  const dueTs = autoCheckoutTimestamp(dateStr, resolveShift(employee, dateStr, dayPunches, branches));
+function dayEndTimestamp(employee, dateStr, dayPunches, rules, now) {
+  const dueTs = autoCheckoutTimestamp(dateStr, resolveShift(employee, dateStr, dayPunches, rules));
   if (dueTs > now) return null;
   const punches = effectivePunches(dayPunches || []);
   return punches.length > 0 && punches.length % 2 === 0 ? punches[punches.length - 1].timestamp : dueTs;
@@ -175,13 +222,20 @@ function mostCommonShift(employees) {
 
 // getBranches: () => the branch list (server.js passes its cached copy). Without it,
 // branches are read from the db on each call, which only the unit tests rely on.
-function createAttendanceLogic(db, { getBranches = null } = {}) {
+function createAttendanceLogic(db, { getBranches = null, getShiftRulesEffectiveFrom = null } = {}) {
   function branchList() {
     if (getBranches) return getBranches() || [];
     try {
       const rows = db.prepare('SELECT * FROM branches').all();
       return Array.isArray(rows) ? rows : [];
     } catch { return []; }
+  }
+  // The branch list plus the date those rules started applying, as resolveShift wants it.
+  function shiftRules() {
+    return {
+      branches: branchList(),
+      effectiveFrom: (getShiftRulesEffectiveFrom && getShiftRulesEffectiveFrom()) || BRANCH_SHIFT_RULES_FROM,
+    };
   }
   function getEmployee(id) {
     return db.prepare('SELECT * FROM employees WHERE id = ?').get(id);
@@ -199,7 +253,7 @@ function createAttendanceLogic(db, { getBranches = null } = {}) {
   // timings combine. Pass the day's punches when known, so a day worked at another
   // branch gets that branch's hours.
   function getShiftForDate(employee, dateStr, dayPunches = []) {
-    return resolveShift(employee, dateStr, dayPunches, branchList());
+    return resolveShift(employee, dateStr, dayPunches, shiftRules());
   }
   function getHoliday(dateStr) {
     return db.prepare('SELECT * FROM holidays WHERE date = ?').get(dateStr);
@@ -418,6 +472,9 @@ module.exports = {
   AUTO_CHECKOUT_AFTER_SHIFT_MINUTES,
   isHalfSaturday,
   dayBranchName,
+  BRANCH_SHIFT_RULES_FROM,
+  legacyShift,
+  branchShift,
   resolveShift,
   autoCheckoutTimestamp,
   autoCheckoutDue,

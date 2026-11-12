@@ -155,17 +155,11 @@ holidays or Sundays, and at most one of each per day (`daily_report_runs`).
 `/admin/daily-report?kind=morning&date=YYYY-MM-DD` shows any day's email without
 sending it.
 
-**Punch-in reminders.** `/internal/punchin-reminder` (same `CRON_SECRET`) emails each
-employee who hasn't punched in 10 minutes after their own shift starts, 5 minutes
-before the 15-minute grace ends. It is off until **Punch-in reminder emails** is set
-to On at `/admin/settings`, and needs each employee's email on their profile. The
-**Punch-in reminder window** setting picks when it may send: Fixed (9:30 to 10:00
-AM) or Follow shift timings (earliest shift start to latest grace end). It is not in
-`vercel.json`: Hobby cron can't run every 5 minutes, so an outside scheduler has to
-call it every 5 minutes (it only sends what is due, once per person per day,
-`punchin_reminder_runs`). That schedule is the only thing that triggers it: with no
-caller set up, no reminder is ever sent, and auto punch-outs only happen at the
-daily safety runs or when someone opens their dashboard.
+**`/internal/punchin-reminder`** (same `CRON_SECRET`) once emailed punch-in
+reminders, driven by an every-5-minute cron in the CRM. The reminders were removed,
+and so was that cron: the endpoint now only runs the auto punch-out, and nothing
+calls it on a schedule. It is kept as a manual trigger and should be folded into
+`/internal/auto-checkout`, which does the same job under an accurate name.
 
 **Shift timings** are set per branch at `/admin/settings` → Branches: a weekday
 shift, and whether the branch has half Saturdays (2nd and 4th Saturday, with their
@@ -176,11 +170,28 @@ hours they turned up at. An employee can instead have **custom timings** (Edit
 Employee → Custom timings), which apply on weekdays and full Saturdays at any branch;
 half Saturdays always follow the branch. See `resolveShift` in `attendance-logic.js`.
 
+Those rules only apply **from the date in Settings → Branch shift rules apply from**
+(`SHIFT_RULES_EFFECTIVE_FROM`, 2026-11-12 by default: the first whole day worked under
+them). An earlier day is read the way it was worked at the time — one company-wide half
+shift on the 2nd and 4th Saturday, and everyone on their own saved timings, with the
+branch not coming into it. The cut-off exists because a day's status is worked out each
+time a report is opened and nothing records what that day's shift was: without it,
+turning half Saturdays off for a branch would turn a Present Saturday into a Half Day in
+months that have already been reported on. Moving the date backwards re-measures those
+days, so only do it for a period whose branch timings are what was actually worked.
+
+One gap remains, the same one the gateway has always had: editing a branch's weekday
+shift also rewrites the saved timings of the employees who follow it, and the old rule
+reads those saved timings — so a weekday before the cut-off is measured against the new
+hours. Only a per-employee shift history would close that, which nothing stores. Half
+Saturdays, custom timings and which branch a day counts as worked at are unaffected.
+
 **Auto punch-out.** Anyone still punched in is auto punched-out 15 minutes after that
 day's shift end, stamped at exactly that time however late the run is. It gets its
-timing from the same outside every-5-minute schedule as the punch-in reminders
-(`/internal/punchin-reminder` runs it first, before any email), plus the daily Vercel
-crons above and whenever an employee opens their dashboard. It never waits for the
+timing from the daily Vercel crons above (19:00, 21:00 and 23:45 IST, which between
+them cover every shift end) and from an employee opening their dashboard; the due time
+is fixed in advance, so a late run still stamps the right one, and each run also sweeps
+the previous `AUTO_CHECKOUT_CATCHUP_DAYS` days. It never waits for the
 biometric device: a real punch-out the device uploads later replaces the auto one.
 Until midnight the dashboard offers **Punch Out** again; a real punch-out made then
 replaces the auto one, so the day isn't a Missed Checkout and any time past the shift
@@ -229,3 +240,10 @@ clearing one is an explicit checkbox.
 - `POST` bodies are capped at 64KB (`MAX_BODY_BYTES`), returning 413.
 - Login is rate-limited on username **and** IP together, so nobody can lock a
   real user out from an arbitrary network.
+- `GET /api/employees` and `GET /api/attendance` need either the `X-API-Key` punch
+  key or a logged-in session. An employee session sees only its own record and its
+  own attendance; admins and managers see everyone. Neither route ever returns
+  `device_pin` — that is the credential the biometric device identifies a person by,
+  and it belongs only to `/admin/device-pins`. **Both were open to the public
+  internet until 2026-11-12**, `/api/employees` answering `SELECT *` (name, mobile,
+  email, device PIN, branch, shift, join date) for every employee.
