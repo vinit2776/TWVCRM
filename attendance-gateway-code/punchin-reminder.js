@@ -7,7 +7,7 @@
 // Something has to call this every few minutes. Vercel's Hobby cron can't (it runs at
 // most daily and lands anywhere in the hour), so /internal/punchin-reminder is called
 // by an outside every-5-minute schedule — the CRM's own cron, awake during the morning
-// reminder window only.
+// reminder window and the evening auto-punch-out window.
 // Each run only sends what is due right now; punchin_reminder_runs stops repeats.
 //
 // The admin setting PUNCHIN_REMINDER_WINDOW decides when runs may send anything:

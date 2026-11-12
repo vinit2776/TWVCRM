@@ -25,12 +25,13 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/billing-dispatch-pump":   3,
   "cron/cosec-booking-cleanup":   3,
   "cron/messaging-health":        3,
-  // Windowed: every 5 min, but only 04:00-05:59 UTC, Mon-Sat (the morning reminder
-  // window). Saturday's last run to Monday's first is ~46h, so anything tighter
-  // than 48 would cry stale every weekend.
+  // Windowed: every 5 min, but only 04:00-05:59 and 13:00-15:59 UTC, Mon-Sat (the
+  // morning reminder window and the evening auto-punch-out window). Saturday's last
+  // run to Monday's first is ~36h, so 42 leaves room for a missed run without
+  // crying stale every Monday.
   // Staleness is the weak signal here; the useful one is last_status, which the
   // route sets to "error" whenever the gateway call fails.
-  "cron/attendance-punchin-reminder": 48,
+  "cron/attendance-punchin-reminder": 42,
   // hourly at :07 — 3h tolerates one missed run plus a OneGrid blip
   "cron/energy-ledger-capture":   3 * HOUR,
   // hourly at :17 — the console keeps hourly Wi-Fi figures ~7 days, so 3h is far inside what can be lost
