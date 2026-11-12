@@ -26,8 +26,6 @@ export interface TerminablePo {
 export function terminateBlocker(po: TerminablePo, requestIsAmc: boolean): string | null {
   if (po.amc_terminated_at) return "Already terminated";
   if (po.status === "cancelled") return "The purchase order is cancelled";
-  // Nothing has been ordered, so there is no contract to end. Cancelling is the right retire.
-  if (po.status === "pending") return "Not ordered yet — cancel the purchase order instead";
   const isAmc = po.po_type === "service" || requestIsAmc || !!po.amc_start_date || (po.amc_status ?? "inactive") !== "inactive";
   if (!isAmc) return "Not an AMC";
   return null;

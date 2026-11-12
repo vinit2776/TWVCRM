@@ -150,9 +150,6 @@ export async function PATCH(
       if (po.status !== "pending") {
         return NextResponse.json({ error: "Only pending POs can be marked as ordered" }, { status: 422 });
       }
-      if (po.amc_terminated_at) {
-        return NextResponse.json({ error: "This AMC has been terminated. Reinstate it before ordering." }, { status: 422 });
-      }
       if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
       }
