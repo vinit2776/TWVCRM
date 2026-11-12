@@ -31,6 +31,10 @@ describe("terminateBlocker", () => {
     expect(terminateBlocker(po({ status: "cancelled" }), true)).toBe("The purchase order is cancelled");
   });
 
+  it("refuses a PO that has not been ordered yet; cancel it instead", () => {
+    expect(terminateBlocker(po({ status: "pending" }), true)).toBe("Not ordered yet — cancel the purchase order instead");
+  });
+
   it("refuses a PO that is not an AMC at all", () => {
     expect(terminateBlocker(po({ po_type: "goods", amc_start_date: null, amc_status: "inactive" }), false)).toBe("Not an AMC");
   });

@@ -1051,7 +1051,7 @@ export default function PurchaseOrderDetailPage() {
               <Mail className="h-4 w-4 mr-1" /> Email PO
             </Button>
           )}
-          {po.status === "pending" && (
+          {po.status === "pending" && !po.amc_terminated_at && (
             <Button
               size="sm"
               className="bg-blue-600 hover:bg-blue-700"
