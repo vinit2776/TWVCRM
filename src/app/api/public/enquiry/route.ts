@@ -1,34 +1,55 @@
+import { normalizeStoredPhone } from "@/lib/phone";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { sendPushToAll } from "@/lib/push";
+import { messaging } from "@/lib/whatsapp";
+import { sanitiseAttribution } from "@/lib/public-forms/attribution";
+import { verifyTurnstile } from "@/lib/public-forms/turnstile";
+import { withCors } from "@/lib/public-forms/cors";
 
-/** Normalise a phone number to a canonical 10-digit Indian mobile number.
- *  Strips all non-digit characters, then removes a leading country code
- *  (+91 / 91) or STD zero if present, so both "9876543210" and
- *  "+91 98765 43210" normalise to the same "9876543210".
- */
-function normalisePhone(raw: string): string {
-  let digits = raw.replace(/\D/g, "");
-  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
-  if (digits.length === 11 && digits.startsWith("0"))  digits = digits.slice(1);
-  return digits;
-}
-
-const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin"] as const;
+const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin", "website"] as const;
 type AllowedSource = (typeof ALLOWED_SOURCES)[number];
 
 const SOURCE_META: Record<AllowedSource, { label: string; tag: string }> = {
   google_ads:    { label: "Google Ads",     tag: "google-ads-form" },
   meta_ads:      { label: "Meta Ads",       tag: "meta-ads-form"   },
   direct_walkin: { label: "Direct Walk-in", tag: "walkin-form"     },
+  website:       { label: "Website",        tag: "website-form"    },
 };
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
 
+type AdminClient = Awaited<ReturnType<typeof createAdminClient>>;
+
+/** Records this submission as an enquiry and returns its reference (TWV-E-0001).
+ *  The reference is minted by the database. A failure here must never lose the customer's
+ *  enquiry, so it is logged (no PII) and the submission carries on without a reference. */
+async function recordEnquiry(
+  supabase: AdminClient,
+  args: { leadId: string; source: AllowedSource; isReEnquiry: boolean; payload: Record<string, unknown> }
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("lead_enquiries")
+    .insert({
+      lead_id: args.leadId,
+      source: args.source,
+      is_re_enquiry: args.isReEnquiry,
+      payload: args.payload,
+    })
+    .select("reference")
+    .single();
+  if (error) {
+    console.error("[public/enquiry] could not record enquiry:", error.message);
+    return null;
+  }
+  return data.reference as string;
+}
+
 interface EnquiryEmailParams {
   isReturning: boolean;
   leadId: string;
+  reference: string | null;
   firstName: string;
   lastName: string;
   sourceLabel: string;
@@ -91,6 +112,7 @@ function buildEnquiryEmailHtml(p: EnquiryEmailParams): string {
             </p>
 
             <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+              ${row("Reference",              p.reference ?? undefined)}
               ${row("Name",                   `${p.firstName} ${p.lastName}`)}
               ${row("Mobile",                 p.mobile)}
               ${row("Email",                  p.email || undefined)}
@@ -131,8 +153,34 @@ function buildEnquiryEmailHtml(p: EnquiryEmailParams): string {
 </html>`;
 }
 
+// Preflight for the marketing website's cross-origin form post.
+export async function OPTIONS(request: NextRequest) {
+  return withCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+}
+
+// Every response — success, validation error or crash — carries the CORS headers, otherwise
+// the website cannot read the error text or the reference number.
 export async function POST(request: NextRequest) {
-  const body = await request.json();
+  let res: NextResponse;
+  try {
+    res = await handleEnquiry(request);
+  } catch (err) {
+    console.error("[public/enquiry] unhandled error:", err instanceof Error ? err.message : "unknown");
+    res = NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+  }
+  return withCors(res, request.headers.get("origin"));
+}
+
+async function handleEnquiry(request: NextRequest): Promise<NextResponse> {
+  let body: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any -- untrusted JSON, each field is validated below
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
 
   const {
     name,
@@ -148,6 +196,8 @@ export async function POST(request: NextRequest) {
     start_date,               // walk-in specific
     conference_room_location, // walk-in specific (when workspace_type = conference_room)
     hp_field,                 // honeypot — bots fill this, humans don't
+    attribution: rawAttribution, // ad / campaign the visitor came from (untrusted)
+    turnstile_token,          // Cloudflare Turnstile token (optional until configured)
     source: rawSource,
   } = body;
 
@@ -160,6 +210,19 @@ export async function POST(request: NextRequest) {
   // Honeypot check — silently succeed without touching DB
   if (hp_field) {
     return NextResponse.json({ success: true });
+  }
+
+  // Bot check. Fails open: only an explicit "invalid token" from Cloudflare rejects, so a
+  // missing token / Cloudflare outage never costs us a real customer's enquiry.
+  const captcha = await verifyTurnstile(
+    turnstile_token,
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+  );
+  if (captcha === "failed") {
+    return NextResponse.json(
+      { error: "We couldn't verify your submission. Please refresh the page and try again." },
+      { status: 400 }
+    );
   }
 
   // Basic validation
@@ -175,7 +238,7 @@ export async function POST(request: NextRequest) {
   const firstName = nameParts[0];
   const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "-";
 
-  const normalisedMobile = normalisePhone(mobile);
+  const normalisedMobile = normalizeStoredPhone(mobile);
 
   // Validate: must be a 10-digit Indian mobile number (starts with 6–9)
   if (!/^[6-9]\d{9}$/.test(normalisedMobile)) {
@@ -224,7 +287,31 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .join("\n");
 
-  const emailParams: Omit<EnquiryEmailParams, "isReturning" | "leadId"> = {
+  // Exactly what the customer submitted, kept on the enquiry row.
+  const submittedPayload: Record<string, unknown> = Object.fromEntries(
+    Object.entries({
+      name: name.trim(),
+      mobile: normalisedMobile,
+      email: normalisedEmail,
+      company: company?.trim(),
+      workspace_type,
+      seat_capacity,
+      budget_per_seat,
+      preferred_location,
+      working_hours,
+      conference_room_location,
+      start_date,
+      description: description?.trim(),
+    }).filter(([, v]) => v !== undefined && v !== null && v !== "")
+  );
+
+  // Where the visitor came from. Stored beside the form fields but never mixed into them.
+  const attribution = sanitiseAttribution(rawAttribution);
+  if (Object.keys(attribution).length > 0) submittedPayload.attribution = attribution;
+  // Visible in the data when the bot check was on but the browser sent no token.
+  if (captcha === "missing") submittedPayload.captcha = "missing";
+
+  const emailParams: Omit<EnquiryEmailParams, "isReturning" | "leadId" | "reference"> = {
     firstName, lastName, sourceLabel,
     mobile: normalisedMobile,
     email: normalisedEmail,
@@ -249,46 +336,65 @@ export async function POST(request: NextRequest) {
     new Set(["space@theworkvilla.com", ...staffEmails])
   );
 
+  // WhatsApp alert — only for Google Ads / Meta Ads / Website enquiries, to sales reps + managers
+  const shouldSendWhatsApp = source === "google_ads" || source === "meta_ads" || source === "website";
+  let salesPhones: string[] = [];
+  if (shouldSendWhatsApp) {
+    const { data: salesRows } = await supabase
+      .from("users")
+      .select("phone")
+      .in("role", ["sales_rep", "manager"])
+      .eq("is_active", true)
+      .not("phone", "is", null)
+      .neq("phone", "");
+
+    salesPhones = (salesRows ?? [])
+      .map((u: { phone: string }) => u.phone)
+      .filter(Boolean);
+  }
+
   if (existing) {
+    const reference = await recordEnquiry(supabase, {
+      leadId: existing.id,
+      source,
+      isReEnquiry: true,
+      payload: submittedPayload,
+    });
+
     // Returning enquiry — add a note activity to the existing lead
     await supabase.from("activities").insert({
       lead_id: existing.id,
       type: "note",
       subject: `Re-enquiry via ${sourceLabel} form`,
-      description: enquirySummary,
+      description: reference ? `Reference: ${reference}\n${enquirySummary}` : enquirySummary,
     });
 
-    // Re-open the attention window: clear any prior claim/resolve so the
-    // dashboard surfaces this lead again, and bump the overdue timer.
-    await supabase
-      .from("leads")
-      .update({
-        claimed_by: null,
-        claimed_at: null,
-        resolved_at: null,
-        resolved_by: null,
-        resolution_outcome: null,
-        attention_reset_at: new Date().toISOString(),
-      })
-      .eq("id", existing.id);
+    // No lead-level reset: the new enquiry row above is its own open item, and earlier
+    // enquiries keep their claim / resolve history.
 
     // Fire-and-forget email + push alert — must not block the response
     resend.emails.send({
       from: EMAIL_FROM,
       to: ALL_RECIPIENTS,
-      subject: `🔁 Re-Enquiry — ${firstName} ${lastName} via ${sourceLabel}`,
-      html: buildEnquiryEmailHtml({ ...emailParams, isReturning: true, leadId: existing.id }),
+      subject: `🔁 Re-Enquiry${reference ? ` ${reference}` : ""} — ${firstName} ${lastName} via ${sourceLabel}`,
+      html: buildEnquiryEmailHtml({ ...emailParams, isReturning: true, leadId: existing.id, reference }),
       replyTo: normalisedEmail || undefined,
     }).catch(() => {});
 
     sendPushToAll({
       title: `🔁 Re-Enquiry — ${firstName} ${lastName}`,
-      body: `Enquiring again via ${sourceLabel}`,
+      body: `Enquiring again via ${sourceLabel}${reference ? ` · ${reference}` : ""}`,
       url: `${APP_URL}/leads/${existing.id}`,
       tag: `re-enquiry-${existing.id}`,
     }).catch(() => {});
 
-    return NextResponse.json({ success: true, returning: true });
+    salesPhones.forEach((phone) => {
+      messaging
+        .internalNewLead(phone, `${firstName} ${lastName}`, company || "—", sourceLabel, existing.id)
+        .catch(() => {});
+    });
+
+    return NextResponse.json({ success: true, returning: true, reference });
   }
 
   // Build the description field: combine free-text with structured extra fields
@@ -328,21 +434,34 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
 
+  const reference = await recordEnquiry(supabase, {
+    leadId: newLead.id,
+    source,
+    isReEnquiry: false,
+    payload: submittedPayload,
+  });
+
   // Fire-and-forget email + push alert — must not block the response
   resend.emails.send({
     from: EMAIL_FROM,
     to: ALL_RECIPIENTS,
-    subject: `🔔 New Enquiry — ${firstName} ${lastName} via ${sourceLabel}`,
-    html: buildEnquiryEmailHtml({ ...emailParams, isReturning: false, leadId: newLead.id }),
+    subject: `🔔 New Enquiry${reference ? ` ${reference}` : ""} — ${firstName} ${lastName} via ${sourceLabel}`,
+    html: buildEnquiryEmailHtml({ ...emailParams, isReturning: false, leadId: newLead.id, reference }),
     replyTo: normalisedEmail || undefined,
   }).catch(() => {});
 
   sendPushToAll({
     title: `🔔 New Enquiry — ${firstName} ${lastName}`,
-    body: `New enquiry via ${sourceLabel}`,
+    body: `New enquiry via ${sourceLabel}${reference ? ` · ${reference}` : ""}`,
     url: `${APP_URL}/leads/${newLead.id}`,
     tag: `new-enquiry-${newLead.id}`,
   }).catch(() => {});
 
-  return NextResponse.json({ success: true, returning: false });
+  salesPhones.forEach((phone) => {
+    messaging
+      .internalNewLead(phone, `${firstName} ${lastName}`, company || "—", sourceLabel, newLead.id)
+      .catch(() => {});
+  });
+
+  return NextResponse.json({ success: true, returning: false, reference });
 }

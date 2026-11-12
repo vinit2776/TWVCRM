@@ -5,18 +5,23 @@ import {
   bucketFor,
   bucketForBooking,
   HANDOFF_STATE_LABELS,
-  INBOX_OPEN_STATES,
+  INBOX_ACTIONABLE_STATES,
   isInboxRole,
+  isRealCompanyName,
   type BookingHandoffState,
   type BookingInboxRow,
   type BookingPaymentConfirmation,
   type HandoffState,
+  type InboxAggregator,
   type InboxPayment,
+  type InboxReportedPayment,
   type InboxResponse,
   type InboxRow,
   type InboxSnapshot,
   type InboxUpload,
   type TimelineEvent,
+  leadAddress,
+  voBillParty,
 } from "@/lib/tally-handoff";
 
 /**
@@ -24,7 +29,9 @@ import {
  *
  * Read-only feed for the Accounts Inbox page. Returns:
  *   - stats: counts by bucket (gst to issue, payments to record, discrepancies, aging)
- *   - rows: open handoff items (handoff_state IS NOT NULL AND <> 'complete')
+ *   - rows: actionable handoff items (open states minus `pi_awaiting_payment`,
+ *           which has no available action here and is tracked in Accounts
+ *           Receivable instead — see INBOX_ACTIONABLE_STATES)
  *           enriched with contract + lead + latest upload + latest tally snapshot match
  *   - last_synced_at: most recent tally_voucher_snapshots.last_synced_at (or null)
  *
@@ -35,6 +42,9 @@ import {
 export const dynamic = "force-dynamic";
 
 const CLOSED_PAGE_SIZE = 50;
+
+/** Window the accounts dashboard's "new" badge counts over. */
+const NEW_WINDOW_HOURS = 24;
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
@@ -78,33 +88,49 @@ export async function GET(req: NextRequest) {
     .from("billing_statements")
     .select(`
       id, statement_number, period_start, period_end,
-      total_amount, payment_status, handoff_state, updated_at,
+      total_amount, payment_status, handoff_state, updated_at, po_number,
       created_at, proforma_sent_at, tally_delivered_at,
       voided_at, void_reason, pi_cancelled_at,
+      held_at, hold_reason,
+      gst_waived_at, gst_waived_reason,
+      lifecycle_stage, tally_credit_note_number,
+      cancellation_requested_at, cancellation_reason,
+      cancellation_requested_by_user:users!billing_statements_cancellation_requested_by_fkey(full_name),
       statement_type, fixed_amount, usage_amount,
       service_usage_amount, booking_usage_amount,
       subtotal, tax_percentage, tax_amount,
       cgst_amount, sgst_amount, igst_amount,
       is_interstate, place_of_supply, hsn_sac_code,
       gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
+      line_items,
+      usage_charges:usage_charges(description, quantity, unit_price, total, notes),
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,
         lead:leads!contracts_lead_id_fkey(
-          id, first_name, last_name, company, email, phone, gst_number, billing_emails
+          id, first_name, last_name, company, email, phone, gst_number, billing_emails,
+          street, city, state, zip_code
         )
       ),
       proposal:proposals!billing_statements_proposal_id_fkey(
         id, proposal_number,
         lead:leads!proposals_lead_id_fkey(
-          id, first_name, last_name, company, email, phone, gst_number, billing_emails
+          id, first_name, last_name, company, email, phone, gst_number, billing_emails,
+          street, city, state, zip_code
         )
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
-        id, invoice_number,
+        id, invoice_number, title, internal_notes,
         lead:leads!proforma_invoices_lead_id_fkey(
-          id, first_name, last_name, company, email, phone, gst_number, billing_emails
+          id, first_name, last_name, company, email, phone, gst_number, billing_emails,
+          street, city, state, zip_code
         )
-      )
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        client_address, client_city, client_state, client_pincode,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, billing_address, billing_city, billing_state, billing_pincode)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, billing_address, billing_city, billing_state, billing_pincode)
     `);
 
   if (singleId) {
@@ -118,7 +144,10 @@ export async function GET(req: NextRequest) {
       .order("updated_at", { ascending: false })
       .range((page - 1) * CLOSED_PAGE_SIZE, page * CLOSED_PAGE_SIZE);
   } else {
-    query = query.in("handoff_state", INBOX_OPEN_STATES as readonly string[])
+    // A pending cancellation is a task whatever state the invoice was in, so
+    // it is pulled in even when its handoff_state is not otherwise actionable.
+    query = query
+      .or(`handoff_state.in.(${INBOX_ACTIONABLE_STATES.join(",")}),cancellation_requested_at.not.is.null`)
       .is("voided_at", null)
       .order("updated_at", { ascending: true });
   }
@@ -140,6 +169,7 @@ export async function GET(req: NextRequest) {
     payment_status: string;
     handoff_state: HandoffState;
     updated_at: string;
+    po_number: string | null;
     statement_type: "rent" | "usage" | "combined" | null;
     fixed_amount: number | null;
     usage_amount: number | null;
@@ -157,12 +187,33 @@ export async function GET(req: NextRequest) {
     gst_invoice_number: string | null;
     tally_invoice_number: string | null;
     gst_invoice_sent_at: string | null;
+    line_items: Array<{
+      type: string;
+      label: string;
+      items: Array<{ description?: string; qty?: number; unit_price?: number; amount?: number; notes?: string }>;
+    }> | null;
+    usage_charges: Array<{
+      description: string | null;
+      quantity: number | null;
+      unit_price: number | null;
+      total: number | null;
+      notes: string | null;
+    }> | null;
     created_at: string;
     proforma_sent_at: string | null;
     tally_delivered_at: string | null;
     voided_at: string | null;
     void_reason: string | null;
+    held_at: string | null;
+    hold_reason: string | null;
+    gst_waived_at: string | null;
+    gst_waived_reason: string | null;
     pi_cancelled_at: string | null;
+    lifecycle_stage: string | null;
+    tally_credit_note_number: string | null;
+    cancellation_requested_at: string | null;
+    cancellation_reason: string | null;
+    cancellation_requested_by_user: { full_name: string | null } | { full_name: string | null }[] | null;
     contract: {
       id: string;
       contract_number: string;
@@ -176,6 +227,10 @@ export async function GET(req: NextRequest) {
         email: string | null;
         phone: string | null;
         gst_number: string | null;
+        street: string | null;
+        city: string | null;
+        state: string | null;
+        zip_code: string | null;
       } | null;
     } | null;
     proposal: {
@@ -189,11 +244,17 @@ export async function GET(req: NextRequest) {
         email: string | null;
         phone: string | null;
         gst_number: string | null;
+        street: string | null;
+        city: string | null;
+        state: string | null;
+        zip_code: string | null;
       } | null;
     } | null;
     invoice: {
       id: string;
       invoice_number: string;
+      title: string | null;
+      internal_notes: string | null;
       lead: {
         id: string;
         first_name: string | null;
@@ -202,8 +263,28 @@ export async function GET(req: NextRequest) {
         email: string | null;
         phone: string | null;
         gst_number: string | null;
+        street: string | null;
+        city: string | null;
+        state: string | null;
+        zip_code: string | null;
       } | null;
     } | null;
+    case: {
+      id: string;
+      case_number: string;
+      bill_to: "aggregator" | "client" | null;
+      client_name: string;
+      client_company_name: string | null;
+      client_email: string | null;
+      client_phone: string | null;
+      client_gst_number: string | null;
+      client_address: string | null;
+      client_city: string | null;
+      client_state: string | null;
+      client_pincode: string | null;
+      aggregator: InboxAggregator | null;
+    } | null;
+    aggregator: InboxAggregator | null;
   }>;
 
   // JS post-filter for search. The result set is already capped (closed=200,
@@ -236,6 +317,14 @@ export async function GET(req: NextRequest) {
           s.invoice?.lead?.first_name ?? "",
           s.invoice?.lead?.last_name ?? "",
           s.invoice?.lead?.email ?? "",
+          s.case?.case_number ?? "",
+          s.case?.client_name ?? "",
+          s.case?.client_company_name ?? "",
+          s.case?.client_email ?? "",
+          s.case?.client_gst_number ?? "",
+          s.case?.aggregator?.name ?? "",
+          s.aggregator?.name ?? "",
+          s.aggregator?.gst_number ?? "",
         ];
         return haystack.some((h) => h.toLowerCase().includes(lc));
       })
@@ -251,7 +340,7 @@ export async function GET(req: NextRequest) {
 
   const noIds = statementIds.length === 0;
 
-  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes] = await Promise.all([
+  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes, openQueriesRes, supportingDocsRes, reportedRes] = await Promise.all([
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("gst_invoice_uploads")
       .select("id, billing_statement_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
@@ -271,13 +360,13 @@ export async function GET(req: NextRequest) {
       .maybeSingle(),
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("billing_payments")
-      .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, razorpay_payment_id")
+      .select("id, billing_statement_id, amount, payment_date, created_at, payment_mode, payment_reference, notes, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
       .in("billing_statement_id", statementIds)
       .order("payment_date", { ascending: false }),
     // Only fetched in single-row mode with ?include=timeline.
     !includeTimeline || noIds ? Promise.resolve({ data: null }) : supabase
       .from("audit_trail")
-      .select("action, changes, performed_by, created_at")
+      .select("action, changes, performed_by, created_at, performer:users!audit_trail_performed_by_fkey(full_name)")
       .eq("entity_type", "billing_statement")
       .eq("entity_id", statementIds[0])
       .order("created_at", { ascending: true }),
@@ -287,7 +376,99 @@ export async function GET(req: NextRequest) {
       .select("id, tally_invoice_number, uploaded_at, uploaded_by, superseded_by")
       .eq("billing_statement_id", statementIds[0])
       .order("uploaded_at", { ascending: true }),
+    noIds ? Promise.resolve({ data: null }) : supabase
+      .from("queries")
+      .select("entity_id")
+      .eq("entity_type", "billing_statement")
+      .in("entity_id", statementIds)
+      .eq("status", "open"),
+    // Reimbursement supporting docs (receipts/vendor bills) — surfaced in the
+    // upload form so accounts can glance at the receipt before/while typing
+    // in the Tally invoice details, not just after via the MR page.
+    noIds ? Promise.resolve({ data: null }) : supabase
+      .from("reimbursement_supporting_documents")
+      .select("id, billing_statement_id")
+      .in("billing_statement_id", statementIds),
+    // Payment reports still waiting on accounts. Not filtered by statement in
+    // SQL: a report matches a statement either through its thread's entity or
+    // through the invoice the reporter named, and the open set is small.
+    noIds ? Promise.resolve({ data: null }) : supabase
+      .from("query_payment_reports")
+      .select(`
+        id, query_id, amount, paid_on, payment_mode, payment_reference, created_at, claimed_statement_id,
+        reporter:users!query_payment_reports_created_by_fkey(full_name),
+        query:queries!query_payment_reports_query_id_fkey(entity_type, entity_id, status)
+      `)
+      .eq("status", "reported"),
   ]);
+
+  const statementIdSet = new Set(statementIds);
+  const reportedByStatement = new Map<string, InboxReportedPayment[]>();
+  for (const r of (reportedRes.data || []) as unknown as Array<{
+    id: string; query_id: string; amount: number | string; paid_on: string;
+    payment_mode: string; payment_reference: string | null; created_at: string;
+    claimed_statement_id: string | null;
+    reporter: { full_name: string | null } | { full_name: string | null }[] | null;
+    query: { entity_type: string; entity_id: string; status: string } | { entity_type: string; entity_id: string; status: string }[] | null;
+  }>) {
+    const q = Array.isArray(r.query) ? r.query[0] : r.query;
+    if (!q || q.status !== "open") continue;
+    const sid = q.entity_type === "billing_statement" ? q.entity_id : r.claimed_statement_id;
+    if (!sid || !statementIdSet.has(sid)) continue;
+    const reporter = Array.isArray(r.reporter) ? r.reporter[0] : r.reporter;
+    const list = reportedByStatement.get(sid) ?? [];
+    list.push({
+      id: r.id,
+      query_id: r.query_id,
+      entity_type: q.entity_type,
+      entity_id: q.entity_id,
+      amount: Number(r.amount),
+      paid_on: r.paid_on,
+      payment_mode: r.payment_mode,
+      payment_reference: r.payment_reference,
+      reported_by_name: reporter?.full_name ?? null,
+      created_at: r.created_at,
+    });
+    reportedByStatement.set(sid, list);
+  }
+
+  const supportingDocsCountByStatement = new Map<string, number>();
+  for (const r of supportingDocsRes.data || []) {
+    const sid = (r as { billing_statement_id: string }).billing_statement_id;
+    supportingDocsCountByStatement.set(sid, (supportingDocsCountByStatement.get(sid) ?? 0) + 1);
+  }
+
+  // Open query count per statement — one grouped-in-JS count from a single
+  // batched query, same pattern as uploadByStatement below. Scoped by
+  // entity_type since `queries` now spans every module (see
+  // src/lib/queries/registry.ts).
+  const openQueryCountByStatement = new Map<string, number>();
+  for (const r of openQueriesRes.data || []) {
+    const sid = (r as { entity_id: string }).entity_id;
+    openQueryCountByStatement.set(sid, (openQueryCountByStatement.get(sid) ?? 0) + 1);
+  }
+
+  // gst_invoice_uploads.uploaded_by references auth.users(id), not
+  // public.users(id) — no FK exists for Supabase to embed a join, so
+  // resolve display names with a second lookup keyed on auth_id. Only
+  // needed for the timeline (same gating as allUploadsRes above).
+  const uploaderNameByAuthId = new Map<string, string>();
+  if (includeTimeline && allUploadsRes.data) {
+    const uploaderAuthIds = [...new Set(
+      (allUploadsRes.data as Array<{ uploaded_by: string | null }>)
+        .map((u) => u.uploaded_by)
+        .filter((id): id is string => !!id)
+    )];
+    if (uploaderAuthIds.length > 0) {
+      const { data: uploaderUsers } = await supabase
+        .from("users")
+        .select("auth_id, full_name")
+        .in("auth_id", uploaderAuthIds);
+      for (const u of (uploaderUsers ?? []) as Array<{ auth_id: string; full_name: string | null }>) {
+        if (u.full_name) uploaderNameByAuthId.set(u.auth_id, u.full_name);
+      }
+    }
+  }
 
   // Latest gst_invoice_upload per statement (most recent non-superseded).
   const uploadByStatement = new Map<string, InboxUpload>();
@@ -351,14 +532,19 @@ export async function GET(req: NextRequest) {
     const sid = (p as { billing_statement_id: string }).billing_statement_id;
     const rzpId = (p.razorpay_payment_id as string | null) ?? null;
     const settlement = rzpId ? (stmtSettlementMap.get(rzpId) ?? null) : null;
+    const recorderRaw = (p as { recorder: { full_name: string | null } | { full_name: string | null }[] | null }).recorder;
+    const recorder = Array.isArray(recorderRaw) ? recorderRaw[0] ?? null : recorderRaw;
     const list = paymentsByStatement.get(sid) ?? [];
     list.push({
       id: p.id as string,
       amount: Number(p.amount),
       payment_date: p.payment_date as string,
+      created_at: p.created_at as string,
       payment_mode: p.payment_mode as string,
       payment_reference: (p.payment_reference as string | null) ?? null,
+      notes: (p.notes as string | null) ?? null,
       razorpay_payment_id: rzpId,
+      recorded_by_name: recorder?.full_name ?? null,
       settled: settlement?.settled ?? null,
       settled_at: settlement?.settled_at ?? null,
       settlement_utr: settlement?.settlement_utr ?? null,
@@ -395,7 +581,14 @@ export async function GET(req: NextRequest) {
     const agingHours = Math.max(0, Math.round((now - Date.parse(stateChangedAt)) / 3_600_000));
     const bucket = bucketFor(s.handoff_state, hasDiscrepancy) ?? "in_flight";
 
-    const customerHasGstin = !!(s.contract?.lead?.gst_number ?? s.proposal?.lead?.gst_number ?? s.invoice?.lead?.gst_number);
+    // VO statements: the buyer is whoever bill_to names, so the GSTIN that
+    // decides A-series vs B-series has to come from that same party — reading
+    // the aggregator's GSTIN on a client-billed case would put the invoice in
+    // the wrong series.
+    const customerGstin =
+      s.contract?.lead?.gst_number ?? s.proposal?.lead?.gst_number ?? s.invoice?.lead?.gst_number ??
+      voBillParty(s)?.gstin ?? null;
+    const customerHasGstin = !!customerGstin;
     const payments = paymentsByStatement.get(s.id) ?? [];
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     const isVoided = !!s.voided_at;
@@ -414,19 +607,48 @@ export async function GET(req: NextRequest) {
           uploaded_by: string | null;
           superseded_by: string | null;
         }>,
-        auditEntries: (auditRes.data || []) as Array<{
+        auditEntries: ((auditRes.data || []) as Array<{
           action: string;
           changes: Record<string, unknown> | null;
           performed_by: string | null;
           created_at: string;
-        }>,
+          performer: { full_name: string | null } | { full_name: string | null }[] | null;
+        }>).map((a) => ({
+          ...a,
+          performer: Array.isArray(a.performer) ? a.performer[0] ?? null : a.performer,
+        })),
+        uploaderNameByAuthId,
       });
     }
+
+    // Prefer structured line_items (the same source proforma-pdf builds
+    // from), fall back to usage_charges rows — accounts sees the exact same
+    // itemization that ends up on the customer-facing PDF, not a lump total.
+    const structuredSections = s.line_items ?? [];
+    const itemizedCharges =
+      structuredSections.length > 0
+        ? structuredSections.flatMap((section) =>
+            section.items.map((item) => ({
+              description: item.description || section.label,
+              quantity: item.qty ?? 1,
+              unit_price: item.unit_price ?? Number(item.amount ?? 0),
+              amount: Number(item.amount ?? 0),
+              notes: item.notes ?? null,
+            }))
+          )
+        : (s.usage_charges ?? []).map((c) => ({
+            description: c.description ?? "Usage charge",
+            quantity: Number(c.quantity ?? 1),
+            unit_price: Number(c.unit_price ?? 0),
+            amount: Number(c.total ?? 0),
+            notes: c.notes,
+          }));
 
     return {
       statement_id: s.id,
       statement_number: s.statement_number,
       statement_total_amount: Math.round(Number(s.total_amount)),
+      po_number: s.po_number,
       period_start: s.period_start,
       period_end: s.period_end,
       payment_status: s.payment_status,
@@ -437,7 +659,18 @@ export async function GET(req: NextRequest) {
       is_voided: isVoided,
       voided_at: s.voided_at,
       void_reason: s.void_reason,
+      is_held: !!s.held_at,
+      hold_reason: s.hold_reason,
+      gst_waived_at: s.gst_waived_at,
+      gst_waived_reason: s.gst_waived_reason,
       pi_was_cancelled: !!s.pi_cancelled_at,
+      lifecycle_stage: s.lifecycle_stage,
+      tally_credit_note_number: s.tally_credit_note_number,
+      cancellation_requested_at: s.cancellation_requested_at,
+      cancellation_reason: s.cancellation_reason,
+      cancellation_requested_by_name: (Array.isArray(s.cancellation_requested_by_user)
+        ? s.cancellation_requested_by_user[0]?.full_name
+        : s.cancellation_requested_by_user?.full_name) ?? null,
       ...(timelineEvents ? { timeline_events: timelineEvents } : {}),
       contract: s.contract
         ? {
@@ -459,13 +692,20 @@ export async function GET(req: NextRequest) {
         ? {
             id: s.invoice.id,
             invoice_number: s.invoice.invoice_number,
+            title: s.invoice.title,
+            internal_notes: s.invoice.internal_notes,
             lead: s.invoice.lead,
           }
         : null,
+      case: s.case,
+      aggregator: s.aggregator,
       latest_upload: upload,
       latest_snapshot: snapshot,
       has_discrepancy: hasDiscrepancy,
       discrepancy_reason: discrepancyReason,
+      open_query_count: openQueryCountByStatement.get(s.id) ?? 0,
+      reported_payments: reportedByStatement.get(s.id) ?? [],
+      supporting_documents_count: supportingDocsCountByStatement.get(s.id) ?? 0,
       // New detail fields
       irn_required: customerHasGstin,
       expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",
@@ -490,6 +730,7 @@ export async function GET(req: NextRequest) {
         period_start: s.period_start,
         period_end: s.period_end,
       },
+      itemized_charges: itemizedCharges,
       payments_received: payments,
       total_paid: totalPaid,
       gst_invoice_sent_at: s.gst_invoice_sent_at ?? null,
@@ -508,9 +749,10 @@ export async function GET(req: NextRequest) {
         else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
         else if (r.bucket === "payment_to_record") acc.payments_to_record += 1;
         if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
+        if (r.aging_hours < NEW_WINDOW_HOURS) acc.new_24h += 1;
         return acc;
       },
-      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0, new_24h: 0 },
     );
     return NextResponse.json({
       stats: singleStats,
@@ -527,6 +769,7 @@ export async function GET(req: NextRequest) {
     .select(`
       id, handoff_state, updated_at, created_at,
       gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
+      voided_at, void_reason,
       booking:bookings!booking_gst_tasks_booking_id_fkey(
         id, booking_number, total_amount_with_gst, total_amount, gst_amount, gst_rate,
         payment_status, payment_mode, payment_reference,
@@ -535,15 +778,17 @@ export async function GET(req: NextRequest) {
         guest_name, guest_email, guest_phone, guest_company,
         space:spaces!bookings_space_id_fkey(id, name),
         location:locations!bookings_location_id_fkey(id, name),
-        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number, billing_emails, id_proof_path),
+        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number, billing_emails, id_proof_path, street, city, state, zip_code),
         booking_addons(id, description, addon_type, quantity, unit_price, amount, gst_rate, gst_amount, total_with_gst, unit_label)
       )
     `);
 
   if (tab === "closed") {
-    bookingTasksQuery = bookingTasksQuery.eq("handoff_state", "complete");
+    // Voided tasks surface here alongside genuinely complete ones — same
+    // "still visible in Archive" behavior billing_statements.voided_at gets.
+    bookingTasksQuery = bookingTasksQuery.or("handoff_state.eq.complete,voided_at.not.is.null");
   } else {
-    bookingTasksQuery = bookingTasksQuery.neq("handoff_state", "complete");
+    bookingTasksQuery = bookingTasksQuery.neq("handoff_state", "complete").is("voided_at", null);
   }
 
   const { data: bookingTaskData } = await bookingTasksQuery
@@ -557,6 +802,8 @@ export async function GET(req: NextRequest) {
     gst_invoice_number: string | null;
     tally_invoice_number: string | null;
     gst_invoice_sent_at: string | null;
+    voided_at: string | null;
+    void_reason: string | null;
     booking: {
       id: string;
       booking_number: string | null;
@@ -589,6 +836,10 @@ export async function GET(req: NextRequest) {
         phone: string | null;
         gst_number: string | null;
         id_proof_path: string | null;
+        street: string | null;
+        city: string | null;
+        state: string | null;
+        zip_code: string | null;
       } | null;
       booking_addons: {
         id: string;
@@ -634,84 +885,110 @@ export async function GET(req: NextRequest) {
   const bookingTaskIds = filteredBookingTasks.map((t) => t.id);
   const bookingIds = filteredBookingTasks.map((t) => t.booking?.id).filter(Boolean) as string[];
 
-  // booking_payments keyed by booking_id
-  const bookingPaymentsMap = new Map<string, BookingPaymentConfirmation[]>();
-  if (bookingIds.length > 0) {
-    const { data: bpRows } = await supabase
-      .from("booking_payments")
-      .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status, verification_notes, screenshot_path")
-      .in("booking_id", bookingIds)
-      .in("status", ["confirmed", "captured", "verified"])
-      .order("created_at", { ascending: false });
+  // booking_payments (+ settlement) and gst_invoice_uploads are independent
+  // of each other — both only need bookingIds/bookingTaskIds, which are
+  // already in hand — so run them concurrently instead of one after the
+  // other. (Settlement itself stays sequential *within* the payments branch
+  // since it needs the razorpay_payment_ids the payments query returns.)
+  const [bookingPaymentsMap, bookingUploadsMap, bookingQueryCounts] = await Promise.all([
+    (async () => {
+      const map = new Map<string, BookingPaymentConfirmation[]>();
+      if (bookingIds.length === 0) return map;
+      const { data: bpRows } = await supabase
+        .from("booking_payments")
+        .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status, verification_notes, screenshot_path")
+        .in("booking_id", bookingIds)
+        .in("status", ["confirmed", "captured", "verified"])
+        .order("created_at", { ascending: false });
 
-    // Fetch settlement data for all Razorpay payment IDs in one query
-    const rzpIds = (bpRows || [])
-      .map((bp) => bp.razorpay_payment_id as string | null)
-      .filter(Boolean) as string[];
+      // Fetch settlement data for all Razorpay payment IDs in one query
+      const rzpIds = (bpRows || [])
+        .map((bp) => bp.razorpay_payment_id as string | null)
+        .filter(Boolean) as string[];
 
-    const settlementMap = new Map<string, { settled: boolean; settled_at: string | null; settlement_utr: string | null }>();
-    if (rzpIds.length > 0) {
-      const { data: sRows } = await supabase
-        .from("razorpay_settlement_cache")
-        .select("razorpay_payment_id, settled, settled_at, settlement_utr")
-        .in("razorpay_payment_id", rzpIds);
-      for (const s of sRows || []) {
-        settlementMap.set(s.razorpay_payment_id as string, {
-          settled: s.settled as boolean,
-          settled_at: (s.settled_at as string | null) ?? null,
-          settlement_utr: (s.settlement_utr as string | null) ?? null,
-        });
+      const settlementMap = new Map<string, { settled: boolean; settled_at: string | null; settlement_utr: string | null }>();
+      if (rzpIds.length > 0) {
+        const { data: sRows } = await supabase
+          .from("razorpay_settlement_cache")
+          .select("razorpay_payment_id, settled, settled_at, settlement_utr")
+          .in("razorpay_payment_id", rzpIds);
+        for (const s of sRows || []) {
+          settlementMap.set(s.razorpay_payment_id as string, {
+            settled: s.settled as boolean,
+            settled_at: (s.settled_at as string | null) ?? null,
+            settlement_utr: (s.settlement_utr as string | null) ?? null,
+          });
+        }
       }
-    }
 
-    for (const bp of bpRows || []) {
-      const bid = (bp as { booking_id: string }).booking_id;
-      const rzpId = (bp.razorpay_payment_id as string | null) ?? null;
-      const settlement = rzpId ? (settlementMap.get(rzpId) ?? null) : null;
-      const list = bookingPaymentsMap.get(bid) ?? [];
-      list.push({
-        id: bp.id as string,
-        amount: Number(bp.amount),
-        payment_mode: bp.payment_mode as string,
-        payment_reference: (bp.payment_reference as string | null) ?? null,
-        razorpay_payment_id: rzpId,
-        created_at: bp.created_at as string,
-        status: bp.status as string,
-        verification_notes: (bp.verification_notes as string | null) ?? null,
-        screenshot_path: (bp.screenshot_path as string | null) ?? null,
-        settled: settlement?.settled ?? null,
-        settled_at: settlement?.settled_at ?? null,
-        settlement_utr: settlement?.settlement_utr ?? null,
-      });
-      bookingPaymentsMap.set(bid, list);
-    }
-  }
-
-  const bookingUploadsMap = new Map<string, InboxUpload>();
-  if (bookingTaskIds.length > 0) {
-    const { data: bookingUploads } = await supabase
-      .from("gst_invoice_uploads")
-      .select("id, booking_gst_task_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
-      .in("booking_gst_task_id", bookingTaskIds)
-      .is("superseded_by", null)
-      .order("uploaded_at", { ascending: false });
-
-    for (const u of bookingUploads || []) {
-      const tid = (u as { booking_gst_task_id: string }).booking_gst_task_id;
-      if (!bookingUploadsMap.has(tid)) {
-        bookingUploadsMap.set(tid, {
-          id: u.id as string,
-          tally_invoice_number: u.tally_invoice_number as string,
-          tally_invoice_series: u.tally_invoice_series as "SDIPL-REG" | "SDIPL-UNREG",
-          irn: (u.irn as string | null) ?? null,
-          invoice_amount: Number(u.invoice_amount),
-          uploaded_at: u.uploaded_at as string,
-          name_check_status: u.name_check_status as "pending" | "approved" | "overridden",
-          autofill_source: u.autofill_source as "qr" | "pdf_text" | "bridge_match" | "manual",
+      for (const bp of bpRows || []) {
+        const bid = (bp as { booking_id: string }).booking_id;
+        const rzpId = (bp.razorpay_payment_id as string | null) ?? null;
+        const settlement = rzpId ? (settlementMap.get(rzpId) ?? null) : null;
+        const list = map.get(bid) ?? [];
+        list.push({
+          id: bp.id as string,
+          amount: Number(bp.amount),
+          payment_mode: bp.payment_mode as string,
+          payment_reference: (bp.payment_reference as string | null) ?? null,
+          razorpay_payment_id: rzpId,
+          created_at: bp.created_at as string,
+          status: bp.status as string,
+          verification_notes: (bp.verification_notes as string | null) ?? null,
+          screenshot_path: (bp.screenshot_path as string | null) ?? null,
+          settled: settlement?.settled ?? null,
+          settled_at: settlement?.settled_at ?? null,
+          settlement_utr: settlement?.settlement_utr ?? null,
         });
+        map.set(bid, list);
       }
-    }
-  }
+      return map;
+    })(),
+    (async () => {
+      const map = new Map<string, InboxUpload>();
+      if (bookingTaskIds.length === 0) return map;
+      const { data: bookingUploads } = await supabase
+        .from("gst_invoice_uploads")
+        .select("id, booking_gst_task_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
+        .in("booking_gst_task_id", bookingTaskIds)
+        .is("superseded_by", null)
+        .order("uploaded_at", { ascending: false });
+
+      for (const u of bookingUploads || []) {
+        const tid = (u as { booking_gst_task_id: string }).booking_gst_task_id;
+        if (!map.has(tid)) {
+          map.set(tid, {
+            id: u.id as string,
+            tally_invoice_number: u.tally_invoice_number as string,
+            tally_invoice_series: u.tally_invoice_series as "SDIPL-REG" | "SDIPL-UNREG",
+            irn: (u.irn as string | null) ?? null,
+            invoice_amount: Number(u.invoice_amount),
+            uploaded_at: u.uploaded_at as string,
+            name_check_status: u.name_check_status as "pending" | "approved" | "overridden",
+            autofill_source: u.autofill_source as "qr" | "pdf_text" | "bridge_match" | "manual",
+          });
+        }
+      }
+      return map;
+    })(),
+    // Open query count per booking task — one grouped query for the whole
+    // page rather than a fetch per row, same as the statement badge above.
+    (async () => {
+      const map = new Map<string, number>();
+      if (bookingTaskIds.length === 0) return map;
+      const { data } = await supabase
+        .from("queries")
+        .select("entity_id")
+        .eq("entity_type", "booking_gst_task")
+        .in("entity_id", bookingTaskIds)
+        .eq("status", "open");
+      for (const r of data || []) {
+        const id = (r as { entity_id: string }).entity_id;
+        map.set(id, (map.get(id) ?? 0) + 1);
+      }
+      return map;
+    })(),
+  ]);
 
   const bookingRows: BookingInboxRow[] = filteredBookingTasks.map((t) => {
     const lead = t.booking?.lead ?? null;
@@ -731,14 +1008,15 @@ export async function GET(req: NextRequest) {
     const agingHours = Math.max(0, Math.round((now - Date.parse(t.updated_at)) / 3_600_000));
     const bucket = bucketForBooking(t.handoff_state as BookingHandoffState, hasDiscrepancy);
 
-    const customerName = lead?.company
-      || t.booking?.guest_company
+    const customerName = [lead?.company, t.booking?.guest_company].find(isRealCompanyName)
       || [lead?.first_name ?? t.booking?.guest_name, lead?.last_name].filter(Boolean).join(" ")
       || null;
+    const customerAddress = leadAddress(lead);
 
     return {
       row_type: "booking" as const,
       task_id: t.id,
+      open_query_count: bookingQueryCounts.get(t.id) ?? 0,
       booking_id: t.booking?.id ?? "",
       booking_number: t.booking?.booking_number ?? null,
       booking_date: t.booking?.booking_date ?? null,
@@ -767,6 +1045,7 @@ export async function GET(req: NextRequest) {
       lead_id_proof_path: lead?.id_proof_path ?? null,
       lead_billing_emails: ((lead as unknown as { billing_emails?: string[] })?.billing_emails ?? null),
       customer_gstin: customerGstin,
+      customer_address: customerAddress,
       irn_required: customerHasGstin,
       expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",
       expected_prefix: customerHasGstin ? "SD/A/" : "SD/B/",
@@ -796,6 +1075,8 @@ export async function GET(req: NextRequest) {
         }
         return [];
       })(),
+      is_voided: !!t.voided_at,
+      void_reason: t.void_reason ?? null,
     };
   });
 
@@ -806,9 +1087,10 @@ export async function GET(req: NextRequest) {
       else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
       else if (r.bucket === "payment_to_record") acc.payments_to_record += 1;
       if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
+      if (r.aging_hours < NEW_WINDOW_HOURS) acc.new_24h += 1;
       return acc;
     },
-    { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+    { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0, new_24h: 0 },
   );
 
   // Fold booking rows into stats
@@ -818,6 +1100,7 @@ export async function GET(req: NextRequest) {
     if (br.has_discrepancy) stats.discrepancies += 1;
     else if (br.bucket === "gst_to_issue") stats.gst_to_issue += 1;
     if (br.aging_hours >= AGING_ESCALATE_HOURS) stats.aging_over_48h += 1;
+    if (br.aging_hours < NEW_WINDOW_HOURS) stats.new_24h += 1;
   }
 
   const response: InboxResponse = {
@@ -878,7 +1161,10 @@ function buildTimelineEvents(args: {
     changes: Record<string, unknown> | null;
     performed_by: string | null;
     created_at: string;
+    performer: { full_name: string | null } | null;
   }>;
+  /** uploaded_by (auth.users id) → display name, resolved by the caller. */
+  uploaderNameByAuthId: Map<string, string>;
 }): TimelineEvent[] {
   const events: TimelineEvent[] = [];
 
@@ -900,30 +1186,35 @@ function buildTimelineEvents(args: {
 
   for (const p of args.payments) {
     const refSuffix = p.payment_reference ? ` · ${p.payment_reference}` : "";
+    const bySuffix = p.recorded_by_name ? ` — by ${p.recorded_by_name}` : "";
     events.push({
       kind: "payment_received",
       at: p.payment_date,
-      label: `Payment received: ₹${p.amount.toLocaleString("en-IN")} via ${p.payment_mode}${refSuffix}`,
+      label: `Payment received: ₹${p.amount.toLocaleString("en-IN")} via ${p.payment_mode}${refSuffix}${bySuffix}`,
       details: {
         amount: p.amount,
         mode: p.payment_mode,
         reference: p.payment_reference,
         razorpay_payment_id: p.razorpay_payment_id,
+        recorded_by_name: p.recorded_by_name,
       },
     });
   }
 
   for (const u of args.uploads) {
     const supersededNote = u.superseded_by ? " (superseded)" : "";
+    const uploaderName = u.uploaded_by ? args.uploaderNameByAuthId.get(u.uploaded_by) ?? null : null;
+    const bySuffix = uploaderName ? ` — by ${uploaderName}` : "";
     events.push({
       kind: "gst_uploaded",
       at: u.uploaded_at,
-      label: `GST invoice uploaded: ${u.tally_invoice_number}${supersededNote}`,
+      label: `GST invoice uploaded: ${u.tally_invoice_number}${supersededNote}${bySuffix}`,
       details: {
         upload_id: u.id,
         invoice_number: u.tally_invoice_number,
         superseded: !!u.superseded_by,
         uploaded_by: u.uploaded_by,
+        uploaded_by_name: uploaderName,
       },
     });
   }
@@ -940,21 +1231,33 @@ function buildTimelineEvents(args: {
   // State changes from audit_trail — only include rows that actually
   // recorded a handoff_state transition. Skips noise like other field edits.
   for (const a of args.auditEntries) {
-    const c = a.changes as { handoff_state?: { old: string | null; new: string }; trigger?: string } | null;
+    const c = a.changes as {
+      handoff_state?: { old: string | null; new: string };
+      trigger?: string;
+      _actor_label?: { new: string };
+    } | null;
     if (!c?.handoff_state) continue;
     const fromLabel = c.handoff_state.old
       ? (HANDOFF_STATE_LABELS[c.handoff_state.old as HandoffState] ?? c.handoff_state.old)
       : "(initial)";
     const toLabel = HANDOFF_STATE_LABELS[c.handoff_state.new as HandoffState] ?? c.handoff_state.new;
+    // Human actor (users.id) takes priority; a non-UUID system actor
+    // (webhook, cron, bridge) is normalized into _actor_label by logAudit —
+    // system-triggered transitions via setHandoffState() carry neither, and
+    // stay unattributed rather than showing a raw trigger string as if it
+    // were a name.
+    const actorName = a.performer?.full_name ?? c._actor_label?.new ?? null;
+    const bySuffix = actorName ? ` — by ${actorName}` : "";
     events.push({
       kind: "state_changed",
       at: a.created_at,
-      label: `State: ${fromLabel} → ${toLabel}`,
+      label: `State: ${fromLabel} → ${toLabel}${bySuffix}`,
       details: {
         from: c.handoff_state.old,
         to: c.handoff_state.new,
         trigger: c.trigger,
         performed_by: a.performed_by,
+        performed_by_name: actorName,
       },
     });
   }

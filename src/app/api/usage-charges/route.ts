@@ -5,6 +5,219 @@ import { logAudit } from "@/lib/audit";
 import { isContractOperational, CHARGE_ALLOWED_ROLES } from "@/lib/constants";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
+// A charge/usage row normalized to one shared shape regardless of which
+// table it came from, so the existing usage_charges-shaped table UI (Qty,
+// Unit Price, Total, GST, Charge Date, Billing Period, Status) renders any
+// of the three sources without special-casing per column.
+interface NormalizedRow {
+  id: string;
+  source: "manual" | "print" | "facility";
+  description: string;
+  contract_id: string | null;
+  contract: { id: string; contract_number: string; billing_cycle?: string | null } | null;
+  booking_id?: string | null;
+  booking?: { id: string; booking_number: string; booking_date: string } | null;
+  lead: { first_name?: string | null; last_name?: string | null; company?: string | null } | null;
+  quantity: number;
+  unit_price: number;
+  total: number;
+  gst_rate: number | null;
+  gst_amount: number | null;
+  total_with_gst: number | null;
+  charge_date: string;
+  status: "pending" | "billed" | "waived";
+  // null = not a meaningful distinction for this source (every manual
+  // charge is billable unless waived, which the status already shows).
+  billable: boolean | null;
+  notes: string | null;
+  created_at: string;
+  /** Which billing cycle this row's charge_date falls into, and whether that
+   *  cycle has already been picked up by a usage run. See billingCycleOf(). */
+  billing_cycle_status: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
+  /** "August 2026" — the month this charge belongs to, for the "Bills in: …" tag. */
+  billing_cycle_label: string;
+  /** Manual/ad-hoc rows only — non-null excludes this charge from the next
+   *  Generate Drafts sweep without changing its status. See held_at's own
+   *  doc comment (00558_usage_charge_hold.sql). */
+  held_at: string | null;
+  hold_reason: string | null;
+  waive_reason: string | null;
+  waived_at: string | null;
+  waived_by_name: string | null;
+  /** Set by the "Bill anyway" action on a stale (see
+   *  USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS) charge — lets the frontend
+   *  suppress its own "needs review" flag once someone has acknowledged it. */
+  reviewed_at: string | null;
+}
+
+function lastDayOfMonth(year: number, month: number): string {
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+}
+
+/**
+ * Usage bills in arrears for the last FULLY-CLOSED month (see
+ * generateUsageStatements in src/lib/billing.ts) — a charge dated in the
+ * still-open current month can't be billed yet, one dated in the closed
+ * month is what the next "Generate Drafts" run will pick up, and one dated
+ * before that is stranded: no future run's single-month window will ever
+ * reach it again unless someone notices it here.
+ */
+function billingCycleOf(
+  chargeDate: string,
+  status: "pending" | "billed" | "waived",
+  /** True when a covering (sent/paid) usage/combined statement already
+   *  exists for this exact contract+month — see the post-merge pass in GET
+   *  below, which is the only caller that ever passes true. A pending charge
+   *  in that state needs a SUPPLEMENTAL statement (generateUsageStatements
+   *  in billing.ts), not the ordinary next "Generate Drafts" run. */
+  hasCoveringStatement = false,
+): { status: NormalizedRow["billing_cycle_status"]; label: string } {
+  const [y, m] = chargeDate.slice(0, 7).split("-").map(Number);
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-IN", { timeZone: "UTC", month: "long", year: "numeric" });
+  if (status === "billed") return { status: "billed", label };
+  if (status === "waived") return { status: "waived", label };
+  if (hasCoveringStatement) return { status: "supplemental_needed", label };
+
+  const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const currentMonth = nowIst.getUTCMonth() + 1;
+  const currentYear = nowIst.getUTCFullYear();
+  const closed = currentMonth === 1 ? { month: 12, year: currentYear - 1 } : { month: currentMonth - 1, year: currentYear };
+
+  if (y === currentYear && m === currentMonth) return { status: "cycle_open", label };
+  if (y === closed.year && m === closed.month) return { status: "ready", label };
+  return { status: "overdue", label };
+}
+
+/**
+ * Contract+month pairs (as "contractId:YYYY-MM") that already have a
+ * covering usage/combined statement sent to the client, paid, or GST-issued
+ * — same "wasSentOrPaid" test generateUsageStatements uses to decide
+ * alreadySent vs supersedable. A pending charge landing in one of these
+ * needs a supplemental statement, not the ordinary next-run pickup.
+ */
+async function fetchCoveringPeriods(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  contractIds: string[],
+): Promise<Set<string>> {
+  const covering = new Set<string>();
+  if (contractIds.length === 0) return covering;
+
+  const { data } = await supabase
+    .from("billing_statements")
+    .select("contract_id, period_start, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
+    .in("contract_id", contractIds)
+    .in("statement_type", ["usage", "combined"])
+    .is("voided_at", null);
+
+  for (const s of (data ?? []) as Array<{
+    contract_id: string; period_start: string;
+    proforma_sent_at: string | null; gst_invoice_number: string | null;
+    billing_payments: { id: string }[];
+  }>) {
+    const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0;
+    if (wasSentOrPaid) covering.add(`${s.contract_id}:${s.period_start.slice(0, 7)}`);
+  }
+  return covering;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeManual(r: any): NormalizedRow {
+  const cycle = billingCycleOf(r.charge_date, r.status);
+  return {
+    id: r.id, source: "manual", description: r.description,
+    contract_id: r.contract_id, contract: r.contract ?? null,
+    booking_id: r.booking_id, booking: r.booking ?? null,
+    lead: r.lead ?? r.booking?.lead ?? null,
+    quantity: Number(r.quantity), unit_price: Number(r.unit_price), total: Number(r.total),
+    gst_rate: r.gst_rate, gst_amount: r.gst_amount, total_with_gst: r.total_with_gst,
+    charge_date: r.charge_date, status: r.status, billable: null,
+    notes: r.notes, created_at: r.created_at,
+    billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    held_at: r.held_at ?? null, hold_reason: r.hold_reason ?? null,
+    waive_reason: r.waive_reason ?? null, waived_at: r.waived_at ?? null,
+    waived_by_name: r.waived_by_user?.full_name ?? null,
+    reviewed_at: r.reviewed_at ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizePrint(r: any): NormalizedRow {
+  const overage = Number(r.overage_quantity);
+  const serviceName = r.service?.name ?? "Print usage";
+  const chargeDate = lastDayOfMonth(r.period_year, r.period_month);
+  const status: "pending" | "billed" | "waived" = r.waived_at ? "waived" : (r.is_billed ? "billed" : "pending");
+  const cycle = billingCycleOf(chargeDate, status);
+  return {
+    id: r.id, source: "print",
+    description: overage > 0
+      ? `${serviceName} — ${r.quantity_used} used, ${overage} over quota`
+      : `${serviceName} — ${r.quantity_used} used (within quota)`,
+    contract_id: r.contract_id, contract: r.contract ? { id: r.contract.id, contract_number: r.contract.contract_number, billing_cycle: r.contract.billing_cycle } : null,
+    lead: r.contract?.lead ?? null,
+    quantity: overage, unit_price: Number(r.overage_rate_snapshot), total: Number(r.amount),
+    gst_rate: r.gst_rate, gst_amount: r.gst_amount, total_with_gst: r.total_with_gst,
+    charge_date: chargeDate,
+    status,
+    billable: Number(r.amount) > 0,
+    notes: r.notes, created_at: r.created_at,
+    billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    held_at: r.held_at ?? null, hold_reason: r.hold_reason ?? null,
+    waive_reason: r.waive_reason ?? null, waived_at: r.waived_at ?? null, waived_by_name: r.waived_by_user?.full_name ?? null,
+    reviewed_at: r.reviewed_at ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeFacility(r: any): NormalizedRow {
+  const facilityName = r.contract_facility?.name ?? "Facility usage";
+  const unit = r.contract_facility?.unit ? ` ${r.contract_facility.unit}` : "";
+  const billable = Number(r.billable_quantity);
+  const chargeDate = r.accounting_period ? lastDayOfMonth(r.accounting_period.year, r.accounting_period.month) : (r.created_at ?? "").slice(0, 10);
+  // billing_statement_id (00563_usage_billing_engine.sql) is now the
+  // authoritative "already on an invoice" signal, same as usage_charges —
+  // the accounting-period-locked check stays as a fallback for rows from
+  // before that column existed.
+  const status: "pending" | "billed" | "waived" = r.waived_at
+    ? "waived"
+    : (r.billing_statement_id || r.accounting_period?.status === "locked") ? "billed" : "pending";
+  const cycle = billingCycleOf(chargeDate, status);
+  return {
+    id: r.id, source: "facility",
+    description: billable > 0
+      ? `${facilityName} — ${r.quantity_used}${unit} used, ${billable}${unit} billable`
+      : `${facilityName} — ${r.quantity_used}${unit} used (within quota)`,
+    contract_id: r.contract_id, contract: r.contract ? { id: r.contract.id, contract_number: r.contract.contract_number, billing_cycle: r.contract.billing_cycle } : null,
+    lead: r.contract?.lead ?? null,
+    quantity: billable, unit_price: Number(r.unit_price), total: Number(r.total_charge),
+    gst_rate: null, gst_amount: null, total_with_gst: null,
+    charge_date: chargeDate,
+    status,
+    billable: billable > 0,
+    notes: r.notes, created_at: r.created_at,
+    billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    held_at: r.held_at ?? null, hold_reason: r.hold_reason ?? null,
+    waive_reason: r.waive_reason ?? null, waived_at: r.waived_at ?? null, waived_by_name: r.waived_by_user?.full_name ?? null,
+    reviewed_at: r.reviewed_at ?? null,
+  };
+}
+
+/**
+ * GET /api/usage-charges
+ *
+ * Merges three sources of logged usage into one list — ad-hoc charges
+ * (usage_charges), print-quota entries (service_usage_records), and
+ * facility/meeting-room entries (facility_usage_records) — so the Usage
+ * Charges tab shows everything captured this period, billable or not,
+ * instead of only the ad-hoc subset. Each source is fetched and normalized
+ * separately (see normalize* above), merged, sorted by date, then paginated
+ * in memory: three heterogeneous tables can't share one SQL query, and
+ * usage volume at this scale (one coworking business) doesn't need true
+ * cross-table pagination — a bounded per-source fetch is enough.
+ *
+ * Print/facility have no booking or lead concept of their own (only a
+ * contract), so a booking_id/lead_id filter — which only makes sense for
+ * ad-hoc charges — narrows the result to manual rows only.
+ */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -16,34 +229,118 @@ export async function GET(request: NextRequest) {
   const contractId = searchParams.get("contract_id");
   const bookingId = searchParams.get("booking_id");
   const leadId = searchParams.get("lead_id");
+  // Comma-separated to support "everything but pending" (billed,waived) for
+  // the Billed History view — filtering that in SQL, before pagination,
+  // avoids a client-side post-filter silently shrinking a page below its
+  // stated size.
   const status = searchParams.get("status");
+  const statuses = status ? status.split(",").filter(Boolean) : null;
   const dateFrom = searchParams.get("date_from");
   const dateTo = searchParams.get("date_to");
 
-  const offset = (page - 1) * limit;
+  // A safety cap per source — not true pagination, see doc comment above.
+  const SOURCE_CAP = 500;
 
-  let query = supabase
+  let manualQuery = supabase
     .from("usage_charges")
     .select(
-      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number, billing_cycle), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company)",
-      { count: "exact" }
+      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number, billing_cycle), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company), waived_by_user:users!usage_charges_waived_by_fkey(id, full_name, role)"
     );
+  if (contractId) manualQuery = manualQuery.eq("contract_id", contractId);
+  if (bookingId) manualQuery = manualQuery.eq("booking_id", bookingId);
+  if (leadId) manualQuery = manualQuery.eq("lead_id", leadId);
+  if (statuses) manualQuery = manualQuery.in("status", statuses);
+  if (dateFrom) manualQuery = manualQuery.gte("charge_date", dateFrom);
+  if (dateTo) manualQuery = manualQuery.lte("charge_date", dateTo);
+  manualQuery = manualQuery
+    .order("charge_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(SOURCE_CAP);
 
-  if (contractId) query = query.eq("contract_id", contractId);
-  if (bookingId) query = query.eq("booking_id", bookingId);
-  if (leadId) query = query.eq("lead_id", leadId);
-  if (status) query = query.eq("status", status);
-  if (dateFrom) query = query.gte("charge_date", dateFrom);
-  if (dateTo) query = query.lte("charge_date", dateTo);
+  // Print/facility usage can now be waived AND held too (see
+  // 00559_service_facility_charge_waive.sql, 00563_usage_billing_engine.sql)
+  // — only a booking/lead filter narrows to manual rows, since print/
+  // facility have no booking or lead concept of their own.
+  const manualOnly = !!bookingId || !!leadId;
 
-  query = query.order("charge_date", { ascending: false }).range(offset, offset + limit - 1);
+  const [manualResult, printResult, facilityResult] = await Promise.all([
+    manualQuery,
+    manualOnly ? Promise.resolve({ data: [], error: null }) : (async () => {
+      let q = supabase
+        .from("service_usage_records")
+        .select("id, contract_id, quantity_used, overage_quantity, overage_rate_snapshot, amount, gst_rate, gst_amount, total_with_gst, is_billed, period_year, period_month, notes, created_at, waived_at, waive_reason, held_at, hold_reason, reviewed_at, contract:contracts!service_usage_records_contract_id_fkey(id, contract_number, billing_cycle, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)), service:service_catalog(name), waived_by_user:users!service_usage_records_waived_by_fkey(id, full_name, role)")
+        .not("contract_id", "is", null)
+        .limit(SOURCE_CAP);
+      if (contractId) q = q.eq("contract_id", contractId);
+      // Only weigh in on is_billed/waived_at when the requested set names
+      // exactly one status this table actually has; a set naming several
+      // (or neither) is "show any," so no filter at all — the post-merge
+      // filter below is the safety net either way.
+      if (statuses?.length === 1 && statuses[0] === "waived") {
+        q = q.not("waived_at", "is", null);
+      } else if (statuses?.length === 1 && statuses[0] === "pending") {
+        q = q.eq("is_billed", false).is("waived_at", null);
+      } else if (statuses?.length === 1 && statuses[0] === "billed") {
+        q = q.eq("is_billed", true);
+      }
+      return q;
+    })(),
+    manualOnly ? Promise.resolve({ data: [], error: null }) : (async () => {
+      let q = supabase
+        .from("facility_usage_records")
+        .select("id, contract_id, quantity_used, billable_quantity, unit_price, total_charge, notes, created_at, waived_at, waive_reason, held_at, hold_reason, reviewed_at, billing_statement_id, contract:contracts!facility_usage_records_contract_id_fkey(id, contract_number, billing_cycle, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)), contract_facility:contract_facilities(name, unit), accounting_period:accounting_periods(year, month, status), waived_by_user:users!facility_usage_records_waived_by_fkey(id, full_name, role)")
+        .limit(SOURCE_CAP);
+      if (contractId) q = q.eq("contract_id", contractId);
+      if (statuses?.length === 1 && statuses[0] === "waived") q = q.not("waived_at", "is", null);
+      return q;
+    })(),
+  ]);
 
-  const { data, error, count } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (manualResult.error) return NextResponse.json({ error: manualResult.error.message }, { status: 500 });
+  if (printResult.error) return NextResponse.json({ error: printResult.error.message }, { status: 500 });
+  if (facilityResult.error) return NextResponse.json({ error: facilityResult.error.message }, { status: 500 });
+
+  let merged: NormalizedRow[] = [
+    ...(manualResult.data ?? []).map(normalizeManual),
+    ...(printResult.data ?? []).map(normalizePrint),
+    ...(facilityResult.data ?? []).map(normalizeFacility),
+  ];
+
+  // Print/facility status and date range couldn't be pushed into their SQL
+  // queries (status is derived, date comes from a joined period) — apply
+  // both post-merge instead.
+  if (statuses) merged = merged.filter((r) => r.source === "manual" || statuses.includes(r.status));
+  if (dateFrom) merged = merged.filter((r) => r.charge_date >= dateFrom);
+  if (dateTo) merged = merged.filter((r) => r.charge_date <= dateTo);
+
+  // charge_date has no time component, so tie-break same-day rows by
+  // created_at (a real timestamp) for stable, chronological ordering.
+  merged.sort((a, b) => b.charge_date.localeCompare(a.charge_date) || (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+
+  const total = merged.length;
+  const offset = (page - 1) * limit;
+  const data = merged.slice(offset, offset + limit);
+
+  // Only the page actually being returned needs the covering-statement check
+  // — cheap even though it's a second round trip, since it's scoped to just
+  // this page's contracts.
+  const pendingContractIds = [...new Set(data.filter((r) => r.status === "pending" && r.contract_id).map((r) => r.contract_id as string))];
+  const coveringPeriods = await fetchCoveringPeriods(supabase, pendingContractIds);
+  if (coveringPeriods.size > 0) {
+    for (const row of data) {
+      if (row.status !== "pending" || !row.contract_id) continue;
+      const hasCovering = coveringPeriods.has(`${row.contract_id}:${row.charge_date.slice(0, 7)}`);
+      if (hasCovering) {
+        const cycle = billingCycleOf(row.charge_date, row.status, true);
+        row.billing_cycle_status = cycle.status;
+        row.billing_cycle_label = cycle.label;
+      }
+    }
+  }
 
   return NextResponse.json({
     data,
-    pagination: { page, limit, total: count || 0, totalPages: Math.ceil((count || 0) / limit) },
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   });
 }
 
@@ -100,9 +397,24 @@ export async function POST(request: NextRequest) {
 
   // Defaults to the client-supplied values; overwritten below when
   // contract_facility_id is set, since quota math is server-authoritative.
+  //
+  // The total is derived rather than trusted, for the same reason gst_amount is
+  // below: a client that sends a total disagreeing with quantity x unit_price
+  // leaves a line that cannot be read back. Booking TWV-B-0040 is the example —
+  // three hours of conference room were billed correctly at Rs 2,400, but the
+  // charge was stored as quantity 1 at Rs 800, so the line reads as Rs 800 while
+  // charging Rs 2,400. Both dialogs already send quantity x unit_price, so this
+  // changes nothing for them and only rejects the inconsistent case.
   let facilityQuantity  = result.data.quantity;
   let facilityUnitPrice = result.data.unit_price;
-  let facilityTotal     = Number(result.data.total);
+  let facilityTotal     = parseFloat((result.data.quantity * result.data.unit_price).toFixed(2));
+
+  const claimedTotal = Number(result.data.total);
+  if (Number.isFinite(claimedTotal) && Math.abs(claimedTotal - facilityTotal) > 0.01) {
+    return NextResponse.json({
+      error: `Charge does not add up: ${result.data.quantity} x ${result.data.unit_price} is ${facilityTotal.toLocaleString("en-IN")}, but the total says ${claimedTotal.toLocaleString("en-IN")}. Set the quantity to the units actually being billed.`,
+    }, { status: 422 });
+  }
   let facilityStatus    = "pending";
 
   if (result.data.contract_id) {
@@ -120,24 +432,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
     }
 
-    // Check if a finalized/exported statement already exists for this contract+period
-    const { data: existingStatement } = await supabase
-      .from("billing_statements")
-      .select("id, status, statement_number")
-      .eq("contract_id", result.data.contract_id)
-      .gte("period_start", periodFirst)
-      .lte("period_start", periodLast)
-      .in("status", ["finalized", "exported"])
-      .maybeSingle();
-
-    if (existingStatement) {
-      const monthLabel = chargeDate.toLocaleString("en-IN", { month: "long", year: "numeric" });
-      return NextResponse.json(
-        { error: `The ${monthLabel} bill (${existingStatement.statement_number}) is already finalized. Charges cannot be added to a finalized bill.` },
-        { status: 400 },
-      );
-    }
-
+    // A finalized/exported statement already covering this contract+period no
+    // longer blocks the charge outright — it saves normally (pending, unlinked)
+    // and the next "Generate Drafts" run picks it up as a SUPPLEMENTAL
+    // statement topping up the original, instead of it having nowhere to go.
+    // See generateUsageStatements in src/lib/billing.ts for the generation
+    // side of this. The accounting-period lock above is unaffected — that's
+    // a deliberate whole-month freeze, unrelated to this per-statement check.
     leadId = contract.lead_id;
     contractTaxPercentage = contract.tax_percentage != null ? Number(contract.tax_percentage) : null;
     contractNumber = contract.contract_number ?? null;
@@ -198,6 +499,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 });
     }
     leadId = booking.lead_id ?? null;
+  }
+
+  // A charge that nets to zero (e.g. a complimentary/courtesy booking add-on
+  // entered at quantity x price = 0) has nothing to bill — treat it the same
+  // as the facility-quota "within free quota" case above: waived, not
+  // pending, so it doesn't sit in the usage-gap queue forever waiting for a
+  // statement it will never need (see getUsageGaps in unbilled-queue.ts).
+  if (facilityStatus === "pending" && facilityTotal === 0) {
+    facilityStatus = "waived";
   }
 
   // GST: server is the source of truth for the computed fields.

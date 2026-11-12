@@ -36,6 +36,7 @@ import { STOCK_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constant
 import { BeverageLogForm } from "@/components/procurement/beverage-log-form";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface UserLocation {
   id: string;
@@ -377,6 +378,7 @@ function ConsumptionPageContent() {
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
+      <PageBreadcrumb resetTo={{ label: "Consumption" }} />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

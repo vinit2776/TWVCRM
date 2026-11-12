@@ -23,6 +23,7 @@ import {
   Repeat2,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const FootfallChart = dynamic(
   () => import("@/components/admin/access-analytics-charts").then((m) => ({ default: m.FootfallChart })),
@@ -209,6 +210,7 @@ export default function AccessAnalyticsPage() {
 
   return (
     <div className="p-6 space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Access Analytics" }} />
 
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

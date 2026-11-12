@@ -207,7 +207,7 @@ export async function POST(
     .insert({
       billing_statement_id: null,
       booking_gst_task_id: task.id,
-      uploaded_by: user.id,
+      uploaded_by: dbUser.id,
       tally_invoice_number: meta.tally_invoice_number,
       tally_invoice_series: meta.tally_invoice_series,
       irn: meta.irn,
@@ -221,7 +221,7 @@ export async function POST(
       // uploader and has already verified the invoice against the booking.
       // The booking task flow has no separate name-check approval step in the UI.
       name_check_status: "approved",
-      name_check_decided_by: user.id,
+      name_check_decided_by: dbUser.id,
       name_check_decided_at: new Date().toISOString(),
     })
     .select("id")

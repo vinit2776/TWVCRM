@@ -1,0 +1,413 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { queryEntityDef, type EntityRow } from "@/lib/queries/registry";
+import { fanOutQueryEvent, threadParticipantIds, entityLabel, loadEntity } from "@/lib/queries/server";
+import { logAudit } from "@/lib/audit";
+import { depositPosition, requiredDeposit } from "@/lib/deposit-instalments";
+import { REPORT_TOLERANCE } from "@/lib/queries/payment-report-balance";
+import { settleBookingPayment } from "@/lib/booking-payment-server";
+import {
+  canReviewPaymentReport,
+  isPaymentReportOutcome,
+  statusForOutcome,
+  type PaymentReportOutcome,
+} from "@/lib/queries/payment-reports";
+
+/**
+ * PATCH /api/queries/payment-reports/[id] — accounts answer a reported payment.
+ *
+ * Three outcomes, and the middle one is the important one:
+ *
+ *   verified   — the credit is in the bank and has been recorded. Requires the
+ *                billing_payment_id of the real payment, which the caller
+ *                creates first through POST /api/billing-statements/[id]/payment.
+ *                This route never writes a payment itself: there is one way
+ *                money enters the ledger and it already exists, with its own
+ *                TDS handling, Tally receipt hook and settlement chain.
+ *   not_found  — can't see it yet. NOT a rejection: the report stays
+ *                'reported' and the thread stays open so the escalation cron
+ *                keeps chasing. Ops get told where it stands.
+ *   rejected   — settled as no such payment. Needs a reason; closes the thread.
+ */
+export const dynamic = "force-dynamic";
+
+interface ReportRow {
+  id: string;
+  query_id: string;
+  status: "reported" | "verified" | "rejected";
+  billing_payment_id: string | null;
+  amount: number;
+  paid_on: string;
+  payment_mode: string;
+  target_kind: "invoice" | "deposit" | "booking";
+  booking_payment_id: string | null;
+  created_by: string;
+  query: {
+    id: string;
+    entity_type: string;
+    entity_id: string;
+    status: "open" | "resolved";
+    audience: "all" | "roles" | "users";
+    audience_roles: string[];
+    audience_user_ids: string[];
+  } | null;
+}
+
+const OUTCOME_HEADLINES: Record<PaymentReportOutcome, string> = {
+  verified: "Reported payment verified",
+  not_found: "Reported payment not found yet",
+  rejected: "Reported payment rejected",
+};
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  const supabase = await createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role, full_name")
+    .eq("auth_id", user.id)
+    .maybeSingle();
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
+
+  if (!canReviewPaymentReport(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Only accounts or an admin can verify a reported payment" },
+      { status: 403 },
+    );
+  }
+
+  const body = (await req.json().catch(() => ({}))) as {
+    outcome?: unknown;
+    billing_payment_id?: unknown;
+    note?: unknown;
+  };
+
+  if (!isPaymentReportOutcome(body.outcome)) {
+    return NextResponse.json({ error: "Unknown outcome" }, { status: 400 });
+  }
+  const outcome = body.outcome;
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+
+  if (outcome === "rejected" && !note) {
+    return NextResponse.json(
+      { error: "Say why you're rejecting this — the reporter has to be able to go back to the customer" },
+      { status: 400 },
+    );
+  }
+
+  const admin = createAdminClient();
+
+  const { data: reportData, error: fetchErr } = await admin
+    .from("query_payment_reports")
+    .select(`
+      id, query_id, status, billing_payment_id, amount, paid_on, payment_mode, target_kind, booking_payment_id, created_by,
+      query:queries!query_payment_reports_query_id_fkey(
+        id, entity_type, entity_id, status, audience, audience_roles, audience_user_ids
+      )
+    `)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
+  if (!reportData) return NextResponse.json({ error: "Report not found" }, { status: 404 });
+
+  const report = reportData as unknown as ReportRow;
+
+  // Recording the payment already closes the report it satisfies, so the card's
+  // follow-up "verify" lands on a report that is already verified against this
+  // very payment. That is the outcome asked for, not a conflict.
+  if (
+    outcome === "verified" &&
+    report.status === "verified" &&
+    typeof body.billing_payment_id === "string" &&
+    report.billing_payment_id === body.billing_payment_id.trim()
+  ) {
+    return NextResponse.json({ status: "verified", settled: true, already: true });
+  }
+
+  if (report.status !== "reported") {
+    return NextResponse.json(
+      { error: `This report has already been settled as "${report.status}"` },
+      { status: 409 },
+    );
+  }
+  if (!report.query) return NextResponse.json({ error: "Report not found" }, { status: 404 });
+
+  const def = queryEntityDef(report.query.entity_type);
+  if (!def) return NextResponse.json({ error: "Report not found" }, { status: 404 });
+
+  // A booking report points at a pending booking_payments row from the day it
+  // is raised. Verifying or rejecting it settles that row (over-credit guard,
+  // booking → paid, GST task) through the same step the booking page uses, so
+  // the two entry points can't disagree. 'not_found' touches nothing.
+  if (report.target_kind === "booking" && outcome !== "not_found") {
+    if (!report.booking_payment_id) {
+      return NextResponse.json({ error: "This report has no payment attached" }, { status: 400 });
+    }
+    const settled = await settleBookingPayment(admin, {
+      paymentId: report.booking_payment_id,
+      outcome,
+      notes: note || null,
+      reviewer: dbUser as { id: string; role: string; full_name: string },
+      settleReport: false,
+    });
+    if (!settled.ok) {
+      return NextResponse.json({ error: settled.error }, { status: settled.status });
+    }
+  }
+
+  // ── Verified: the money must actually have been recorded ─────────────────
+  //
+  // Two shapes of proof, because deposits and top-ups have no payment row of
+  // their own. The equivalent evidence is the source row's own status flag
+  // having flipped to 'paid' — re-read here rather than trusted from the
+  // client, so a report cannot be marked verified by anyone who merely says
+  // the money was recorded.
+  let paymentId: string | null = null;
+
+  if (outcome === "verified" && report.target_kind === "deposit" && report.query.entity_type === "proposal_deposit") {
+    const { data: proposal } = await admin
+      .from("proposals")
+      .select("id, deposit_payment_status, deposit_payment_amount, security_deposit_amount, deposit_exception_amount, deposit_credit_amount")
+      .eq("id", report.query.entity_id)
+      .maybeSingle();
+
+    if (!proposal) {
+      return NextResponse.json({ error: "That proposal no longer exists" }, { status: 400 });
+    }
+    // Collected in parts, the proposal only reads 'paid' after the last part, so
+    // the proof is the parts received: they must cover what this report claims
+    // on top of what earlier verified reports already account for.
+    const { data: partRows } = await admin
+      .from("proposal_deposit_instalments")
+      .select("amount, status, paid_amount")
+      .eq("proposal_id", proposal.id);
+    const hasParts = (partRows ?? []).some((r) => r.status !== "cancelled" || Number(r.paid_amount ?? 0) > 0);
+    if (hasParts && proposal.deposit_payment_status !== "paid") {
+      const received = depositPosition(requiredDeposit(proposal), partRows ?? []).paid;
+      const { data: verified } = await admin
+        .from("query_payment_reports")
+        .select("amount, query:queries!query_payment_reports_query_id_fkey(entity_type, entity_id)")
+        .eq("status", "verified")
+        .eq("target_kind", "deposit")
+        .neq("id", id);
+      const alreadyAccounted = (verified ?? [])
+        .filter((r) => {
+          const raw = (r as unknown as { query: { entity_type: string; entity_id: string } | { entity_type: string; entity_id: string }[] | null }).query;
+          const q = Array.isArray(raw) ? raw[0] ?? null : raw;
+          return q?.entity_type === "proposal_deposit" && q?.entity_id === proposal.id;
+        })
+        .reduce((sum, r) => sum + Number((r as unknown as { amount: number }).amount || 0), 0);
+      if (received + REPORT_TOLERANCE < alreadyAccounted + Number(report.amount)) {
+        return NextResponse.json(
+          { error: "Record this part first — the deposit parts received so far don't cover what was reported, so there is nothing to verify against." },
+          { status: 400 },
+        );
+      }
+    } else if (proposal.deposit_payment_status !== "paid") {
+      return NextResponse.json(
+        {
+          error:
+            "Record the deposit first — this proposal's deposit still reads as unpaid, so there is nothing to verify against.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (outcome === "verified" && report.target_kind === "deposit" && report.query.entity_type === "deposit_topup") {
+    const { data: topup } = await admin
+      .from("deposit_topups")
+      .select("id, status")
+      .eq("id", report.query.entity_id)
+      .maybeSingle();
+
+    if (!topup) {
+      return NextResponse.json({ error: "That top-up no longer exists" }, { status: 400 });
+    }
+    if (topup.status !== "paid") {
+      return NextResponse.json(
+        {
+          error:
+            "Record the top-up first — it still reads as unpaid, so there is nothing to verify against.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (outcome === "verified" && report.target_kind === "invoice") {
+    paymentId = typeof body.billing_payment_id === "string" ? body.billing_payment_id.trim() : "";
+    if (!paymentId) {
+      return NextResponse.json(
+        { error: "Record the payment first — a verified report must point at one" },
+        { status: 400 },
+      );
+    }
+
+    const { data: payment } = await admin
+      .from("billing_payments")
+      .select("id, amount, billing_statement_id")
+      .eq("id", paymentId)
+      .maybeSingle();
+    if (!payment) {
+      return NextResponse.json({ error: "That payment doesn't exist" }, { status: 400 });
+    }
+
+    // One payment settles one report. Linking a payment that another report
+    // already claimed would let two reports (and two reporters) both count the
+    // same money as theirs.
+    const { data: alreadyLinked } = await admin
+      .from("query_payment_reports")
+      .select("id")
+      .eq("billing_payment_id", paymentId)
+      .eq("status", "verified")
+      .neq("id", id)
+      .limit(1);
+    if (alreadyLinked && alreadyLinked.length > 0) {
+      return NextResponse.json(
+        { error: "That payment is already linked to another verified report" },
+        { status: 409 },
+      );
+    }
+
+    // Guard against verifying against someone else's invoice. A report on a
+    // statement must point at that statement; a report on a contract must
+    // point at a statement belonging to it. Getting this wrong would mark a
+    // customer's claim settled against another customer's money.
+    if (report.query.entity_type === "billing_statement") {
+      if (payment.billing_statement_id !== report.query.entity_id) {
+        return NextResponse.json(
+          { error: "That payment is against a different statement" },
+          { status: 400 },
+        );
+      }
+    } else {
+      const { data: stmt } = await admin
+        .from("billing_statements")
+        .select("id, contract_id")
+        .eq("id", payment.billing_statement_id)
+        .maybeSingle();
+      if (!stmt || stmt.contract_id !== report.query.entity_id) {
+        return NextResponse.json(
+          { error: "That payment is against a statement on a different contract" },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
+  const newStatus = statusForOutcome(outcome);
+  const settling = outcome !== "not_found";
+
+  if (settling) {
+    const { error: updErr } = await admin
+      .from("query_payment_reports")
+      .update({
+        status: newStatus,
+        billing_payment_id: paymentId,
+        resolution_note: note || null,
+        reviewed_by: dbUser.id,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      // Only settle a report still open — two people pressing Verify on the
+      // same claim must not produce two settlements.
+      .eq("status", "reported");
+    if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+  }
+
+  // ── Timeline ────────────────────────────────────────────────────────────
+  // 'not_found' has its own event type so "last checked" is exact, but it
+  // still counts as the latest message for the escalation clock (chase.ts
+  // reads the newest event of any type), so the chase resets off it exactly
+  // like a typed reply.
+  const eventType =
+    outcome === "verified"
+      ? "payment_verified"
+      : outcome === "rejected"
+        ? "payment_rejected"
+        : "payment_not_found";
+
+  const defaultNote =
+    outcome === "verified"
+      ? report.target_kind === "deposit"
+        ? "Found in the bank and recorded against the deposit."
+        : report.target_kind === "booking"
+          ? "Found in the bank and verified against the booking."
+          : "Found in the bank and recorded against the invoice."
+      : "Not in the bank yet — will keep looking.";
+
+  const { error: msgErr } = await admin.from("query_messages").insert({
+    query_id: report.query_id,
+    event_type: eventType,
+    body: note || defaultNote,
+    created_by: dbUser.id,
+  });
+  if (msgErr) return NextResponse.json({ error: msgErr.message }, { status: 500 });
+
+  if (settling) {
+    const { error: closeErr } = await admin
+      .from("queries")
+      .update({
+        status: "resolved",
+        resolved_by: dbUser.id,
+        resolved_at: new Date().toISOString(),
+        // A settled thread has nothing left to chase.
+        escalated_at: null,
+      })
+      .eq("id", report.query_id);
+    if (closeErr) return NextResponse.json({ error: closeErr.message }, { status: 500 });
+  } else {
+    // A reply clears the escalation stamp so the next stretch of silence can
+    // escalate again — same rule as an ordinary message.
+    await admin.from("queries").update({ escalated_at: null }).eq("id", report.query_id);
+  }
+
+  const loaded = await loadEntity(admin, report.query.entity_type, report.query.entity_id);
+
+  await fanOutQueryEvent(admin, {
+    queryId: report.query_id,
+    def,
+    // Addressed back at the reporter and everyone already in the thread,
+    // rather than at accounts who just acted.
+    targeting: {
+      audience: "users",
+      audience_roles: [],
+      audience_user_ids: [report.created_by],
+    },
+    entitySummary: loaded?.summary ?? null,
+    entityId: report.query.entity_id,
+    author: dbUser as { id: string; role: string; full_name: string },
+    participantIds: await threadParticipantIds(admin, report.query_id),
+    headline: OUTCOME_HEADLINES[outcome],
+    message: note || defaultNote,
+    notificationType: `payment_report_${outcome}`,
+  });
+
+  if (settling) {
+    void logAudit(admin, {
+      entityType: def.auditEntityType,
+      entityId:
+        (loaded?.row ? def.auditEntityId(loaded.row as EntityRow) : null) ?? report.query.entity_id,
+      action: outcome === "verified" ? "payment_report_verified" : "payment_report_rejected",
+      performedBy: dbUser.id,
+      changes: {
+        payment_report_id: { old: null, new: report.id },
+        status: { old: "reported", new: newStatus },
+        billing_payment_id: { old: null, new: paymentId },
+        note: { old: null, new: note || defaultNote },
+        context: { old: null, new: entityLabel(def, loaded?.summary ?? null) },
+      },
+    });
+  }
+
+  return NextResponse.json({ status: newStatus, settled: settling });
+}

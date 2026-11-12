@@ -4,29 +4,44 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { gzip } from "zlib";
 import { promisify } from "util";
 import { pingCronHealth } from "@/lib/cron-ping";
+import { envStr } from "@/lib/env";
 
 export const maxDuration = 300;
 
 const gzipAsync = promisify(gzip);
 
+// Every value below goes through envStr(). A trailing newline on
+// BACKUP_DB_HOST in Vercel produced "getaddrinfo ENOTFOUND
+// aws-1-ap-south-1.pooler.supabase.com\n" and stopped this backup dead on
+// 2026-04-21; it stayed broken until 2026-08-16 because the health ping that
+// should have reported it was itself failing silently.
 function getS3Client() {
   return new S3Client({
-    endpoint: `https://${process.env.B2_ENDPOINT}`,
+    endpoint: `https://${envStr("B2_ENDPOINT")}`,
     region: "us-east-005",
     credentials: {
-      accessKeyId: process.env.B2_KEY_ID!,
-      secretAccessKey: process.env.B2_APPLICATION_KEY!,
+      accessKeyId: envStr("B2_KEY_ID")!,
+      secretAccessKey: envStr("B2_APPLICATION_KEY")!,
     },
   });
 }
 
 function getPool() {
   return new Pool({
-    host: process.env.BACKUP_DB_HOST,
-    port: parseInt(process.env.BACKUP_DB_PORT || "5432"),
-    user: process.env.BACKUP_DB_USER,
-    password: process.env.BACKUP_DB_PASSWORD,
-    database: process.env.BACKUP_DB_NAME || "postgres",
+    host: envStr("BACKUP_DB_HOST"),
+    port: parseInt(envStr("BACKUP_DB_PORT") || "5432"),
+    user: envStr("BACKUP_DB_USER"),
+    // Trimmed too. An earlier version deliberately left the password raw on the
+    // theory that a password may legitimately end in whitespace — but the same
+    // paste that put a newline on BACKUP_DB_HOST put one on the password, and
+    // the untrimmed value failed with:
+    //   28P01 password authentication failed for user "backup_user"
+    // Reproduced exactly: the stored credential authenticates, and the same
+    // credential with a trailing "\n" produces that error verbatim. Supabase
+    // generates alphanumeric passwords with no surrounding whitespace, so
+    // trimming can only help here.
+    password: envStr("BACKUP_DB_PASSWORD"),
+    database: envStr("BACKUP_DB_NAME") || "postgres",
     ssl: { rejectUnauthorized: false },
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
@@ -79,7 +94,7 @@ export async function GET(request: NextRequest) {
 
     // Upload to B2
     await s3.send(new PutObjectCommand({
-      Bucket: process.env.B2_BUCKET || "twvcrmbackups",
+      Bucket: envStr("B2_BUCKET") || "twvcrmbackups",
       Key: key,
       Body: compressed,
       ContentType: "application/gzip",

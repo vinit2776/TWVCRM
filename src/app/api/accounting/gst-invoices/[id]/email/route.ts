@@ -172,7 +172,8 @@ export async function POST(
               Number(paymentData.amount).toLocaleString("en-IN"),
               "https://theworkvilla.com",
               signed.signedUrl,
-              id
+              // [id] is a contract_payments row — see the fetch above.
+              { type: "contract_payment", id },
             )
             .catch((e: unknown) => console.error("[messaging] GST invoice WA doc failed:", e));
         })

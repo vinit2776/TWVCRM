@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 
 /**
  * POST /api/proposals/[id]/monthly-link
@@ -24,6 +24,10 @@ export async function POST(
     .single();
 
   if (!proposal) return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
+
+  if (proposal.status === "superseded") {
+    return NextResponse.json({ error: "This proposal has been replaced by a newer revision." }, { status: 409 });
+  }
 
   if (proposal.razorpay_payment_link_url) {
     return NextResponse.json({ payment_link_url: proposal.razorpay_payment_link_url, message: "Link already exists" });
@@ -62,7 +66,7 @@ export async function POST(
     currency: "INR",
     description: `Monthly Charge — ${proposal.proposal_number} — The WorkVilla`,
     reference_id: `${proposal.proposal_number}-MON`,
-    expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+    expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
     notify: { sms: !!customerPhone, email: !!customerEmail },
     reminder_enable: true,
     notes: { proposal_id: id, proposal_number: proposal.proposal_number, type: "monthly_charge" },

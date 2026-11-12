@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { preventEnterSubmit } from "@/lib/utils";
 
 export default function NewLandlordPage() {
   const router = useRouter();
@@ -61,6 +63,10 @@ export default function NewLandlordPage() {
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
+      <PageBreadcrumb
+        current={{ label: "New Landlord" }}
+        fallbackParent={{ href: "/rent-management/landlords", label: "Landlords" }}
+      />
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" asChild>
           <Link href="/rent-management/landlords"><ArrowLeft className="h-4 w-4" /></Link>
@@ -71,7 +77,7 @@ export default function NewLandlordPage() {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
         <Card>
           <CardHeader><CardTitle className="text-base">Basic Details</CardTitle></CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">

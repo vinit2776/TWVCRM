@@ -38,6 +38,8 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
+import { ingestInboundWhatsAppEnquiry, isInboundEvent } from "@/lib/whatsapp-intake";
+import { pickProfileName } from "@/lib/whatsapp-names";
 
 const WEBHOOK_TOKEN = process.env.MSG91_WEBHOOK_TOKEN?.trim() || undefined;
 
@@ -132,6 +134,12 @@ export function parseInboundMessage(event: Record<string, unknown>): {
   return { body: `[${messageType}]`, messageType };
 }
 
+/** The business's own WhatsApp number must never become a lead. */
+function isOwnNumber(digits: string): boolean {
+  const own = (process.env.MSG91_WHATSAPP_SENDER ?? "").replace(/\D/g, "").slice(-10);
+  return own.length === 10 && digits.slice(-10) === own;
+}
+
 /** Constant-time compare so a wrong token can't be recovered by timing. */
 function tokenMatches(candidate: string | null | undefined): boolean {
   if (!candidate || !WEBHOOK_TOKEN) return false;
@@ -223,7 +231,16 @@ export async function POST(request: NextRequest) {
 
   for (const event of events) {
     const requestId = event.requestId as string | undefined;
-    const rawStatus = event.status as string | undefined;
+    // WhatsApp delivery reports put the real status string in `status`
+    // ("DELIVERED"/"read"/...). The SMS custom-webhook template instead sends
+    // a numeric code in `status` (e.g. "1") and puts the actual event name in
+    // `upperCaseEventName`/`eventName`/`event` — checking those first (and
+    // falling back to `status` for WhatsApp) covers both shapes.
+    const rawStatus =
+      (event.upperCaseEventName as string | undefined) ??
+      (event.eventName as string | undefined) ??
+      (event.event as string | undefined) ??
+      (event.status as string | undefined);
     // Inbound events populate both `from` and `customerNumber`; prefer whichever
     // is present so a payload that only carries one is still attributed.
     const senderNumber =
@@ -274,6 +291,20 @@ export async function POST(request: NextRequest) {
         } else if (msg.entity_type === "case" && msg.entity_id) {
           const { data: voCase } = await supabase.from("cases").select("lead_id").eq("id", msg.entity_id).single();
           leadId = voCase?.lead_id || null;
+        } else if (msg.entity_type === "proposal" && msg.entity_id) {
+          const { data: proposal } = await supabase.from("proposals").select("lead_id").eq("id", msg.entity_id).single();
+          leadId = proposal?.lead_id || null;
+        } else if (msg.entity_type === "invoice" && msg.entity_id) {
+          const { data: inv } = await supabase.from("proforma_invoices").select("lead_id").eq("id", msg.entity_id).single();
+          leadId = inv?.lead_id || null;
+        } else if (msg.entity_type === "contract_payment" && msg.entity_id) {
+          // contract_payments has no lead_id of its own — it hangs off a contract.
+          const { data: cp } = await supabase
+            .from("contract_payments")
+            .select("contract:contracts!contract_payments_contract_id_fkey(lead_id)")
+            .eq("id", msg.entity_id)
+            .single();
+          leadId = (cp as { contract?: { lead_id?: string } } | null)?.contract?.lead_id || null;
         }
 
         if (leadId) {
@@ -285,7 +316,7 @@ export async function POST(request: NextRequest) {
           }).then(({ error }) => { if (error) console.error("[webhook] activity insert failed:", error.message); });
         }
       }
-    } else if (senderNumber && !rawStatus) {
+    } else if (senderNumber && isInboundEvent(event, rawStatus, requestId)) {
       // Inbound message — link to lead if phone matches, log activity, alert dashboard.
       //
       // Not keyed on `text`: most inbound events carry an empty `text` and hold
@@ -309,14 +340,45 @@ export async function POST(request: NextRequest) {
 
       // Find a matching lead by phone or mobile (suffix match on last 10 digits)
       let matchedLeadId: string | null = null;
+      let matchedContactName: string | null = null;
       if (last10.length === 10) {
-        const { data: leads } = await supabase
-          .from("leads")
-          .select("id, phone, mobile")
-          .or(`phone.ilike.%${last10},mobile.ilike.%${last10}`)
-          .limit(1);
-        matchedLeadId = leads?.[0]?.id ?? null;
+        // Digits-only match across the lead's numbers and its additional contacts, preferring a
+        // customer with an active contract (migration 00623). If the function is not there yet
+        // (code deployed before the migration) fall back to the old suffix match.
+        const { data: hit, error: rpcError } = await supabase.rpc("find_lead_by_phone", { p_last10: last10 });
+        if (!rpcError) {
+          matchedLeadId = (hit as { lead_id: string; contact_name: string | null }[] | null)?.[0]?.lead_id ?? null;
+          matchedContactName = (hit as { lead_id: string; contact_name: string | null }[] | null)?.[0]?.contact_name ?? null;
+        } else {
+          const { data: leads } = await supabase
+            .from("leads")
+            .select("id, phone, mobile")
+            .or(`phone.ilike.%${last10},mobile.ilike.%${last10}`)
+            .limit(1);
+          matchedLeadId = leads?.[0]?.id ?? null;
+        }
       }
+
+      // A WhatsApp message from a new number is a new lead; from a known one, a re-enquiry.
+      // Never lets a failure here break delivery-report handling or the 200 back to MSG91.
+      let intakeLeadId: string | null = null;
+      if (inboundChannel === "whatsapp" && !isOwnNumber(digits)) {
+        try {
+          const intake = await ingestInboundWhatsAppEnquiry(supabase, {
+            senderNumber,
+            matchedLeadId,
+            messageBody,
+            messageType,
+            profileName: pickProfileName(event),
+            matchedContactName,
+            referral,
+          });
+          intakeLeadId = intake?.leadId ?? null;
+        } catch (err) {
+          console.error("[webhook] whatsapp enquiry intake failed:", err instanceof Error ? err.message : "unknown");
+        }
+      }
+      const messageLeadId = matchedLeadId ?? intakeLeadId;
 
       // Insert inbound message record
       await supabase.from("whatsapp_messages").insert({
@@ -326,8 +388,8 @@ export async function POST(request: NextRequest) {
         message_body: messageBody,
         template_name: messageType === "text" ? null : messageType,
         status:       "delivered",
-        entity_type:  matchedLeadId ? "lead" : null,
-        entity_id:    matchedLeadId ?? null,
+        entity_type:  messageLeadId ? "lead" : null,
+        entity_id:    messageLeadId ?? null,
       });
 
       // An ad reply is a fresh inbound lead — surface where it came from, since
@@ -361,6 +423,8 @@ export async function POST(request: NextRequest) {
         "[messaging webhook] Unhandled event shape. Top-level keys:",
         Object.keys(event).join(","),
         "| status:", rawStatus ?? "-",
+        // Non-PII routing fields only, so a new payload shape can be diagnosed from logs.
+        "| direction:", typeof event.direction === "string" ? event.direction.slice(0, 20) : "-",
         "| hasRequestId:", !!requestId
       );
     }

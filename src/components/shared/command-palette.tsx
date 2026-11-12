@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
   Search,
@@ -47,7 +47,6 @@ const QUICK_LINKS: SearchResult[] = [
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
   const [leadResults, setLeadResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [searching, setSearching] = useState(false);
@@ -68,60 +67,70 @@ export function CommandPalette() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Filter quick links
-  useEffect(() => {
-    if (!query.trim()) {
-      setResults(QUICK_LINKS);
-      setLeadResults([]);
-      setSelectedIndex(0);
-      return;
-    }
-
-    const filtered = QUICK_LINKS.filter(
-      (item) =>
-        item.label.toLowerCase().includes(query.toLowerCase()) ||
-        item.category.toLowerCase().includes(query.toLowerCase())
+  // Derived, not state: filtering a 13-item list needs no effect and no extra render.
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return QUICK_LINKS;
+    return QUICK_LINKS.filter(
+      (item) => item.label.toLowerCase().includes(q) || item.category.toLowerCase().includes(q)
     );
-    setResults(filtered);
-    setSelectedIndex(0);
   }, [query]);
 
-  // Search leads from API
+  // Search leads via the lean quick-search endpoint. Stale requests are aborted so a slow
+  // response for "ab" can't overwrite the results for "abc".
   useEffect(() => {
-    if (!query.trim() || query.length < 2) {
+    const q = query.trim();
+    setSelectedIndex(0);
+    if (q.length < 2) {
       setLeadResults([]);
+      setSearching(false);
       return;
     }
 
+    const controller = new AbortController();
+    // Drop the previous query's leads so they don't linger under a query they don't match.
+    setLeadResults([]);
+    setSearching(true);
     const timer = setTimeout(async () => {
-      setSearching(true);
       try {
-        const res = await fetch(`/api/leads?search=${encodeURIComponent(query)}&limit=5`);
-        if (res.ok) {
-          const json = await res.json();
-          const leads = (json.data || []).map(
+        const res = await fetch(`/api/leads/quick-search?q=${encodeURIComponent(q)}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          setLeadResults([]);
+          return;
+        }
+        const json = await res.json();
+        setLeadResults(
+          (json.data || []).map(
             (lead: { id: string; first_name: string; last_name: string; company?: string; email?: string }) => ({
               id: lead.id,
-              label: `${lead.first_name} ${lead.last_name}`,
+              label: `${lead.first_name} ${lead.last_name}`.trim(),
               description: lead.company || lead.email || "",
               href: `/leads/${lead.id}`,
               icon: Users,
               category: "Leads",
             })
-          );
-          setLeadResults(leads);
-        }
-      } catch {
-        // Ignore search errors
+          )
+        );
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        setLeadResults([]);
       } finally {
-        setSearching(false);
+        if (!controller.signal.aborted) setSearching(false);
       }
-    }, 300);
+    }, 150);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query]);
 
-  const allResults = [...results, ...leadResults];
+  const allResults = useMemo(() => [...results, ...leadResults], [results, leadResults]);
+
+  // Lead results arrive after the selection was reset; keep the highlight on a real row.
+  const activeIndex = Math.min(selectedIndex, Math.max(allResults.length - 1, 0));
 
   const handleSelect = useCallback(
     (result: SearchResult) => {
@@ -135,12 +144,12 @@ export function CommandPalette() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIndex((prev) => Math.min(prev + 1, allResults.length - 1));
+      setSelectedIndex(Math.min(activeIndex + 1, allResults.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setSelectedIndex((prev) => Math.max(prev - 1, 0));
-    } else if (e.key === "Enter" && allResults[selectedIndex]) {
-      handleSelect(allResults[selectedIndex]);
+      setSelectedIndex(Math.max(activeIndex - 1, 0));
+    } else if (e.key === "Enter" && allResults[activeIndex]) {
+      handleSelect(allResults[activeIndex]);
     }
   };
 
@@ -201,7 +210,7 @@ export function CommandPalette() {
                             onClick={() => handleSelect(result)}
                             className={cn(
                               "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
-                              index === selectedIndex
+                              index === activeIndex
                                 ? "bg-accent text-accent-foreground"
                                 : "hover:bg-muted"
                             )}

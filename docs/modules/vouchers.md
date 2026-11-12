@@ -6,7 +6,7 @@ The WiFi Vouchers module manages internet access provisioning for The WorkVilla'
 
 1. **Repository mode** — pre-printed WiFi voucher codes uploaded from ISP-generated PDFs and assigned from a pool to contracts (one code per seat) or bookings (one code per N attendees).
 2. **UniFi API mode** — real-time voucher generation via the Ubiquiti UniFi cloud API for locations with a UniFi controller. Vouchers have precision durations matching the exact contract or booking window; no batch import needed.
-3. **Ruijie API mode** — real-time voucher generation via the Ruijie Cloud API, for locations running Ruijie Reyee hardware (currently Nungambakkam Arcade: RAP2200(E) AP + NBR6210-E gateway). Unlike UniFi, duration/quota come from pre-configured packages, not an exact per-voucher value — see "Ruijie Cloud API Integration Details" below, including a known gap (no revoke API).
+3. **Ruijie API mode** — real-time voucher generation via the Ruijie Cloud API, for locations running Ruijie Reyee hardware (currently Nungambakkam Arcade: RAP2200(E) AP + NBR6210-E gateway). Unlike UniFi, duration/quota come from pre-configured packages, not an exact per-voucher value — see "Ruijie Cloud API Integration Details" below, including a hardware limitation of the deployed device model (no revoke API — codes cannot be switched off once issued).
 
 The module sits at the intersection of Operations (bookings, contracts) and IT (WiFi infrastructure). Key business functions:
 - Ensure every active contract seat has a valid WiFi code for the duration of the contract.
@@ -176,7 +176,7 @@ Used exclusively for voucher replacement authorization.
 | Column | Type | Notes |
 |--------|------|-------|
 | `unifi_site_id` | TEXT | UniFi site slug (e.g. `"default"`); NULL = repository mode |
-| `unifi_console_id` | TEXT | UniFi cloud console UUID; falls back to `UNIFI_CONSOLE_ID` env var |
+| `unifi_console_id` | TEXT | UniFi cloud console id. **Required** for `unifi_api` mode — there is no env-var fallback (a location without one errors instead of talking to another site's console) |
 | `ruijie_group_id` | INTEGER | Ruijie Cloud network group ID (site identifier); set when `wifi_voucher_mode = 'ruijie_api'` |
 | `wifi_voucher_mode` | TEXT NOT NULL DEFAULT `'repository'` CHECK (`repository`, `unifi_api`, or `ruijie_api`) | Definitive flag for mode selection |
 
@@ -388,9 +388,36 @@ All create/update/delete actions call `logAudit()`. Reveal of a UniFi voucher co
 ### Environment variables
 | Var | Purpose |
 |-----|---------|
-| `UNIFI_API_KEY` | Bearer key for the UniFi cloud API |
-| `UNIFI_CONSOLE_ID` | Default console UUID (used if `locations.unifi_console_id` is null) |
-| `UNIFI_SITE_NAME` | Default site slug, e.g. `"default"` |
+| `UNIFI_API_KEY` | Shared UniFi cloud API key — used for any console that has no key of its own (Nungambakkam) |
+| `ASSET_CREDENTIALS_ENCRYPTION_KEY` | Also encrypts per-console UniFi keys (see below) |
+| ~~`UNIFI_CONSOLE_ID`~~ / ~~`UNIFI_SITE_NAME`~~ | **No longer read.** There is no default console; the console always comes from the location (or the voucher's recorded console). Safe to delete from Vercel. |
+
+### Adding another UniFi site (e.g. Perungudi)
+
+The cloud connector (`api.ui.com`) only proxies for the console's **owner**, so a console owned by a different UniFi account than Nungambakkam needs its own key:
+
+1. Signed in to unifi.ui.com as the account that owns the console: **API** (account-level page, not the console's `…/unifi-api/network` page) → Create New API Key → scopes Site Manager + UniFi Applications → Network. The key is shown once.
+2. CRM → **Network → Configuration** (admin) → pick the location, set mode *UniFi Live API*, site `default`, the console ID, and paste the key. Saving checks the key against the console first, then stores it AES-GCM encrypted in `unifi_console_credentials` (service-role only; never sent back to the browser).
+3. No key entered and none stored = the shared `UNIFI_API_KEY` is used.
+
+`unifiRequest` resolves the key per console (`resolveApiKey`, 5-minute cache). Revocation is `POST /cmd/hotspot {cmd:"delete-voucher"}`; `DELETE /stat/voucher/{id}` does nothing.
+
+### Site-mixup guards (a voucher can never silently go to the wrong console)
+
+A Nungambakkam voucher must never be issued, revoked or shown for Perungudi, or vice versa. Four layers:
+
+1. **No default console.** Every UniFi helper requires a `SiteConfig`; a missing/blank console throws `UnifiConfigError` before any network call (`src/lib/unifi.ts`; routes turn it into a 400 via `src/lib/unifi-http.ts`). Resolvers:
+   - `siteConfigFromLocation(row)` — you hold a location row (throws if `unifi_console_id` is empty).
+   - `siteConfigForLocationId(id)` — you hold only an id (cron, approvals, `/api/unifi/*` list endpoints, which now require `location_id`).
+   - `siteConfigForStoredVoucher({ consoleId, locationId })` — you hold something already issued. **Use this for revoke / reveal / email.** It targets the console recorded at issue time; only rows that predate the record fall back to the location.
+   `PUT /api/locations/[id]` refuses `unifi_api` mode without a console id.
+2. **Recorded at issue time** (migration 00639): `voucher_issuances.unifi_console_id` + `unifi_location_code`, `contracts.unifi_voucher_console_id` + `unifi_voucher_location_code`, `unifi_adhoc_voucher_links.unifi_console_id` + `unifi_location_code`. Existing rows were backfilled from their location's console. A replacement voucher is issued on the location's *current* console; the old code is revoked on its *recorded* one. Reveal refuses (409) if the CRM recorded a different console for that voucher.
+3. **Location code in the voucher note** (`buildVoucherNote`), so a voucher is identifiable on the controller itself: `PGD | TWV-C-0123_seat1` (contract seat), `PGD | booking_<id>_seat1`, `PGD | contract_TWV-C-0123` (activation voucher), `PGD | <free text>` (ad-hoc). `stripVoucherNotePrefix` removes it again where notes are parsed (`/api/unifi/voucher-devices`); notes without a prefix (older vouchers) still parse.
+4. **Post-issue check.** After `create-voucher`, the voucher's `site_id` is compared with the configured site's internal id (`getUnifiSiteInternalId`, from the console's `/self/sites`). On a mismatch the voucher is deleted again and the issue fails. If the site id can't be determined the check is skipped with a warning (it never blocks).
+
+**Network → Configuration** shows `Connected to: <console name>` after a save (and on open), from `api.ui.com/v1/hosts` (`getUnifiConsoleInfo`), so the admin can confirm the id is the right console. If another location already uses the same console id a warning is shown (saving is not blocked).
+
+Per-seat UniFi vouchers are deleted on the controller (on their recorded console) whenever a contract is terminated, expires (`/api/cron/contract-expiry`, `revokeContractAccess`) or a booking is cancelled, via `revokeUnifiIssuances` in `src/lib/contract-lifecycle.ts`.
 
 ### API base URL
 ```
@@ -443,12 +470,19 @@ Five standard packages exist for Nungambakkam Arcade, created by IT specifically
 
 IT also manages ~14 separate tenant/cabin-named packages (e.g. `TRINAMITE_GROOMING_HUB_cabin08`) for manually-issued vouchers predating this integration. `matchRuijiePackage()` only ever matches `CRM_`-prefixed packages — it will never touch or select IT's manual packages.
 
-### Known gap: no revoke/disable API (as of 2026-07)
-**Confirmed directly with Ruijie support** (not just undocumented) — there is no endpoint to revoke, disable, or delete an issued voucher. `voucher/create`, `voucher/customerCreate`, and `voucher/getList` are the only voucher endpoints. This means:
+### Hardware limitation: no revoke/disable API
+**Confirmed directly with Ruijie support**, and confirmed again on 2026-08-19 as a limitation of *this model of device* (the RAP2200(E) / NBR6210-E deployed at Nungambakkam Arcade) — not a roadmap item and not something to wait for. There is no endpoint to revoke, disable, or delete an issued voucher. `voucher/create`, `voucher/customerCreate`, and `voucher/getList` are the only voucher endpoints. This means:
 - Contract termination does **not** cut off Ruijie-mode WiFi access immediately, unlike `unifi_api` locations where `revokeUnifiVoucher()` fires on termination. A terminated Nungambakkam Arcade seat's voucher stays live until its package's natural expiry.
 - MAC-bound vouchers (all `CRM_*` packages are bound) also cannot be unbound/reset via API — a device change on an active seat has no API-driven "replace" path for Ruijie vouchers (contrast with the repository/UniFi OTP-gated replace flow).
-- There is deliberately **no `revokeRuijieVoucher()` export** in `src/lib/ruijie.ts` — don't add a no-op stub. If Ruijie ships this later, wire it into contract termination the same way `revokeUnifiVoucher` is wired today.
-- This is currently an accepted, known business-policy gap, not a bug — flagged here so nobody "fixes" it by guessing at an endpoint that doesn't exist.
+- There is deliberately **no `revokeRuijieVoucher()` export** in `src/lib/ruijie.ts` — don't add a no-op stub. Because the constraint is tied to the installed hardware model, the realistic path to revocation is replacing the AP/gateway with a model that supports it, not waiting for a Ruijie Cloud release. If that ever happens, wire it into contract termination the same way `revokeUnifiVoucher` is wired today, and revisit the booking-side behaviour below.
+- This is an accepted business-policy constraint, not a bug — flagged here so nobody "fixes" it by guessing at an endpoint that doesn't exist.
+
+**Booking-side behaviour (added 2026-08-19).** Because a Ruijie code can never be switched off, the CRM is built to never *claim* it was:
+- `POST /api/bookings/[id]/vouchers/[issuanceId]/revoke` and `.../replace` return **501** at Ruijie locations and change nothing, rather than marking a live code dead.
+- Booking cancellation (`src/lib/booking-cancel.ts`) releases Ruijie issuances with an explicit reason stating the code was NOT disabled, counts them as `vouchersStillLive`, and the cancel dialog raises a warning toast so staff know the guest is still online.
+- The booking page hides the Revoke / Revoke-and-reissue controls at Ruijie locations and shows a notice *before* issuing, since the usual "revoke and reissue" recovery is unavailable.
+- In voucher history such rows read **"Released (still usable)"** on an amber background, distinct from a genuinely revoked code.
+- **Duration is therefore the only exposure control at these locations.** `matchRuijiePackage()` accepts a ±20% tolerance, so an unrevokable code can overrun its booking by at most 20% (~2h on a 10-hour day pass) and errors rather than issuing anything longer. Finer-grained `CRM_` packages in Ruijie Cloud tighten this further — that is a Ruijie Cloud config change, not a code change.
 
 ### Linking already-issued vouchers to existing contracts
 Nungambakkam Arcade had ~56 vouchers already issued manually by IT before this integration existed — none of those are recorded in `voucher_issuances`. There is **deliberately no automatic or name-based matching** to reconcile them; `POST /api/contracts/[id]/vouchers/link-ruijie` (`LinkRuijieVoucherDialog`, a "Link Existing" button next to "Issue" on `ContractVouchersSection` for Ruijie-mode locations) is a lookup-by-exact-code-and-confirm flow only. Staff must first verify which voucher belongs to which customer out-of-band (e.g. checking the customer's actual device against the "Connected Clients" list in `RuijiePanel`), then type in the exact code they've verified. The endpoint returns a preview (package, status, device count) for visual confirmation before anything is written — never a search or suggestion list. This is intentional: package names like `TRINAMITE_GROOMING_HUB_cabin08` are informal strings IT typed by hand, not a reliable matching key.
@@ -597,9 +631,8 @@ Response includes:
 
 | Dependency | Type | Notes |
 |------------|------|-------|
-| `UNIFI_API_KEY` | Env var | Required for any UniFi API operation |
-| `UNIFI_CONSOLE_ID` | Env var | Default console; overridden by `locations.unifi_console_id` |
-| `UNIFI_SITE_NAME` | Env var | Default site slug; overridden by `locations.unifi_site_id` |
+| `UNIFI_API_KEY` | Env var | Shared key; consoles with a row in `unifi_console_credentials` use their own |
+| `unifi_console_credentials` | DB table | Encrypted per-console API key (migration 00638); service-role only |
 | `RESEND_API_KEY` | Env var | Required for voucher email delivery |
 | `locations.wifi_voucher_mode` | DB column | `'repository'` or `'unifi_api'` per location |
 | `locations.unifi_site_id` | DB column | Site slug; NULL = repository mode |

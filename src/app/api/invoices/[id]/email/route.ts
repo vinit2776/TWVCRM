@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
-import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
+import { mirrorInvoiceToStatement } from "@/lib/adhoc-invoice-mirror";
+import { razorpayLinkDates } from "@/lib/razorpay-link-dates";
 
 export const maxDuration = 30;
 
@@ -56,9 +58,25 @@ export async function POST(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = invoice.lead as any;
-  const customerEmail = lead?.email || recipients[0];
-  const customerPhone = lead?.phone || lead?.mobile;
-  const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
+
+  // A case-raised invoice has no lead — the buyer comes from the case's
+  // billing route instead, so the greeting and the Razorpay customer name
+  // the party that actually owes it rather than falling back to "Client".
+  let caseParty: ReturnType<typeof invoiceParty> = null;
+  if (invoice.case_id) {
+    const { data: caseRow } = await supabase
+      .from("cases")
+      .select("client_name, client_company_name, client_email, client_phone, client_gst_number, aggregator_id, bill_to, aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone, gst_number)")
+      .eq("id", invoice.case_id)
+      .maybeSingle();
+    if (caseRow) caseParty = invoiceParty({ case: caseRow as unknown as InvoiceCaseLike });
+  }
+
+  const customerEmail = caseParty?.email || lead?.email || recipients[0];
+  const customerPhone = caseParty?.phone || lead?.phone || lead?.mobile;
+  const customerName =
+    caseParty?.name ||
+    (lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer");
 
   // ── Auto-create Razorpay payment link ────────────────────────────────────────
   let paymentLinkUrl: string | null = invoice.razorpay_link_url || null;
@@ -78,7 +96,7 @@ export async function POST(
         const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
 
-        const expireBy = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60; // 30 days
+        const expireBy = Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const payload: Record<string, any> = {
@@ -114,6 +132,12 @@ export async function POST(
             .from("proforma_invoices")
             .update({ razorpay_link_id: linkData.id, razorpay_link_url: linkData.short_url })
             .eq("id", id);
+          // Separate write: a DB without the date columns must not lose the link.
+          const { error: datesErr } = await supabase
+            .from("proforma_invoices")
+            .update(razorpayLinkDates(linkData))
+            .eq("id", id);
+          if (datesErr) console.warn("[invoice email] Could not save link dates:", datesErr.message);
         } else {
           console.warn("[invoice email] Razorpay link creation failed:", await rzpRes.json().catch(() => null));
         }
@@ -163,7 +187,7 @@ export async function POST(
             <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Empower your business with flexible workspaces</p>
           </div>
           <div style="padding:32px;">
-            <p style="color:#1a1b1e;font-size:15px;">Dear ${lead?.first_name || "Client"},</p>
+            <p style="color:#1a1b1e;font-size:15px;">Dear ${caseParty?.name || lead?.first_name || "Client"},</p>
             <p style="color:#333;font-size:14px;">Please find attached the invoice <strong>${invoice.invoice_number}</strong> for <strong>${invoice.title}</strong>.</p>
 
             <p style="color:#015E65;font-size:13px;font-weight:700;margin:20px 0 8px;letter-spacing:0.3px;">INVOICE SUMMARY</p>
@@ -218,10 +242,15 @@ export async function POST(
 
     console.log("Invoice email sent:", emailResult?.id, "to:", recipients);
 
+    // The AR reminder ladder (fetchDunnableReceivables) reads due_date off this
+    // row directly, not off the billing_statements mirror below — without this,
+    // an invoice sent without a due date at creation is permanently un-remindable.
+    const dueDate = (invoice.due_date as string | null) || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
     // Update status to "sent"
     await supabase
       .from("proforma_invoices")
-      .update({ status: "sent" })
+      .update({ status: "sent", ...(invoice.due_date ? {} : { due_date: dueDate }) })
       .eq("id", id);
 
     // ── Mirror into billing_statements so this flows through the same AR ────────
@@ -230,52 +259,11 @@ export async function POST(
     // Razorpay link on the existing row instead of piling up duplicate AR entries.
     try {
       const adminForStatement = createAdminClient();
-      const { data: existingStatement } = await adminForStatement
-        .from("billing_statements")
-        .select("id")
-        .eq("invoice_id", id)
-        .maybeSingle();
-
-      if (existingStatement) {
-        if (paymentLinkUrl) {
-          await adminForStatement
-            .from("billing_statements")
-            .update({ razorpay_payment_link_id: invoice.razorpay_link_id, razorpay_payment_link_url: paymentLinkUrl })
-            .eq("id", existingStatement.id);
-        }
-      } else {
-        const todayYmd = new Date().toISOString().slice(0, 10);
-        const dueDate = (invoice.due_date as string | null) || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        const lineItems = ((invoice.items || []) as Array<{ description: string; quantity: number; unit_price: number; total: number }>).map((item) => ({
-          description: item.description,
-          qty: item.quantity,
-          unit_price: item.unit_price,
-          amount: item.total,
-          hsn_sac_code: resolveHsnCode("ad_hoc_charges"),
-        }));
-
-        await adminForStatement.from("billing_statements").insert({
-          invoice_id: id,
-          contract_id: null,
-          proposal_id: invoice.proposal_id ?? null,
-          statement_type: "usage",
-          created_via: "adhoc_invoice",
-          status: "finalized",
-          payment_status: "unpaid",
-          handoff_state: "pi_awaiting_payment",
-          period_start: todayYmd,
-          period_end: todayYmd,
-          subtotal: invoice.subtotal,
-          fixed_amount: invoice.subtotal,
-          tax_percentage: invoice.tax_percentage,
-          tax_amount: invoice.tax_amount,
-          total_amount: invoice.total_amount,
-          due_date: dueDate,
-          razorpay_payment_link_id: invoice.razorpay_link_id ?? null,
-          razorpay_payment_link_url: paymentLinkUrl,
-          line_items: [{ type: "usage", label: invoice.title, items: lineItems, subtotal: invoice.subtotal }],
-        });
-      }
+      await mirrorInvoiceToStatement(
+        adminForStatement,
+        { ...invoice, due_date: invoice.due_date ?? dueDate },
+        { linkId: invoice.razorpay_link_id, linkUrl: paymentLinkUrl },
+      );
     } catch (e) {
       console.error("[invoice email] billing_statements mirror failed (non-fatal):", e);
     }
@@ -300,7 +288,8 @@ export async function POST(
         Number(invoice.total_amount).toLocaleString("en-IN"),
         paymentLinkUrl || "",
         pdfPublicUrl,
-        id
+        // [id] is a proforma_invoices row.
+        { type: "invoice", id },
       ).catch((e: unknown) => console.error("[messaging] invoice WA doc failed:", e));
     }
 

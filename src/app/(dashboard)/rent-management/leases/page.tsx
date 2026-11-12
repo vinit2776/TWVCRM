@@ -20,6 +20,8 @@ import type { PropertyLease } from "@/types";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 export default function LeasesListPage() {
   const router = useRouter();
@@ -60,6 +62,7 @@ export default function LeasesListPage() {
 
   return (
     <div className="p-6 space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Leases" }} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Leases</h1>
@@ -132,7 +135,11 @@ export default function LeasesListPage() {
                   {filtered.map((lease) => (
                     <tr key={lease.id} className="border-b hover:bg-muted/20 transition-colors">
                       <td className="px-4 py-3">
-                        <Link href={`/rent-management/leases/${lease.id}`} className="font-medium hover:underline text-primary">
+                        <Link
+                          href={`/rent-management/leases/${lease.id}`}
+                          className="font-medium hover:underline text-primary"
+                          onClick={() => pushTrailEntry({ href: `/rent-management/leases/${lease.id}`, label: lease.location?.name ?? "Lease" })}
+                        >
                           {lease.location?.name ?? "—"}
                         </Link>
                         {lease.location?.city && (

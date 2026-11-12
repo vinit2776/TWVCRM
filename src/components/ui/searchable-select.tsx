@@ -17,6 +17,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 export interface SearchableSelectOption {
   value: string;
   label: string;
+  /** Optional coloured pill shown after the label. Its text is searchable too. */
+  badge?: { text: string; className?: string };
+  /** Optional second line under the label (e.g. model and serial). Searchable too. */
+  detail?: string;
 }
 
 interface SearchableSelectProps {
@@ -28,6 +32,14 @@ interface SearchableSelectProps {
   emptyMessage?: string;
   disabled?: boolean;
   className?: string;
+}
+
+function OptionBadge({ badge, className }: { badge: NonNullable<SearchableSelectOption["badge"]>; className?: string }) {
+  return (
+    <span className={cn("inline-block rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap", badge.className ?? "bg-muted text-muted-foreground", className)}>
+      {badge.text}
+    </span>
+  );
 }
 
 export function SearchableSelect({
@@ -58,6 +70,7 @@ export function SearchableSelect({
           )}
         >
           <span className="truncate">{selected ? selected.label : placeholder}</span>
+          {selected?.badge && <OptionBadge badge={selected.badge} className="ml-2 shrink-0" />}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -70,7 +83,7 @@ export function SearchableSelect({
               {options.map((option) => (
                 <CommandItem
                   key={option.value}
-                  value={option.label}
+                  value={[option.label, option.detail, option.badge?.text].filter(Boolean).join(" ")}
                   onSelect={() => {
                     onValueChange(option.value === value ? "" : option.value);
                     setOpen(false);
@@ -82,7 +95,11 @@ export function SearchableSelect({
                       value === option.value ? "opacity-100" : "opacity-0"
                     )}
                   />
-                  {option.label}
+                  <span>
+                    {option.label}
+                    {option.badge && <OptionBadge badge={option.badge} className="ml-2 align-middle" />}
+                    {option.detail && <span className="block text-xs text-muted-foreground">{option.detail}</span>}
+                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>

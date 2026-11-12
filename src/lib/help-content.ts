@@ -1502,12 +1502,12 @@ export const HELP_CONTENT: HelpContentData = {
     { question: "Is my data secure?", answer: "Yes. The CRM uses Supabase (PostgreSQL) with Row Level Security, HTTPS encryption, and role-based access control. All changes are tracked in audit logs." },
     { question: "Can I export data from the CRM?", answer: "Accounting summaries can be exported. Individual records (leads, bookings, etc.) can be printed or saved as PDFs. Bulk CSV export is not currently available." },
     { question: "What browsers are supported?", answer: "The CRM works best on Chrome, Firefox, Safari, and Edge (latest versions). Mobile browsers are also supported." },
-    { question: "How do I report a bug or request a feature?", answer: "Contact the admin team at contact@theworkvilla.com with a description of the issue or feature request." },
+    { question: "How do I report a bug or request a feature?", answer: "Contact the admin team at vinit@theworkvilla.com with a description of the issue or feature request." },
     { question: "What happens if the internet goes down?", answer: "If you have the CRM installed as a PWA, you can still browse recently visited pages in read-only mode. Saving new records requires an active connection. Changes sync automatically when you reconnect. We recommend saving frequently." },
     { question: "Can I install the CRM as an app on my phone?", answer: "Yes! Open the CRM in Chrome (Android) or Safari (iPhone), then tap 'Add to Home Screen'. The app installs as a PWA and runs full-screen like a native app. It also supports limited offline browsing." },
     { question: "Can I undo a change?", answer: "There is no undo button. However, Admins can review the Audit Logs to see what changed and manually reverse it if needed." },
     { question: "Why can I not see certain modules in the sidebar?", answer: "Your access is determined by your role. Sales Reps have limited access. Managers and Admins see additional modules. Ask your Admin to check your role if you believe access is incorrect." },
-    { question: "How do I contact support?", answer: "Email contact@theworkvilla.com or call +91 97910 97900 during business hours." },
+    { question: "How do I contact support?", answer: "Email vinit@theworkvilla.com." },
     { question: "Can I send documents to customers on WhatsApp?", answer: "Yes! When emailing a Proposal, Proforma Invoice, or GST Invoice, the send dialog has a green 'Also send via WhatsApp' checkbox. Tick it to also deliver the PDF to the customer's WhatsApp. This requires the lead to have a phone number saved, and is always opt-in (off by default)." },
     { question: "How do I get notified about new leads in real time?", answer: "The 🔔 bell icon in the top navigation bar lights up with a red badge whenever a new lead arrives from Google Ads, Meta Ads, or the Walk-in form. A chime also plays. Click the bell to see the new enquiries and jump to the lead directly." },
   ],
@@ -1570,8 +1570,11 @@ export const HELP_CONTENT: HelpContentData = {
   /*  Support info                                                     */
   /* ================================================================ */
 
+  // Internal staff support contact — NOT the sales/customer inbox
+  // (contact@theworkvilla.com). Placeholder until a dedicated internal
+  // support address/channel exists.
   supportInfo: {
-    email: "contact@theworkvilla.com",
-    phone: "+91 97910 97900",
+    email: "vinit@theworkvilla.com",
+    phone: "",
   },
 };

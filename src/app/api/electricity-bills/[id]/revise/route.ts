@@ -82,6 +82,13 @@ export async function POST(
   }
   const bill = rawBill as EbBillRow;
 
+  if ((rawBill as { source_vendor_bill_id?: string | null }).source_vendor_bill_id) {
+    return NextResponse.json(
+      { error: "This record was linked from an uploaded vendor bill and cannot be revised. Unlink it and link the bill again." },
+      { status: 422 },
+    );
+  }
+
   if (!["invoiced", "dispatched"].includes(bill.status)) {
     return NextResponse.json(
       { error: `Only invoiced or dispatched bills can be revised (current status: ${bill.status})` },
@@ -178,6 +185,33 @@ export async function POST(
       { error: insertErr?.message ?? "Failed to create revised bill" },
       { status: 500 },
     );
+  }
+
+  // ── Carry the landlord payable over to the new draft ──────────────────────
+  // The payable belongs to the live bill. Without this, a revised draft shows no vendor bill and
+  // the payable stays attached to the revised (dead) row. Found through either side of the link,
+  // since some bills only have the vendor-bill side set.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: linkedVb } = await (supabase as any)
+    .from("vendor_bills")
+    .select("id")
+    .eq("electricity_bill_id", id)
+    .maybeSingle();
+  const vendorBillId: string | null = bill.vendor_bill_id ?? linkedVb?.id ?? null;
+  if (vendorBillId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: vbErr } = await (supabase as any)
+      .from("vendor_bills")
+      .update({ electricity_bill_id: newBill.id })
+      .eq("id", vendorBillId);
+    if (vbErr) {
+      console.error("[eb] revise: vendor bill relink failed:", vbErr.message);
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from("electricity_bills").update({ vendor_bill_id: vendorBillId }).eq("id", newBill.id);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from("electricity_bills").update({ vendor_bill_id: null }).eq("id", id);
+    }
   }
 
   // ── Copy lines to new bill ────────────────────────────────────────────────

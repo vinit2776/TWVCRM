@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { pollEvents, COSEC_EVENT, COSEC_DENIAL_REASON, parseDirection } from "@/lib/cosec";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/cron/cosec-events
@@ -13,7 +14,7 @@ import { pollEvents, COSEC_EVENT, COSEC_DENIAL_REASON, parseDirection } from "@/
  *   5. IN/OUT events → upsert cosec_presence (live presence state)
  *   6. Updates device polling cursors
  */
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -305,3 +306,5 @@ async function resolveEntityNames(
   await Promise.all(tasks);
   return names;
 }
+
+export const GET = withCronHealth("cron/cosec-events", handler);

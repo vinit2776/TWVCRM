@@ -15,7 +15,7 @@ CREATE TYPE billing_statement_status AS ENUM ('draft', 'finalized', 'exported');
 -- CONTRACTS
 -- =============================================
 CREATE TABLE contracts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   contract_number VARCHAR(50) UNIQUE,
   lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE RESTRICT,
   proposal_id UUID NOT NULL REFERENCES proposals(id) ON DELETE RESTRICT,
@@ -75,7 +75,7 @@ CREATE TRIGGER update_contracts_updated_at BEFORE UPDATE ON contracts
 -- VOUCHER REPOSITORY
 -- =============================================
 CREATE TABLE voucher_repository (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   voucher_code VARCHAR(255) UNIQUE NOT NULL,
   status voucher_status DEFAULT 'available',
   metadata JSONB DEFAULT '{}',
@@ -92,7 +92,7 @@ CREATE INDEX idx_voucher_repository_code ON voucher_repository(voucher_code);
 -- VOUCHER ISSUANCES
 -- =============================================
 CREATE TABLE voucher_issuances (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   contract_id UUID NOT NULL REFERENCES contracts(id) ON DELETE RESTRICT,
   voucher_id UUID NOT NULL REFERENCES voucher_repository(id) ON DELETE RESTRICT,
   lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE RESTRICT,
@@ -114,7 +114,7 @@ CREATE INDEX idx_voucher_issuances_lead_id ON voucher_issuances(lead_id);
 -- BILLING STATEMENTS (created before usage_charges for FK)
 -- =============================================
 CREATE TABLE billing_statements (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   statement_number VARCHAR(50) UNIQUE,
   contract_id UUID NOT NULL REFERENCES contracts(id) ON DELETE RESTRICT,
   lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE RESTRICT,
@@ -164,7 +164,7 @@ CREATE TRIGGER update_billing_statements_updated_at BEFORE UPDATE ON billing_sta
 -- USAGE CHARGES
 -- =============================================
 CREATE TABLE usage_charges (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   contract_id UUID NOT NULL REFERENCES contracts(id) ON DELETE RESTRICT,
   lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE RESTRICT,
   description VARCHAR(500) NOT NULL,

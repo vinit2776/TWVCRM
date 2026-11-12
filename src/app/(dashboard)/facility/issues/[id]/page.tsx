@@ -21,7 +21,7 @@ import {
   ArrowLeft, AlertTriangle, Loader2, MessageSquare, MapPin, User,
   Server, Clock, RefreshCw, CheckCircle2, Wrench, Star, ImagePlus,
   Phone, Mail, ExternalLink, ShieldAlert, Bell, Check, CheckCheck, X,
-  TimerReset, Trophy, MoreHorizontal,
+  TimerReset, Trophy, MoreHorizontal, Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -40,15 +40,20 @@ import {
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
-  REPORTED_VIA_LABEL, formatDuration, timeAgo, timeUntil, nextStatusOptions,
+  REPORTED_VIA_LABEL, formatDuration, parseDuration, MAX_TIME_LOG_MINUTES, timeAgo, timeUntil, nextStatusOptions,
   TAT_REASON_LABEL, TAT_REASON_LIST_EXEMPT, TAT_REASON_LIST_CONTROLLABLE, kpiPointsStyle,
   STATUS_ACTION_PRIORITY, getTatStatus, SCOPE_LABEL,
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
+import { ComplaintLinkCard } from "@/components/facility/complaint-link-card";
+import { MentionTextarea, type MentionUser } from "@/components/facility/mention-textarea";
 import type {
   FacilityIssue, FacilityIssueStatus, FacilityRootCause, FacilityTatReason, FacilityIssueTatExtension,
+  FacilityIssueTimeLog,
 } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface AssigneeOption { id: string; full_name: string; role: string }
 interface Collaborator { id: string; user_id: string; user: { id: string; full_name: string; email: string; role: string } }
@@ -85,7 +90,7 @@ interface AssetDetail {
   recent_issues: { id: string; issue_number: string; title: string; created_at: string }[];
 }
 
-const OVERRIDE_ROLES = ["admin", "manager", "office_admin"];
+const OVERRIDE_ROLES = ["admin", "manager", "office_admin", "coordinator"];
 
 const STATUS_ACTION_LABEL: Record<string, string> = {
   in_progress: "Start Work",
@@ -97,6 +102,23 @@ const STATUS_ACTION_ICON: Record<string, typeof Wrench> = {
   resolved: CheckCircle2,
   reopened: RefreshCw,
 };
+
+/** Highlights the "@Full Name" substrings for users actually recorded as mentioned on this event. */
+function renderMessageWithMentions(text: string, mentionedUserIds: string[] | undefined, roster: MentionUser[]) {
+  const names = (mentionedUserIds ?? [])
+    .map((id) => roster.find((u) => u.id === id)?.full_name)
+    .filter((n): n is string => !!n)
+    .sort((a, b) => b.length - a.length); // longest first so "@Jay" can't swallow a match meant for "@Jayesh"
+  if (names.length === 0) return text;
+
+  const pattern = names.map((n) => `@${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).join("|");
+  const parts = text.split(new RegExp(`(${pattern})`, "g"));
+  return parts.map((part, i) =>
+    names.some((n) => part === `@${n}`)
+      ? <span key={i} className="font-semibold text-primary bg-secondary rounded px-1">{part}</span>
+      : part
+  );
+}
 
 function useClaimCountdown(claimSlaTargetAt: string | null | undefined) {
   const [remaining, setRemaining] = useState<number | null>(null);
@@ -129,7 +151,15 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const [issue, setIssue] = useState<FacilityIssue | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [savingDescription, setSavingDescription] = useState(false);
   const [comment, setComment] = useState("");
+  const [commentMentionIds, setCommentMentionIds] = useState<string[]>([]);
+  const [mentionRoster, setMentionRoster] = useState<MentionUser[]>([]);
   const [resolveOpen, setResolveOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignees, setAssignees] = useState<AssigneeOption[]>([]);
@@ -149,6 +179,13 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   // the hint never flashes on for a user who already dismissed it.
   const [extendHintDismissed, setExtendHintDismissed] = useState(true);
   const assetFetchedRef = useRef<string | null>(null);
+  const [timeLogs, setTimeLogs] = useState<FacilityIssueTimeLog[]>([]);
+  const [timeLogTotal, setTimeLogTotal] = useState(0);
+  const [logTimeOpen, setLogTimeOpen] = useState(false);
+  const [timeInput, setTimeInput] = useState("");
+  const [timeNote, setTimeNote] = useState("");
+  const [timeInputError, setTimeInputError] = useState("");
+  const [loggingTime, setLoggingTime] = useState(false);
 
   useEffect(() => {
     setExtendHintDismissed(localStorage.getItem("facility_extend_hint_dismissed") === "1");
@@ -165,6 +202,48 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     if (res.ok) setIssue(json.data);
     else toast.error(json.error || "Failed to load issue");
     setLoading(false);
+  };
+
+  const saveTitle = async () => {
+    const trimmed = titleDraft.trim();
+    if (!trimmed) { toast.error("Title can't be empty"); return; }
+    if (trimmed === issue?.title) { setEditingTitle(false); return; }
+    setSavingTitle(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to update title");
+      setEditingTitle(false);
+      await fetchIssue();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update title");
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
+  const saveDescription = async () => {
+    if (descriptionDraft === (issue?.description || "")) { setEditingDescription(false); return; }
+    setSavingDescription(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: descriptionDraft.trim() || null }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to update description");
+      setEditingDescription(false);
+      await fetchIssue();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update description");
+    } finally {
+      setSavingDescription(false);
+    }
   };
 
   const fetchCollaborators = async () => {
@@ -185,15 +264,66 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     if (res.ok) setExtensions(json.data ?? []);
   };
 
+  const fetchTimeLogs = async () => {
+    const res = await fetch(`/api/facility/issues/${id}/time-logs`);
+    const json = await res.json();
+    if (res.ok) {
+      setTimeLogs(json.data ?? []);
+      setTimeLogTotal(json.total_minutes ?? 0);
+    }
+  };
+
+  const submitTimeLog = async () => {
+    const minutes = parseDuration(timeInput);
+    if (!minutes) {
+      setTimeInputError("Enter a duration like 45m, 1h 30m, or 2d");
+      return;
+    }
+    if (minutes > MAX_TIME_LOG_MINUTES) {
+      setTimeInputError(`That's over ${MAX_TIME_LOG_MINUTES / (24 * 60)} days — log it as separate entries.`);
+      return;
+    }
+    setTimeInputError("");
+    setLoggingTime(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${id}/time-logs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minutes, note: timeNote.trim() || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to log time");
+      setLogTimeOpen(false);
+      setTimeInput("");
+      setTimeNote("");
+      await fetchTimeLogs();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to log time");
+    } finally {
+      setLoggingTime(false);
+    }
+  };
+
   useEffect(() => {
     fetchIssue();
     fetchCollaborators();
     fetchNudges();
     fetchExtensions();
+    fetchTimeLogs();
     fetch("/api/me")
       .then((r) => r.json())
       .then((j) => setCurrentUser(j ?? null))
       .catch(() => null);
+    // Full user directory for @mention — deliberately not /api/facility/assignees,
+    // which is scoped to FMS/admin/manager. Anyone can be tagged into a comment.
+    fetch("/api/users")
+      .then((r) => r.json())
+      .then((j) => setMentionRoster(
+        ((j.data ?? []) as { id: string; full_name: string; role: string; is_active: boolean }[])
+          .filter((u) => u.is_active)
+          .map((u) => ({ id: u.id, full_name: u.full_name, role: u.role }))
+      ))
+      .catch(() => setMentionRoster([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -251,6 +381,11 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       .catch(() => setAssignees([]));
   }, [assignOpen, collabOpen]);
 
+  const composerMentionRoster = useMemo(
+    () => mentionRoster.filter((u) => u.id !== currentUser?.id),
+    [mentionRoster, currentUser?.id]
+  );
+
   const open = !!issue && ["new", "acknowledged", "in_progress", "reopened"].includes(issue.status);
 
   // Live-ticks the TAT banner's status (on_track/at_risk/overdue) so it
@@ -278,6 +413,9 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
   const isOverrideTier = OVERRIDE_ROLES.includes(currentUser?.role ?? "");
   const isOwner = !!currentUser && issue?.assigned_to === currentUser.id;
+  // A ticket's original reporter can always reassign it to anyone, same as
+  // override tier — matches the /assign API's own rule (see that route).
+  const isReporter = !!currentUser && !!issue?.reported_by && issue.reported_by === currentUser.id;
   const isUnowned = !!issue && !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
   const canAct = isOwner || isOverrideTier;
   // Nudging prompts the assignee for an update — never show it to the assignee
@@ -285,7 +423,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   // otherwise qualify via override tier or being the reporter.
   const isCollaborator = collaborators.some((c) => c.user_id === currentUser?.id);
   const canNudge = !!issue?.assigned_to && !!currentUser && !isOwner && !isCollaborator &&
-    (isOverrideTier || issue.reported_by === currentUser.id);
+    (isOverrideTier || isReporter);
   const canExtend = isOwner && open && (issue?.tat_extension_count ?? 0) < 2;
   // Narrower than isOverrideTier — flipping an extension's KPI-exempt flag
   // is admin/manager only, unlike the rest of the override tier.
@@ -302,7 +440,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     : (!isOwner && issue?.assigned_to && open)
     ? { type: "take_over", label: "Take over" }
     : null;
-  const showAssignAsPrimary = isOverrideTier && !!ownershipAction;
+  const canReassign = isOverrideTier || isReporter;
+  const showAssignAsPrimary = canReassign && !!ownershipAction;
   const assignLabel = issue?.assignee?.full_name ? "Reassign" : "Assign to…";
 
   // ---- transitions ---------------------------------------------------------
@@ -434,10 +573,11 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       const res = await fetch(`/api/facility/issues/${issue.id}/comment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: comment.trim() }),
+        body: JSON.stringify({ message: comment.trim(), mentionedUserIds: commentMentionIds }),
       });
       if (!res.ok) throw new Error("Failed to add comment");
       setComment("");
+      setCommentMentionIds([]);
       await fetchIssue();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
@@ -554,6 +694,10 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
+      <PageBreadcrumb
+        current={{ label: issue.title }}
+        fallbackParent={{ href: "/facility/issues", label: "Issues" }}
+      />
       {/* ───── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon" onClick={() => router.back()}>
@@ -578,7 +722,36 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               </span>
             )}
           </div>
-          <h1 className="text-base md:text-lg font-semibold mt-1 break-words">{issue.title}</h1>
+          {editingTitle ? (
+            <div className="mt-1">
+              <Input
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); saveTitle(); }
+                  if (e.key === "Escape") { setEditingTitle(false); }
+                }}
+                onBlur={saveTitle}
+                autoFocus
+                disabled={savingTitle}
+                className="text-base md:text-lg font-semibold h-auto py-1"
+              />
+              <p className="text-[10px] text-muted-foreground mt-0.5">Enter to save, Esc to cancel</p>
+            </div>
+          ) : (
+            <h1
+              className={cn(
+                "text-base md:text-lg font-semibold mt-1 break-words group",
+                canAct && "cursor-text hover:bg-muted/40 rounded px-1 -mx-1"
+              )}
+              onClick={() => { if (canAct) { setTitleDraft(issue.title); setEditingTitle(true); } }}
+            >
+              {issue.title}
+              {canAct && (
+                <Pencil className="h-3 w-3 inline-block ml-1.5 mb-0.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+              )}
+            </h1>
+          )}
           <LifecycleStepper status={issue.status} />
         </div>
         <Button variant="ghost" size="icon" onClick={fetchIssue} disabled={loading} title="Refresh">
@@ -630,6 +803,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
           )}
         </div>
       </section>
+
+      {issue.reported_via === "whatsapp" && <ComplaintLinkCard issueId={issue.id} />}
 
       {/* ───── Claim countdown banner (unowned tickets only) ─────────────── */}
       {isUnowned && claimCountdownMs !== null && (
@@ -704,9 +879,10 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         )}
 
         {/* Overflow — everything else. Assign/Reassign still lives here for
-            override tier when it's NOT already shown as primary above (e.g.
-            they already own the ticket, or it's resolved/closed). */}
-        {(isOverrideTier || (canAct && overflowStatusActions.length > 0)) && (
+            override tier (or the ticket's reporter) when it's NOT already
+            shown as primary above (e.g. they already own the ticket, or
+            it's resolved/closed). */}
+        {(canReassign || (canAct && overflowStatusActions.length > 0)) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="outline" disabled={busy} title="More actions">
@@ -722,7 +898,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                   {STATUS_ACTION_LABEL[s]}
                 </DropdownMenuItem>
               ))}
-              {isOverrideTier && !showAssignAsPrimary && (
+              {canReassign && !showAssignAsPrimary && (
                 <DropdownMenuItem onClick={() => setAssignOpen(true)}>
                   {assignLabel}
                 </DropdownMenuItem>
@@ -768,10 +944,78 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         <div className="md:col-span-2 space-y-4">
           {/* Description */}
           <section className="rounded-lg border bg-card p-4 space-y-2">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Description</div>
-            <p className="text-sm whitespace-pre-wrap">
-              {issue.description || <span className="text-muted-foreground italic">No description provided</span>}
-            </p>
+            <div className="flex items-center justify-between">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Description</div>
+              {canAct && !editingDescription && (
+                <button
+                  onClick={() => { setDescriptionDraft(issue.description || ""); setEditingDescription(true); }}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Edit description"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {editingDescription ? (
+              <div>
+                <Textarea
+                  value={descriptionDraft}
+                  onChange={(e) => setDescriptionDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Escape") setEditingDescription(false); }}
+                  rows={4}
+                  autoFocus
+                  disabled={savingDescription}
+                  className="text-sm"
+                />
+                <div className="flex justify-end gap-2 mt-1.5">
+                  <Button size="sm" variant="ghost" onClick={() => setEditingDescription(false)} disabled={savingDescription}>
+                    Cancel
+                  </Button>
+                  <Button size="sm" onClick={saveDescription} disabled={savingDescription}>
+                    {savingDescription ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm whitespace-pre-wrap">
+                {issue.description || <span className="text-muted-foreground italic">No description provided</span>}
+              </p>
+            )}
+          </section>
+
+          {/* Time spent */}
+          <section className="rounded-lg border bg-card p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Time spent</div>
+              {canAct && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setTimeInput(""); setTimeNote(""); setTimeInputError(""); setLogTimeOpen(true); }}
+                >
+                  <Clock className="h-3.5 w-3.5 mr-1" /> Log time
+                </Button>
+              )}
+            </div>
+            <div className="text-lg font-semibold">
+              {formatDuration(timeLogTotal)}
+              <span className="text-xs text-muted-foreground font-normal ml-1.5">total logged</span>
+            </div>
+            {timeLogs.length > 0 && (
+              <div className="divide-y">
+                {timeLogs.map((t) => (
+                  <div key={t.id} className="flex items-start justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      {t.note && <p className="text-sm truncate">{t.note}</p>}
+                      <p className="text-xs text-muted-foreground">
+                        {t.logger?.full_name ?? "—"} · {timeAgo(t.logged_at)}
+                      </p>
+                    </div>
+                    <span className="text-sm font-medium whitespace-nowrap">{formatDuration(t.minutes)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           {/* Photos */}
@@ -861,7 +1105,9 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                     )}
                   >
                     <div className={highlighted ? "text-sm" : "text-xs text-muted-foreground"}>
-                      {e.message ?? e.event_type}
+                      {e.message
+                        ? renderMessageWithMentions(e.message, e.payload?.mentioned_user_ids as string[] | undefined, mentionRoster)
+                        : e.event_type}
                     </div>
                     <div className={cn("text-xs mt-0.5", highlighted ? "opacity-70" : "text-muted-foreground")}>
                       {e.actor?.full_name ?? e.actor_label ?? "System"} · {timeAgo(e.created_at)}
@@ -874,11 +1120,13 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               )}
             </div>
             <div className="border-t p-3 space-y-2">
-              <Textarea
+              <MentionTextarea
                 value={comment}
-                onChange={(e) => setComment(e.target.value)}
+                onChange={setComment}
+                onMentionedIdsChange={setCommentMentionIds}
+                roster={composerMentionRoster}
                 rows={2}
-                placeholder="Write an update…"
+                placeholder="Write an update… (@ to tag anyone)"
                 maxLength={2000}
               />
               <div className="flex justify-end">
@@ -1070,6 +1318,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                   {assetDetail.recent_issues.map((ri) => (
                     <Link key={ri.id} href={`/facility/issues/${ri.id}`}
                       className="block text-xs hover:underline text-muted-foreground truncate"
+                      onClick={() => pushTrailEntry({ href: `/facility/issues/${ri.id}`, label: ri.title })}
                     >
                       <code className="font-mono">{ri.issue_number}</code> — {ri.title}
                       <span className="ml-1 opacity-60">({timeAgo(ri.created_at)})</span>
@@ -1218,6 +1467,46 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             <Button onClick={submitExtend} disabled={extending || !extendReason || !extendExplanation.trim() || !extendHours}>
               {extending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Extend
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ───── Log time dialog ─────────────────────────────────────────────── */}
+      <Dialog open={logTimeOpen} onOpenChange={setLogTimeOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Log time on {issue.issue_number}</DialogTitle>
+            <DialogDescription>How long did this take?</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Time spent</Label>
+              <Input
+                value={timeInput}
+                onChange={(e) => { setTimeInput(e.target.value); setTimeInputError(""); }}
+                placeholder="e.g. 45m, 1h 30m, 2d"
+                autoFocus
+                className="mt-1"
+              />
+              {timeInputError && <p className="text-xs text-destructive mt-1">{timeInputError}</p>}
+            </div>
+            <div>
+              <Label className="text-xs">Note (optional)</Label>
+              <Textarea
+                value={timeNote}
+                onChange={(e) => setTimeNote(e.target.value)}
+                placeholder="What did you work on?"
+                rows={2}
+                className="mt-1"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setLogTimeOpen(false)} disabled={loggingTime}>Cancel</Button>
+            <Button onClick={submitTimeLog} disabled={loggingTime}>
+              {loggingTime && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>

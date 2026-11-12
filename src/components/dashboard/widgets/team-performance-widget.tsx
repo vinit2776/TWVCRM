@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { Users, Activity, CheckSquare, Loader2, Inbox } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { USER_ROLE_LABELS } from "@/lib/constants";
@@ -74,9 +75,11 @@ export function TeamPerformanceWidget({ locationFilter }: TeamPerformanceWidgetP
             </div>
             <div className="max-h-72 overflow-y-auto -mx-1 px-1">
             {data.map((member) => (
-              <div
+              <Link
                 key={member.user_id}
+                href={`/team/${member.user_id}/activity`}
                 className="grid grid-cols-[1fr_auto_auto] gap-2 items-center rounded-md px-1 py-2 hover:bg-muted/40 transition-colors"
+                title="View full activity storyboard"
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{member.full_name}</p>
@@ -90,7 +93,7 @@ export function TeamPerformanceWidget({ locationFilter }: TeamPerformanceWidgetP
                 <span className="text-sm font-semibold text-green-600 text-right min-w-[2rem]">
                   {member.tasks_completed_this_week}
                 </span>
-              </div>
+              </Link>
             ))}
             </div>
           </div>

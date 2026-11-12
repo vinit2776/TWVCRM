@@ -1,10 +1,11 @@
+import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createBookingSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
-import { isContractOperational } from "@/lib/constants";
+import { isContractOperational, canOverrideBookingFacility } from "@/lib/constants";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const maxDuration = 30;
@@ -106,6 +107,7 @@ export async function GET(request: NextRequest) {
   const dateTo = searchParams.get("date_to");
   const bookingDate = searchParams.get("booking_date");
   const search = searchParams.get("search");
+  const facilityResolution = searchParams.get("facility_resolution");
 
   const includeHistory = searchParams.get("include_history") === "true";
   const offset = (page - 1) * limit;
@@ -114,7 +116,7 @@ export async function GET(request: NextRequest) {
   // "All Bookings" history section). The dashboard view fetches limit=200
   // with date_from=today and never paginates — skipping the count saves a
   // full table scan on every page load.
-  const needsCount = includeHistory || page > 1 || !!status || !!customerType || !!dateFrom || !!dateTo || !!search;
+  const needsCount = includeHistory || page > 1 || !!status || !!customerType || !!dateFrom || !!dateTo || !!search || !!facilityResolution;
 
   // Explicit column whitelist — `select("*")` was pulling 50+ booking columns
   // (legacy printer_*, payment tokens, refund metadata, original_*, etc.) on
@@ -131,6 +133,7 @@ export async function GET(request: NextRequest) {
     "payment_status", "payment_mode",
     "status", "check_in_at", "check_out_at",
     "no_show_detected_at", "refund_status",
+    "facility_resolution", "contract_facility_id_override", "facility_override_reason",
     "created_at",
   ].join(", ");
 
@@ -157,6 +160,7 @@ export async function GET(request: NextRequest) {
   if (contractId) query = query.eq("contract_id", contractId);
   if (leadId) query = query.eq("lead_id", leadId);
   if (bookingDate) query = query.eq("booking_date", bookingDate);
+  if (facilityResolution) query = query.eq("facility_resolution", facilityResolution);
   if (dateFrom) query = query.gte("booking_date", dateFrom);
   if (dateTo) query = query.lte("booking_date", dateTo);
   if (search?.trim()) {
@@ -211,6 +215,13 @@ export async function POST(request: NextRequest) {
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
   if (spaceErr || !space) return NextResponse.json({ error: "Space not found" }, { status: 404 });
   if (!space.is_active) return NextResponse.json({ error: "Space is not active" }, { status: 400 });
+
+  if (input.contract_facility_id_override && !canOverrideBookingFacility(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Your role can't mark a booking as a substitute allocation" },
+      { status: 403 }
+    );
+  }
 
   // 2. Availability check
   const dayOfWeek = DAYS_OF_WEEK[new Date(input.booking_date + "T00:00:00").getDay()];
@@ -405,7 +416,8 @@ export async function POST(request: NextRequest) {
   // portion. Keeps the receipt aligned with what's actually collected.
   const gstRate = 18;
   const gstAmount = parseFloat((totalAmount * gstRate / 100).toFixed(2));
-  const totalAmountWithGst = parseFloat((totalAmount + gstAmount).toFixed(2));
+  // Whole rupees: nobody pays paise, and the leftover would otherwise block "fully paid".
+  const totalAmountWithGst = roundToRupee(totalAmount + gstAmount);
 
   // 3b. Prepaid purchase validation (if caller passes prepaid_purchase_id in body)
   let prepaidPurchaseId: string | undefined;
@@ -454,156 +466,167 @@ export async function POST(request: NextRequest) {
   let leadId: string | undefined;
   let usageChargeId: string | undefined;
   let paymentStatus = "pending";
+  let facilityResolution: "auto_matched" | "override" | "unresolved" | null = null;
 
   if (input.customer_type === "contract_holder" || input.customer_type === "guest") {
     // Fetch contract
     const { data: contract, error: contractErr } = await supabase
       .from("contracts")
-      .select("id, lead_id, status, end_date")
+      .select("id, lead_id, status, start_date, end_date, terminated_at")
       .eq("id", input.contract_id!)
       .single();
 
     if (contractErr || !contract) {
       return NextResponse.json({ error: "Contract not found" }, { status: 404 });
     }
-    if (!isContractOperational(contract)) {
-      return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
+
+    // Exception: a terminated contract can still take a booking if it's being
+    // logged retroactively for a date the contract was actually active for
+    // (e.g. an old booking that never got entered before termination). The
+    // booking date must fall within [start_date, terminated_at] — this is not
+    // a general reopen of terminated contracts for new business.
+    const isBackdatedOnTerminated =
+      contract.status === "terminated" &&
+      !!contract.terminated_at &&
+      input.booking_date >= contract.start_date &&
+      input.booking_date <= contract.terminated_at.split("T")[0];
+
+    if (!isContractOperational(contract) && !isBackdatedOnTerminated) {
+      return NextResponse.json(
+        {
+          error:
+            contract.status === "terminated"
+              ? "This contract was terminated — the booking date must fall within the period the contract was active (before termination)."
+              : "Contract is not active",
+        },
+        { status: 400 }
+      );
     }
 
     contractId = contract.id;
     leadId = contract.lead_id;
 
     // ── Quota-aware usage charge ───────────────────────────────────────────
-    // For hourly bookings: look up contract_facilities with an hour-based unit.
-    // If a matching facility exists we check how many hours have already been
-    // consumed this calendar month and only charge the overage beyond the
-    // negotiated free quota.  Daily-space bookings bypass quota logic entirely
+    // For hourly bookings: look up contract_facilities with an hour-based
+    // unit, so we know whether this space is under conference-room-style
+    // monthly quota billing. Daily-space bookings bypass this entirely
     // (they're day-pass hot-desks, not conference hours).
+    //
+    // Pooled Monthly Usage (Model B): when a matching hour-based facility
+    // exists, NO charge is created here at booking time — actual usage
+    // isn't known yet. The checkout handler (maybePostPooledUsageCharge in
+    // bookings/[id]/route.ts) computes and posts the real charge once
+    // check_in_at/check_out_at are known, pooled against every other
+    // checked-out booking this month for the same contract+facility. A
+    // booking that's cancelled or never checked in correctly consumes no
+    // quota and generates no charge, which the old booked-duration-based
+    // model couldn't do (it charged/reserved quota the moment a booking was
+    // made, regardless of whether it ever happened).
     const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
     let contractFacilityForQuota: {
       id: string; name: string; unit: string;
       free_quota: number; cost_per_unit: number;
     } | null = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let quotaBookingsData: any[] | null = null;
 
-    if (!isDaily) {
-      // Fetch contract facilities and existing bookings in parallel
-      // (both only need contract.id — no dependency between them).
-      // If no hour-based facility exists, the bookings data is unused
-      // but the speculative fetch saves a round-trip when it IS needed.
-      const bDate = new Date(input.booking_date + "T00:00:00");
-      const yr = bDate.getFullYear();
-      const mo = bDate.getMonth(); // 0-based
-      const monthStart = new Date(yr, mo, 1).toISOString().split("T")[0];
-      const monthEnd   = new Date(yr, mo + 1, 0).toISOString().split("T")[0];
+    if (!isDaily && input.contract_facility_id_override) {
+      // Substitute allocation: staff explicitly chose which quota this
+      // booking counts against (e.g. cabin standing in for the occupied
+      // conference room) — skip name-matching entirely.
+      const { data: overrideFacility } = await supabase
+        .from("contract_facilities")
+        .select("id, name, unit, free_quota, cost_per_unit, contract_id")
+        .eq("id", input.contract_facility_id_override)
+        .single();
 
-      const [{ data: contractFacilities }, { data: ebData }] = await Promise.all([
-        supabase
-          .from("contract_facilities")
-          .select("id, name, unit, free_quota, cost_per_unit")
-          .eq("contract_id", contract.id)
-          .in("unit", HOUR_UNITS),
-        supabase
-          .from("bookings")
-          .select("duration_hours")
-          .eq("contract_id", contract.id)
-          .gte("booking_date", monthStart)
-          .lte("booking_date", monthEnd)
-          .in("status", ["confirmed", "checked_in", "checked_out"]),
-      ]);
-      quotaBookingsData = ebData;
+      if (!overrideFacility || overrideFacility.contract_id !== contract.id) {
+        return NextResponse.json(
+          { error: "Selected facility does not belong to this contract" },
+          { status: 400 }
+        );
+      }
+      if (!HOUR_UNITS.includes(overrideFacility.unit.toLowerCase())) {
+        return NextResponse.json(
+          { error: "Selected facility isn't hour-based — substitute allocation only applies to hourly quotas" },
+          { status: 400 }
+        );
+      }
+
+      contractFacilityForQuota = overrideFacility;
+      facilityResolution = "override";
+    } else if (!isDaily) {
+      const { data: contractFacilities } = await supabase
+        .from("contract_facilities")
+        .select("id, name, unit, free_quota, cost_per_unit")
+        .eq("contract_id", contract.id)
+        .in("unit", HOUR_UNITS);
 
       if (contractFacilities && contractFacilities.length > 0) {
         if (contractFacilities.length === 1) {
           contractFacilityForQuota = contractFacilities[0];
+          facilityResolution = "auto_matched";
         } else {
-          // Multiple hour-based facilities — name-match against the space being booked
+          // Multiple hour-based facilities — name-match against the space being booked.
+          // No fallback to "first row" when nothing matches: guessing which quota to
+          // draw against can silently drain the wrong one. Leave it unresolved instead
+          // and flag it for Accounts to sort out (see facility_resolution column).
           const spaceLower = space.name.toLowerCase();
-          contractFacilityForQuota =
-            contractFacilities.find(
-              (f: { name: string }) =>
-                spaceLower.includes(f.name.toLowerCase()) ||
-                f.name.toLowerCase().includes(spaceLower)
-            ) || contractFacilities[0]; // fallback to first
+          const matched = contractFacilities.find(
+            (f: { name: string }) =>
+              spaceLower.includes(f.name.toLowerCase()) ||
+              f.name.toLowerCase().includes(spaceLower)
+          );
+          if (matched) {
+            contractFacilityForQuota = matched;
+            facilityResolution = "auto_matched";
+          } else {
+            facilityResolution = "unresolved";
+          }
         }
       }
     }
 
-    let chargeDescription: string;
-    let chargeQty: number;
-    let chargeUnitPrice: number;
-    let chargeTotal: number;
-    let chargeStatus: string;
-
     if (contractFacilityForQuota) {
-      // Use the existing bookings fetched above (parallel with contract_facilities)
-      const hoursUsedSoFar = (quotaBookingsData || []).reduce(
-        (sum: number, b: { duration_hours: number | null }) =>
-          sum + Number(b.duration_hours || 0),
-        0
-      );
-
-      const freeQuota    = Number(contractFacilityForQuota.free_quota);
-      const freeRemaining = Math.max(0, freeQuota - hoursUsedSoFar);
-      const overageHours  = Math.max(0, durationHours - freeRemaining);
-      const overageRate   = Number(contractFacilityForQuota.cost_per_unit);
-      const facilityName  = contractFacilityForQuota.name;
-
-      if (overageHours > 0) {
-        chargeQty       = overageHours;
-        chargeUnitPrice = overageRate;
-        chargeTotal     = parseFloat((overageHours * overageRate).toFixed(2));
-        chargeStatus    = "pending";
-        chargeDescription =
-          `${facilityName} Overage: ${space.name} — ${overageHours}hr charged ` +
-          `(prior usage: ${hoursUsedSoFar}hr, quota: ${freeQuota}hr/mo)`;
-      } else {
-        chargeQty       = durationHours;
-        chargeUnitPrice = 0;
-        chargeTotal     = 0;
-        chargeStatus    = "waived";
-        chargeDescription =
-          `${facilityName}: ${space.name} — ${durationHours}hr ` +
-          `(within ${freeQuota}hr/mo quota, used ${hoursUsedSoFar + durationHours}hr total)`;
-      }
+      // Model B: settles at checkout, not here. See comment above.
+      paymentStatus = "pending";
     } else {
-      // No hour-based contract facility configured — charge the full booking rate
-      chargeDescription = `Conference Room: ${space.name} (${input.start_time}–${input.end_time}, ${input.booking_date})`;
-      chargeQty         = isDaily ? quantity : durationHours;
-      chargeUnitPrice   = effectiveRate;
-      chargeTotal       = totalAmount;
-      chargeStatus      = "pending";
+      // No hour-based contract facility configured — charge the full
+      // booking rate immediately, exactly as before. This path is
+      // unrelated to the conference-room quota/pooling system: day-pass
+      // bookings, or an hourly booking on a contract with no configured
+      // quota, were never part of that story and are untouched by the
+      // pooled-usage redesign.
+      const chargeDescription = `Conference Room: ${space.name} (${input.start_time}–${input.end_time}, ${input.booking_date})`;
+      const chargeQty         = isDaily ? quantity : durationHours;
+
+      // Note: booking_id is set AFTER the booking row is inserted further
+      // below (we only have the contract here). We'll patch booking_id
+      // onto this charge row once the booking has been created. Without
+      // that link, /billing can't trace from a booking back to its posted
+      // charge — which was confusing finance.
+      const { data: charge, error: chargeErr } = await supabase
+        .from("usage_charges")
+        .insert({
+          contract_id:          contract.id,
+          lead_id:              contract.lead_id,
+          description:          chargeDescription,
+          quantity:             chargeQty,
+          unit_price:           effectiveRate,
+          total:                totalAmount,
+          charge_date:          input.booking_date,
+          status:               "pending",
+          created_by:           dbUser.id,
+          contract_facility_id: null,
+        })
+        .select("id")
+        .single();
+
+      if (chargeErr) {
+        return NextResponse.json({ error: "Failed to create usage charge: " + chargeErr.message }, { status: 500 });
+      }
+
+      usageChargeId = charge?.id;
+      paymentStatus = "posted_to_bill";
     }
-
-    // Note: booking_id is set AFTER the booking row is inserted further below
-    // (we only have the contract here). We'll patch booking_id onto this
-    // charge row once the booking has been created. Without that link,
-    // /billing can't trace from a booking back to its posted charge — which
-    // was confusing finance.
-    const { data: charge, error: chargeErr } = await supabase
-      .from("usage_charges")
-      .insert({
-        contract_id:          contract.id,
-        lead_id:              contract.lead_id,
-        description:          chargeDescription,
-        quantity:             chargeQty,
-        unit_price:           chargeUnitPrice,
-        total:                chargeTotal,
-        charge_date:          input.booking_date,
-        status:               chargeStatus,
-        created_by:           dbUser.id,
-        contract_facility_id: contractFacilityForQuota?.id ?? null,
-      })
-      .select("id")
-      .single();
-
-    if (chargeErr) {
-      return NextResponse.json({ error: "Failed to create usage charge: " + chargeErr.message }, { status: 500 });
-    }
-
-    usageChargeId = charge?.id;
-    paymentStatus = "posted_to_bill";
   }
 
   if (input.customer_type === "walk_in") {
@@ -724,6 +747,9 @@ export async function POST(request: NextRequest) {
       loi_number: input.loi_number || null,
       access_provided_by: input.access_provided_by || null,
       num_attendees: input.num_attendees ? Number(input.num_attendees) : null,
+      contract_facility_id_override: input.contract_facility_id_override || null,
+      facility_override_reason: input.contract_facility_id_override ? input.facility_override_reason : null,
+      facility_resolution: facilityResolution,
       created_by: dbUser.id,
     })
     .select("*")
@@ -859,6 +885,24 @@ export async function POST(request: NextRequest) {
     performedBy: dbUser.id,
     changes: { record: { old: null, new: booking } },
   });
+
+  // 9a. Separate, dedicated audit entry for substitute allocation — kept
+  // apart from the generic "create" entry above so Accounts can find every
+  // override with one query (entity_type=booking, action=booking_facility_override)
+  // instead of grepping through full booking-create diffs.
+  if (input.contract_facility_id_override) {
+    logAudit(supabase, {
+      entityType: "booking",
+      entityId: booking.id,
+      action: "booking_facility_override",
+      performedBy: dbUser.id,
+      changes: {
+        space: { old: null, new: space.name },
+        contract_facility_id: { old: null, new: input.contract_facility_id_override },
+        reason: { old: null, new: input.facility_override_reason },
+      },
+    });
+  }
 
   // 11. Settle past dues
   if (input.settle_charge_ids && Array.isArray(input.settle_charge_ids) && input.settle_charge_ids.length > 0) {

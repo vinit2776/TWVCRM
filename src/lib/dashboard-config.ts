@@ -5,6 +5,7 @@ import type { UserRole } from "@/types";
 export type WidgetId =
   // Existing
   | "pending_actions"
+  | "next_steps"
   | "live_enquiries"
   | "kpi_stats"
   | "followups"
@@ -20,6 +21,10 @@ export type WidgetId =
   | "renewal_pipeline"
   | "cash_aging"
   | "revenue_pulse"
+  | "sales"
+  | "procurement_po"
+  | "facility"
+  | "meter_telemetry"
   | "occupancy"
   // New (Tier 2: operational signal)
   | "sla_risk"
@@ -31,11 +36,14 @@ export type WidgetId =
   | "aggregator_performance"
   | "procurement_spend"
   | "quota_overuse"
+  | "pending_overtime_charges"
   | "mtd_bookings"
   | "rent_revenue"
   | "network"
   | "week_in_review"
-  | "quick_charge";
+  | "quick_charge"
+  | "accounts_overview"
+  | "accounts_work_queue";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -46,6 +54,7 @@ export interface WidgetMeta {
 
 export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   pending_actions:        { id: "pending_actions",        title: "Pending Actions" },
+  next_steps:             { id: "next_steps",             title: "My next steps" },
   live_enquiries:         { id: "live_enquiries",         title: "Live Enquiries" },
   kpi_stats:              { id: "kpi_stats",              title: "Key Metrics" },
   followups:              { id: "followups",              title: "Follow-ups" },
@@ -60,6 +69,10 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   renewal_pipeline:       { id: "renewal_pipeline",       title: "Renewal Pipeline" },
   cash_aging:             { id: "cash_aging",             title: "Cash Aging" },
   revenue_pulse:          { id: "revenue_pulse",          title: "Revenue Pulse" },
+  sales:                  { id: "sales",                  title: "Sales" },
+  procurement_po:         { id: "procurement_po",         title: "Procurement POs" },
+  facility:               { id: "facility",               title: "Facilities" },
+  meter_telemetry:        { id: "meter_telemetry",        title: "Live Meter Telemetry" },
   occupancy:              { id: "occupancy",              title: "Occupancy" },
   sla_risk:               { id: "sla_risk",               title: "SLA Risk Board" },
   member_health:          { id: "member_health",          title: "Member Health" },
@@ -69,11 +82,14 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   aggregator_performance: { id: "aggregator_performance", title: "Aggregator Performance" },
   procurement_spend:      { id: "procurement_spend",      title: "Procurement Spend" },
   quota_overuse:          { id: "quota_overuse",          title: "Quota Overuse" },
+  pending_overtime_charges: { id: "pending_overtime_charges", title: "Pending Usage Charges" },
   mtd_bookings:           { id: "mtd_bookings",           title: "Bookings Value (MTD)" },
   rent_revenue:           { id: "rent_revenue",           title: "Rent vs Revenue" },
   network:                { id: "network",                title: "Network Status" },
   week_in_review:         { id: "week_in_review",         title: "Last 7 Days" },
   quick_charge:           { id: "quick_charge",           title: "Log a Charge" },
+  accounts_overview:      { id: "accounts_overview",      title: "Accounts Overview" },
+  accounts_work_queue:    { id: "accounts_work_queue",    title: "Accounts Work Queue" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
@@ -82,31 +98,17 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
 // insert its WidgetId into the role's array.
 
 export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
+  // Admin sees only these four management widgets. Every other role keeps its own set.
   admin: [
-    "pending_actions",
-    "live_enquiries",
-    "quick_charge",
-    "week_in_review",
-    "mtd_bookings",
-    "revenue_pulse",
-    "renewal_pipeline",
-    "cash_aging",
-    "rent_revenue",
-    "occupancy",
-    "sla_risk",
-    "lead_funnel",
-    "source_roi",
-    "schedule",
-    "member_health",
-    "aggregator_performance",
-    "quota_overuse",
-    "procurement_spend",
-    "team_performance",
-    "followups",
+    "sales",
+    "procurement_po",
+    "facility",
+    "meter_telemetry",
   ],
 
   manager: [
     "pending_actions",
+    "next_steps",
     "live_enquiries",
     "quick_charge",
     "kpi_stats",
@@ -117,6 +119,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "lead_funnel",
     "revenue_pulse",
     "sla_risk",
+    "pending_overtime_charges",
     "source_roi",
     "member_health",
     "team_performance",
@@ -125,6 +128,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
 
   sales_rep: [
     "live_enquiries",
+    "next_steps",
     "quick_charge",
     "schedule",
     "lead_funnel",
@@ -136,6 +140,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   floor_manager: [
     "quick_charge",
     "live_enquiries",
+    "next_steps",
     "schedule",
     "booking_summary",
     "mtd_bookings",
@@ -143,17 +148,16 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "followups",
   ],
 
-  // Accounts: finance/accounts team
+  // Accounts: finance/accounts team.
+  //
+  // Deliberately a single widget. The previous nine were inherited from the
+  // admin/sales set — MTD totals, ROI, renewal pipeline — none of which is
+  // accounts work. AccountsWorkQueueWidget is the desk itself: one colour-coded
+  // queue of everything waiting on accounts, most late first, each row opening
+  // the item. accounts_overview (queued counts plus outstanding/payables) is
+  // still a valid widget id, just no longer in this role's default set.
   accounts: [
-    "quick_charge",
-    "mtd_bookings",
-    "cash_aging",
-    "revenue_pulse",
-    "renewal_pipeline",
-    "quota_overuse",
-    "aggregator_performance",
-    "procurement_spend",
-    "financial_summary",
+    "accounts_work_queue",
   ],
 
   // FMS: Facility Manager
@@ -166,6 +170,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   // Office Administrator
   office_admin: [
     "schedule",
+    "next_steps",
     "mtd_bookings",
     "procurement_spend",
     "sla_risk",
@@ -173,17 +178,35 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "booking_summary",
   ],
 
+  // Coordinator: sales-rep view plus the day-to-day ops and procurement signals.
+  // No finance widgets, matching the role's no-accounts rule.
+  coordinator: [
+    "schedule",
+    "live_enquiries",
+    "quick_charge",
+    "mtd_bookings",
+    "booking_summary",
+    "procurement_summary",
+    "sla_risk",
+    "followups",
+  ],
+
   // IT Manager
   it_manager: [
+    "next_steps",
     "network",
     "sla_risk",
   ],
 
   // IT Technician
   it_technician: [
+    "next_steps",
     "network",
     "sla_risk",
   ],
+
+  // Enquiry Log Viewer — confined to /leads/enquiry-log; the dashboard is never shown
+  enquiry_viewer: [],
 
   // Management Viewer — read-only observer; sees high-level KPIs across all areas
   viewer: [

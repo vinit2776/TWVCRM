@@ -14,7 +14,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { unifiRequest, siteConfigFromLocation } from "@/lib/unifi";
+import { unifiRequest, siteConfigForLocationId, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 
 const ALLOWED_CMDS = ["block-sta", "unblock-sta", "kick-sta", "unauthorize-guest"] as const;
 type ClientCmd = typeof ALLOWED_CMDS[number];
@@ -59,11 +60,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let siteCfg = undefined;
-  if (location_id) {
-    const { data: loc } = await supabase
-      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", location_id).single();
-    if (loc) siteCfg = siteConfigFromLocation(loc);
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = await siteConfigForLocationId(location_id);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
   }
 
   const results = await Promise.all(

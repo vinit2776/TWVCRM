@@ -1,7 +1,7 @@
 "use client";
 
 import { use, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Edit2,
@@ -11,8 +11,12 @@ import {
   Building,
   MapPin,
   RefreshCw,
+  User,
+  Send,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
@@ -22,13 +26,19 @@ import { CaseStatusPipeline } from "@/components/cases/case-status-pipeline";
 import { CaseDocumentsTab } from "@/components/cases/case-documents-tab";
 import { CaseComplianceTab } from "@/components/cases/case-compliance-tab";
 import { CaseAgreementTab } from "@/components/cases/case-agreement-tab";
+import { SpecialClauseCard, SpecialClauseBadge } from "@/components/contracts/special-clause-card";
+import { specialClauseGate } from "@/lib/special-clause/gate";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { CaseLeaveAgreementTab } from "@/components/cases/case-leave-agreement-tab";
+import { CaseBillingTab } from "@/components/cases/case-billing-tab";
 import { CaseCommentsTab } from "@/components/cases/case-comments-tab";
 import { CaseEmailsTab } from "@/components/cases/case-emails-tab";
 import { CaseSubscriptionHistory } from "@/components/cases/case-subscription-history";
+import { CaseRenewalTab } from "@/components/cases/case-renewal-tab";
 import { CaseStatusTransitionDialog } from "@/components/cases/case-status-transition-dialog";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useCase } from "@/hooks/use-cases";
 import { toast } from "sonner";
 import {
@@ -37,6 +47,10 @@ import {
   CASE_STATUS_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { caseDisplayName } from "@/lib/case-workflow";
+import { caseExpiry } from "@/lib/case-expiry";
+import { StartRenewalDialog } from "@/components/cases/start-renewal-dialog";
+import { PartnerRenewalDialog } from "@/components/cases/partner-renewal-dialog";
 import {
   Dialog,
   DialogContent,
@@ -45,6 +59,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import Link from "next/link";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 export default function CaseDetailPage({
   params,
@@ -53,10 +69,22 @@ export default function CaseDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
+  // The Renewals desk links straight to the Renewal tab, and can open Start renewal.
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab") ?? "";
+  const initialTab = ["renewal", "agreement", "proposal"].includes(tabParam) ? tabParam : "overview";
   const { data: caseData, loading, refetch } = useCase(id);
+  const { user } = useCurrentUser();
+  // Special clause not yet approved: neither agreement may be sent, signed or stamped.
+  const clauseGate = specialClauseGate(caseData?.special_clause_status);
+  const caseAddress = [caseData?.client_address, caseData?.client_city, caseData?.client_state, caseData?.client_pincode].filter(Boolean).join(", ");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [startRenewalOpen, setStartRenewalOpen] = useState(searchParams.get("start_renewal") === "1");
+  const [partnerRenewalOpen, setPartnerRenewalOpen] = useState(searchParams.get("partner_renewal") === "1");
+  // Bumped after a renewal starts so the Renewal tab reloads its history.
+  const [renewalVersion, setRenewalVersion] = useState(0);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -98,10 +126,16 @@ export default function CaseDetailPage({
     );
   }
 
-  const aggregator = caseData.aggregator as { id: string; name: string; code: string } | null;
+  const aggregator = caseData.aggregator as { id: string; name: string; company_name?: string; code: string; billing_method?: string | null } | null;
+  // A postpaid partner is invoiced monthly, so its renewal is a confirmation, not a bill.
+  const isPostpaidPartner = !!aggregator && aggregator.billing_method === "postpaid";
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: caseDisplayName(caseData) }}
+        fallbackParent={{ href: "/cases", label: "Cases" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -110,22 +144,44 @@ export default function CaseDetailPage({
           </Button>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-2xl font-bold">{caseData.client_name}</h1>
+              <h1 className="text-2xl font-bold">{caseDisplayName(caseData)}</h1>
               <StatusBadge type="case_status" value={caseData.status} />
               <StatusBadge type="vo_purpose" value={caseData.purpose} />
+              <SpecialClauseBadge status={caseData.special_clause_status} />
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="font-mono">{caseData.case_number}</span>
-              {aggregator && (
+              {/* Contact person — secondary to the company in the heading, but
+                  still the name staff use on the phone, so keep it visible. */}
+              {caseData.client_company_name && caseData.client_name && (
                 <>
                   <span>|</span>
-                  <span>{aggregator.name}</span>
+                  <span>{caseData.client_name}</span>
                 </>
+              )}
+              <span>|</span>
+              {aggregator ? (
+                <Link
+                  href={`/aggregators/${aggregator.id}`}
+                  className="hover:text-foreground hover:underline"
+                  onClick={() => pushTrailEntry({ href: `/aggregators/${aggregator.id}`, label: aggregator.name })}
+                >
+                  {aggregator.company_name || aggregator.name}
+                </Link>
+              ) : (
+                <Badge variant="outline">Direct Client</Badge>
               )}
             </div>
           </div>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => router.push(`/cases/${caseData.id}/edit`)}
+          >
+            <Edit2 className="mr-2 h-4 w-4" />
+            Edit
+          </Button>
           <Button
             variant="outline"
             onClick={() => setStatusDialogOpen(true)}
@@ -143,16 +199,101 @@ export default function CaseDetailPage({
       </div>
 
       {/* Status Pipeline */}
-      <CaseStatusPipeline currentStatus={caseData.status} />
+      <CaseStatusPipeline
+        currentStatus={caseData.status}
+        proposalStatus={caseData.agreement?.status}
+        agreementStatus={caseData.ll_agreement?.status}
+        billingStatus={caseData.billing_statement}
+      />
 
-      <Tabs defaultValue="overview">
+      {/* Expiry band — only once the agreement is live. end_date was
+          backfilled for every case from start_date + tenure_months, so a
+          pre-active case carries a date for a term that never began and must
+          not be presented as an expiry. */}
+      {(() => {
+        const expiry = caseExpiry(caseData);
+        if (expiry.tone === "projected" || !caseData.end_date) return null;
+        const tone =
+          expiry.tone === "past" ? "border-red-300 bg-red-50 text-red-900"
+          : expiry.tone === "urgent" ? "border-red-300 bg-red-50/70 text-red-900"
+          : expiry.tone === "soon" ? "border-amber-300 bg-amber-50 text-amber-900"
+          : "border-border bg-muted/40";
+        return (
+          <div className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border-l-4 border px-4 py-3 ${tone}`}>
+            <div>
+              <p className="text-[0.65rem] font-medium uppercase tracking-wide opacity-70">
+                {expiry.tone === "past" ? "Agreement expired" : "Agreement expires"}
+              </p>
+              <p className="text-lg font-semibold tabular-nums">{formatDate(caseData.end_date)}</p>
+            </div>
+            <p className="text-sm">{expiry.relative}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => (isPostpaidPartner ? setPartnerRenewalOpen(true) : setStartRenewalOpen(true))}
+              className="bg-background"
+            >
+              <Send className="mr-1.5 h-3.5 w-3.5" />
+              {isPostpaidPartner ? "Confirm partner renewal" : "Start renewal"}
+            </Button>
+          </div>
+        );
+      })()}
+
+      <PartnerRenewalDialog
+        caseId={id}
+        open={partnerRenewalOpen}
+        onClose={() => setPartnerRenewalOpen(false)}
+        onDone={() => {
+          refetch();
+          setRenewalVersion((v) => v + 1);
+        }}
+      />
+
+      <StartRenewalDialog
+        caseId={id}
+        open={startRenewalOpen}
+        onClose={() => setStartRenewalOpen(false)}
+        onStarted={() => {
+          refetch();
+          setRenewalVersion((v) => v + 1);
+        }}
+      />
+
+      {clauseGate.blocked && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+          <Lock className="mt-0.5 h-4 w-4 text-amber-700 shrink-0" />
+          <div className="flex-1 text-sm text-amber-900">
+            <span className="font-medium">Sending is blocked.</span> {clauseGate.reason} It affects both the proposal and the Leave &amp; License agreement.
+          </div>
+        </div>
+      )}
+
+      <SpecialClauseCard
+        subject={{ kind: "case", id }}
+        status={caseData.special_clause_status}
+        locked={caseData.ll_agreement_status === "executed" || caseData.ll_agreement_status === "signing" || caseData.agreement_status === "executed"}
+        userRole={user?.role ?? null}
+        facts={{
+          "Customer": caseData.client_company_name || caseData.client_name || "",
+          "Service": VO_PURPOSE_LABELS[caseData.purpose as keyof typeof VO_PURPOSE_LABELS] ?? String(caseData.purpose ?? ""),
+          "Licence fee (before tax)": caseData.rate ? formatCurrency(caseData.rate) : "",
+          "Term (months)": String(caseData.tenure_months ?? ""),
+          "Security deposit": caseData.security_deposit ? formatCurrency(caseData.security_deposit) : "None",
+        }}
+        onChanged={refetch}
+      />
+
+      <Tabs defaultValue={initialTab}>
         <TabsList className="flex-wrap">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
+          <TabsTrigger value="renewal">Renewal</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="compliance">Compliance</TabsTrigger>
           <TabsTrigger value="proposal" className="flex items-center gap-1">Proposal <InfoTooltip text="Commercial offer with pricing and terms for this case" side="bottom" /></TabsTrigger>
           <TabsTrigger value="agreement" className="flex items-center gap-1">Agreement <InfoTooltip text="Formal Leave & License agreement with legal clauses and e-stamping" side="bottom" /></TabsTrigger>
+          <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="comments">Comments</TabsTrigger>
           <TabsTrigger value="emails">Emails</TabsTrigger>
         </TabsList>
@@ -175,6 +316,8 @@ export default function CaseDetailPage({
                     <InfoRow label="PAN" value={caseData.client_pan_number} />
                     <InfoRow label="GST" value={caseData.client_gst_number} />
                     <InfoRow label="CIN" value={caseData.client_cin_number} />
+                    <InfoRow icon={User} label="Represented By" value={caseData.represented_by_name} />
+                    <InfoRow label="Designation" value={caseData.represented_by_designation} />
                   </div>
                 </CardContent>
               </Card>
@@ -340,7 +483,16 @@ export default function CaseDetailPage({
         </TabsContent>
 
         <TabsContent value="subscriptions" className="mt-4">
-          <CaseSubscriptionHistory caseId={id} />
+          <CaseSubscriptionHistory caseId={id} onStartRenewal={() => setStartRenewalOpen(true)} />
+        </TabsContent>
+
+        <TabsContent value="renewal" className="mt-4">
+          <CaseRenewalTab
+            key={renewalVersion}
+            caseId={id}
+            onStartRenewal={() => setStartRenewalOpen(true)}
+            onChanged={refetch}
+          />
         </TabsContent>
 
         <TabsContent value="documents" className="mt-4">
@@ -366,11 +518,15 @@ export default function CaseDetailPage({
         </TabsContent>
 
         <TabsContent value="proposal" className="mt-4">
-          <CaseAgreementTab caseId={id} />
+          <CaseAgreementTab caseId={id} clauseGate={clauseGate} caseAddress={caseAddress} />
         </TabsContent>
 
         <TabsContent value="agreement" className="mt-4">
-          <CaseLeaveAgreementTab caseId={id} />
+          <CaseLeaveAgreementTab caseId={id} clauseGate={clauseGate} caseAddress={caseAddress} />
+        </TabsContent>
+
+        <TabsContent value="billing" className="mt-4">
+          <CaseBillingTab caseId={id} />
         </TabsContent>
 
         <TabsContent value="comments" className="mt-4">
@@ -411,7 +567,7 @@ export default function CaseDetailPage({
           <DialogHeader>
             <DialogTitle>Delete Case</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete case {caseData.case_number} for {caseData.client_name}?
+              Are you sure you want to delete case {caseData.case_number} for {caseDisplayName(caseData)}?
               This action cannot be undone.
             </DialogDescription>
           </DialogHeader>

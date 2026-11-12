@@ -28,7 +28,7 @@ async function runGenerators(
   const mode: GenMode = opts.mode ?? "both";
   const empty = (err?: string): GenerateResult => ({
     month: m, year: y, generated: 0, skipped: 0, errors: err ? [err] : [],
-    statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], supplemental: [], preview: [],
   });
 
   let rent: GenerateResult = empty();
@@ -68,10 +68,22 @@ export async function GET() {
  * POST — manual trigger from the Billing UI (admin/manager/accounts).
  *
  * Body:
- *   { month?, year?, contract_id? }   — run live: generate + finalize + dispatch
- *   { dry_run: true, month?, year? }  — PREVIEW only: compute amounts/GST and
- *                                        return what WOULD be generated, writing
- *                                        nothing and sending nothing.
+ *   { dry_run: false, contract_id, month?, year? }  — run live for ONE contract
+ *                                                       (generate + finalize + dispatch).
+ *   { dry_run: false, mode: "usage", month?, year? } — run live for the whole
+ *                                                       usage batch (drafts only,
+ *                                                       never dispatched from here).
+ *   { month?, year? }  (or anything else)             — PREVIEW only: compute
+ *                                                       amounts/GST and return what
+ *                                                       WOULD be generated, writing
+ *                                                       nothing and sending nothing.
+ *
+ * `dry_run` must be the exact boolean `false` to run live — every other value
+ * (missing, misspelled, `true`, `"false"`, etc.) is treated as a preview. A
+ * whole-batch live RENT run is refused outright; that path is
+ * /api/billing/dispatch-run, which queues one job per contract with per-job
+ * visibility and retry instead of dispatching everything synchronously in one
+ * request. See the inline comment below for why.
  *
  * Live runs send the internal summary email (notifyBillingRun). Dry runs do not.
  */
@@ -90,9 +102,36 @@ export async function POST(request: NextRequest) {
   const month      = body.month      ? parseInt(String(body.month)) : undefined;
   const year       = body.year       ? parseInt(String(body.year))  : undefined;
   const contractId = body.contract_id || undefined;
-  const dryRun     = body.dry_run === true;
-  const modeIn     = String(body.mode || "both").toLowerCase();
-  const mode: GenMode = (modeIn === "rent" || modeIn === "usage") ? modeIn : "both";
+  // Fail-safe default: only an explicit `dry_run: false` runs live. A missing,
+  // misspelled (e.g. `dryRun`), or truthy-but-wrong-shaped flag falls back to
+  // a preview instead of silently dispatching real proformas — see the
+  // 2026-09-01 incident where a hand-typed `dryRun` (camelCase) key was
+  // ignored by `=== true` and defaulted straight into a live send.
+  const dryRun     = body.dry_run !== false;
+  const modeIn     = String(body.mode || "rent").toLowerCase();
+  // Usage is billed from Billing → Usage Charges → Unbilled, grouped by
+  // contract and month (src/lib/usage-billing.ts). Month-drafts from
+  // generateUsageStatements would lock charges into drafts that list never
+  // shows, so this endpoint no longer runs the usage generator in any mode.
+  if (modeIn === "usage") {
+    return NextResponse.json({
+      error: "Usage drafts are no longer generated here. Send usage invoices from Billing → Usage Charges → Unbilled.",
+    }, { status: 410 });
+  }
+  const mode: GenMode = "rent";
+
+  // Whole-batch live rent sending is disabled on this synchronous endpoint.
+  // It dispatches real invoices to every eligible customer in one request with
+  // no per-job visibility, retry, or abort — that's what caused the incident
+  // above. The supported live-batch path is /api/billing/dispatch-run, which
+  // queues one job per contract. A live run here is only allowed when scoped
+  // to a single contract_id (the "bill this contract now" action — see
+  // contract-invoices-section.tsx).
+  if (!dryRun && !contractId) {
+    return NextResponse.json({
+      error: "Live batch rent generation is disabled on this endpoint — use /api/billing/dispatch-run instead, or pass dry_run: true to preview here.",
+    }, { status: 400 });
+  }
 
   const admin = createAdminClient();
   const opts  = { month, year, contractId, dryRun, mode };
@@ -108,7 +147,7 @@ export async function POST(request: NextRequest) {
     dry_run: dryRun,
     month: rent.month,
     year: rent.year,
-    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, quarterly_skipped: rent.quarterlySkipped, superseded: rent.superseded, already_sent: rent.alreadySent, preview: rent.preview },
+    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, not_delivered: rent.notDelivered, cycle_skipped: rent.cycleSkipped, superseded: rent.superseded, already_sent: rent.alreadySent, preview: rent.preview },
     usage_statements: { generated: usage.generated, skipped: usage.skipped, superseded: usage.superseded, already_sent: usage.alreadySent, preview: usage.preview },
     errors: [...rent.errors, ...usage.errors].length > 0 ? [...rent.errors, ...usage.errors] : undefined,
     statement_ids: [...rent.statementIds, ...usage.statementIds],
@@ -143,10 +182,17 @@ async function notifyBillingRun(
       <br/><br/>Update the lead record to enable auto-send next month.
     </div>` : "";
 
-  const quarterlyHtml = rent.quarterlySkipped.length > 0 ? `
+  const notDeliveredHtml = rent.notDelivered.length > 0 ? `
+    <div style="background:#f8d7da;border:1px solid #f5c2c7;border-radius:6px;padding:12px 16px;margin:12px 0;font-size:13px;color:#842029;">
+      ⚠️ ${rent.notDelivered.length} proforma${rent.notDelivered.length > 1 ? "s were" : " was"} raised but never reached the client:
+      <strong>${rent.notDelivered.join(", ")}</strong>
+      <br/><br/>These are finalized, so no later billing run will retry them. Resend each one from its statement.
+    </div>` : "";
+
+  const cycleSkippedHtml = rent.cycleSkipped.length > 0 ? `
     <p style="color:#666;font-size:12px;">
-      ${rent.quarterlySkipped.length} quarterly contract${rent.quarterlySkipped.length > 1 ? "s" : ""} not billed this cycle (expected — not their billing month):
-      ${rent.quarterlySkipped.join(", ")}
+      ${rent.cycleSkipped.length} advance-billed contract${rent.cycleSkipped.length > 1 ? "s" : ""} not billed this run (expected — quarterly/half-yearly/yearly contracts bill only in their anchor month):
+      ${rent.cycleSkipped.join(", ")}
     </p>` : "";
 
   const errorHtml = [...rent.errors, ...usage.errors].length > 0 ? `
@@ -173,10 +219,11 @@ async function notifyBillingRun(
         </table>
         ${noContactHtml}
         ${errorHtml}
-        ${quarterlyHtml}
+        ${notDeliveredHtml}
+        ${cycleSkippedHtml}
         ${usage.generated > 0 ? `
         <div style="text-align:center;margin:24px 0;">
-          <a href="${appUrl}/billing?tab=statements&type=usage" style="background:#015E65;color:white;padding:10px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;font-size:14px;">Review Usage Statements</a>
+          <a href="${appUrl}/billing?tab=usage" style="background:#015E65;color:white;padding:10px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;font-size:14px;">Review Usage Statements</a>
         </div>` : ""}
       </div>
       <div style="background:#015E65;padding:12px 32px;text-align:center;">

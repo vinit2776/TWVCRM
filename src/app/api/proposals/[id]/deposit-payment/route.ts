@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { logAudit, diffChanges } from "@/lib/audit";
+import { canRecordPayments } from "@/lib/constants";
 
 /**
  * POST /api/proposals/[id]/deposit-payment
@@ -9,7 +12,7 @@ import { COMPANY_BANK_DETAILS } from "@/lib/constants";
  * Accepts multipart/form-data with:
  *   - amount       (required) numeric string
  *   - reference    (optional) UTR / transaction ID
- *   - notes        (optional) free text
+ *   - notes        (required, ≥10 chars) internal note for accounts — never shown to the customer
  *   - payment_proof (optional) image or PDF file — uploaded to crm-documents storage
  */
 export async function POST(
@@ -28,9 +31,11 @@ export async function POST(
     .eq("auth_id", user.id)
     .single();
 
-  const ALLOWED_ROLES = ["admin", "manager", "accounts"];
-  if (!actor || !ALLOWED_ROLES.includes(actor.role)) {
-    return NextResponse.json({ error: "Not authorised to record manual payments" }, { status: 403 });
+  if (!actor || !canRecordPayments(actor.role)) {
+    return NextResponse.json(
+      { error: "Only admin or accounts can record a deposit. Use \"Report paid\" to tell accounts about one." },
+      { status: 403 },
+    );
   }
 
   // Parse multipart form
@@ -45,6 +50,9 @@ export async function POST(
   const amount = parseFloat(amountRaw || "");
   if (!amountRaw || isNaN(amount) || amount <= 0) {
     return NextResponse.json({ error: "Valid payment amount is required" }, { status: 400 });
+  }
+  if (!notes || notes.length < 10) {
+    return NextResponse.json({ error: "Add an internal note (at least 10 characters) so accounts can book this correctly" }, { status: 400 });
   }
 
   // Fetch proposal + lead
@@ -64,8 +72,13 @@ export async function POST(
     return NextResponse.json({ error: "No deposit required for this proposal" }, { status: 400 });
   }
 
-  // Shortfall tolerance check — expected deposit amount (pre-GST), net of any credit applied
-  const expectedAmount = Math.max(0, Number(proposal.security_deposit_amount || 0) - Number(proposal.deposit_credit_amount || 0));
+  // Collected in parts: record against the specific part, never the whole deposit.
+  if (await hasLiveInstalments(createAdminClient(), id)) {
+    return NextResponse.json({ error: "This deposit is being collected in parts — record the payment against the part it belongs to." }, { status: 409 });
+  }
+
+  // Shortfall tolerance check — expected deposit amount (pre-GST), net of any credit applied and exception
+  const expectedAmount = Math.max(0, Number(proposal.security_deposit_amount || 0) + Number(proposal.deposit_exception_amount || 0) - Number(proposal.deposit_credit_amount || 0));
   let shortfallApprovedById: string | null = null;
 
   if (expectedAmount > 0 && amount < expectedAmount) {
@@ -133,23 +146,34 @@ export async function POST(
 
   // Update proposal
   const receivedAt = new Date().toISOString();
+  const depositUpdate = {
+    deposit_payment_status: "paid",
+    deposit_payment_amount: amount,
+    deposit_payment_reference: reference,
+    deposit_payment_medium: paymentMedium,
+    deposit_payment_received_at: receivedAt,
+    deposit_payment_screenshot_url: screenshotUrl,
+    deposit_internal_notes: notes,
+    deposit_payment_recorded_by: actor.id,
+    ...(shortfallApprovedById ? { deposit_shortfall_approved_by: shortfallApprovedById } : {}),
+  };
   const { error: updateError } = await supabase
     .from("proposals")
-    .update({
-      deposit_payment_status: "paid",
-      deposit_payment_amount: amount,
-      deposit_payment_reference: reference,
-      deposit_payment_medium: paymentMedium,
-      deposit_payment_received_at: receivedAt,
-      deposit_payment_screenshot_url: screenshotUrl,
-      ...(shortfallApprovedById ? { deposit_shortfall_approved_by: shortfallApprovedById } : {}),
-    })
+    .update(depositUpdate)
     .eq("id", id);
 
   if (updateError) {
     console.error("[deposit-payment] update error:", updateError);
     return NextResponse.json({ error: "Failed to update proposal" }, { status: 500 });
   }
+
+  logAudit(supabase, {
+    entityType: "proposal",
+    entityId: id,
+    action: "update",
+    performedBy: actor.id,
+    changes: diffChanges(proposal, depositUpdate),
+  }).catch(() => {});
 
   // Send confirmation email to customer
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

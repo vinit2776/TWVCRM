@@ -3,6 +3,9 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
+// Razorpay link/payment details never change once issued; avoid re-fetching on every page load.
+const razorpayDetailCache = new Map<string, { name: string | null; ref: string | null }>();
+
 /**
  * GET /api/finance/gateway-activity
  *
@@ -108,7 +111,7 @@ export async function GET(request: NextRequest) {
       ? adminSupabase.from("bookings").select("id, booking_number, leads(first_name, last_name, company)").in("id", manualBookingIds)
       : Promise.resolve({ data: [] }),
     manualStatementIds.length
-      ? adminSupabase.from("billing_statements").select("id, statement_number, contracts(contract_number, leads(first_name, last_name, company))").in("id", manualStatementIds)
+      ? adminSupabase.from("billing_statements").select("id, statement_number, leads(first_name, last_name, company), contracts!billing_statements_contract_id_fkey(id, contract_number, leads(first_name, last_name, company))").in("id", manualStatementIds)
       : Promise.resolve({ data: [] }),
   ]);
 
@@ -162,7 +165,7 @@ export async function GET(request: NextRequest) {
         entity_ref: s?.statement_number ?? null,
         entity_label: s?.statement_number ? `Invoice ${s.statement_number}` : "Invoice",
         entity_href: contract ? `/billing?contract=${contract.id}` : null,
-        customer_name: leadName(getLead(contract)),
+        customer_name: leadName(getLead(contract) ?? getLead(s)),
         notes: ml.notes, linked_at: ml.linked_at, linked_by_name: ml.linked_by_name,
       });
     }
@@ -199,7 +202,8 @@ export async function GET(request: NextRequest) {
       billing_statements!inner(
         id,
         statement_number,
-        contracts(
+        leads(first_name, last_name, company),
+        contracts!billing_statements_contract_id_fkey(
           id,
           contract_number,
           leads(first_name, last_name, company)
@@ -256,9 +260,11 @@ export async function GET(request: NextRequest) {
     const contract = statement?.contracts
       ? (Array.isArray(statement.contracts) ? statement.contracts[0] : statement.contracts)
       : null;
-    const lead = contract?.leads
-      ? (Array.isArray(contract.leads) ? contract.leads[0] : contract.leads)
-      : null;
+    // Contract-less statements (usage / ad-hoc) carry the customer on the
+    // statement's own lead_id instead.
+    const leadOf = (o: { leads?: unknown } | null | undefined) =>
+      o?.leads ? (Array.isArray(o.leads) ? o.leads[0] : o.leads) : null;
+    const lead = leadOf(contract) ?? leadOf(statement);
     const enriched: EnrichedCRM = {
       entity_type:   "billing_statement",
       entity_id:     statement?.id ?? null,
@@ -281,21 +287,160 @@ export async function GET(request: NextRequest) {
     .limit(1)
     .maybeSingle();
 
+  // ── 6b. Payment-link fallback ─────────────────────────────────────────────
+  // Steps 3–4 only match payments the webhook wrote a booking_payments /
+  // billing_payments row for. Many legitimate payments never get one:
+  // proposal pro-rata + deposits, deposit top-ups, prepaid purchases and
+  // ad-hoc invoices don't create those rows at all, and invoice payments the
+  // webhook skipped (voided / already-paid statement, or a missed delivery)
+  // have none either. The webhook log still maps payment → payment link, and
+  // every link is stored on the entity it was issued for, so resolve those
+  // here instead of showing "—".
+  type LinkResolved = {
+    entity_type: "billing_statement" | "booking" | "proposal" | "deposit_topup" | "prepaid_purchase" | "adhoc_invoice";
+    entity_id: string | null; entity_ref: string | null; entity_label: string;
+    entity_href: string | null; customer_name: string;
+  };
+  const linkByPaymentId = new Map<string, LinkResolved>();
+
+  const unresolved = cache
+    .filter((c) =>
+      !crmByPaymentId.has(c.razorpay_payment_id) &&
+      !(c.order_id && crmByOrderId.has(c.order_id)) &&
+      !manualEnrichedMap.has(c.razorpay_payment_id))
+    .map((c) => c.razorpay_payment_id);
+
+  if (unresolved.length) {
+    const { data: logRows, error: logErr } = await adminSupabase
+      .from("razorpay_webhook_log")
+      .select("razorpay_payment_id, razorpay_payment_link_id")
+      .in("razorpay_payment_id", unresolved)
+      .not("razorpay_payment_link_id", "is", null);
+    if (logErr) console.error("[gateway-activity] webhook_log lookup error:", logErr);
+
+    const linkIdByPaymentId = new Map<string, string>();
+    for (const r of logRows ?? []) {
+      if (r.razorpay_payment_id && r.razorpay_payment_link_id) {
+        linkIdByPaymentId.set(r.razorpay_payment_id, r.razorpay_payment_link_id);
+      }
+    }
+    const linkIds = [...new Set(linkIdByPaymentId.values())];
+
+    if (linkIds.length) {
+      const leadsEmbed = "leads(first_name, last_name, company)";
+      const [stmts, books, props, depProps, prepaid, topups, adhoc] = await Promise.all([
+        adminSupabase.from("billing_statements")
+          .select(`id, statement_number, razorpay_payment_link_id, ${leadsEmbed}, contracts!billing_statements_contract_id_fkey(id, contract_number, ${leadsEmbed})`)
+          .in("razorpay_payment_link_id", linkIds),
+        adminSupabase.from("bookings")
+          .select(`id, booking_number, razorpay_payment_link_id, ${leadsEmbed}`)
+          .in("razorpay_payment_link_id", linkIds),
+        adminSupabase.from("proposals")
+          .select(`id, proposal_number, razorpay_payment_link_id, ${leadsEmbed}`)
+          .in("razorpay_payment_link_id", linkIds),
+        adminSupabase.from("proposals")
+          .select(`id, proposal_number, deposit_razorpay_link_id, ${leadsEmbed}`)
+          .in("deposit_razorpay_link_id", linkIds),
+        adminSupabase.from("prepaid_purchases")
+          .select(`id, razorpay_payment_link_id, ${leadsEmbed}`)
+          .in("razorpay_payment_link_id", linkIds),
+        adminSupabase.from("deposit_topups")
+          .select(`id, razorpay_payment_link_id, contracts!deposit_topups_contract_id_fkey(id, contract_number, ${leadsEmbed})`)
+          .in("razorpay_payment_link_id", linkIds),
+        adminSupabase.from("proforma_invoices")
+          .select(`id, invoice_number, razorpay_link_id, ${leadsEmbed}`)
+          .in("razorpay_link_id", linkIds),
+      ]);
+      for (const [name, res] of Object.entries({ stmts, books, props, depProps, prepaid, topups, adhoc })) {
+        if (res.error) console.error(`[gateway-activity] link fallback (${name}) error:`, res.error);
+      }
+
+      const byLink = new Map<string, LinkResolved>();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const one = (v: any) => (Array.isArray(v) ? v[0] : v) ?? null;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const s of (stmts.data ?? []) as any[]) {
+        const c = one(s.contracts);
+        byLink.set(s.razorpay_payment_link_id, {
+          entity_type: "billing_statement", entity_id: s.id, entity_ref: s.statement_number ?? null,
+          entity_label: s.statement_number ? `Invoice ${s.statement_number}` : "Invoice",
+          entity_href: c?.id ? `/billing?contract=${c.id}` : null,
+          customer_name: leadName(getLead(c) ?? getLead(s)),
+        });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const b of (books.data ?? []) as any[]) {
+        byLink.set(b.razorpay_payment_link_id, {
+          entity_type: "booking", entity_id: b.id, entity_ref: b.booking_number ?? null,
+          entity_label: b.booking_number ? `Booking ${b.booking_number}` : "Booking",
+          entity_href: `/bookings/${b.id}`, customer_name: leadName(getLead(b)),
+        });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const p of (props.data ?? []) as any[]) {
+        byLink.set(p.razorpay_payment_link_id, {
+          entity_type: "proposal", entity_id: p.id, entity_ref: p.proposal_number ?? null,
+          entity_label: `Proposal ${p.proposal_number ?? ""} (pro-rata)`.replace("  ", " "),
+          entity_href: `/proposals/${p.id}`, customer_name: leadName(getLead(p)),
+        });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const p of (depProps.data ?? []) as any[]) {
+        byLink.set(p.deposit_razorpay_link_id, {
+          entity_type: "proposal", entity_id: p.id, entity_ref: p.proposal_number ?? null,
+          entity_label: `Proposal ${p.proposal_number ?? ""} (deposit)`.replace("  ", " "),
+          entity_href: `/proposals/${p.id}`, customer_name: leadName(getLead(p)),
+        });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const p of (prepaid.data ?? []) as any[]) {
+        byLink.set(p.razorpay_payment_link_id, {
+          entity_type: "prepaid_purchase", entity_id: p.id, entity_ref: null,
+          entity_label: "Prepaid purchase", entity_href: null, customer_name: leadName(getLead(p)),
+        });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const t of (topups.data ?? []) as any[]) {
+        const c = one(t.contracts);
+        byLink.set(t.razorpay_payment_link_id, {
+          entity_type: "deposit_topup", entity_id: t.id, entity_ref: c?.contract_number ?? null,
+          entity_label: c?.contract_number ? `Deposit top-up ${c.contract_number}` : "Deposit top-up",
+          entity_href: c?.id ? `/contracts/${c.id}` : null, customer_name: leadName(getLead(c)),
+        });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const i of (adhoc.data ?? []) as any[]) {
+        byLink.set(i.razorpay_link_id, {
+          entity_type: "adhoc_invoice", entity_id: i.id, entity_ref: i.invoice_number ?? null,
+          entity_label: i.invoice_number ? `Invoice ${i.invoice_number}` : "Invoice",
+          entity_href: null, customer_name: leadName(getLead(i)),
+        });
+      }
+
+      for (const [pid, linkId] of linkIdByPaymentId) {
+        const hit = byLink.get(linkId);
+        if (hit) linkByPaymentId.set(pid, hit);
+      }
+    }
+  }
+
   // ── 7. Merge cache rows with CRM enrichment ───────────────────────────────
   let allRows = cache.map((c) => {
     const crm = crmByPaymentId.get(c.razorpay_payment_id)
               ?? (c.order_id ? crmByOrderId.get(c.order_id) : null)
               ?? null;
     const manual = crm ? null : (manualEnrichedMap.get(c.razorpay_payment_id) ?? null);
+    const viaLink = crm || manual ? null : (linkByPaymentId.get(c.razorpay_payment_id) ?? null);
 
     return {
       id:                   c.razorpay_payment_id,
-      entity_type:          crm?.entity_type ?? manual?.entity_type ?? ("unmatched" as const),
-      entity_id:            crm?.entity_id   ?? manual?.entity_id   ?? null,
-      entity_ref:           crm?.entity_ref  ?? manual?.entity_ref  ?? null,
-      entity_label:         crm?.entity_label ?? manual?.entity_label ?? "Razorpay (not in CRM)",
-      entity_href:          crm?.entity_href  ?? manual?.entity_href  ?? null,
-      customer_name:        crm?.customer_name ?? manual?.customer_name ?? "—",
+      entity_type:          crm?.entity_type ?? manual?.entity_type ?? viaLink?.entity_type ?? ("unmatched" as const),
+      entity_id:            crm?.entity_id   ?? manual?.entity_id   ?? viaLink?.entity_id ?? null,
+      entity_ref:           crm?.entity_ref  ?? manual?.entity_ref  ?? viaLink?.entity_ref ?? null,
+      entity_label:         crm?.entity_label ?? manual?.entity_label ?? viaLink?.entity_label ?? "Razorpay (not in CRM)",
+      entity_href:          crm?.entity_href  ?? manual?.entity_href  ?? viaLink?.entity_href ?? null,
+      customer_name:        crm?.customer_name ?? manual?.customer_name ?? viaLink?.customer_name ?? "—",
       amount:               crm?.crm_amount ?? (c.amount != null ? Number(c.amount) : 0),
       razorpay_payment_id:  c.razorpay_payment_id,
       payment_reference:    c.order_id ?? null,
@@ -308,13 +453,66 @@ export async function GET(request: NextRequest) {
       fee:                  c.fee != null ? Number(c.fee) : null,
       tax:                  c.tax != null ? Number(c.tax) : null,
       payment_method:       c.payment_method ?? null,
-      in_crm:               crm !== null,
+      in_crm:               crm !== null || viaLink !== null,
       manually_linked:      manual !== null,
+      gateway_reference:    null as string | null,
       link_notes:           manual?.notes ?? null,
       link_linked_at:       manual?.linked_at ?? null,
       link_linked_by:       manual?.linked_by_name ?? null,
     };
   });
+
+  // ── 7b. Statements with no contract/lead of their own ────────────────────
+  // Virtual-office renewals hang off a case (client_* columns) and
+  // proposal-originated invoices off a proposal. Neither is reachable via
+  // contract → lead, so those rows read "—" even though the invoice matched.
+  // Separate lookups rather than embeds: billing_statements already has
+  // multiple FKs into other tables, and an ambiguous embed fails the whole
+  // query (see 00508).
+  const blankStatementIds = allRows
+    .filter((r) => r.entity_type === "billing_statement" && r.customer_name === "—" && r.entity_id)
+    .map((r) => r.entity_id as string);
+  if (blankStatementIds.length) {
+    const { data: stmtRefs, error: stmtRefErr } = await adminSupabase
+      .from("billing_statements")
+      .select("id, case_id, proposal_id")
+      .in("id", blankStatementIds);
+    if (stmtRefErr) console.error("[gateway-activity] statement case/proposal lookup error:", stmtRefErr);
+
+    const caseIds     = [...new Set((stmtRefs ?? []).map((r) => r.case_id).filter(Boolean))] as string[];
+    const proposalIds = [...new Set((stmtRefs ?? []).map((r) => r.proposal_id).filter(Boolean))] as string[];
+    const [{ data: caseRows }, { data: proposalRows }] = await Promise.all([
+      caseIds.length
+        ? adminSupabase.from("cases").select("id, client_name, client_company_name").in("id", caseIds)
+        : Promise.resolve({ data: [] }),
+      proposalIds.length
+        ? adminSupabase.from("proposals").select("id, leads(first_name, last_name, company)").in("id", proposalIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const caseName = new Map<string, string>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const c of (caseRows ?? []) as any[]) {
+      const n = (c.client_company_name || c.client_name || "").trim();
+      if (n) caseName.set(c.id, n);
+    }
+    const proposalName = new Map<string, string>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const p of (proposalRows ?? []) as any[]) {
+      const n = leadName(getLead(p));
+      if (n !== "—") proposalName.set(p.id, n);
+    }
+    const nameByStatement = new Map<string, string>();
+    for (const r of stmtRefs ?? []) {
+      const n = (r.case_id && caseName.get(r.case_id)) || (r.proposal_id && proposalName.get(r.proposal_id));
+      if (n) nameByStatement.set(r.id, n);
+    }
+    allRows = allRows.map((r) =>
+      r.entity_type === "billing_statement" && r.customer_name === "—" && r.entity_id && nameByStatement.has(r.entity_id)
+        ? { ...r, customer_name: nameByStatement.get(r.entity_id) as string }
+        : r,
+    );
+  }
 
   // Apply date filter in JS — rows with NULL payment_created_at always pass through
   const fromMs = new Date(fromDate + "T00:00:00Z").getTime();
@@ -324,6 +522,63 @@ export async function GET(request: NextRequest) {
     const t = new Date(r.created_at).getTime();
     return t >= fromMs && t <= toMs;
   });
+
+  // ── 7c. Razorpay-side details for rows that still have no name ────────────
+  // Every payment link is created with a reference_id / description and the
+  // customer's details, so Razorpay itself can say who a payment was for even
+  // when nothing in the CRM points back (hand-made statements, imports).
+  // Read-only GETs, only for the few rows still blank, cached per process.
+  const stillBlank = allRows.filter((r) => r.customer_name === "—").slice(0, 25);
+  if (stillBlank.length) {
+    const { data: rzpSettings } = await adminSupabase
+      .from("app_settings")
+      .select("key, value")
+      .in("key", ["razorpay_key_id", "razorpay_key_secret"]);
+    const rzp: Record<string, string> = {};
+    (rzpSettings ?? []).forEach((r) => { rzp[r.key] = r.value; });
+
+    if (rzp.razorpay_key_id && rzp.razorpay_key_secret) {
+      const auth = Buffer.from(`${rzp.razorpay_key_id}:${rzp.razorpay_key_secret}`).toString("base64");
+      const { data: logRows } = await adminSupabase
+        .from("razorpay_webhook_log")
+        .select("razorpay_payment_id, razorpay_payment_link_id")
+        .in("razorpay_payment_id", stillBlank.map((r) => r.id))
+        .not("razorpay_payment_link_id", "is", null);
+      const linkOf = new Map<string, string>();
+      for (const l of logRows ?? []) {
+        if (l.razorpay_payment_id && l.razorpay_payment_link_id) linkOf.set(l.razorpay_payment_id, l.razorpay_payment_link_id);
+      }
+
+      const details = await Promise.all(stillBlank.map(async (r) => {
+        const linkId = linkOf.get(r.id);
+        const url = linkId
+          ? `https://api.razorpay.com/v1/payment_links/${linkId}`
+          : `https://api.razorpay.com/v1/payments/${r.id}`;
+        const cached = razorpayDetailCache.get(url);
+        if (cached) return { id: r.id, ...cached };
+        try {
+          const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` }, signal: AbortSignal.timeout(8000) });
+          if (!res.ok) return { id: r.id, name: null, ref: null };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const d = (await res.json()) as any;
+          const name = (d.customer?.name || d.customer?.email || d.email || d.customer?.contact || d.contact || "").trim() || null;
+          const ref = [d.reference_id, d.description].filter(Boolean).join(" · ") || null;
+          razorpayDetailCache.set(url, { name, ref });
+          return { id: r.id, name, ref };
+        } catch (err) {
+          console.error("[gateway-activity] razorpay detail fetch failed:", err instanceof Error ? err.message : err);
+          return { id: r.id, name: null, ref: null };
+        }
+      }));
+      const byId = new Map(details.map((d) => [d.id, d]));
+      allRows = allRows.map((r) => {
+        const d = byId.get(r.id);
+        return d && (d.name || d.ref)
+          ? { ...r, customer_name: d.name ?? r.customer_name, gateway_reference: d.ref }
+          : r;
+      });
+    }
+  }
 
   // Filter by entity type
   if (entityTypeFilter && entityTypeFilter !== "unmatched") {

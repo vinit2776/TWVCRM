@@ -35,7 +35,7 @@ CREATE TYPE agg_invoice_status AS ENUM ('draft', 'sent', 'paid', 'overdue', 'can
 -- ==========================================
 
 CREATE TABLE aggregators (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   name VARCHAR(255) NOT NULL,
   code VARCHAR(50) UNIQUE,
   status aggregator_status DEFAULT 'active',
@@ -93,7 +93,7 @@ CREATE TRIGGER aggregators_code BEFORE INSERT ON aggregators
 -- ==========================================
 
 CREATE TABLE aggregator_contacts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   aggregator_id UUID NOT NULL REFERENCES aggregators(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
   email VARCHAR(255),
@@ -114,7 +114,7 @@ CREATE INDEX idx_agg_contacts_email ON aggregator_contacts(email);
 -- ==========================================
 
 CREATE TABLE aggregator_rate_cards (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   aggregator_id UUID NOT NULL REFERENCES aggregators(id) ON DELETE CASCADE,
   purpose vo_purpose NOT NULL,
   location_id UUID REFERENCES locations(id),
@@ -138,7 +138,7 @@ CREATE INDEX idx_agg_rate_cards_purpose ON aggregator_rate_cards(purpose);
 -- ==========================================
 
 CREATE TABLE cases (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   case_number VARCHAR(50) UNIQUE,
   aggregator_id UUID NOT NULL REFERENCES aggregators(id) ON DELETE RESTRICT,
   aggregator_contact_id UUID REFERENCES aggregator_contacts(id),
@@ -244,7 +244,7 @@ CREATE TRIGGER cases_number BEFORE INSERT ON cases
 -- ==========================================
 
 CREATE TABLE case_documents (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
   document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
   document_type VARCHAR(100) NOT NULL,
@@ -269,7 +269,7 @@ CREATE INDEX idx_case_docs_type ON case_documents(document_type);
 -- ==========================================
 
 CREATE TABLE case_comments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
   comment TEXT NOT NULL,
   is_internal BOOLEAN DEFAULT true,
@@ -288,7 +288,7 @@ CREATE INDEX idx_case_comments_created ON case_comments(created_at DESC);
 -- ==========================================
 
 CREATE TABLE case_compliance_checks (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
   check_name VARCHAR(255) NOT NULL,
   check_category VARCHAR(100),
@@ -310,7 +310,7 @@ CREATE INDEX idx_compliance_status ON case_compliance_checks(status);
 -- ==========================================
 
 CREATE TABLE case_agreements (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
   agreement_number VARCHAR(50) UNIQUE,
   template_key VARCHAR(100) NOT NULL,
@@ -368,7 +368,7 @@ CREATE TRIGGER agreements_number BEFORE INSERT ON case_agreements
 -- ==========================================
 
 CREATE TABLE case_emails (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
   direction email_direction NOT NULL,
   gmail_message_id VARCHAR(255),
@@ -395,7 +395,7 @@ CREATE INDEX idx_case_emails_created ON case_emails(created_at DESC);
 -- ==========================================
 
 CREATE TABLE aggregator_invoices (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   invoice_number VARCHAR(50) UNIQUE,
   aggregator_id UUID NOT NULL REFERENCES aggregators(id) ON DELETE RESTRICT,
   period_month INTEGER NOT NULL CHECK (period_month >= 1 AND period_month <= 12),

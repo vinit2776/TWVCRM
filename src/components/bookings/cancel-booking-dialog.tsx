@@ -181,6 +181,15 @@ export function CancelBookingDialog({
       toast.success(
         `Booking cancelled${bits.length ? ` — ${bits.join(" · ")}` : ""}`
       );
+      // Ruijie has no revocation API, so cancelling does NOT cut the guest's
+      // WiFi. Say so explicitly — staff otherwise assume access ended with the
+      // booking, and the guest stays online until the code expires.
+      if (json.vouchers_still_live > 0) {
+        toast.warning(
+          `${json.vouchers_still_live} WiFi code${json.vouchers_still_live === 1 ? "" : "s"} still work${json.vouchers_still_live === 1 ? "s" : ""} — this location's provider (Ruijie) can't disable codes. The guest stays online until it expires.`,
+          { duration: 10000 }
+        );
+      }
       onCancelled();
       onOpenChange(false);
     } finally {

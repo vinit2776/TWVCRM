@@ -23,7 +23,7 @@ interface Assignment {
   location: ScopedLocation | null;
 }
 
-const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin", "coordinator"];
 
 export function useScopedLocations() {
   const [allLocations, setAllLocations] = useState<ScopedLocation[]>([]);

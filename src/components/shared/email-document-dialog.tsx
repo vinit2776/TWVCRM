@@ -28,6 +28,9 @@ interface EmailDocumentDialogProps {
   /** Saved CC addresses (e.g. lead.billing_emails) pre-filled alongside leadEmail;
    *  still editable/removable before send. */
   defaultCc?: string[];
+  /** Renewal contracts can also attach the addendum — shows the attachment
+   *  picker (Agreement / Addendum) instead of always sending both. */
+  contractIsRenewal?: boolean;
   onGeneratePDF: () => string | Promise<string>; // Returns base64 string (sync or async)
   onSuccess?: () => void;
 }
@@ -45,6 +48,7 @@ export function EmailDocumentDialog({
   leadEmail,
   leadPhone,
   defaultCc,
+  contractIsRenewal,
   onGeneratePDF,
   onSuccess,
 }: EmailDocumentDialogProps) {
@@ -54,6 +58,13 @@ export function EmailDocumentDialog({
   const [newEmail, setNewEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [sendWhatsApp, setSendWhatsApp] = useState(false);
+
+  // Renewal contracts have a base agreement and an addendum — let the sender
+  // pick either or both instead of always bundling both into one email.
+  const showAttachmentPicker = documentType === "contract" && contractIsRenewal;
+  const [sendAgreement, setSendAgreement] = useState(true);
+  const [sendAddendum, setSendAddendum] = useState(true);
+  const noAttachmentsSelected = showAttachmentPicker && !sendAgreement && !sendAddendum;
 
   // ── Deposit link failure state ─────────────────────────────────────────────
   // When the API returns 422 + deposit_link_failed, we switch to a warning
@@ -94,21 +105,31 @@ export function EmailDocumentDialog({
       toast.error("Please add at least one recipient");
       return;
     }
+    if (noAttachmentsSelected) {
+      toast.error("Select at least one document to send");
+      return;
+    }
+
+    // Renewal contracts: the agreement PDF is only needed when it's actually
+    // being sent — skip generating it if the sender only wants the addendum.
+    const needsAgreementPdf = !showAttachmentPicker || sendAgreement;
 
     setSending(true);
 
     try {
       // Generate PDF (use cached blob if retrying after a deposit-link failure)
-      let pdfBlob: Blob;
-      if (cachedPdfBlob && forceSendWithoutLink) {
-        pdfBlob = cachedPdfBlob;
-      } else {
-        const pdfBase64 = await Promise.resolve(onGeneratePDF());
-        const byteChars = atob(pdfBase64);
-        const byteArray = new Uint8Array(byteChars.length);
-        for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
-        pdfBlob = new Blob([byteArray], { type: "application/pdf" });
-        setCachedPdfBlob(pdfBlob);
+      let pdfBlob: Blob | null = null;
+      if (needsAgreementPdf) {
+        if (cachedPdfBlob && forceSendWithoutLink) {
+          pdfBlob = cachedPdfBlob;
+        } else {
+          const pdfBase64 = await Promise.resolve(onGeneratePDF());
+          const byteChars = atob(pdfBase64);
+          const byteArray = new Uint8Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+          pdfBlob = new Blob([byteArray], { type: "application/pdf" });
+          setCachedPdfBlob(pdfBlob);
+        }
       }
 
       const apiPath =
@@ -120,7 +141,13 @@ export function EmailDocumentDialog({
 
       const formData = new FormData();
       formData.append("recipients", JSON.stringify(recipients));
-      formData.append("pdf", pdfBlob, "document.pdf");
+      if (pdfBlob) {
+        formData.append("pdf", pdfBlob, "document.pdf");
+      }
+      if (showAttachmentPicker) {
+        formData.append("send_agreement", String(sendAgreement));
+        formData.append("send_addendum", String(sendAddendum));
+      }
       if (forceSendWithoutLink) {
         formData.append("force_send_without_link", "true");
       }
@@ -131,7 +158,13 @@ export function EmailDocumentDialog({
       const res = await fetch(apiPath, { method: "POST", body: formData });
 
       if (res.ok) {
-        const docLabel = documentType === "proposal" ? "Proposal" : documentType === "contract" ? "Agreement" : "Invoice";
+        const docLabel = showAttachmentPicker
+          ? sendAgreement && sendAddendum
+            ? "Agreement + Addendum"
+            : sendAgreement
+              ? "Agreement"
+              : "Addendum"
+          : documentType === "proposal" ? "Proposal" : documentType === "contract" ? "Agreement" : "Invoice";
         toast.success(`${docLabel} sent to ${recipients.length} recipient${recipients.length > 1 ? "s" : ""}`);
         setDepositLinkError(null);
         setCachedPdfBlob(null);
@@ -167,6 +200,8 @@ export function EmailDocumentDialog({
       setDepositLinkError(null);
       setCachedPdfBlob(null);
       setSendWhatsApp(false);
+      setSendAgreement(true);
+      setSendAddendum(true);
     }
     onOpenChange(isOpen);
   };
@@ -273,6 +308,36 @@ export function EmailDocumentDialog({
               </p>
             </div>
 
+            {/* Attachment picker — renewal contracts only; choose agreement, addendum, or both */}
+            {showAttachmentPicker && (
+              <div className="space-y-2 rounded-md border bg-muted/40 px-3 py-2.5">
+                <Label className="text-xs text-muted-foreground">Attachments</Label>
+                <div className="flex items-center gap-2.5">
+                  <Checkbox
+                    id="send-agreement"
+                    checked={sendAgreement}
+                    onCheckedChange={(v) => setSendAgreement(!!v)}
+                  />
+                  <label htmlFor="send-agreement" className="text-sm cursor-pointer select-none">
+                    Membership Agreement
+                  </label>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <Checkbox
+                    id="send-addendum"
+                    checked={sendAddendum}
+                    onCheckedChange={(v) => setSendAddendum(!!v)}
+                  />
+                  <label htmlFor="send-addendum" className="text-sm cursor-pointer select-none">
+                    Renewal Addendum
+                  </label>
+                </div>
+                {noAttachmentsSelected && (
+                  <p className="text-xs text-destructive">Select at least one document to send.</p>
+                )}
+              </div>
+            )}
+
             {/* WhatsApp opt-in — only shown when phone is available */}
             {leadPhone && (
               <div className="flex items-center gap-2.5 rounded-md border bg-muted/40 px-3 py-2.5">
@@ -294,7 +359,7 @@ export function EmailDocumentDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleSend} disabled={sending || recipients.length === 0}>
+              <Button onClick={handleSend} disabled={sending || recipients.length === 0 || noAttachmentsSelected}>
                 {sending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {sending
                   ? "Sending..."

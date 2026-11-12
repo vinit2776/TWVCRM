@@ -18,6 +18,7 @@ export async function logCommunication(
     entityId: string;
     channel: CommunicationChannel;
     recipient: string;
+    cc?: string[] | null;
     body: string;
     subject?: string | null;
     attachmentUrl?: string | null;
@@ -28,7 +29,7 @@ export async function logCommunication(
   }
 ): Promise<CommunicationLogEntry | null> {
   const {
-    entityType, entityId, channel, recipient, body,
+    entityType, entityId, channel, recipient, cc = null, body,
     subject = null, attachmentUrl = null, attachmentName = null,
     status = "sent", errorMessage = null, sentBy = null,
   } = params;
@@ -40,6 +41,9 @@ export async function logCommunication(
       entity_id: entityId,
       channel,
       recipient,
+      // Only send the column when there is something to write, so a send still
+      // logs on an environment that hasn't applied migration 00562 yet.
+      ...(cc && cc.length > 0 ? { cc } : {}),
       subject,
       body,
       attachment_url: attachmentUrl,

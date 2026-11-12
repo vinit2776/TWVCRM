@@ -1,3 +1,4 @@
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 
@@ -123,8 +124,8 @@ export async function POST(request: NextRequest) {
 
   const amountInPaise = Math.round(balanceDue * 100);
 
-  // Expire link in 7 days
-  const expireBy = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+  // Longest validity Razorpay allows
+  const expireBy = Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
 
   // Build Razorpay Payment Link payload
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

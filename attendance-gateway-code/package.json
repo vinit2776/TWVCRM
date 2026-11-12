@@ -1,0 +1,15 @@
+{
+  "name": "attendance-gateway",
+  "version": "1.0.0",
+  "description": "In-house attendance gateway: receives biometric device punches, computes attendance status, ready to feed the CRM",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "test": "node --test",
+    "snapshot": "node --env-file-if-exists=.env scripts/db-snapshot.js",
+    "set-password": "node --env-file-if-exists=.env scripts/set-password.js",
+    "create-admin": "node --env-file-if-exists=.env scripts/create-admin.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.4"
+  }
+}

@@ -26,6 +26,12 @@ export interface FlowGuide {
   roles?: UserRole[];
   /** Idle duration in ms before showing (default: 10 000) */
   idleMs?: number;
+  /**
+   * Contract detail pages only: show the hint only while the contract on the
+   * page is in one of these statuses. The route alone can't tell a draft from
+   * a terminated contract, so the hook looks the status up before showing.
+   */
+  contractStatuses?: string[];
 }
 
 interface RouteEntry {
@@ -137,6 +143,7 @@ export const ROUTE_GUIDES: RouteEntry[] = [
       totalSteps: 2,
       hint: "Activate this contract to start the membership. Billing will begin from the contract start date.",
       roles: ["admin", "manager"],
+      contractStatuses: ["draft", "sent", "viewed", "accepted"],
     },
   },
 
@@ -267,7 +274,7 @@ export const ROUTE_GUIDES: RouteEntry[] = [
       flowName: "Raising a Request",
       step: 1,
       totalSteps: 2,
-      hint: "Describe what you need, the quantity, and estimated cost. The more detail you add, the faster the approval.",
+      hint: "Pick what you are buying and the form is set up for you. Then describe what you need, the quantity, and estimated cost. The more detail you add, the faster the approval.",
       idleMs: 15_000,
     },
   },

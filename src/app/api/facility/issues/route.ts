@@ -11,6 +11,7 @@ import {
 import { notifyIssueAssignee, notifyAdminsStaleAssignee } from "@/lib/facility-notifications";
 import { createAdminClient } from "@/lib/supabase/server";
 import { classify } from "@/lib/facility-classifier";
+import { checkTicketContract } from "@/lib/facility/ticket-customer";
 import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia, FacilityTaskType } from "@/types";
 
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
@@ -119,12 +120,14 @@ export async function POST(request: NextRequest) {
     scope,
     category_id,
     location_id, floor_id, space_unit_id, asset_id,
+    contract_id,           // optional: the customer (contract) this ticket is about
     title, description,
     priority = "medium",
     reported_via = "walk_in",
     reporter_name, reporter_email, reporter_phone,
     linked_feedback_id,
-    assigned_to: delegateAssignedTo,   // delegated_task only — the person being delegated to
+    assigned_to: delegateAssignedTo,   // delegated_task: the person being delegated to; reported_problem: optional override of the department in-charge
+    additional_assignee_ids: additionalAssigneeIds,  // co-assignees, stored as collaborators
     due_date,                          // delegated_task only — manual TAT, required (D4)
     tat_hours: manualTatHours,         // reported_problem only — manual override of the computed TAT
     attachments,           // optional array of { file_url, file_path, file_type, caption }
@@ -148,6 +151,26 @@ export async function POST(request: NextRequest) {
   }
   if (manualTatHours != null && manualTatHours !== "" && (!isFinite(Number(manualTatHours)) || Number(manualTatHours) <= 0)) {
     return NextResponse.json({ error: "tat_hours must be a positive number" }, { status: 400 });
+  }
+
+  // Optional customer link. Only for reported problems (a delegated task is
+  // internal work), and only a live contract at this ticket's own center.
+  let ticketContractId: string | null = null;
+  if (contract_id !== undefined && contract_id !== null && contract_id !== "") {
+    if (task_type !== "reported_problem") {
+      return NextResponse.json({ error: "A customer can only be set on a reported problem" }, { status: 400 });
+    }
+    if (typeof contract_id !== "string" || !/^[0-9a-f-]{36}$/i.test(contract_id)) {
+      return NextResponse.json({ error: "Invalid customer" }, { status: 400 });
+    }
+    const { data: linked } = await supabase
+      .from("contracts")
+      .select("id, status, location_id")
+      .eq("id", contract_id)
+      .maybeSingle();
+    const check = checkTicketContract(linked, location_id);
+    if (!check.ok) return NextResponse.json({ error: check.error }, { status: 400 });
+    ticketContractId = contract_id;
   }
 
   // Delegated tasks: required assignee + TAT, validated before any DB writes.
@@ -302,6 +325,17 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // A reporter who picked assignees in the wizard overrides the department's
+  // in-charge; an invalid pick is ignored so routing falls back to the default.
+  if (task_type === "reported_problem" && typeof delegateAssignedTo === "string" && delegateAssignedTo) {
+    const { data: picked } = await createAdminClient()
+      .from("users")
+      .select("id, full_name, is_active")
+      .eq("id", delegateAssignedTo)
+      .single();
+    if (picked && canDelegateTo(picked)) autoAssignee = { id: picked.id, full_name: picked.full_name };
+  }
+
   const now = new Date().toISOString();
   const finalAssignee = delegatedAssignee ?? autoAssignee;
   const { data: issue, error } = await supabase
@@ -315,6 +349,10 @@ export async function POST(request: NextRequest) {
       floor_id: floor_id || null,
       space_unit_id: space_unit_id || null,
       asset_id: asset_id || null,
+      // Only written when a customer was chosen, so a ticket without one never
+      // touches the column (keeps ticket creation working if this deploys before
+      // migration 00621 is applied).
+      ...(ticketContractId ? { contract_id: ticketContractId } : {}),
       title: title.trim(),
       description: description || null,
       priority,
@@ -381,6 +419,25 @@ export async function POST(request: NextRequest) {
           collaboratorIds.map((user_id) => ({ issue_id: issue.id, user_id, added_by: dbUser.id })),
           { onConflict: "issue_id,user_id", ignoreDuplicates: true }
         );
+    }
+  }
+
+  // Co-assignees picked on creation: the first pick is assigned_to, the rest
+  // join as collaborators so they get the same notifications and access.
+  if (Array.isArray(additionalAssigneeIds) && additionalAssigneeIds.length > 0) {
+    const adminClient = createAdminClient();
+    const requested = [...new Set(additionalAssigneeIds.filter((id): id is string => typeof id === "string"))]
+      .filter((id) => id !== finalAssignee?.id);
+    const { data: activeUsers } = await adminClient
+      .from("users")
+      .select("id")
+      .in("id", requested)
+      .eq("is_active", true);
+    const rows = (activeUsers ?? []).map((u) => ({ issue_id: issue.id, user_id: u.id as string, added_by: dbUser.id }));
+    if (rows.length > 0) {
+      await adminClient
+        .from("facility_issue_collaborators")
+        .upsert(rows, { onConflict: "issue_id,user_id", ignoreDuplicates: true });
     }
   }
 

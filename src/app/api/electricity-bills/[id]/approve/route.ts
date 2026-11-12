@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { hasBillableContract } from "@/lib/electricity-auto-approve";
 
 export async function POST(
   _request: NextRequest,
@@ -20,8 +21,8 @@ export async function POST(
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Admin or Manager role required" }, { status: 403 });
+  if (!["admin", "manager", "accounts"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Admin, Manager or Accounts role required" }, { status: 403 });
   }
 
   // Verify bill exists and is a landlord draft
@@ -37,6 +38,23 @@ export async function POST(
   }
   if (bill.status !== "draft") {
     return NextResponse.json({ error: `Bill is already ${bill.status}` }, { status: 409 });
+  }
+
+  // With no customer to bill the RPC also approves the landlord payable, and that approval is
+  // an admin/manager decision. Accounts can approve only when customer bills will be generated.
+  if (dbUser.role === "accounts") {
+    const billable = await hasBillableContract(supabase, bill.location_id);
+    if (billable !== true) {
+      return NextResponse.json(
+        {
+          error:
+            billable === "error"
+              ? "Could not check the contracts at this location. Try again, or ask an admin or manager."
+              : "No customer contract is billable at this location, so approving would also approve the landlord payable. An admin or manager must approve this one.",
+        },
+        { status: 403 },
+      );
+    }
   }
 
   // Call the atomic RPC

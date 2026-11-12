@@ -1,5 +1,7 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
+import { MrCorrectMenu } from "@/components/procurement/mr-correct-menu";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
@@ -21,10 +23,11 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import { MaterialRequestQuotations } from "@/components/procurement/material-request-quotations";
+import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
 import { BillCustomerDialog } from "@/components/procurement/bill-customer-dialog";
 import { CorrectDepartmentDialog } from "@/components/procurement/correct-department-dialog";
 import {
-  PR_STATUS_LABELS, PR_STATUS_COLORS,
+  PR_STATUS_LABELS, PR_STATUS_COLORS, MR_EDITABLE_STATUSES,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
   PROCUREMENT_APPROVAL_THRESHOLDS,
   PO_STATUS_LABELS, PO_STATUS_COLORS,
@@ -32,9 +35,15 @@ import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
   BILLING_STATEMENT_STATUS_LABELS, BILLING_STATEMENT_STATUS_COLORS,
+  BILLING_CYCLE_LABELS,
 } from "@/lib/constants";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
+import { cycleFromUnit, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
+import { canCombineLines, combinedPerCycleCost } from "@/lib/procurement/amc-lines";
 import type { PurchaseRequest } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { PriceToleranceField } from "@/components/procurement/price-tolerance-field";
+import { QueryButton } from "@/components/queries/query-button";
 
 type ActionType = "approve" | "reject" | "cancel" | "submit" | "resubmit";
 
@@ -96,7 +105,7 @@ function computeStageStatuses(lc: LifecycleData): StageStatus[] {
     // 2. Submitted for Approval
     mr.status !== "draft",
     // 3. Approved
-    ["approved", "partially_ordered", "po_created", "fully_ordered"].includes(mr.status) && !!mr.approved_at,
+    ["approved", "partially_ordered", "po_created"].includes(mr.status) && !!mr.approved_at,
     // 4. PO Created
     linked_pos.length > 0,
     // 5. Order Dispatched
@@ -182,6 +191,77 @@ function entityBadgeClass(entityType: string): string {
   return "bg-gray-100 text-gray-700";
 }
 
+// ─── Activity log noise reduction ────────────────────────────────────────────
+// Every page load logs a "view" event, including the detail page's own
+// refetch right after one of its own mutations — so a single real action
+// (e.g. "Updated: status") is immediately followed by a same-user "view" that
+// carries no new information. Consecutive "view" events on the same entity
+// are collapsed into one summary row so genuine changes aren't buried under
+// them.
+
+type DisplayAuditEvent =
+  | { kind: "single"; event: AuditEvent }
+  | {
+      kind: "view-group";
+      id: string;
+      entity_type: string;
+      entity_label: string;
+      count: number;
+      performers: string[];
+      last_created_at: string;
+    };
+
+function buildDisplayAuditEvents(events: AuditEvent[]): DisplayAuditEvent[] {
+  // Drop a "view" that immediately follows a real action by the same person
+  // on the same entity — that's the page's own post-mutation refetch, not a
+  // second look.
+  const filtered: AuditEvent[] = [];
+  for (const ev of events) {
+    const prev = filtered[filtered.length - 1];
+    const isSelfRefetch =
+      ev.action === "view" &&
+      prev &&
+      prev.action !== "view" &&
+      prev.entity_id === ev.entity_id &&
+      prev.performer?.id === ev.performer?.id;
+    if (!isSelfRefetch) filtered.push(ev);
+  }
+
+  // Collapse remaining consecutive "view" events on the same entity into one row.
+  const result: DisplayAuditEvent[] = [];
+  let i = 0;
+  while (i < filtered.length) {
+    const ev = filtered[i];
+    if (ev.action !== "view") {
+      result.push({ kind: "single", event: ev });
+      i++;
+      continue;
+    }
+    let j = i;
+    const performers = new Set<string>();
+    while (j < filtered.length && filtered[j].action === "view" && filtered[j].entity_id === ev.entity_id) {
+      performers.add(filtered[j].performer?.full_name ?? "Unknown");
+      j++;
+    }
+    const count = j - i;
+    if (count === 1) {
+      result.push({ kind: "single", event: ev });
+    } else {
+      result.push({
+        kind: "view-group",
+        id: `view-group-${ev.id}`,
+        entity_type: ev.entity_type,
+        entity_label: ev.entity_label,
+        count,
+        performers: Array.from(performers),
+        last_created_at: filtered[j - 1].created_at,
+      });
+    }
+    i = j;
+  }
+  return result;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Page component
 // ─────────────────────────────────────────────────────────────────────────────
@@ -189,18 +269,24 @@ function entityBadgeClass(entityType: string): string {
 export default function PurchaseRequestDetailPage() {
   const { user } = useCurrentUser();
   const { id } = useParams<{ id: string }>();
+  const { chain: cycle, locked: cycleLocked, reload: reloadChain } = useChainState({ prId: id });
   const router = useRouter();
 
   const userRole = user?.role ?? "";
   const [pr, setPr] = useState<PurchaseRequest | null>(null);
+  const [approvalThreshold, setApprovalThreshold] = useState<number>(PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE);
   const [loading, setLoading] = useState(true);
+  // AMC lines ticked to be ordered together as one PO
+  const [combineIds, setCombineIds] = useState<string[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
 
   // Dialog state
   const [actionDialog, setActionDialog] = useState<ActionType | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
-  // Admin-only override for approving without a vendor quotation attached (repeat / pre-approved orders)
+  // Optional note when approving without a vendor quotation attached — advisory, not a gate
   const [quotationOverrideReason, setQuotationOverrideReason] = useState("");
+  // What the approver will allow; starts at what the requester asked for.
+  const [approvedTolerance, setApprovedTolerance] = useState(0);
   // Edit-prices-and-resubmit (only available on rejected MRs)
   const [editPricesOpen, setEditPricesOpen] = useState(false);
   // Bill Customer (reimbursement department only)
@@ -215,6 +301,19 @@ export default function PurchaseRequestDetailPage() {
   const [lifecycleLoading, setLifecycleLoading] = useState(false);
 
   // Budget check state
+  type CenterBudgetCheck = {
+    location_id: string;
+    location_name: string | null;
+    monthly_budget: number;
+    spent_so_far: number;
+    this_mr_amount: number;
+    projected_total: number;
+    remaining_before_mr: number;
+    is_over_budget: boolean;
+    over_by: number;
+    utilisation_before: number;
+    utilisation_after: number;
+  };
   type BudgetCheck = {
     has_budget: boolean;
     monthly_budget?: number;
@@ -226,6 +325,7 @@ export default function PurchaseRequestDetailPage() {
     over_by?: number;
     utilisation_before?: number;
     utilisation_after?: number;
+    center?: CenterBudgetCheck | null;
   };
   const [budgetCheck, setBudgetCheck] = useState<BudgetCheck | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
@@ -236,6 +336,7 @@ export default function PurchaseRequestDetailPage() {
     if (res.ok) {
       const json = await res.json();
       setPr(json.data);
+      if (typeof json.approval_threshold === "number") setApprovalThreshold(json.approval_threshold);
     } else {
       toast.error("Failed to load material request");
       router.push("/procurement/requests");
@@ -252,12 +353,14 @@ export default function PurchaseRequestDetailPage() {
     ["admin", "manager", "accounts"].includes(userRole);
 
   const openApproveDialog = useCallback(async () => {
+    setApprovedTolerance(pr?.tolerance_requested_percent ?? 0);
     setActionDialog("approve");
     // AMC MRs bypass budget — no need to fetch budget check
     if (!pr || !isApprover || pr.expenditure_type === "amc") return;
     setBudgetLoading(true);
+    const locationParam = pr.location_id ? `&location_id=${pr.location_id}` : "";
     const res = await fetch(
-      `/api/procurement/budget/check?department=${pr.department}&amount=${pr.total_estimated_amount ?? 0}`
+      `/api/procurement/budget/check?department=${pr.department}&amount=${pr.total_estimated_amount ?? 0}${locationParam}`
     );
     if (res.ok) {
       const data = await res.json();
@@ -278,7 +381,7 @@ export default function PurchaseRequestDetailPage() {
       .finally(() => setLifecycleLoading(false));
   }, [pr, id]);
 
-  const performAction = async (action: ActionType, extra?: Record<string, string>) => {
+  const performAction = async (action: ActionType, extra?: Record<string, string | number>) => {
     setActionLoading(true);
     try {
       const res = await fetch(`/api/procurement/requests/${id}`, {
@@ -330,17 +433,29 @@ export default function PurchaseRequestDetailPage() {
 
   if (!pr) return null;
 
-  const canSeePrices = ["admin", "manager"].includes(userRole);
-  const isLargeAmount = pr.total_estimated_amount > PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
+  // office_admin sees the same figures as admin/manager on this page. This is display only:
+  // approval stays on `isApprover` (admin/manager).
+  const canSeePrices = ["admin", "manager", "office_admin"].includes(userRole);
+  // Everything on an MR stays editable until it's approved — see MR_EDITABLE_STATUSES.
+  const canEditRequest =
+    MR_EDITABLE_STATUSES.includes(pr.status) &&
+    (["admin", "manager", "office_admin"].includes(userRole) ||
+      (userRole === "coordinator" && pr.requested_by === user?.id));
+  const isLargeAmount = pr.total_estimated_amount > approvalThreshold;
   const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 
   // Lifecycle derived data
+  const displayAuditEvents = lifecycle ? buildDisplayAuditEvents(lifecycle.audit_trail) : [];
   const stageStatuses = lifecycle ? computeStageStatuses(lifecycle) : null;
   const nextStageIdx = stageStatuses ? stageStatuses.indexOf("current") : -1;
   const isMrTerminated = pr.status === "rejected" || pr.status === "cancelled";
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: pr.pr_number }}
+        fallbackParent={{ href: "/procurement/requests", label: "Material Requests" }}
+      />
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -353,12 +468,15 @@ export default function PurchaseRequestDetailPage() {
               <Badge variant="secondary" className={PR_STATUS_COLORS[pr.status]}>
                 {PR_STATUS_LABELS[pr.status]}
               </Badge>
+              <QueryButton entityType="purchase_request" entityId={pr.id} />
             </div>
             <div className="flex items-center gap-2 mt-1">
               <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
                 {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
               </Badge>
-              {userRole === "admin" && !["cancelled", "rejected"].includes(pr.status) && (
+              {/* Quick department fix for approved MRs. Before approval the full
+                  "Edit Request" editor covers this, so don't offer two paths. */}
+              {userRole === "admin" && !canEditRequest && !["cancelled", "rejected"].includes(pr.status) && (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -383,9 +501,51 @@ export default function PurchaseRequestDetailPage() {
           </div>
         </div>
 
+        {/* An approved multi-cycle AMC is the point people get stuck: the request is
+            done, but nothing about it says the recurring invoices live on the PO. */}
+        {pr.department === "amc" && ["approved", "partially_ordered"].includes(pr.status) && (() => {
+          const amcItem = pr.purchase_request_items?.[0];
+          const cycle = cycleFromUnit(amcItem?.unit);
+          const cycles = Number(amcItem?.quantity ?? 1);
+          if ((pr.purchase_request_items?.length ?? 0) > 1) {
+            return (
+              <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm">
+                <p className="font-medium text-blue-900">Next step: create a Purchase Order for each asset</p>
+                <p className="text-xs text-blue-800 mt-0.5">
+                  Each asset line below has its own payment schedule, so it becomes its own PO. Service reports and
+                  vendor invoices are recorded on each PO.
+                </p>
+              </div>
+            );
+          }
+          if (cycles <= 1) return null;
+          return (
+            <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm">
+              <p className="font-medium text-blue-900">
+                Next step: create the Purchase Order
+              </p>
+              <p className="text-xs text-blue-800 mt-0.5">
+                This is a {CYCLE_UNIT_LABEL[cycle]}ly contract — {cycles} payments of{" "}
+                {amcItem?.estimated_price ? formatCurrency(Number(amcItem.estimated_price)) : "the agreed amount"}{" "}
+                per {CYCLE_UNIT_LABEL[cycle]}. Service reports and vendor invoices are
+                recorded on the Purchase Order, once per {CYCLE_UNIT_LABEL[cycle]} — not on this request.
+              </p>
+            </div>
+          );
+        })()}
+
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
-          {["approved", "partially_ordered"].includes(pr.status) && (
+          <MrCorrectMenu
+            prId={pr.id}
+            prNumber={pr.pr_number}
+            status={pr.status}
+            pos={lifecycle?.linked_pos ?? []}
+            locked={cycleLocked}
+            isAdmin={userRole === "admin"}
+            onDone={() => { fetchPr(); reloadChain(); }}
+          />
+          {["approved", "partially_ordered"].includes(pr.status) && !(pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1) && (
             <Button
               size="sm"
               className="bg-blue-600 hover:bg-blue-700"
@@ -405,6 +565,16 @@ export default function PurchaseRequestDetailPage() {
               onClick={() => router.push(`/procurement/orders?pr_id=${pr.id}`)}
             >
               <ShoppingCart className="h-4 w-4 mr-1" /> View Orders
+            </Button>
+          )}
+          {canEditRequest && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => router.push(`/procurement/requests/${pr.id}/edit`)}
+              disabled={actionLoading}
+            >
+              <Pencil className="h-4 w-4 mr-1" /> Edit Request
             </Button>
           )}
           {pr.status === "draft" && (
@@ -482,6 +652,9 @@ export default function PurchaseRequestDetailPage() {
         </div>
       </div>
 
+      <ChainLockBanner chain={cycle} ref={{ prId: id }} isAdmin={userRole === "admin"} onChanged={reloadChain} />
+      {cycle && cycle.state === "open" && ["approved", "partially_ordered", "po_created"].includes(pr?.status ?? "") && <ChainStatusCard chain={cycle} />}
+
       {/* Rejection reason callout */}
       {pr.status === "rejected" && pr.rejection_reason && (
         <Card className="border-red-300 bg-red-50 ring-1 ring-red-200">
@@ -527,6 +700,14 @@ export default function PurchaseRequestDetailPage() {
                   Approval Ref: {pr.approval_code}
                 </p>
               )}
+              {pr.expenditure_type !== "amc" && (
+                <p className="text-xs text-green-700 mt-1">
+                  Price tolerance: {(pr.tolerance_percent ?? 0) > 0 ? `± ${pr.tolerance_percent}% on the final invoice` : "firm price"}
+                  {(pr.tolerance_requested_percent ?? 0) !== (pr.tolerance_percent ?? 0) && (pr.tolerance_requested_percent ?? 0) > 0
+                    ? ` (requested ± ${pr.tolerance_requested_percent}%)`
+                    : ""}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -562,10 +743,20 @@ export default function PurchaseRequestDetailPage() {
                     <div className="space-y-1">
                       {activeStatements.map((s) => (
                         <div key={s.id} className="flex items-center justify-between text-xs bg-white/70 rounded px-2 py-1.5 border border-pink-100">
-                          <span className="font-mono">{s.statement_number}</span>
+                          <Link
+                            href={`/api/billing-statements/${s.id}/${s.gst_invoice_number ? "gst-invoice-pdf" : "proforma-pdf"}`}
+                            target="_blank"
+                            className="font-mono text-pink-900 hover:underline"
+                          >
+                            {s.statement_number}
+                          </Link>
                           <Badge className={BILLING_STATEMENT_STATUS_COLORS[s.status] ?? ""} variant="secondary">
                             {BILLING_STATEMENT_STATUS_LABELS[s.status] ?? s.status}
                           </Badge>
+                          <ReimbursementSupportingDocuments
+                            statementId={s.id}
+                            count={s.supporting_documents?.length ?? 0}
+                          />
                           <span className="font-medium">{formatCurrency(s.total_amount)}</span>
                         </div>
                       ))}
@@ -688,7 +879,7 @@ export default function PurchaseRequestDetailPage() {
               </div>
               {isLargeAmount && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                  Amount exceeds ₹{PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()} — admin approval required
+                  Amount exceeds ₹{approvalThreshold.toLocaleString()} — admin approval required
                 </div>
               )}
               <div className="flex justify-between text-sm">
@@ -726,7 +917,9 @@ export default function PurchaseRequestDetailPage() {
               <div>
                 <p className="text-xs text-muted-foreground">Asset</p>
                 <p className="font-medium">
-                  {pr.linked_asset
+                  {pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1
+                    ? `${pr.purchase_request_items?.length} assets (see lines below)`
+                    : pr.linked_asset
                     ? `${pr.linked_asset.name}${pr.linked_asset.asset_code ? ` (${pr.linked_asset.asset_code})` : ""}`
                     : "—"}
                 </p>
@@ -751,9 +944,28 @@ export default function PurchaseRequestDetailPage() {
                 <p className="text-xs text-muted-foreground">End Date</p>
                 <p className="font-medium">{pr.amc_end_date ?? "—"}</p>
               </div>
+              {!(pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1) && (() => {
+                const amcItem = pr.purchase_request_items?.[0];
+                const cycle = cycleFromUnit(amcItem?.unit);
+                const cycles = Number(amcItem?.quantity ?? 1);
+                return (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Billing Cycle</p>
+                    <p className="font-medium">
+                      {BILLING_CYCLE_LABELS[cycle]}
+                      {cycles > 1 && ` · ${cycles} cycles`}
+                    </p>
+                  </div>
+                );
+              })()}
               {canSeePrices && (
                 <div className="sm:col-span-2">
-                  <p className="text-xs text-muted-foreground">Annual Amount (pre-GST)</p>
+                  <p className="text-xs text-muted-foreground">
+                    {(() => {
+                      const cycles = Number(pr.purchase_request_items?.[0]?.quantity ?? 1);
+                      return cycles > 1 || (pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1) ? "Total Contract Value (pre-GST)" : "Annual Amount (pre-GST)";
+                    })()}
+                  </p>
                   <p className="font-bold text-base">{formatCurrency(pr.total_estimated_amount ?? 0)}</p>
                 </div>
               )}
@@ -791,6 +1003,100 @@ export default function PurchaseRequestDetailPage() {
                 {pr.advance_notes && <p className="text-xs text-muted-foreground mt-1">{pr.advance_notes}</p>}
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* One line per asset — each is ordered as its own service PO */}
+      {pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Assets covered</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {(pr.purchase_request_items ?? []).map((line) => {
+              const cycle = cycleFromUnit(line.unit);
+              const cycles = Number(line.quantity ?? 1);
+              const ordered = (line.already_ordered_qty ?? 0) >= cycles;
+              const canOrder = ["approved", "partially_ordered"].includes(pr.status) && !ordered;
+              return (
+                <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 border-t pt-2 first:border-t-0 first:pt-0">
+                  <div className="flex items-start gap-3">
+                    {["approved", "partially_ordered"].includes(pr.status) && (
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4"
+                        aria-label="Select to combine"
+                        disabled={ordered}
+                        checked={combineIds.includes(line.id)}
+                        onChange={(e) =>
+                          setCombineIds((prev) => (e.target.checked ? [...prev, line.id] : prev.filter((x) => x !== line.id)))
+                        }
+                      />
+                    )}
+                  <div>
+                    <p className="font-medium">
+                      {line.linked_asset
+                        ? `${line.linked_asset.name}${line.linked_asset.asset_code ? ` (${line.linked_asset.asset_code})` : ""}`
+                        : line.item_name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {BILLING_CYCLE_LABELS[cycle]} · {cycles} cycle{cycles === 1 ? "" : "s"}
+                      {canSeePrices && line.estimated_price
+                        ? ` · ${formatCurrency(Number(line.estimated_price))} per ${CYCLE_UNIT_LABEL[cycle]}`
+                        : ""}
+                    </p>
+                  </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className={ordered ? "text-green-700" : "text-muted-foreground"}>
+                      {ordered ? "Ordered" : "Not yet ordered"}
+                    </Badge>
+                    {canOrder && (
+                      <Button
+                        size="sm"
+                        className="bg-blue-600 hover:bg-blue-700"
+                        onClick={() => router.push(`/procurement/orders/new-service?from_mr=${pr.id}&item=${line.id}`)}
+                      >
+                        <ShoppingCart className="h-4 w-4 mr-1" /> Create PO
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {["approved", "partially_ordered"].includes(pr.status) && (() => {
+              const picked = (pr.purchase_request_items ?? []).filter((l) => combineIds.includes(l.id));
+              if (picked.length === 0) return null;
+              const check = canCombineLines(picked);
+              const cycle = cycleFromUnit(picked[0].unit);
+              return (
+                <div className="border-t pt-3 space-y-2">
+                  {check.ok ? (
+                    <p className="text-xs text-muted-foreground">
+                      One PO for {picked.map((l) => l.linked_asset?.asset_code ?? l.item_name).join(" + ")}:{" "}
+                      {BILLING_CYCLE_LABELS[cycle]} · {Number(picked[0].quantity)} cycles
+                      {canSeePrices ? ` · ${formatCurrency(combinedPerCycleCost(picked))} per ${CYCLE_UNIT_LABEL[cycle]}` : ""}.
+                      One vendor, one invoice per {CYCLE_UNIT_LABEL[cycle]} for all assets.
+                    </p>
+                  ) : picked.length > 1 ? (
+                    <p className="text-xs text-amber-700">{check.reason}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Tick at least two lines to combine them into one PO.</p>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!check.ok}
+                    onClick={() =>
+                      router.push(`/procurement/orders/new-service?from_mr=${pr.id}&items=${picked.map((l) => l.id).join(",")}`)
+                    }
+                  >
+                    <ShoppingCart className="h-4 w-4 mr-1" /> Combine selected into one PO
+                  </Button>
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
       )}
@@ -1150,21 +1456,49 @@ export default function PurchaseRequestDetailPage() {
       {/* ═══════════════════════════════════════════════════════════════════
           Section C: Activity Log (Audit Trail)
       ════════════════════════════════════════════════════════════════════ */}
-      {lifecycle && lifecycle.audit_trail.length > 0 && (
+      {lifecycle && displayAuditEvents.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <Activity className="h-4 w-4 text-muted-foreground" />
               <CardTitle className="text-base">Activity Log</CardTitle>
               <Badge variant="secondary" className="ml-auto text-xs">
-                {lifecycle.audit_trail.length} event{lifecycle.audit_trail.length !== 1 ? "s" : ""}
+                {displayAuditEvents.length} event{displayAuditEvents.length !== 1 ? "s" : ""}
               </Badge>
             </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-0">
-              {lifecycle.audit_trail.map((event, idx) => {
-                const isLast = idx === lifecycle.audit_trail.length - 1;
+              {displayAuditEvents.map((d, idx) => {
+                const isLast = idx === displayAuditEvents.length - 1;
+
+                if (d.kind === "view-group") {
+                  return (
+                    <div key={d.id} className="flex gap-3">
+                      <div className="flex flex-col items-center flex-shrink-0">
+                        <div className="w-2.5 h-2.5 rounded-full mt-1.5 bg-gray-300" />
+                        {!isLast && <div className="w-0.5 flex-1 bg-border mt-1" />}
+                      </div>
+                      <div className="pb-4 flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`inline-block text-xs font-mono font-semibold px-1.5 py-0.5 rounded opacity-70 ${entityBadgeClass(d.entity_type)}`}
+                          >
+                            {d.entity_label}
+                          </span>
+                          <span className="text-sm text-muted-foreground">
+                            Viewed {d.count} times
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {d.performers.join(", ")} · {formatDateTime(d.last_created_at)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const event = d.event;
                 const changesEntries = event.changes
                   ? Object.entries(event.changes).filter(([, v]) => v !== null && v !== undefined)
                   : [];
@@ -1219,7 +1553,7 @@ export default function PurchaseRequestDetailPage() {
 
                       {/* Performer + time */}
                       <p className="text-xs text-muted-foreground mt-1">
-                        {event.performer?.full_name ?? "System"} · {formatDate(event.created_at)}
+                        {event.performer?.full_name ?? "System"} · {formatDateTime(event.created_at)}
                       </p>
                     </div>
                   </div>
@@ -1248,27 +1582,45 @@ export default function PurchaseRequestDetailPage() {
               You are about to approve <strong>{pr.pr_number}</strong> for{" "}
               <strong>{formatCurrency(pr.total_estimated_amount)}</strong>.
             </p>
-            {/* Quotation gate — no vendor quotation attached */}
-            {hasNoQuotations && (
-              userRole === "admin" ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
-                  <p className="text-xs font-semibold text-amber-800">
-                    No vendor quotation attached. As admin you can approve anyway — provide a reason
-                    (e.g. repeat / pre-approved order at an already-agreed price).
+            {/* Price tolerance — the requester's ask; approver accepts or changes it. Not offered for AMC. */}
+            {pr.expenditure_type !== "amc" && (
+              <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                {(pr.tolerance_requested_percent ?? 0) > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Requester asked for <strong>± {pr.tolerance_requested_percent}%</strong>
+                    {pr.tolerance_reason ? <> — &ldquo;{pr.tolerance_reason}&rdquo;</> : null}
                   </p>
-                  <Textarea
-                    value={quotationOverrideReason}
-                    onChange={(e) => setQuotationOverrideReason(e.target.value)}
-                    placeholder="Reason for approving without a quotation…"
-                    rows={2}
-                    className="bg-white"
-                  />
-                </div>
-              ) : (
-                <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-                  ⛔ No vendor quotation attached. Only admin can approve without one.
-                </div>
-              )
+                ) : (
+                  <p className="text-xs text-muted-foreground">Requester asked for a firm price.</p>
+                )}
+                <PriceToleranceField
+                  label="Allow the final invoice to differ by"
+                  percent={approvedTolerance}
+                  onPercentChange={setApprovedTolerance}
+                  estimate={pr.total_estimated_amount}
+                />
+                {approvedTolerance !== (pr.tolerance_requested_percent ?? 0) && (
+                  <p className="text-xs text-amber-700">
+                    You&apos;re changing this from {(pr.tolerance_requested_percent ?? 0) ? `± ${pr.tolerance_requested_percent}%` : "firm price"} to {approvedTolerance ? `± ${approvedTolerance}%` : "firm price"}.
+                  </p>
+                )}
+              </div>
+            )}
+            {/* Quotation warning — no vendor quotation attached; advisory only, doesn't block approval */}
+            {hasNoQuotations && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+                <p className="text-xs font-semibold text-amber-800">
+                  ⚠ No vendor quotation attached. You can still approve — for new or unusual purchases,
+                  consider asking the requester to upload one first.
+                </p>
+                <Textarea
+                  value={quotationOverrideReason}
+                  onChange={(e) => setQuotationOverrideReason(e.target.value)}
+                  placeholder="Note for approving without a quotation (optional)…"
+                  rows={2}
+                  className="bg-white"
+                />
+              </div>
             )}
             {/* Budget check panel — approvers only (admin / manager) */}
             {isApprover && budgetLoading && (
@@ -1333,9 +1685,43 @@ export default function PurchaseRequestDetailPage() {
                 No monthly budget configured for {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}. All managers and admins can approve.
               </p>
             )}
+            {isApprover && !budgetLoading && budgetCheck?.center && (
+              <div className={`rounded-lg border p-3 space-y-2 ${budgetCheck.center.is_over_budget ? "border-red-200 bg-red-50" : budgetCheck.center.utilisation_after >= 80 ? "border-amber-200 bg-amber-50" : "border-green-200 bg-green-50"}`}>
+                <p className={`text-xs font-semibold uppercase tracking-wide ${budgetCheck.center.is_over_budget ? "text-red-700" : budgetCheck.center.utilisation_after >= 80 ? "text-amber-700" : "text-green-700"}`}>
+                  {budgetCheck.center.location_name ?? "This center"} — Monthly Budget
+                </p>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Center budget</span>
+                    <span className="font-medium">{formatCurrency(budgetCheck.center.monthly_budget)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Spent so far</span>
+                    <span>{formatCurrency(budgetCheck.center.spent_so_far)}</span>
+                  </div>
+                  <div className="flex justify-between border-t pt-1 mt-1">
+                    <span className={`font-semibold ${budgetCheck.center.is_over_budget ? "text-red-700" : "text-muted-foreground"}`}>
+                      After approval: {formatCurrency(budgetCheck.center.projected_total)} ({budgetCheck.center.utilisation_after}%)
+                    </span>
+                    {budgetCheck.center.is_over_budget && (
+                      <span className="text-red-700 font-bold text-xs">
+                        ↑ Over by {formatCurrency(budgetCheck.center.over_by)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {budgetCheck.center.is_over_budget && (
+                  <div className={`text-xs rounded px-2 py-1.5 mt-1 ${userRole === "admin" ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800"}`}>
+                    {userRole === "admin"
+                      ? "⚠ This approval will exceed this center's budget. As admin you can still approve."
+                      : "⛔ Manager approval is not permitted when the center budget is exceeded. Only admin can approve over-budget requests."}
+                  </div>
+                )}
+              </div>
+            )}
             {isLargeAmount && (
               <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                This amount exceeds ₹{PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()}. Only admin users can approve this.
+                This amount exceeds ₹{approvalThreshold.toLocaleString()}. Only admin users can approve this.
               </div>
             )}
           </div>
@@ -1344,18 +1730,17 @@ export default function PurchaseRequestDetailPage() {
             <Button
               className="bg-green-600 hover:bg-green-700"
               onClick={() =>
-                performAction(
-                  "approve",
-                  hasNoQuotations && userRole === "admin"
+                performAction("approve", {
+                  ...(hasNoQuotations && quotationOverrideReason.trim()
                     ? { quotation_override_reason: quotationOverrideReason.trim() }
-                    : undefined
-                )
+                    : {}),
+                  ...(pr.expenditure_type !== "amc" ? { tolerance_percent: approvedTolerance } : {}),
+                })
               }
               disabled={
                 actionLoading ||
                 (budgetCheck?.is_over_budget === true && userRole === "manager") ||
-                (hasNoQuotations && userRole !== "admin") ||
-                (hasNoQuotations && userRole === "admin" && !quotationOverrideReason.trim())
+                (budgetCheck?.center?.is_over_budget === true && userRole === "manager")
               }
             >
               {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <CheckCircle className="h-4 w-4 mr-1" />}
@@ -1408,7 +1793,7 @@ export default function PurchaseRequestDetailPage() {
             <DialogTitle>Cancel Material Request</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground py-2">
-            Are you sure you want to cancel <strong>{pr.pr_number}</strong>? This action cannot be undone.
+            Are you sure you want to cancel <strong>{pr.pr_number}</strong>? An admin can reopen it later if needed.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setActionDialog(null)}>Keep Request</Button>

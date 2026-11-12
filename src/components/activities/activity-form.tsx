@@ -31,6 +31,7 @@ import {
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { ActivityType } from "@/types";
 
 interface ActivityFormProps {
@@ -106,9 +107,12 @@ export function ActivityForm({
     summaryLines.push("No follow-up scheduled");
   }
 
+  // A scheduled follow-up must say what it is for — it's shown as the "next action".
+  const followUpNoteMissing = !!followUpDate && !followUpNotes.trim();
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (followUpStatus === "incomplete") return;
+    if (followUpStatus === "incomplete" || followUpNoteMissing) return;
     setSubmitting(true);
 
     const durationSeconds = callDurationMinutes
@@ -125,7 +129,7 @@ export function ActivityForm({
       meeting_start_at: meetingStart || undefined,
       meeting_end_at: meetingEnd || undefined,
       follow_up_date: followUpDate || undefined,
-      follow_up_notes: followUpNotes || undefined,
+      follow_up_notes: followUpNotes.trim() || undefined,
     };
 
     const res = await fetch(`/api/leads/${leadId}/activities`, {
@@ -151,7 +155,7 @@ export function ActivityForm({
         <DialogHeader>
           <DialogTitle>Log Activity</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label>Activity Type</Label>
             <Select
@@ -271,12 +275,18 @@ export function ActivityForm({
               )}
             </div>
             <div className="space-y-2">
-              <Label>Follow-up Notes</Label>
+              <Label>Follow-up Notes{followUpDate ? " *" : ""}</Label>
               <Input
                 value={followUpNotes}
                 onChange={(e) => setFollowUpNotes(e.target.value)}
-                placeholder="Reminder..."
+                placeholder="What needs to happen? e.g. Send proposal, call back after site visit"
+                aria-invalid={followUpNoteMissing}
               />
+              {followUpNoteMissing && (
+                <p className="text-xs text-destructive">
+                  Add a note saying what the follow-up is for.
+                </p>
+              )}
             </div>
           </div>
 
@@ -302,7 +312,7 @@ export function ActivityForm({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={submitting || followUpStatus === "incomplete"}>
+            <Button type="submit" disabled={submitting || followUpStatus === "incomplete" || followUpNoteMissing}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Log Activity
             </Button>

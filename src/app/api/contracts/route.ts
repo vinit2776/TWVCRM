@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { canAuthorSpecialClause } from "@/lib/special-clause/gate";
+import { submitSpecialClause } from "@/lib/special-clause/service";
 import { createContractSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
+import { getProrataPaidDate } from "@/lib/proposals";
+import { firstBillingAnchor } from "@/lib/billing-months";
+import { commitmentEndDate, resolveContractCommitment } from "@/lib/contract-commitment";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -44,10 +49,21 @@ export async function GET(request: NextRequest) {
     if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 });
 
     const rows = (rpcRows ?? []) as { data: Record<string, unknown>; total_count: number }[];
-    const total = rows[0]?.total_count ?? 0;
+    // search_contracts has no terminated_after argument, so apply the cutoff
+    // here — otherwise it only worked on the direct-query path below. It runs
+    // after the RPC's limit, so it can only trim rows, never recover ones the
+    // limit cut. Falls back to end_date for terminated rows with no terminated_at.
+    const kept = terminatedAfter
+      ? rows.filter(r => {
+          if (r.data.status !== "terminated") return true;
+          const endedOn = (r.data.terminated_at ?? r.data.end_date) as string | null | undefined;
+          return !!endedOn && endedOn >= terminatedAfter;
+        })
+      : rows;
+    const total = Math.max(0, Number(rows[0]?.total_count ?? 0) - (rows.length - kept.length));
     return NextResponse.json({
-      data: rows.map(r => r.data),
-      pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
+      data: kept.map(r => r.data),
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   }
 
@@ -140,14 +156,57 @@ export async function POST(request: NextRequest) {
   const totalAmount = proposal.total_amount;
   const proposalLocationId: string | null = proposal.location_id;
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role, full_name").eq("auth_id", user.id).single();
+
+  if (d.special_clause && !canAuthorSpecialClause(dbUser?.role)) {
+    return NextResponse.json({ error: "You can't add a special clause." }, { status: 403 });
+  }
+
+  // Term / lock-in / notice period must be what the proposal offered — the
+  // form locks them, this enforces it. Only an admin can differ, with a reason.
+  const commitment = resolveContractCommitment({
+    proposal,
+    submitted: {
+      tenure_months: d.tenure_months,
+      lock_in_months: d.lock_in_months ?? undefined,
+      notice_period_months: d.notice_period_months,
+    },
+    overrideReason: d.commitment_override_reason,
+    isAdmin: dbUser?.role === "admin",
+  });
+  if (!commitment.ok) {
+    return NextResponse.json({ error: commitment.error }, { status: commitment.status });
+  }
+
+  // start_date is a placeholder until the proposal's pro-rata invoice is
+  // actually paid. If it's already paid at creation time, the invoice's
+  // occupation_start_date is authoritative — use it instead of whatever the
+  // form submitted, and lock it immediately. Otherwise the form value stands
+  // as a placeholder (start_date_confirmed = false) until activation.
+  //
+  // "Paid" is checked via getProrataPaidDate rather than a plain
+  // payment_status === "paid" comparison: the GST-invoice-paid-via-its-own-
+  // billing_statement path never mirrors back to proposals.payment_status,
+  // so relying on that field alone would leave a contract marked
+  // unconfirmed (and PDF-watermarked) even though the customer already paid.
+  const proRataPaidDate = await getProrataPaidDate(supabase, d.proposal_id);
+  const proRataAlreadyPaid = !!proRataPaidDate;
+  const resolvedStartDateStr = proRataAlreadyPaid && proposal.occupation_start_date
+    ? (proposal.occupation_start_date as string)
+    : d.start_date;
 
   // End date: use the explicit end_date when the form supplies one (the
   // start/end-date picker). Otherwise derive it from start_date + tenure_months
   // minus 1 day — a contract starting Nov 1 for 11 months ends Sep 30.
-  const startDate = new Date(d.start_date);
+  //
+  // When the terms follow the proposal, the end date is always start + agreed
+  // term — computed here from the resolved start rather than trusting the
+  // form, since the resolved start can differ from what the form submitted.
+  const startDate = new Date(resolvedStartDateStr);
   let endDateStr: string;
-  if (d.end_date) {
+  if (!commitment.overridden) {
+    endDateStr = commitmentEndDate(resolvedStartDateStr, commitment.values.tenure_months);
+  } else if (d.end_date) {
     endDateStr = d.end_date;
   } else {
     const endDate = new Date(startDate);
@@ -156,14 +215,12 @@ export async function POST(request: NextRequest) {
     endDateStr = endDate.toISOString().split("T")[0];
   }
 
-  // Calculate next_billing_date based on billing_cycle
-  const nextBillingDate = new Date(startDate);
-  switch (d.billing_cycle) {
-    case "monthly": nextBillingDate.setMonth(nextBillingDate.getMonth() + 1); break;
-    case "quarterly": nextBillingDate.setMonth(nextBillingDate.getMonth() + 3); break;
-    case "half_yearly": nextBillingDate.setMonth(nextBillingDate.getMonth() + 6); break;
-    case "yearly": nextBillingDate.setMonth(nextBillingDate.getMonth() + 12); break;
-  }
+  // Opening billing anchor — the first month this contract is billed for.
+  // Previously this was start_date + one whole billing cycle, which for an
+  // advance-billed contract pointed at the SECOND cycle and skipped billing the
+  // first one outright (a quarterly contract starting 19 May anchored to 19 Aug,
+  // so June and July were never billed).
+  const nextBillingDateYmd = firstBillingAnchor(resolvedStartDateStr);
 
   const { data, error } = await supabase
     .from("contracts")
@@ -180,16 +237,21 @@ export async function POST(request: NextRequest) {
       discount_amount: discountAmount,
       total_amount: totalAmount,
       billing_cycle: d.billing_cycle,
-      tenure_months: d.tenure_months,
-      start_date: d.start_date,
+      tenure_months: commitment.values.tenure_months,
+      start_date: resolvedStartDateStr,
       end_date: endDateStr,
       // Tiered rate-phase clock anchor — defaults to start_date, same as the
       // one-time backfill for pre-existing contracts (see 00315 migration).
-      phase_start_date: d.start_date,
-      next_billing_date: nextBillingDate.toISOString().split("T")[0],
+      phase_start_date: resolvedStartDateStr,
+      // Placeholder until the proposal's pro-rata invoice is paid — see
+      // supabase/migrations/00503_contract_start_date_confirmation.sql.
+      start_date_confirmed: proRataAlreadyPaid,
+      start_date_locked_at: proRataAlreadyPaid ? new Date().toISOString() : null,
+      next_billing_date: nextBillingDateYmd,
       seats: d.seats,
       terms_and_conditions: d.terms_and_conditions,
       notes: d.notes,
+      po_number: d.po_number?.trim() || null,
       location_id: d.location_id || proposalLocationId || null,
       // Membership agreement fields
       workspace_description: d.workspace_description,
@@ -197,8 +259,13 @@ export async function POST(request: NextRequest) {
       complimentary_services: d.complimentary_services,
       security_deposit_months: d.security_deposit_months,
       escalation_percentage: d.escalation_percentage,
-      notice_period_months: d.notice_period_months,
-      lock_in_months: d.lock_in_months ?? null,
+      notice_period_months: commitment.values.notice_period_months,
+      lock_in_months: commitment.values.lock_in_months,
+      ...(commitment.overridden && {
+        commitment_override_reason: d.commitment_override_reason?.trim(),
+        commitment_overridden_by: dbUser?.id,
+        commitment_overridden_at: new Date().toISOString(),
+      }),
       member_signatory_name: d.member_signatory_name,
       member_signatory_designation: d.member_signatory_designation,
       member_signatory_pan: d.member_signatory_pan ?? null,
@@ -220,6 +287,20 @@ export async function POST(request: NextRequest) {
       changes: { record: { old: null, new: data } },
     });
 
+    if (commitment.overridden) {
+      logAudit(supabase, {
+        entityType: "contract",
+        entityId: data.id,
+        action: "commitment_terms_overridden",
+        performedBy: dbUser.id,
+        changes: {
+          tenure_months: { old: proposal.tenure_months, new: commitment.values.tenure_months },
+          lock_in_months: { old: proposal.lock_in_months, new: commitment.values.lock_in_months },
+          notice_period_months: { old: proposal.notice_period_months, new: commitment.values.notice_period_months },
+          reason: { old: null, new: d.commitment_override_reason?.trim() },
+        },
+      });
+    }
   }
 
   // ── Copy proposal_service_quotas → contract_service_quotas ────────────────
@@ -287,5 +368,27 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ data }, { status: 201 });
+  // ── Optional special clause ───────────────────────────────────────────────
+  // Submitted after the contract exists so the revision has a real contract_id.
+  // A failure here must not lose the contract; the author can resubmit from its page.
+  let specialClauseError: string | null = null;
+  let specialClauseStatus: string | null = null;
+  if (data && d.special_clause && dbUser?.id) {
+    const res = await submitSpecialClause(createAdminClient(), {
+      subject: { kind: "contract", id: data.id },
+      actor: { id: dbUser.id, role: dbUser.role, name: dbUser.full_name || "A teammate" },
+      intent: d.special_clause.intent,
+      reason: d.special_clause.reason,
+      clauseText: d.special_clause.clause_text,
+      reviewToken: d.special_clause.review_token,
+      report: d.special_clause.report,
+    });
+    if (res.ok) specialClauseStatus = res.status;
+    else specialClauseError = res.error;
+  }
+
+  return NextResponse.json(
+    { data, special_clause_status: specialClauseStatus, special_clause_error: specialClauseError },
+    { status: 201 },
+  );
 }

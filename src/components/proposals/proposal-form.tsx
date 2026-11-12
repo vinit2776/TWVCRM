@@ -13,12 +13,21 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
-import { Loader2 } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
 import { LocationSelector } from "@/components/shared/location-selector";
-import { formatCurrency } from "@/lib/utils";
-import type { ServiceCatalogItem } from "@/types";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
+import {
+  PROPOSAL_MAX_TENURE_MONTHS,
+  buildCommitmentTermLines,
+  hasCommitmentTerms,
+  maxNoticePeriodMonths,
+  mentionsCommitmentTerms,
+  stripLegacyCommitmentLines,
+  validateCommitmentTerms,
+} from "@/lib/proposal-terms";
+import type { ServiceCatalogItem, Proposal } from "@/types";
 
 interface ServiceQuotaRow {
   service_id: string;
@@ -35,6 +44,16 @@ interface ProposalFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  /** Present in edit mode — the proposal being edited. */
+  proposalId?: string;
+  initialProposal?: Proposal;
+  /**
+   * Revise a sent proposal: same prefilled form, but submitting creates a new
+   * revision (PROP-xxxx-R2) via POST /api/proposals/[id]/revise instead of
+   * editing in place. `onRevised` receives the new proposal.
+   */
+  revise?: boolean;
+  onRevised?: (revision: { id: string; proposal_number: string }) => void;
 }
 
 export function ProposalForm({
@@ -43,7 +62,12 @@ export function ProposalForm({
   open,
   onOpenChange,
   onSuccess,
+  proposalId,
+  initialProposal,
+  revise = false,
+  onRevised,
 }: ProposalFormProps) {
+  const isEditMode = Boolean(proposalId && initialProposal);
   const [title, setTitle] = useState("");
   const [locationId, setLocationId] = useState<string | null>(leadLocationId || null);
   const [description, setDescription] = useState("");
@@ -52,6 +76,7 @@ export function ProposalForm({
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
   ]);
+  const [escalationSplit, setEscalationSplit] = useState(false);
   const [taxPercentage, setTaxPercentage] = useState(18);
   const [discountPercentage, setDiscountPercentage] = useState(0);
   const [validUntil, setValidUntil] = useState("");
@@ -62,6 +87,11 @@ export function ProposalForm({
   const [depositMonths, setDepositMonths] = useState(0);
   const [depositAmount, setDepositAmount] = useState(0);
   const [depositOverridden, setDepositOverridden] = useState(false);
+  // No defaults on purpose: the commitment offered must be a deliberate choice,
+  // since it's carried into the contract.
+  const [tenureMonths, setTenureMonths] = useState<number | null>(null);
+  const [lockInMonths, setLockInMonths] = useState<number | null>(null);
+  const [noticePeriodMonths, setNoticePeriodMonths] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Load service catalog once on mount
@@ -83,15 +113,99 @@ export function ProposalForm({
       .catch(() => setCatalogLoaded(true));
   }, []);
 
+  // Prefill from the existing proposal when opened in edit mode; otherwise
+  // start from a blank form each time the create dialog is opened.
+  useEffect(() => {
+    if (!open) return;
+    if (initialProposal) {
+      setTitle(initialProposal.title || "");
+      setLocationId(initialProposal.location_id || leadLocationId || null);
+      setDescription(initialProposal.description || "");
+      setItems(
+        initialProposal.items?.length
+          ? initialProposal.items.map((i) => ({
+              description: i.description,
+              quantity: i.quantity,
+              unit: i.unit,
+              unit_price: i.unit_price,
+              total: i.total,
+              ...(i.escalates !== undefined ? { escalates: i.escalates } : {}),
+            }))
+          : [{ description: "", quantity: 1, unit_price: 0, total: 0 }]
+      );
+      setEscalationSplit((initialProposal.items ?? []).some((i) => i.escalates !== undefined));
+      setTaxPercentage(initialProposal.tax_percentage ?? 18);
+      setDiscountPercentage(initialProposal.discount_percentage ?? 0);
+      setValidUntil(initialProposal.valid_until ? initialProposal.valid_until.slice(0, 10) : "");
+      const storedTerms = initialProposal.terms_and_conditions ?? DEFAULT_PROPOSAL_TERMS;
+      // A legacy proposal's text still carries the old hardcoded deposit/term/
+      // notice lines; drop them so they don't contradict the generated ones.
+      setTermsAndConditions(hasCommitmentTerms(initialProposal) ? storedTerms : stripLegacyCommitmentLines(storedTerms));
+      setTenureMonths(initialProposal.tenure_months ?? null);
+      setLockInMonths(initialProposal.lock_in_months ?? null);
+      setNoticePeriodMonths(initialProposal.notice_period_months ?? null);
+      setNotes(initialProposal.notes ?? "");
+      const confRoom = (initialProposal.complimentary_items || []).find((i) => i.name === "Conference Room");
+      setConfRoomHours(confRoom?.quantity ?? 0);
+      setConfRoomOverageRate(confRoom?.price_per_unit ?? 0);
+      setDepositMonths(initialProposal.security_deposit_months ?? 0);
+      setDepositAmount(initialProposal.security_deposit_amount ?? 0);
+      // Only lock the stored deposit if it was a custom figure. A deposit that
+      // was months × rent keeps following the months selector, so changing
+      // "2 months" to "3 months" doesn't leave the old amount behind.
+      const storedMonths = initialProposal.security_deposit_months ?? 0;
+      const storedSubtotal = (initialProposal.items ?? []).reduce(
+        (sum, item) => sum + Math.max(1, item.quantity) * item.unit_price,
+        0
+      );
+      setDepositOverridden(
+        storedMonths > 0 && (initialProposal.security_deposit_amount ?? 0) !== storedMonths * storedSubtotal
+      );
+    } else {
+      resetForm();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialProposal, leadLocationId]);
+
+  // Edit mode only — merge in the proposal's existing service quotas once
+  // the catalog has loaded (need service_id from the catalog to match rows).
+  useEffect(() => {
+    if (!open || !proposalId || !initialProposal || !catalogLoaded) return;
+    fetch(`/api/proposals/${proposalId}/service-quotas`)
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((json) => {
+        const rows = (json.data || []) as { service_id: string; monthly_quota: number; overage_rate: number }[];
+        if (rows.length === 0) return;
+        setServiceQuotas((prev) =>
+          prev.map((sq) => {
+            const match = rows.find((r) => r.service_id === sq.service_id);
+            return match ? { ...sq, monthly_quota: match.monthly_quota, overage_rate: match.overage_rate } : sq;
+          })
+        );
+      })
+      .catch(() => {});
+  }, [open, proposalId, initialProposal, catalogLoaded]);
+
   // Compute subtotal for deposit auto-calculation
   const computedSubtotal = items
     .filter((item) => item.description.trim())
     .reduce((sum, item) => sum + Math.max(1, item.quantity) * item.unit_price, 0);
 
+  // Keep the auto-calculated deposit following the rent. The deposit line in
+  // the terms is generated from these values (see generatedTermLines).
+  const effectiveDepositAmount = depositOverridden ? depositAmount : depositMonths * computedSubtotal;
+  useEffect(() => {
+    if (!open) return;
+    if (!depositOverridden && depositAmount !== effectiveDepositAmount) {
+      setDepositAmount(effectiveDepositAmount);
+    }
+  }, [open, depositMonths, depositAmount, depositOverridden, effectiveDepositAmount]);
+
   const resetForm = () => {
     setTitle("");
     setDescription("");
     setItems([{ description: "", quantity: 1, unit_price: 0, total: 0 }]);
+    setEscalationSplit(false);
     setTaxPercentage(18);
     setDiscountPercentage(0);
     setValidUntil("");
@@ -103,6 +217,9 @@ export function ProposalForm({
     setDepositMonths(0);
     setDepositAmount(0);
     setDepositOverridden(false);
+    setTenureMonths(null);
+    setLockInMonths(null);
+    setNoticePeriodMonths(null);
     // Reset quotas to defaults
     setServiceQuotas(prev => prev.map(sq => ({
       ...sq,
@@ -110,6 +227,36 @@ export function ProposalForm({
       overage_rate: sq.default_overage_rate,
     })));
   };
+
+  const handleTenureChange = (val: string) => {
+    const tenure = parseInt(val);
+    setTenureMonths(tenure);
+    const lockIn = lockInMonths != null ? Math.min(lockInMonths, tenure) : null;
+    setLockInMonths(lockIn);
+    if (lockIn != null && noticePeriodMonths != null) {
+      setNoticePeriodMonths(Math.min(noticePeriodMonths, maxNoticePeriodMonths(tenure, lockIn)));
+    }
+  };
+
+  const handleLockInChange = (val: string) => {
+    const lockIn = parseInt(val);
+    setLockInMonths(lockIn);
+    if (tenureMonths != null && noticePeriodMonths != null) {
+      setNoticePeriodMonths(Math.min(noticePeriodMonths, maxNoticePeriodMonths(tenureMonths, lockIn)));
+    }
+  };
+
+  const maxNotice = tenureMonths != null && lockInMonths != null
+    ? maxNoticePeriodMonths(tenureMonths, lockInMonths)
+    : null;
+
+  const generatedTermLines = buildCommitmentTermLines({
+    tenure_months: tenureMonths,
+    lock_in_months: lockInMonths,
+    notice_period_months: noticePeriodMonths,
+    security_deposit_months: depositMonths,
+    security_deposit_amount: depositMonths > 0 ? effectiveDepositAmount : 0,
+  });
 
   const updateQuota = (serviceId: string, field: "monthly_quota" | "overage_rate", value: number) => {
     setServiceQuotas(prev => prev.map(sq =>
@@ -137,6 +284,16 @@ export function ProposalForm({
       return;
     }
 
+    const commitmentError = validateCommitmentTerms({
+      tenure_months: tenureMonths,
+      lock_in_months: lockInMonths,
+      notice_period_months: noticePeriodMonths,
+    });
+    if (commitmentError) {
+      toast.error(commitmentError);
+      return;
+    }
+
     setSubmitting(true);
 
     // Only send quotas that have been configured (quota > 0 or rate differs from default)
@@ -159,6 +316,7 @@ export function ProposalForm({
         unit: item.unit || undefined,
         unit_price: item.unit_price,
         total: Math.max(1, item.quantity) * item.unit_price,
+        ...(escalationSplit && item.escalates !== undefined ? { escalates: item.escalates } : {}),
       })),
       tax_percentage: taxPercentage,
       discount_percentage: discountPercentage,
@@ -174,23 +332,35 @@ export function ProposalForm({
       }] : undefined,
       security_deposit_months: depositMonths,
       security_deposit_amount: depositMonths > 0 ? depositAmount : 0,
+      tenure_months: tenureMonths,
+      lock_in_months: lockInMonths,
+      notice_period_months: noticePeriodMonths,
     };
 
-    const res = await fetch("/api/proposals", {
-      method: "POST",
+    const url = revise ? `/api/proposals/${proposalId}/revise` : isEditMode ? `/api/proposals/${proposalId}` : "/api/proposals";
+    const res = await fetch(url, {
+      method: isEditMode && !revise ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
 
     setSubmitting(false);
     if (res.ok) {
-      toast.success("Proposal created successfully");
-      resetForm();
+      if (revise) {
+        const json = await res.json().catch(() => null);
+        toast.success(`Revision ${json?.data?.proposal_number ?? ""} created. Send it to the customer.`);
+        onOpenChange(false);
+        if (json?.data?.id && onRevised) onRevised(json.data);
+        else onSuccess();
+        return;
+      }
+      toast.success(isEditMode ? "Proposal updated successfully" : "Proposal created successfully");
+      if (!isEditMode) resetForm();
       onOpenChange(false);
       onSuccess();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to create proposal");
+      toast.error(err?.error || (revise ? "Failed to create revision" : isEditMode ? "Failed to update proposal" : "Failed to create proposal"));
     }
   };
 
@@ -198,9 +368,16 @@ export function ProposalForm({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Proposal</DialogTitle>
+          <DialogTitle>{revise ? `Revise ${initialProposal?.proposal_number ?? "proposal"}` : isEditMode ? "Edit Proposal" : "Create Proposal"}</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        {revise && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            This proposal has already been sent, so its terms are locked. Saving creates a new revision as a draft.
+            The original is marked superseded and its payment links are cancelled, so the customer can no longer pay
+            or accept the old terms. Nothing is sent until you send the revision.
+          </div>
+        )}
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="proposal-title">
@@ -233,6 +410,8 @@ export function ProposalForm({
               onTaxChange={setTaxPercentage}
               discountPercentage={discountPercentage}
               onDiscountChange={setDiscountPercentage}
+              escalationSplit={escalationSplit}
+              onEscalationSplitChange={setEscalationSplit}
             />
           </div>
 
@@ -352,12 +531,78 @@ export function ProposalForm({
             </div>
           </div>
 
-          {/* Security Deposit */}
+          {/* Commitment & Security Deposit */}
           <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
-            <Label className="text-sm font-semibold">Security Deposit</Label>
+            <div>
+              <Label className="text-sm font-semibold">Commitment & Security Deposit</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                What the customer is offered. These are printed in the proposal terms and carried into the contract.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="tenure-months" className="text-xs text-muted-foreground">
+                  Term <span className="text-destructive">*</span>
+                </Label>
+                <Select value={tenureMonths != null ? String(tenureMonths) : ""} onValueChange={handleTenureChange}>
+                  <SelectTrigger id="tenure-months">
+                    <SelectValue placeholder="Select term" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: PROPOSAL_MAX_TENURE_MONTHS }, (_, i) => i + 1).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m} month{m !== 1 ? "s" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="lock-in-months" className="text-xs text-muted-foreground">
+                  Lock-in Period <span className="text-destructive">*</span>
+                </Label>
+                <Select
+                  value={lockInMonths != null ? String(lockInMonths) : ""}
+                  onValueChange={handleLockInChange}
+                  disabled={tenureMonths == null}
+                >
+                  <SelectTrigger id="lock-in-months">
+                    <SelectValue placeholder={tenureMonths == null ? "Select term first" : "Select lock-in"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: tenureMonths ?? 0 }, (_, i) => i + 1).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m} month{m !== 1 ? "s" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="notice-period-months" className="text-xs text-muted-foreground">
+                  Notice Period <span className="text-destructive">*</span>
+                </Label>
+                <Select
+                  value={noticePeriodMonths != null ? String(noticePeriodMonths) : ""}
+                  onValueChange={(v) => setNoticePeriodMonths(parseInt(v))}
+                  disabled={maxNotice == null}
+                >
+                  <SelectTrigger id="notice-period-months">
+                    <SelectValue placeholder={maxNotice == null ? "Select lock-in first" : "Select notice"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: (maxNotice ?? -1) + 1 }, (_, i) => i).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m === 0 ? "None (0 months)" : `${m} month${m !== 1 ? "s" : ""}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="deposit-months" className="text-xs text-muted-foreground">Number of Months</Label>
+                <Label htmlFor="deposit-months" className="text-xs text-muted-foreground">Security Deposit (months)</Label>
                 <Select
                   value={String(depositMonths)}
                   onValueChange={(v) => {
@@ -424,6 +669,16 @@ export function ProposalForm({
 
           <div className="space-y-2">
             <Label htmlFor="terms">Terms & Conditions</Label>
+            <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                <Lock className="h-3 w-3" /> Generated from Commitment & Security Deposit — updates as you change them
+              </p>
+              {generatedTermLines.length > 0 ? (
+                <div className="whitespace-pre-line">{generatedTermLines.join("\n")}</div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Select term, lock-in and notice period to generate these lines.</p>
+              )}
+            </div>
             <Textarea
               id="terms"
               value={termsAndConditions}
@@ -431,8 +686,13 @@ export function ProposalForm({
               placeholder="Add terms and conditions..."
               rows={3}
             />
+            {mentionsCommitmentTerms(termsAndConditions) && (
+              <p className="text-xs text-amber-700">
+                These terms mention lock-in, notice period or security deposit. Those lines are generated above — remove them here so the proposal doesn&apos;t state conflicting terms.
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">
-              List legal and commercial terms here only. Set amenity quotas (conference rooms, prints, etc.) in the <span className="font-medium">Service Quotas</span> section above.
+              List other legal and commercial terms here. Set amenity quotas (conference rooms, prints, etc.) in the <span className="font-medium">Service Quotas</span> section above.
             </p>
           </div>
 
@@ -457,7 +717,7 @@ export function ProposalForm({
             </Button>
             <Button type="submit" disabled={submitting}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create Proposal
+              {revise ? "Create revision" : isEditMode ? "Save Changes" : "Create Proposal"}
             </Button>
           </div>
         </form>

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FileText, Download } from "lucide-react";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface RegisterDef {
   key: string;
@@ -87,6 +88,7 @@ export default function IsoRegistersPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
+      <PageBreadcrumb resetTo={{ label: "ISO Registers" }} />
       <div>
         <h1 className="text-2xl font-semibold flex items-center gap-2">
           <FileText className="h-6 w-6 text-teal-700" />

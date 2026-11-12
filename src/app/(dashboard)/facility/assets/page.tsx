@@ -3,13 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, Search, Pencil, ScanLine, Printer, CheckSquare } from "lucide-react";
+import { Plus, Search, Pencil, ScanLine, Printer, CheckSquare, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
-import type { FacilityAsset } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
+import type { FacilityAsset, FacilityAssetCategory } from "@/types";
 
 interface Location { id: string; name: string }
 
@@ -17,9 +19,11 @@ export default function FacilityAssetsPage() {
   const router = useRouter();
   const [assets, setAssets] = useState<FacilityAsset[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [categories, setCategories] = useState<FacilityAssetCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [locationId, setLocationId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
   const [openForm, setOpenForm] = useState(false);
   const [editing, setEditing] = useState<FacilityAsset | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -30,6 +34,7 @@ export default function FacilityAssetsPage() {
     setLoading(true);
     const params = new URLSearchParams({ include_stats: "true" });
     if (locationId) params.set("location_id", locationId);
+    if (categoryId) params.set("category_id", categoryId);
     if (search.trim()) params.set("search", search.trim());
     const res = await fetch(`/api/facility/assets?${params.toString()}`);
     const json = await res.json();
@@ -64,15 +69,26 @@ export default function FacilityAssetsPage() {
     router.push(`/facility/assets/batch-print?ids=${encodeURIComponent(ids)}`);
   };
 
+  const downloadCsv = () => {
+    const params = new URLSearchParams({ format: "csv" });
+    if (locationId) params.set("location_id", locationId);
+    if (categoryId) params.set("category_id", categoryId);
+    if (search.trim()) params.set("search", search.trim());
+    window.location.href = `/api/facility/assets?${params.toString()}`;
+  };
+
   useEffect(() => {
     fetch("/api/locations?is_active=true").then((r) => r.json()).then((j) => setLocations(j.data || []));
+    fetch("/api/facility/categories").then((r) => r.json()).then((j) => setCategories(j.data || []));
   }, []);
 
   useEffect(() => {
     const t = setTimeout(fetchData, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId, search]);
+  }, [locationId, categoryId, search]);
+
+  const hasActiveFilters = !!(search.trim() || locationId || categoryId);
 
   // Group by location for nicer presentation
   const grouped = useMemo(() => {
@@ -87,6 +103,7 @@ export default function FacilityAssetsPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Assets" }} />
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Facility Assets</h1>
@@ -95,6 +112,9 @@ export default function FacilityAssetsPage() {
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setScannerOpen(true)}>
             <ScanLine className="h-4 w-4 mr-1" /> Scan QR
+          </Button>
+          <Button size="sm" variant="outline" onClick={downloadCsv}>
+            <Download className="h-4 w-4 mr-1" /> Export CSV
           </Button>
           <Button
             size="sm"
@@ -118,10 +138,28 @@ export default function FacilityAssetsPage() {
           <option value="">All locations</option>
           {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
+        <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="h-10 px-2 rounded-md border bg-background text-sm">
+          <option value="">All categories</option>
+          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
       </div>
 
       {loading ? (
         <div className="text-sm text-muted-foreground py-12 text-center">Loading…</div>
+      ) : grouped.length === 0 && hasActiveFilters ? (
+        <div className="max-w-md mx-auto py-14 px-4 text-center space-y-3">
+          <div className="text-lg font-semibold">No assets match this filter</div>
+          <p className="text-sm text-muted-foreground">
+            Try a different location, category, or search term.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setSearch(""); setLocationId(""); setCategoryId(""); }}
+          >
+            Clear filters
+          </Button>
+        </div>
       ) : grouped.length === 0 ? (
         <div className="max-w-md mx-auto py-14 px-4 text-center space-y-6">
           <div className="text-2xl font-semibold">Start your asset register</div>
@@ -218,12 +256,28 @@ export default function FacilityAssetsPage() {
                         <td className="px-3 py-2">
                           {selectMode
                             ? <span className="font-mono text-xs">{a.asset_code}</span>
-                            : <Link className="font-mono text-xs hover:underline" href={`/facility/assets/${a.id}`}>{a.asset_code}</Link>}
+                            : (
+                              <Link
+                                className="font-mono text-xs hover:underline"
+                                href={`/facility/assets/${a.id}`}
+                                onClick={() => pushTrailEntry({ href: `/facility/assets/${a.id}`, label: a.name })}
+                              >
+                                {a.asset_code}
+                              </Link>
+                            )}
                         </td>
                         <td className="px-3 py-2">
                           {selectMode
                             ? <span>{a.name}</span>
-                            : <Link className="hover:underline" href={`/facility/assets/${a.id}`}>{a.name}</Link>}
+                            : (
+                              <Link
+                                className="hover:underline"
+                                href={`/facility/assets/${a.id}`}
+                                onClick={() => pushTrailEntry({ href: `/facility/assets/${a.id}`, label: a.name })}
+                              >
+                                {a.name}
+                              </Link>
+                            )}
                         </td>
                         <td className="px-3 py-2 hidden sm:table-cell text-xs">{a.category?.name ?? "—"}</td>
                         <td className="px-3 py-2 hidden md:table-cell text-xs">{[a.make, a.model].filter(Boolean).join(" ") || "—"}</td>

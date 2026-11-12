@@ -1,0 +1,27 @@
+-- Virtual Office case status becomes event-derived rather than hand-maintained.
+--
+-- Audit of production (22 Aug 2026) found all 58 cases sitting in the first
+-- three states and 13 of the 16 states never used. Nothing in the billing or
+-- Leave & License paths ever advanced cases.status, so the renewal cron —
+-- which opens with .eq("status", "active") — had never fired for any case.
+--
+-- Only one new value is needed. The rest of the derived pipeline reuses
+-- existing enum values:
+--   created                  -> intake_received   (already the column default)
+--   first document uploaded  -> docs_received
+--   compliance check passes  -> internal_approved
+--   case invoice raised      -> invoiced
+--   case invoice paid        -> paid              (NEW — no existing value means this)
+--   L&L executed             -> active
+--   renewal cron             -> renewal_due / grace_period / lapsed
+--
+-- The seven hand-off states (docs_requested, under_review, compliance_check,
+-- sent_for_client_approval, client_approved, signing_in_progress, executed)
+-- are retired in application code only. Postgres cannot drop an enum value,
+-- and leaving them in place keeps this migration reversible: rolling back the
+-- code restores the old pipeline without any schema work.
+--
+-- The data backfill lives in 00522 — a new enum value cannot be used in the
+-- same transaction that adds it.
+
+ALTER TYPE case_status ADD VALUE IF NOT EXISTS 'paid' AFTER 'invoiced';

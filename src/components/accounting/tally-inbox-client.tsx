@@ -13,10 +13,14 @@
  * underlying statement detail page.
  */
 
-import { Fragment, useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon } from "lucide-react";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MapPin, Receipt, Ban } from "lucide-react";
+import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { InboxQueryButton } from "@/components/queries/inbox-query-button";
+import { formatCurrency, formatDate, bookingWindowHours } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -30,15 +34,29 @@ import {
   type BookingHandoffState,
   type BookingInboxRow,
   type HandoffBucket,
-  type InboxPayment,
   type InboxResponse,
   type InboxRow,
+  isRealCompanyName,
+  leadAddress,
+  voBillParty,
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
+import { StatementHistoryDialog } from "./statement-history-dialog";
+import { BookingPaymentsToVerify } from "@/components/accounting/booking-payments-to-verify";
+import { ToVerifyPanel } from "./to-verify-panel";
+import { ReportedPaymentSheet } from "@/components/queries/reported-payment-sheet";
+import { paymentModeLabel as reportedModeLabel } from "@/components/billing/payment-collected-panel";
+import { PaymentDateFields } from "@/components/billing/payment-date-fields";
+import { todayIst } from "@/lib/payment-dates";
+import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
+import { StatementPaymentPanel, paymentModeLabel } from "@/components/billing/payment-collected-panel";
+import { DepositGuardWarning, DepositOverrideField, looksLikeDepositAdjustment } from "@/components/billing/deposit-guard-notice";
+import { DEPOSIT_OVERRIDE_MIN_REASON_LENGTH } from "@/lib/deposit-payment-guard";
+import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 
-type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
+type FilterTab = "all" | "cancellations" | "gst_to_issue" | "payment_to_record" | "to_verify" | "discrepancy" | "closed";
 
 // Success confirmation shown in place of a row once an action closes it out —
 // the row itself drops out of the "open" list on the next reload, so without
@@ -56,18 +74,27 @@ type CompletionInfo = {
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All open" },
+  { key: "cancellations", label: "Cancellations" },
   { key: "gst_to_issue", label: "GST to issue" },
   { key: "payment_to_record", label: "Payments" },
+  { key: "to_verify", label: "To verify" },
   { key: "discrepancy", label: "Discrepancies" },
   { key: "closed", label: "Closed" },
 ];
 
 function partyDisplay(row: InboxRow): string {
   const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
-  if (!lead) return "(unknown party)";
-  if (lead.company) return lead.company;
-  const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
-  return name || lead.email || "(unnamed)";
+  if (lead) {
+    if (isRealCompanyName(lead.company)) return lead.company;
+    const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
+    return name || lead.email || "(unnamed)";
+  }
+  // VO statements carry no lead. The buyer is whoever the case's bill_to
+  // names (the aggregator, for partner-billed cases) — not automatically the
+  // end client, whose name never reaches the invoice in that case.
+  const voParty = voBillParty(row);
+  if (voParty) return voParty.name || "(unnamed)";
+  return "(unknown party)";
 }
 
 function bucketBadgeClass(bucket: HandoffBucket, hasDiscrepancy: boolean): string {
@@ -94,6 +121,87 @@ function bucketLabel(bucket: HandoffBucket): string {
   }
 }
 
+function paymentStatusBadge(status: string): { label: string; cls: string } {
+  switch (status) {
+    case "paid":
+      return { label: "Paid", cls: "bg-green-50 text-green-800 border-green-200" };
+    case "partially_paid":
+      return { label: "Partially paid", cls: "bg-amber-50 text-amber-800 border-amber-200" };
+    case "unpaid":
+      return { label: "Unpaid", cls: "bg-muted/60 text-muted-foreground border-transparent" };
+    default:
+      return { label: status, cls: "bg-muted/60 text-muted-foreground border-transparent" };
+  }
+}
+
+/**
+ * "All open" groups rows by the action a user would actually click next,
+ * instead of raw last-updated order. One group per action button already
+ * on the row (canUpload / canSend / canRecordPayment / canMarkAccounted),
+ * plus discrepancies pulled to the top since those block everything else.
+ * Mirrors INBOX_ACTIONABLE_STATES — every open row belongs to exactly one
+ * group (discrepancy overrides state).
+ */
+type ActionGroupKey = "cancel_credit_note" | "discrepancy" | "upload_gst" | "send_to_customer" | "record_payment" | "mark_accounted";
+
+const ACTION_GROUPS: { key: ActionGroupKey; title: string; caption: string; wrapCls: string }[] = [
+  {
+    key: "cancel_credit_note",
+    title: "Cancellations — upload credit note",
+    caption: "An admin or manager asked to cancel these GST invoices. Issue the credit note in Tally and upload it here.",
+    wrapCls: "bg-red-50 border-red-300",
+  },
+  {
+    key: "discrepancy",
+    title: "Discrepancies to resolve",
+    caption: "Amount, name, or GST number doesn't match what Tally expects. Always cleared first.",
+    wrapCls: "bg-red-50/60 border-red-200",
+  },
+  {
+    key: "upload_gst",
+    title: "Upload GST invoice",
+    caption: "Payment's in, or GST was requested direct — issue the invoice in Tally and upload it here.",
+    wrapCls: "bg-blue-50/60 border-blue-200",
+  },
+  {
+    key: "send_to_customer",
+    title: "Send to customer",
+    caption: "GST invoice is uploaded and name-matched — one click sends it on.",
+    wrapCls: "bg-violet-50/60 border-violet-200",
+  },
+  {
+    key: "record_payment",
+    title: "Record payment",
+    caption: "Customer already has the invoice. Bank statement in hand? Log it here.",
+    wrapCls: "bg-amber-50/60 border-amber-200",
+  },
+  {
+    key: "mark_accounted",
+    title: "Mark as accounted",
+    caption: "GST already sent and payment already collected via the PI — just needs closing out.",
+    wrapCls: "bg-green-50/60 border-green-200",
+  },
+];
+
+function getRowActionGroup(row: InboxRow): ActionGroupKey {
+  if (row.cancellation_requested_at) return "cancel_credit_note";
+  if (row.has_discrepancy) return "discrepancy";
+  switch (row.handoff_state) {
+    case "pi_paid_awaiting_gst":
+    case "direct_gst_requested":
+      return "upload_gst";
+    case "ready_to_send":
+      return "send_to_customer";
+    case "gst_sent_awaiting_payment":
+    case "paid_awaiting_receipt_record":
+      return "record_payment";
+    case "gst_sent":
+      return "mark_accounted";
+    default:
+      return "upload_gst";
+  }
+}
+
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
   const diffMs = Date.now() - Date.parse(iso);
@@ -108,14 +216,44 @@ function timeAgo(iso: string | null): string {
 }
 
 export function TallyInboxClient() {
+  const { user } = useCurrentUser();
+  const currentUserRole = user?.role ?? "";
   const [data, setData] = useState<InboxResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<FilterTab>("all");
+  // Open payment reports waiting on a bank check. Only meaningful (and only
+  // shown) for the roles that can settle them — see canReviewPaymentReport.
+  const canVerifyPayments = canReviewPaymentReport(currentUserRole);
+  const [reportsToVerify, setReportsToVerify] = useState<number | null>(null);
+  const [bookingPaymentsToVerify, setBookingPaymentsToVerify] = useState(0);
+  const loadToVerifyCount = useCallback(async () => {
+    try {
+      const [res, bookingRes] = await Promise.all([
+        fetch("/api/queries?stats=true", { cache: "no-store" }),
+        fetch("/api/accounting/booking-payments-pending", { cache: "no-store" }),
+      ]);
+      if (!res.ok) return;
+      const json = (await res.json()) as { stats?: { to_verify?: number } };
+      const bookingJson = bookingRes.ok ? ((await bookingRes.json()) as { items?: unknown[] }) : null;
+      setReportsToVerify(json.stats?.to_verify ?? 0);
+      setBookingPaymentsToVerify(bookingJson?.items?.length ?? 0);
+    } catch {
+      // The tab simply shows no count.
+    }
+  }, []);
+  useEffect(() => {
+    if (canVerifyPayments) void loadToVerifyCount();
+  }, [canVerifyPayments, loadToVerifyCount]);
   // Primary split — rental/contract statements vs walk-in booking GST tasks.
   // These are backed by entirely different tables (billing_statements vs
   // booking_gst_tasks) and were previously stacked in one unlabeled list.
   const [activeType, setActiveType] = useState<"contracts" | "bookings">("contracts");
+  // Booking payments only make sense under Bookings; the rest are contract-side.
+  const toVerifyCount =
+    reportsToVerify === null
+      ? null
+      : reportsToVerify + (activeType === "bookings" ? bookingPaymentsToVerify : 0);
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   // Statement row state
@@ -132,6 +270,12 @@ export function TallyInboxClient() {
   const [sentConfirmedBookingId, setSentConfirmedBookingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [closedPage, setClosedPage] = useState(1);
+  // "All open" action-group collapse state, keyed by ActionGroupKey. Only
+  // set when a user explicitly toggles a group — undefined falls back to
+  // "open if non-empty" in the render, so newly-populated groups (e.g. a
+  // discrepancy appearing) open on their own without clobbering a group the
+  // user deliberately collapsed.
+  const [groupOverrides, setGroupOverrides] = useState<Record<string, boolean>>({});
   // Completion confirmations — kept visible until the user dismisses them,
   // even after the underlying row drops out of the "open" list.
   const [completions, setCompletions] = useState<CompletionInfo[]>([]);
@@ -141,6 +285,8 @@ export function TallyInboxClient() {
   const dismissCompletion = useCallback((id: string) => {
     setCompletions((prev) => prev.filter((x) => x.id !== id));
   }, []);
+  // History dialog (timeline + communications) — shared across open/closed rows.
+  const [historyRow, setHistoryRow] = useState<{ id: string; statement_number: string | null } | null>(null);
   // Pre-send dialog
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [pendingSend, setPendingSend] = useState<{ type: "statement"; id: string; recipients: string[] } | { type: "booking"; id: string; recipients: string[] } | null>(null);
@@ -163,6 +309,10 @@ export function TallyInboxClient() {
   const [payNotifyCustomer, setPayNotifyCustomer] = useState(false);
   const [payRemainderMode, setPayRemainderMode] = useState("bank_transfer");
   const [payRemainderRef, setPayRemainderRef] = useState("");
+  // Set when the server refuses a payment that looks like a deposit adjustment.
+  const [payGuardMessage, setPayGuardMessage] = useState<string | null>(null);
+  const [payOverrideConfirmed, setPayOverrideConfirmed] = useState(false);
+  const [payOverrideReason, setPayOverrideReason] = useState("");
 
   // Auto-expand the first pi_paid_awaiting_gst row on initial load so accounts
   // can see the upload form without an extra click.
@@ -200,6 +350,49 @@ export function TallyInboxClient() {
     }
   }, [tab, searchTerm, closedPage]);
 
+  // Re-fetch and patch a single statement instead of the whole list after a
+  // row-level mutation (upload / send / record payment / close / GSTIN
+  // save). The full inbox query joins across 5 owner types plus a 6-query
+  // fan-out — doing that for every click when only one row actually changed
+  // is what made the page feel slower with each successive action. The
+  // ?id= mode is the same query scoped to one row, so it's cheap.
+  // contractStats/visibleRows/groupedRows are memoized off `data`, so
+  // patching data.rows here is enough for the whole UI to catch up —
+  // nothing downstream needs to change.
+  const refreshRow = useCallback(async (statementId: string) => {
+    try {
+      const res = await fetch(`/api/accounting/inbox?id=${encodeURIComponent(statementId)}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const json = (await res.json()) as InboxResponse;
+      const fresh = json.rows[0] as InboxRow | undefined;
+      setData((prev) => {
+        if (!prev) return prev;
+        // Which tab we're viewing determines whether a state change should
+        // make the row appear or disappear from the current list — e.g.
+        // "mark accounted" should drop the row off "All open" immediately,
+        // but a resend on the Closed tab should keep it right where it is.
+        const isClosedTab = tab === "closed";
+        const belongsHere = !!fresh && (isClosedTab
+          ? (fresh.handoff_state === "complete" || fresh.is_voided)
+          : (fresh.handoff_state !== "complete" && !fresh.is_voided));
+        const idx = prev.rows.findIndex((r) => r.statement_id === statementId);
+        let rows: InboxRow[];
+        if (!belongsHere) {
+          rows = idx === -1 ? prev.rows : prev.rows.filter((r) => r.statement_id !== statementId);
+        } else if (idx === -1) {
+          rows = [...prev.rows, fresh as InboxRow];
+        } else {
+          rows = prev.rows.map((r, i) => (i === idx ? (fresh as InboxRow) : r));
+        }
+        return rows === prev.rows ? prev : { ...prev, rows };
+      });
+    } catch {
+      // Silent — worst case the row looks stale until the next natural
+      // reload or manual Refresh click, which beats failing the action
+      // that already succeeded server-side.
+    }
+  }, [tab]);
+
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -236,10 +429,43 @@ export function TallyInboxClient() {
     return () => clearTimeout(handle);
   }, [data]);
 
+  // Honor ?open=<statement_id | booking task_id> — used by the role dashboards
+  // so "Handle" lands on the exact item, expanded and scrolled into view.
+  // Runs once per page load: after that the user is driving, and a later
+  // refresh of `data` must not re-open a row they closed.
+  const handledOpenParam = useRef(false);
+  const [openNotice, setOpenNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (handledOpenParam.current || !data || loading) return;
+    const openId = new URLSearchParams(window.location.search).get("open");
+    if (!openId) return;
+    handledOpenParam.current = true;
+    // Stops the first-awaiting-GST auto-expand above from replacing the row we were asked for.
+    hasAutoExpanded.current = true;
+    if (data.rows.some((r) => r.statement_id === openId)) {
+      setActiveType("contracts");
+      setExpandedId(openId);
+    } else if (data.booking_rows?.some((r) => r.task_id === openId)) {
+      setActiveType("bookings");
+      setExpandedBookingId(openId);
+    } else {
+      // Only the open list is loaded here, so a missing id usually means it was
+      // handled since the dashboard was drawn — say so rather than show nothing.
+      setOpenNotice("That item is no longer in the open list. It may already have been handled.");
+      return;
+    }
+    // No cleanup on purpose: this runs once, and a data refresh re-running the
+    // effect would cancel the scroll without ever scheduling it again.
+    setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-statement-id="${CSS.escape(openId)}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 400);
+  }, [data, loading]);
+
   const handleSend = useCallback((statementId: string, row: InboxRow) => {
     const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
     const recipients = Array.from(new Set([
-      lead?.email,
+      lead?.email ?? voBillParty(row)?.email,
       ...(lead?.billing_emails ?? []),
     ].filter((e): e is string => !!e)));
     setPendingSend({ type: "statement", id: statementId, recipients });
@@ -295,7 +521,8 @@ export function TallyInboxClient() {
           });
         }
       }
-      await load();
+      if (type === "statement") await refreshRow(id);
+      else await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Send failed");
     } finally {
@@ -303,12 +530,12 @@ export function TallyInboxClient() {
       setSendingBookingId(null);
       setPendingSend(null);
     }
-  }, [pendingSend, load, data, pushCompletion]);
+  }, [pendingSend, load, refreshRow, data, pushCompletion]);
 
-  const handleUploaded = useCallback(async () => {
+  const handleUploaded = useCallback(async (statementId: string) => {
     setExpandedId(null);
-    await load();
-  }, [load]);
+    await refreshRow(statementId);
+  }, [refreshRow]);
 
   const handleBookingUploaded = useCallback(async (
     row: BookingInboxRow,
@@ -367,19 +594,19 @@ export function TallyInboxClient() {
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setSentConfirmedId(statementId);
-      await load();
+      await refreshRow(statementId);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Resend failed");
     } finally {
       setResendingId(null);
     }
-  }, [load]);
+  }, [refreshRow]);
 
   const openPayDialog = useCallback((row: InboxRow) => {
     const balance = Math.max(0, row.statement_total_amount - (row.total_paid ?? 0));
     setPayRow({ id: row.statement_id, statement_number: row.statement_number, balance_due: balance });
     setPayAmount(String(balance));
-    setPayDate(new Date().toISOString().slice(0, 10));
+    setPayDate(todayIst());
     setPayMode("bank_transfer");
     setPayRef("");
     setPayNotes("");
@@ -390,6 +617,9 @@ export function TallyInboxClient() {
     setPayRemainderMode("bank_transfer");
     setPayRemainderRef("");
     setPayDepositAvailable(null);
+    setPayGuardMessage(null);
+    setPayOverrideConfirmed(false);
+    setPayOverrideReason("");
     fetch(`/api/billing-statements/${row.statement_id}/deposit-balance`)
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => setPayDepositAvailable(json?.data?.available ?? 0))
@@ -437,12 +667,12 @@ export function TallyInboxClient() {
               `${formatCurrency(payRemainderLeg)} remainder failed: ${remainderJson.error || "unknown error"}. Record it separately.`
             );
             setPayRow(null);
-            await load();
+            await refreshRow(payRow.id);
             return;
           }
         }
         setPayRow(null);
-        await load();
+        await refreshRow(payRow.id);
       } catch (e) {
         setActionError(e instanceof Error ? e.message : "Failed to submit deposit adjustment");
       } finally {
@@ -470,18 +700,23 @@ export function TallyInboxClient() {
           notes: payNotes || null,
           tds_amount: tdsAmt,
           tds_section: payTdsEnabled ? payTdsSection : null,
+          deposit_override_reason: payOverrideConfirmed ? payOverrideReason.trim() : undefined,
         }),
       });
       const json = await res.json();
+      if (res.status === 409 && json.code === "DEPOSIT_AVAILABLE") {
+        setPayGuardMessage(json.error);
+        return;
+      }
       if (!res.ok) throw new Error(json.error || "Failed");
       setPayRow(null);
-      await load();
+      await refreshRow(payRow.id);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Failed to record payment");
     } finally {
       setPaySubmitting(false);
     }
-  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, load, isPayDepositMode, payDepositLeg, payRemainderLeg, payRemainderMode, payRemainderRef, payNotifyCustomer]);
+  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, refreshRow, payOverrideConfirmed, payOverrideReason, isPayDepositMode, payDepositLeg, payRemainderLeg, payRemainderMode, payRemainderRef, payNotifyCustomer]);
 
   const handleAccounted = useCallback(async (statementId: string) => {
     setClosingId(statementId);
@@ -505,13 +740,13 @@ export function TallyInboxClient() {
           action: "marked_complete",
         });
       }
-      await load();
+      await refreshRow(statementId);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Failed");
     } finally {
       setClosingId(null);
     }
-  }, [load, data, pushCompletion]);
+  }, [refreshRow, data, pushCompletion]);
 
   const handleBookingSend = useCallback((taskId: string, row: BookingInboxRow) => {
     const recipients = Array.from(new Set([
@@ -577,13 +812,16 @@ export function TallyInboxClient() {
     return list.reduce(
       (acc, r) => {
         acc.total_open += 1;
-        if (r.has_discrepancy) acc.discrepancies += 1;
+        // A pending cancellation is its own task; don't also count it as a
+        // payment/GST/discrepancy item.
+        if (r.cancellation_requested_at) acc.cancellations += 1;
+        else if (r.has_discrepancy) acc.discrepancies += 1;
         else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
         else if (r.bucket === "payment_to_record") acc.payments_to_record += 1;
         if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
         return acc;
       },
-      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0, cancellations: 0 },
     );
   }, [data]);
 
@@ -599,7 +837,7 @@ export function TallyInboxClient() {
         if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
         return acc;
       },
-      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0, cancellations: 0 },
     );
   }, [data, tab]);
 
@@ -608,19 +846,61 @@ export function TallyInboxClient() {
   const visibleRows = useMemo(() => {
     if (!data) return [];
     if (tab === "all" || tab === "closed") return data.rows;
-    if (tab === "discrepancy") return data.rows.filter((r) => r.has_discrepancy);
-    return data.rows.filter((r) => r.bucket === tab && !r.has_discrepancy);
+    if (tab === "cancellations") return data.rows.filter((r) => !!r.cancellation_requested_at);
+    if (tab === "discrepancy") return data.rows.filter((r) => r.has_discrepancy && !r.cancellation_requested_at);
+    return data.rows.filter((r) => r.bucket === tab && !r.has_discrepancy && !r.cancellation_requested_at);
   }, [data, tab]);
+
+  // Only meaningful on the "All open" tab, where rows needing five different
+  // actions are otherwise interleaved by last-updated order. visibleRows is
+  // already search-filtered (server-side), so grouping it directly keeps
+  // groups in sync with the search box for free.
+  const groupedRows = useMemo(() => {
+    const map = new Map<ActionGroupKey, InboxRow[]>();
+    for (const g of ACTION_GROUPS) map.set(g.key, []);
+    for (const row of visibleRows) {
+      map.get(getRowActionGroup(row))!.push(row);
+    }
+    return map;
+  }, [visibleRows]);
 
   const visibleBookingRows = useMemo(() => {
     if (!data?.booking_rows) return [];
     const br = data.booking_rows;
     if (tab === "closed") return br.filter((r) => r.handoff_state === "complete");
     if (tab === "all") return br.filter((r) => r.handoff_state !== "complete");
+    if (tab === "cancellations") return [];
     if (tab === "discrepancy") return br.filter((r) => r.has_discrepancy && r.handoff_state !== "complete");
     if (tab === "gst_to_issue") return br.filter((r) => r.bucket === "gst_to_issue" && !r.has_discrepancy && r.handoff_state !== "complete");
     return [];
   }, [data, tab]);
+
+  // Shared row renderer so the flat list and the grouped-by-action sections
+  // (both below) render identical rows — same props, same handlers.
+  const renderStatementRow = (row: InboxRow) => (
+    <InboxRowItem
+      key={row.statement_id}
+      row={row}
+      expanded={expandedId === row.statement_id}
+      sending={sendingId === row.statement_id}
+      closing={closingId === row.statement_id}
+      resending={resendingId === row.statement_id}
+      sentConfirmed={sentConfirmedId === row.statement_id}
+      onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
+      onSend={() => handleSend(row.statement_id, row)}
+      onClose={() => handleAccounted(row.statement_id)}
+      onResend={() => handleResend(row.statement_id)}
+      onUploaded={() => handleUploaded(row.statement_id)}
+      onCancelUpload={() => setExpandedId(null)}
+      onGstinUpdated={() => void refreshRow(row.statement_id)}
+      onRecordPayment={() => openPayDialog(row)}
+      onCreditNoteUploaded={() => void load()}
+      onViewHistory={() => setHistoryRow({ id: row.statement_id, statement_number: row.statement_number })}
+      onQueryChanged={() => void refreshRow(row.statement_id)}
+      currentUserRole={currentUserRole}
+      onWaived={() => void refreshRow(row.statement_id)}
+    />
+  );
 
   return (
     <div className="space-y-4">
@@ -683,14 +963,16 @@ export function TallyInboxClient() {
 
       {/* Filter tabs + search */}
       <div className="border-b flex items-center gap-1 flex-wrap">
-        {FILTER_TABS.map((t) => {
+        {FILTER_TABS.filter((t) => (t.key !== "to_verify" || canVerifyPayments) && (t.key !== "cancellations" || tab === "cancellations" || activeStats.cancellations > 0)).map((t) => {
           // Counts are tab-aware: open tabs reflect the OPEN summary; the
           // Closed tab can't sensibly show a global count, so it shows the
           // page-size result only when we're on it.
           const count =
             t.key === "all" ? activeStats.total_open
+            : t.key === "cancellations" ? activeStats.cancellations
             : t.key === "gst_to_issue" ? activeStats.gst_to_issue
             : t.key === "payment_to_record" ? activeStats.payments_to_record
+            : t.key === "to_verify" ? (toVerifyCount ?? undefined)
             : t.key === "discrepancy" ? activeStats.discrepancies
             : t.key === "closed" && tab === "closed" ? (activeType === "contracts" ? visibleRows.length : visibleBookingRows.length)
             : undefined;
@@ -740,8 +1022,22 @@ export function TallyInboxClient() {
         </div>
       </div>
 
+      {openNotice && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-start justify-between gap-3">
+          <span>{openNotice}</span>
+          <button type="button" className="text-xs underline" onClick={() => setOpenNotice(null)}>Dismiss</button>
+        </div>
+      )}
+
       {/* Worklist */}
-      {error ? (
+      {tab === "to_verify" ? (
+        <div className="space-y-4">
+          {activeType === "bookings" && (
+            <BookingPaymentsToVerify onChanged={() => void loadToVerifyCount()} />
+          )}
+          <ToVerifyPanel onChanged={() => void loadToVerifyCount()} search={searchInput} />
+        </div>
+      ) : error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <p className="font-medium">Failed to load inbox</p>
           <p className="mt-1">{error}</p>
@@ -763,45 +1059,63 @@ export function TallyInboxClient() {
           {completions.map((c) => (
             <CompletionBanner key={c.id} completion={c} onDismiss={() => dismissCompletion(c.id)} />
           ))}
-          <ul className="rounded-lg border overflow-hidden divide-y" role="list">
-            {activeType === "contracts" && visibleRows.map((row) => (
-              <InboxRowItem
-                key={row.statement_id}
-                row={row}
-                expanded={expandedId === row.statement_id}
-                sending={sendingId === row.statement_id}
-                closing={closingId === row.statement_id}
-                resending={resendingId === row.statement_id}
-                sentConfirmed={sentConfirmedId === row.statement_id}
-                onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
-                onSend={() => handleSend(row.statement_id, row)}
-                onClose={() => handleAccounted(row.statement_id)}
-                onResend={() => handleResend(row.statement_id)}
-                onUploaded={handleUploaded}
-                onCancelUpload={() => setExpandedId(null)}
-                onGstinUpdated={() => void load()}
-                onRecordPayment={() => openPayDialog(row)}
-              />
-            ))}
-            {activeType === "bookings" && visibleBookingRows.map((row) => (
-              <BookingInboxRowItem
-                key={row.task_id}
-                row={row}
-                expanded={expandedBookingId === row.task_id}
-                sending={sendingBookingId === row.task_id}
-                closing={closingBookingId === row.task_id}
-                resending={resendingBookingId === row.task_id}
-                sentConfirmed={sentConfirmedBookingId === row.task_id}
-                onToggle={() => setExpandedBookingId(expandedBookingId === row.task_id ? null : row.task_id)}
-                onSend={() => handleBookingSend(row.task_id, row)}
-                onClose={() => handleBookingClose(row.task_id)}
-                onResend={() => handleBookingResend(row.task_id)}
-                onUploaded={handleUploaded}
-                onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
-                onCancelUpload={() => setExpandedBookingId(null)}
-              />
-            ))}
-          </ul>
+          {activeType === "contracts" && tab === "all" ? (
+            <div className="space-y-2">
+              {ACTION_GROUPS.map((g) => {
+                const rows = groupedRows.get(g.key) ?? [];
+                if (rows.length === 0) return null;
+                const isOpen = groupOverrides[g.key] ?? true;
+                return (
+                  <div key={g.key} className={`rounded-lg border p-2.5 ${g.wrapCls}`}>
+                    <button
+                      type="button"
+                      onClick={() => setGroupOverrides((prev) => ({ ...prev, [g.key]: !isOpen }))}
+                      aria-expanded={isOpen}
+                      className="w-full flex items-baseline gap-2 py-1 text-left"
+                    >
+                      <span className="text-sm font-semibold">{g.title}</span>
+                      <span className="text-xs text-muted-foreground">({rows.length})</span>
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 ml-auto text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                        aria-hidden
+                      />
+                    </button>
+                    <p className="text-xs text-muted-foreground mb-2">{g.caption}</p>
+                    {isOpen && (
+                      <ul className="rounded-lg border overflow-hidden divide-y bg-background" role="list">
+                        {rows.map(renderStatementRow)}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <ul className="rounded-lg border overflow-hidden divide-y" role="list">
+              {activeType === "contracts" && visibleRows.map(renderStatementRow)}
+              {activeType === "bookings" && visibleBookingRows.map((row) => (
+                <BookingInboxRowItem
+                  key={row.task_id}
+                  row={row}
+                  expanded={expandedBookingId === row.task_id}
+                  sending={sendingBookingId === row.task_id}
+                  closing={closingBookingId === row.task_id}
+                  resending={resendingBookingId === row.task_id}
+                  sentConfirmed={sentConfirmedBookingId === row.task_id}
+                  onToggle={() => setExpandedBookingId(expandedBookingId === row.task_id ? null : row.task_id)}
+                  onSend={() => handleBookingSend(row.task_id, row)}
+                  onClose={() => handleBookingClose(row.task_id)}
+                  onResend={() => handleBookingResend(row.task_id)}
+                  onUploaded={() => void load()}
+                  onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
+                  onCancelUpload={() => setExpandedBookingId(null)}
+                  onVoided={() => void load()}
+                  onQueryChanged={() => void load()}
+                  currentUserRole={currentUserRole}
+                />
+              ))}
+            </ul>
+          )}
           {tab === "closed" && activeType === "contracts" && (
             <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
               <span>Page {closedPage} · {visibleRows.length} records</span>
@@ -859,14 +1173,11 @@ export function TallyInboxClient() {
                   <Label>Amount (₹)</Label>
                   <Input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
                 </div>
-                <div>
-                  <Label>Payment date</Label>
-                  <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
-                </div>
+                <PaymentDateFields value={payDate} onChange={setPayDate} />
               </div>
               <div>
                 <Label>Payment mode</Label>
-                <Select value={payMode} onValueChange={setPayMode}>
+                <Select value={payMode} onValueChange={(v) => { setPayMode(v); setPayGuardMessage(null); setPayOverrideConfirmed(false); }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="bank_transfer">Bank transfer / NEFT / RTGS</SelectItem>
@@ -891,6 +1202,19 @@ export function TallyInboxClient() {
                 <Label>Notes</Label>
                 <Input value={payNotes} onChange={(e) => setPayNotes(e.target.value)} placeholder="optional" />
               </div>
+
+              {looksLikeDepositAdjustment(payMode, payDepositAvailable, payRef, payNotes) && !payGuardMessage && (
+                <DepositGuardWarning available={payDepositAvailable ?? 0} />
+              )}
+              {payGuardMessage && (
+                <DepositOverrideField
+                  message={payGuardMessage}
+                  confirmed={payOverrideConfirmed}
+                  onConfirmedChange={setPayOverrideConfirmed}
+                  reason={payOverrideReason}
+                  onReasonChange={setPayOverrideReason}
+                />
+              )}
 
               {/* ── Adjustment against deposit block ── */}
               {isPayDepositMode && (
@@ -1013,7 +1337,10 @@ export function TallyInboxClient() {
           )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setPayRow(null)} disabled={paySubmitting}>Cancel</Button>
-            <Button onClick={() => void submitPayment()} disabled={paySubmitting}>
+            <Button
+              onClick={() => void submitPayment()}
+              disabled={paySubmitting || (!!payGuardMessage && !(payOverrideConfirmed && payOverrideReason.trim().length >= DEPOSIT_OVERRIDE_MIN_REASON_LENGTH))}
+            >
               {paySubmitting
                 ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />{isPayDepositMode ? "Submitting…" : "Recording…"}</>
                 : (isPayDepositMode ? "Submit for Approval" : "Record payment")}
@@ -1029,6 +1356,13 @@ export function TallyInboxClient() {
         savedRecipients={pendingSend?.recipients ?? []}
         sending={!!(sendingId || sendingBookingId)}
         onConfirm={handleSendConfirm}
+      />
+
+      {/* History dialog — timeline + communications, open or closed rows */}
+      <StatementHistoryDialog
+        statementId={historyRow?.id ?? null}
+        statementNumber={historyRow?.statement_number ?? null}
+        onOpenChange={(open) => { if (!open) setHistoryRow(null); }}
       />
     </div>
   );
@@ -1220,7 +1554,7 @@ function formatSentAt(iso: string): string {
   return new Date(iso).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" });
 }
 
-function InboxRowItem({
+const InboxRowItem = memo(function InboxRowItem({
   row,
   expanded,
   sending,
@@ -1235,6 +1569,11 @@ function InboxRowItem({
   onCancelUpload,
   onGstinUpdated,
   onRecordPayment,
+  onViewHistory,
+  onQueryChanged,
+  currentUserRole,
+  onWaived,
+  onCreditNoteUploaded,
 }: {
   row: InboxRow;
   expanded: boolean;
@@ -1250,7 +1589,13 @@ function InboxRowItem({
   onCancelUpload: () => void;
   onGstinUpdated: () => void;
   onRecordPayment: () => void;
+  onViewHistory: () => void;
+  onQueryChanged: () => void;
+  currentUserRole: string;
+  onWaived: () => void;
+  onCreditNoteUploaded: () => void;
 }) {
+  const [creditNoteOpen, setCreditNoteOpen] = useState(false);
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
   const [gstinSaving, setGstinSaving] = useState(false);
@@ -1260,6 +1605,49 @@ function InboxRowItem({
   const [paymentOpen, setPaymentOpen] = useState(
     row.handoff_state === "pi_paid_awaiting_gst" && row.payments_received.length > 0,
   );
+  const [queryOpen, setQueryOpen] = useState(false);
+  const [reportSheet, setReportSheet] = useState<{ query_id: string; entity_type: string; entity_id: string; title: string } | null>(null);
+  const [waivePromptOpen, setWaivePromptOpen] = useState(false);
+  const [waiveReasonInput, setWaiveReasonInput] = useState("");
+  const [waiving, setWaiving] = useState(false);
+  const [waiveContracts, setWaiveContracts] = useState<{ id: string; contract_number: string }[] | null>(null);
+  const [waiveSelectedContract, setWaiveSelectedContract] = useState("");
+
+  const handleWaiveConfirm = async () => {
+    const reason = waiveReasonInput.trim();
+    if (!reason) return;
+    if (waiveContracts && !waiveSelectedContract) return;
+    setWaiving(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${row.statement_id}/waive-gst`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason,
+          ...(waiveSelectedContract ? { contract_id: waiveSelectedContract } : {}),
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 409 && body.needs_contract_selection) {
+          setWaiveContracts(body.contracts);
+          return;
+        }
+        toast.error(body.error || "Failed to recategorize");
+        return;
+      }
+      toast.success("Recategorized as a security deposit — closed, no GST invoice required");
+      setWaivePromptOpen(false);
+      setWaiveReasonInput("");
+      setWaiveContracts(null);
+      setWaiveSelectedContract("");
+      onWaived();
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setWaiving(false);
+    }
+  };
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -1295,15 +1683,26 @@ function InboxRowItem({
   const agingClass =
     aging >= AGING_ESCALATE_HOURS ? "text-red-700" : aging >= 24 ? "text-amber-700" : "text-muted-foreground";
 
-  const canUpload =
-    row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested";
-  const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
-  const canRecordPayment =
+  // A requested cancellation turns the row into a credit-note task: the
+  // payment / send / accounted actions would all be wrong for an invoice that
+  // is being withdrawn, so they are switched off while it is pending.
+  const cancelling = !!row.cancellation_requested_at && !row.is_voided;
+  const canUploadCreditNote = cancelling && (currentUserRole === "accounts" || currentUserRole === "admin");
+  const canUpload = !cancelling &&
+    (row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested");
+  const canSend = !cancelling && row.handoff_state === "ready_to_send" && !row.has_discrepancy;
+  const canRecordPayment = !cancelling && (
     row.handoff_state === "gst_sent_awaiting_payment"
-    || row.handoff_state === "paid_awaiting_receipt_record";
-  const canMarkAccounted = row.handoff_state === "gst_sent";
+    || row.handoff_state === "paid_awaiting_receipt_record");
+  const canMarkAccounted = !cancelling && row.handoff_state === "gst_sent";
   const hasUpload = row.latest_upload !== null;
   const isClosed = row.handoff_state === "complete";
+
+  // Billing address for whoever the invoice actually bills — a case/aggregator
+  // (VO) party if one applies, otherwise the lead behind the contract/proposal/invoice.
+  const displayAddress =
+    voBillParty(row)?.address
+    ?? leadAddress(row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead ?? null);
 
   // Tally bridge match status — derived from latest_snapshot + has_discrepancy.
   // Bridge v2 isn't deployed yet, so most rows will be "not synced".
@@ -1338,17 +1737,34 @@ function InboxRowItem({
 
   return (
     <li
-      className="hover:bg-muted/30 transition-colors rounded"
+      className={cancelling
+        ? "bg-red-50 hover:bg-red-100/70 border-l-4 border-red-500 transition-colors rounded"
+        : "hover:bg-muted/30 transition-colors rounded"}
       data-statement-id={row.statement_id}
     >
       <div className="p-3 md:p-4 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 items-start">
         {/* ── Line 1 ── primary identity */}
         <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
-          <span
-            className={`text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 ${bucketBadgeClass(row.bucket, row.has_discrepancy)}`}
-          >
-            {bucketLabel(row.bucket)}
-          </span>
+          {cancelling ? (
+            <span className="text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 bg-red-100 text-red-800 border-red-300 font-medium">
+              <Ban className="h-2.5 w-2.5 inline -mt-0.5 mr-0.5" aria-hidden />
+              Cancellation requested
+            </span>
+          ) : row.gst_waived_at ? (
+            <span
+              className="text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 bg-green-50 text-green-800 border-green-200"
+              title={row.gst_waived_reason ? `No GST required: ${row.gst_waived_reason}` : "No GST required"}
+            >
+              <Receipt className="h-2.5 w-2.5 inline -mt-0.5 mr-0.5" aria-hidden />
+              Deposit · no GST required
+            </span>
+          ) : (
+            <span
+              className={`text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 ${bucketBadgeClass(row.bucket, row.has_discrepancy)}`}
+            >
+              {bucketLabel(row.bucket)}
+            </span>
+          )}
           <span className="font-medium text-sm truncate">{partyDisplay(row)}</span>
         </div>
         <div className="text-right">
@@ -1384,16 +1800,37 @@ function InboxRowItem({
           )}
           <span> · {row.handoff_state ? HANDOFF_STATE_LABELS[row.handoff_state] : "Draft"}</span>
           {row.contract?.billing_mode === "gst_direct" && <span> · direct GST</span>}
+          {row.tally_credit_note_number && (
+            <span className="font-mono text-red-700" title="Cancelled via credit note">
+              {" "}· Cancelled via {row.tally_credit_note_number}
+            </span>
+          )}
         </div>
         <div className={`text-xs ${agingClass} text-right`}>
           {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
         </div>
 
-        {/* ── Line 3 ── pills: GSTIN · IRN req · Tally · period */}
+        {/* ── Line 3 ── pills: payment status · GSTIN · IRN req · Tally · period */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap text-[11px]">
-          {(row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number) ? (
+          {(() => {
+            const ps = paymentStatusBadge(row.payment_status);
+            return (
+              <span className={`px-1.5 py-0.5 rounded border font-medium ${ps.cls}`} title="Payment status">
+                {ps.label}
+              </span>
+            );
+          })()}
+          {row.po_number && (
+            <span
+              className="font-mono px-1.5 py-0.5 rounded bg-violet-50 text-violet-900 border border-violet-200 font-medium"
+              title="Customer PO Number — put this on the Tally invoice"
+            >
+              PO: {row.po_number}
+            </span>
+          )}
+          {(row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number ?? voBillParty(row)?.gstin) ? (
             <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
-              {row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number}
+              {row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number ?? voBillParty(row)?.gstin}
             </span>
           ) : gstinEditing ? (
             <span className="flex items-center gap-1 flex-wrap">
@@ -1460,6 +1897,32 @@ function InboxRowItem({
           )}
         </div>
 
+        {cancelling && (
+          <div className="col-span-2 text-xs text-red-900 bg-red-100/70 border border-red-200 rounded px-2.5 py-1.5">
+            <b>Credit note needed.</b> Requested {formatDate(row.cancellation_requested_at as string)}
+            {row.cancellation_requested_by_name ? ` by ${row.cancellation_requested_by_name}` : ""}
+            {row.cancellation_reason ? <> — “{row.cancellation_reason}”</> : null}
+            . Issue the credit note in Tally, then upload it here. Nothing is sent to the customer.
+          </div>
+        )}
+        {row.is_voided && row.lifecycle_stage === "cancelled" && (
+          <div className="col-span-2 text-xs text-red-900 bg-red-50 border border-red-200 rounded px-2.5 py-1.5">
+            <b>Cancelled</b>
+            {row.tally_credit_note_number ? ` via credit note ${row.tally_credit_note_number}` : ""}
+            {row.cancellation_requested_by_name
+              ? ` · requested by ${row.cancellation_requested_by_name}${row.cancellation_requested_at ? ` on ${formatDate(row.cancellation_requested_at)}` : ""}`
+              : ""}
+            {(row.cancellation_reason ?? row.void_reason) ? <> — “{row.cancellation_reason ?? row.void_reason}”</> : null}
+          </div>
+        )}
+        {/* ── Billing address — accounts needs this to raise the Tally invoice ── */}
+        {displayAddress && (
+          <div className="col-span-2 flex items-start gap-1 text-[11px] text-muted-foreground" title={displayAddress}>
+            <MapPin className="h-3 w-3 flex-shrink-0 mt-0.5" aria-hidden />
+            <span className="truncate">{displayAddress}</span>
+          </div>
+        )}
+
         {/* ── Lifecycle tracker ── */}
         <InboxRowLifecycleTracker row={row} />
 
@@ -1485,6 +1948,38 @@ function InboxRowItem({
 
         {/* ── Actions row ── */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap justify-end pt-1">
+          <button
+            type="button"
+            onClick={onViewHistory}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+            title="Timeline and communications sent for this statement"
+          >
+            <History className="h-3 w-3" />
+            History
+          </button>
+          <InboxQueryButton
+            open={queryOpen}
+            openCount={row.open_query_count}
+            onToggle={() => setQueryOpen((v) => !v)}
+            title="Raise or answer a question about this statement"
+          />
+          {row.reported_payments.map((rp) => (
+            <button
+              key={rp.id}
+              type="button"
+              onClick={() => setReportSheet({
+                query_id: rp.query_id,
+                entity_type: rp.entity_type,
+                entity_id: rp.entity_id,
+                title: partyDisplay(row),
+              })}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+              title={`Reported by ${rp.reported_by_name ?? "someone"} — open to accept, verify or reject`}
+            >
+              <IndianRupee className="h-3 w-3" />
+              Payment reported · {formatCurrency(rp.amount)} · {reportedModeLabel(rp.payment_mode)}
+            </button>
+          ))}
           {row.payments_received.length > 0 && (
             <button
               type="button"
@@ -1540,6 +2035,61 @@ function InboxRowItem({
               )}
             </button>
           )}
+          {canUpload && !isClosed && !!row.invoice && !row.gst_waived_at
+            && (currentUserRole === "accounts" || currentUserRole === "admin")
+            && !waivePromptOpen && (
+            <button
+              type="button"
+              onClick={() => setWaivePromptOpen(true)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-green-300 text-green-800 hover:bg-green-50"
+              title="This ad-hoc invoice actually collected a security deposit — recategorize it and close without a Tally GST invoice"
+            >
+              <Receipt className="h-3 w-3" />
+              Mark as deposit — no GST
+            </button>
+          )}
+          {waivePromptOpen && (
+            <div className="col-span-2 w-full rounded border border-green-200 bg-green-50/50 p-2 space-y-2">
+              <textarea
+                autoFocus
+                rows={2}
+                value={waiveReasonInput}
+                onChange={(e) => setWaiveReasonInput(e.target.value)}
+                placeholder="Reason (e.g. refundable security deposit for Cabin 4, collected via this ad-hoc invoice) — at least 10 characters"
+                className="w-full text-xs px-2 py-1.5 rounded border focus:outline-none focus:ring-1 focus:ring-foreground/30"
+              />
+              {waiveContracts && (
+                <select
+                  value={waiveSelectedContract}
+                  onChange={(e) => setWaiveSelectedContract(e.target.value)}
+                  className="w-full text-xs px-2 py-1.5 rounded border"
+                >
+                  <option value="">This customer has more than one active contract — pick which to credit</option>
+                  {waiveContracts.map((c) => (
+                    <option key={c.id} value={c.id}>{c.contract_number}</option>
+                  ))}
+                </select>
+              )}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void handleWaiveConfirm()}
+                  disabled={waiving || waiveReasonInput.trim().length < 10 || (!!waiveContracts && !waiveSelectedContract)}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-700 text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {waiving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                  Confirm — close without GST
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setWaivePromptOpen(false); setWaiveReasonInput(""); setWaiveContracts(null); setWaiveSelectedContract(""); }}
+                  className="text-xs px-2 py-1 rounded border hover:bg-muted"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
           {canSend && (
             <button
               type="button"
@@ -1550,6 +2100,20 @@ function InboxRowItem({
               {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
               {sending ? "Sending…" : "Retry send"}
             </button>
+          )}
+          {canUploadCreditNote && (
+            <button
+              type="button"
+              onClick={() => setCreditNoteOpen(true)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+              title="Upload the credit note issued in Tally to cancel this GST invoice"
+            >
+              <Upload className="h-3 w-3" />
+              Upload credit note
+            </button>
+          )}
+          {cancelling && !canUploadCreditNote && (
+            <span className="text-xs text-red-800">Awaiting credit note from Accounts</span>
           )}
           {canRecordPayment && (
             <button
@@ -1599,6 +2163,30 @@ function InboxRowItem({
           )}
         </div>
       </div>
+      {queryOpen && (
+        <div className="mx-3 mb-2 md:mx-4 border-t pt-2">
+          <QueryThreadPanel entityType="billing_statement" entityId={row.statement_id} onChanged={onQueryChanged} />
+        </div>
+      )}
+      <ReportedPaymentSheet
+        report={reportSheet}
+        onClose={() => setReportSheet(null)}
+        onChanged={onQueryChanged}
+      />
+      {creditNoteOpen && (
+        <CreditNoteUploadDialog
+          statement={{
+            id: row.statement_id,
+            statement_number: row.statement_number,
+            tally_invoice_number: row.latest_upload?.tally_invoice_number ?? null,
+            total_amount: row.statement_total_amount,
+            payment_status: row.payment_status,
+          }}
+          defaultReason={row.cancellation_reason ?? ""}
+          onCancelled={() => { setCreditNoteOpen(false); onCreditNoteUploaded(); }}
+          onClose={() => setCreditNoteOpen(false)}
+        />
+      )}
       {expanded && canUpload && (
         <TallyInboxUploadForm
           row={row}
@@ -1607,126 +2195,55 @@ function InboxRowItem({
         />
       )}
       {paymentOpen && row.payments_received.length > 0 && (
-        <>
-          <StatementPaymentPanel payments={row.payments_received} totalAmount={row.statement_total_amount} />
-          {row.handoff_state === "pi_paid_awaiting_gst" && (
-            <div className="px-4 py-2 flex items-center gap-1.5 text-xs text-green-800 bg-green-50 border-t border-green-100">
-              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-600" aria-hidden />
-              Payment confirmed — issue the GST invoice in Tally, then upload it here.
-            </div>
-          )}
-        </>
+        <div className="mx-3 mb-2 md:mx-4">
+          <StatementPaymentPanel
+            payments={row.payments_received}
+            totalAmount={row.statement_total_amount}
+            nextStepMessage={
+              row.handoff_state === "pi_paid_awaiting_gst"
+                ? "Statement fully paid — issue the GST invoice in Tally, then upload it here."
+                : undefined
+            }
+          />
+        </div>
       )}
     </li>
   );
-}
-
-// ── Billing statement payment panel ────────────────────────────────────────
-
-function StatementPaymentPanel({
-  payments,
-  totalAmount,
-}: {
-  payments: InboxPayment[];
-  totalAmount: number;
-}) {
-  const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
-  const isFullyPaid = Math.abs(totalPaid - totalAmount) < 0.5;
-
-  return (
-    <div className="mx-3 mb-2 md:mx-4 p-3 rounded-lg bg-green-50 border border-green-200 text-xs">
-      <div className="flex items-center justify-between mb-2">
-        <span className="font-medium text-green-900 flex items-center gap-1.5">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Payment collected
-        </span>
-        <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
-          isFullyPaid
-            ? "bg-green-100 text-green-800 border-green-300"
-            : "bg-amber-100 text-amber-800 border-amber-200"
-        }`}>
-          {isFullyPaid ? "Fully paid" : `Partial · ${formatCurrency(totalPaid)} of ${formatCurrency(totalAmount)}`}
-        </span>
-      </div>
-      <div className="space-y-2">
-        {payments.map((p) => {
-          const txnDate = new Date(p.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-          const isRazorpay = !!p.razorpay_payment_id;
-          return (
-            <div key={p.id} className="rounded border border-green-200 bg-white/60 px-2.5 py-2 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-green-900 tabular-nums">{formatCurrency(p.amount)}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-800 border border-green-200 font-medium">
-                  {paymentModeLabel(p.payment_mode)}
-                </span>
-              </div>
-              {isRazorpay ? (
-                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
-                  <span className="text-muted-foreground">Txn ID</span>
-                  <span className="font-mono text-green-800 break-all">{p.razorpay_payment_id}</span>
-                  <span className="text-muted-foreground">Transacted on</span>
-                  <span>{txnDate}</span>
-                  {p.settled === true ? (
-                    <>
-                      <span className="text-muted-foreground">Settled to bank</span>
-                      <span className="text-green-700 font-medium">
-                        {p.settled_at ? new Date(p.settled_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
-                      </span>
-                      {p.settlement_utr && (
-                        <>
-                          <span className="text-muted-foreground">Bank UTR</span>
-                          <span className="font-mono text-green-800">{p.settlement_utr}</span>
-                        </>
-                      )}
-                    </>
-                  ) : p.settled === false ? (
-                    <>
-                      <span className="text-muted-foreground">Settlement</span>
-                      <span className="text-amber-700">Pending — not yet settled to bank</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-muted-foreground">Settlement</span>
-                      <span className="text-muted-foreground italic">Not synced yet</span>
-                    </>
-                  )}
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
-                  <span className="text-muted-foreground">Date recorded</span>
-                  <span>{txnDate}</span>
-                  {p.payment_reference && (
-                    <>
-                      <span className="text-muted-foreground">Reference</span>
-                      <span className="font-mono text-green-800">{p.payment_reference}</span>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+}, (prev, next) =>
+  // Callback props are re-created every parent render regardless — comparing
+  // them by reference would defeat the memo. They all just forward to
+  // useCallback-stabilized handlers with `row` (or its id) as the argument,
+  // so skipping a re-render when `row` itself hasn't changed is safe:
+  // refreshRow() only creates a new row object for the one row that
+  // actually changed, leaving every other row's reference untouched.
+  prev.row === next.row &&
+  prev.expanded === next.expanded &&
+  prev.sending === next.sending &&
+  prev.closing === next.closing &&
+  prev.resending === next.resending &&
+  prev.sentConfirmed === next.sentConfirmed
+);
 
 // ── Booking payment confirmation helpers ────────────────────────────────────
+// StatementPaymentPanel and paymentModeLabel now live in
+// @/components/billing/payment-collected-panel (shared with the ad-hoc
+// invoice payment popover on the lead page).
 
 import type { BookingPaymentConfirmation } from "@/lib/tally-handoff";
 
-function paymentModeLabel(mode: string): string {
-  const map: Record<string, string> = {
-    razorpay: "Razorpay",
-    upi: "UPI",
-    cash: "Cash",
-    card: "Card",
-    neft: "NEFT",
-    rtgs: "RTGS",
-    cheque: "Cheque",
-    bank_transfer: "Bank Transfer",
-  };
-  return map[mode.toLowerCase()] ?? mode;
+/**
+ * Hours to show beside a booking's time range. Prefers the real start/end
+ * window; falls back to `duration_hours` only when the times are missing
+ * (check-in/out-only rows). `duration_hours` is a billing day-unit ("1") for
+ * daily-priced spaces, so it must never be rendered as elapsed time on its own.
+ */
+function formatWindowHours(
+  startTime: string | null | undefined,
+  endTime: string | null | undefined,
+  durationHours: number | null | undefined
+): string {
+  const h = startTime && endTime ? bookingWindowHours(startTime, endTime) : Number(durationHours ?? 0);
+  return Number.isInteger(h) ? String(h) : h.toFixed(1).replace(/\.0$/, "");
 }
 
 function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentConfirmation[] }) {
@@ -2049,6 +2566,9 @@ function BookingInboxRowItem({
   onUploaded,
   onInvoiceUploaded,
   onCancelUpload,
+  onVoided,
+  onQueryChanged,
+  currentUserRole,
 }: {
   row: BookingInboxRow;
   expanded: boolean;
@@ -2063,12 +2583,45 @@ function BookingInboxRowItem({
   onUploaded: () => void;
   onInvoiceUploaded: (info: { invoiceNumber: string; amount: number; emailedTo: string | null }) => void;
   onCancelUpload: () => void;
+  onVoided: () => void;
+  onQueryChanged: () => void;
+  currentUserRole: string;
 }) {
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [queryOpen, setQueryOpen] = useState(false);
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
   const [gstinSaving, setGstinSaving] = useState(false);
   const [gstinError, setGstinError] = useState<string | null>(null);
+  const [voiding, setVoiding] = useState(false);
+  const [voidPromptOpen, setVoidPromptOpen] = useState(false);
+  const [voidReasonInput, setVoidReasonInput] = useState("");
+
+  const handleVoidConfirm = async () => {
+    const reason = voidReasonInput.trim();
+    if (!reason) return;
+    setVoiding(true);
+    try {
+      const res = await fetch(`/api/booking-gst-tasks/${row.task_id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ void_reason: reason }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.error || "Failed to void");
+        return;
+      }
+      toast.success("Booking task voided — excluded from the open worklist");
+      setVoidPromptOpen(false);
+      setVoidReasonInput("");
+      onVoided();
+    } catch {
+      toast.error("Failed to void — check your connection");
+    } finally {
+      setVoiding(false);
+    }
+  };
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -2204,6 +2757,14 @@ function BookingInboxRowItem({
           )}
         </div>
 
+        {/* ── Billing address — accounts needs this to raise the Tally invoice ── */}
+        {row.customer_address && (
+          <div className="col-span-2 flex items-start gap-1 text-[11px] text-muted-foreground" title={row.customer_address}>
+            <MapPin className="h-3 w-3 flex-shrink-0 mt-0.5" aria-hidden />
+            <span className="truncate">{row.customer_address}</span>
+          </div>
+        )}
+
         {/* Lifecycle tracker */}
         <BookingInboxLifecycleTracker state={row.handoff_state} />
 
@@ -2222,9 +2783,14 @@ function BookingInboxRowItem({
                 : row.check_in_at && row.check_out_at
                   ? `${new Date(row.check_in_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} – ${new Date(row.check_out_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })}`
                   : "—"}
-              {row.duration_hours != null && (
-                <span className="text-muted-foreground ml-1">({row.duration_hours}h)</span>
-              )}
+              {/* Real elapsed window, not `duration_hours` — that column stores "1"
+                  as a billing day-unit for daily-priced spaces, so day passes
+                  used to read "09:30 – 18:30 (1h)" here. */}
+              {(row.start_time && row.end_time) || row.duration_hours != null ? (
+                <span className="text-muted-foreground ml-1">
+                  ({formatWindowHours(row.start_time, row.end_time, row.duration_hours)}h)
+                </span>
+              ) : null}
             </span>
           </div>
 
@@ -2289,6 +2855,12 @@ function BookingInboxRowItem({
             Payment
             {paymentOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
+          <InboxQueryButton
+            open={queryOpen}
+            openCount={row.open_query_count}
+            onToggle={() => setQueryOpen((v) => !v)}
+            title="Raise or answer a question about this booking"
+          />
           {row.lead_id && row.lead_id_proof_path && (
             <a
               href={`/api/leads/${row.lead_id}/id-proof`}
@@ -2382,11 +2954,71 @@ function BookingInboxRowItem({
               ) : null}
             </div>
           )}
+          {currentUserRole === "admin" && !row.is_voided && !voidPromptOpen && (
+            <button
+              type="button"
+              onClick={() => setVoidPromptOpen(true)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50"
+              title="Exclude this booking's Tally task from the open worklist (test/bad data) — does not touch the booking or payment"
+            >
+              <X className="h-3 w-3" />
+              Void
+            </button>
+          )}
+          {voidPromptOpen && (
+            <div className="flex items-center gap-1.5 w-full">
+              <input
+                type="text"
+                autoFocus
+                value={voidReasonInput}
+                onChange={(e) => setVoidReasonInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleVoidConfirm();
+                  if (e.key === "Escape") { setVoidPromptOpen(false); setVoidReasonInput(""); }
+                }}
+                placeholder="Reason for voiding (required)…"
+                className="flex-1 text-xs border rounded px-2 py-1 bg-background"
+              />
+              <button
+                type="button"
+                onClick={handleVoidConfirm}
+                disabled={voiding || !voidReasonInput.trim()}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex-shrink-0"
+              >
+                {voiding ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm void"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setVoidPromptOpen(false); setVoidReasonInput(""); }}
+                className="text-xs px-2 py-1 rounded border hover:bg-muted flex-shrink-0"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          {row.is_voided && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200"
+              title={row.void_reason ? `Voided: ${row.void_reason}` : "Voided"}
+            >
+              Voided
+            </span>
+          )}
         </div>
       </div>
 
       {paymentOpen && (
         <BookingPaymentPanel confirmations={row.payment_confirmations} totalAmount={row.statement_total_amount} />
+      )}
+
+      {queryOpen && (
+        <div className="mx-3 mb-2 md:mx-4 border-t pt-2">
+          <QueryThreadPanel
+            entityType="booking_gst_task"
+            entityId={row.task_id}
+            onChanged={onQueryChanged}
+          />
+        </div>
       )}
 
       {expanded && canUpload && (
@@ -2396,6 +3028,7 @@ function BookingInboxRowItem({
           spaceName={row.space_name}
           customerName={row.customer_name}
           customerGstin={row.customer_gstin}
+          customerAddress={row.customer_address}
           totalAmount={row.statement_total_amount}
           irnRequired={row.irn_required}
           expectedSeries={row.expected_series ?? (row.irn_required ? "SDIPL-REG" : "SDIPL-UNREG")}

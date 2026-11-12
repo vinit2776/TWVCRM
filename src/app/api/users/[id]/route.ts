@@ -5,7 +5,28 @@ import { logAudit } from "@/lib/audit";
 const VALID_ROLES = [
   "admin", "manager", "sales_rep", "floor_manager", "accounts",
   "fms", "office_admin", "it_manager", "it_technician", "viewer",
+  "enquiry_viewer", "coordinator",
 ];
+
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data, error } = await supabase
+    .from("users")
+    .select("id, full_name, email, role")
+    .eq("id", id)
+    .single();
+
+  if (error || !data) return NextResponse.json({ error: "User not found" }, { status: 404 });
+
+  return NextResponse.json({ data });
+}
 
 export async function PATCH(
   request: NextRequest,

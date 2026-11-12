@@ -12,6 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { RENEWAL_NOTE_MAX_LENGTH } from "@/lib/renewal-note";
 import { Separator } from "@/components/ui/separator";
 import {
   Select,
@@ -31,6 +33,8 @@ interface EditableItem {
   quantity: number;
   unit_price: number;
   unit?: string;
+  // Carried through unchanged so editing a renewal never loses the rent/maintenance split.
+  escalates?: boolean;
 }
 
 interface ContractRenewalEditDialogProps {
@@ -51,6 +55,7 @@ export function ContractRenewalEditDialog({
   const [seats, setSeats] = useState(contract.seats || 1);
   const [billingCycle, setBillingCycle] = useState<string>(contract.billing_cycle || "monthly");
   const [escalationPct, setEscalationPct] = useState(contract.escalation_percentage || 0);
+  const [agreedNote, setAgreedNote] = useState(contract.renewal_agreed_note ?? "");
   const [startDate, setStartDate] = useState(contract.start_date);
   const [items, setItems] = useState<EditableItem[]>(() =>
     (contract.items || []).map((item) => ({
@@ -58,6 +63,7 @@ export function ContractRenewalEditDialog({
       quantity: item.quantity,
       unit_price: item.unit_price,
       unit: item.unit,
+      ...(item.escalates !== undefined ? { escalates: item.escalates } : {}),
     }))
   );
 
@@ -121,12 +127,14 @@ export function ContractRenewalEditDialog({
           seats,
           billing_cycle: billingCycle,
           escalation_percentage: escalationPct,
+          agreed_note: agreedNote,
           items: items.map((i) => ({
             description: i.description.trim(),
             quantity: i.quantity,
             unit_price: i.unit_price,
             unit: i.unit,
             total: i.quantity * i.unit_price,
+            ...(i.escalates !== undefined ? { escalates: i.escalates } : {}),
           })),
         }),
       });
@@ -230,6 +238,22 @@ export function ContractRenewalEditDialog({
                   items below. Edit the amounts directly if the escalation changes the rate.
                 </p>
               </div>
+              <div className="space-y-1 col-span-2">
+                <Label className="text-xs" htmlFor="edit-agreed-note">What was agreed (optional)</Label>
+                <Textarea
+                  id="edit-agreed-note"
+                  value={agreedNote}
+                  onChange={(e) => setAgreedNote(e.target.value)}
+                  maxLength={RENEWAL_NOTE_MAX_LENGTH}
+                  rows={2}
+                  placeholder="Held the rate in return for two more seats and a 12-month term"
+                  className="text-sm"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Internal. Shown to admins on the lead&apos;s Value tab; never on the agreement or invoices.{" "}
+                  {agreedNote.length} / {RENEWAL_NOTE_MAX_LENGTH}
+                </p>
+              </div>
             </div>
             {previewEndDate && (
               <p className="text-xs text-muted-foreground">
@@ -270,6 +294,9 @@ export function ContractRenewalEditDialog({
                           placeholder="e.g. 8 Seater Conference Room"
                           className="h-8 text-sm"
                         />
+                        {item.escalates === false && (
+                          <p className="mt-1 text-[11px] text-amber-700">Fixed: not escalated on renewal</p>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <Input

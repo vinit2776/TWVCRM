@@ -344,7 +344,18 @@ export async function GET(request: NextRequest) {
     const adHocTotal = contractAdHocCharges.reduce((sum, c) => sum + Number(c.total), 0);
     const bookingTotal = contractBookings.reduce((sum, b) => sum + Number(b.total_amount || 0), 0);
     const recurringAmount = Number(contract.total_amount);
-    const currentMonthCharges = recurringAmount + facilityUsageTotal + adHocTotal + bookingTotal;
+    // A real, already-issued statement for this period is ground truth and
+    // must win over the raw-rate guess below — its total_amount can
+    // legitimately differ (rate-phase proration, escalation, a manual
+    // adjustment at finalize time), and this figure feeds straight into
+    // `outstanding` and the Aging Buckets "Current" total, so a guess here
+    // silently drifted those away from what was actually billed.
+    const currentStatement = statementByContract[contract.id as string];
+    const hasRealCurrentStatement =
+      !!currentStatement && (currentStatement.status === "finalized" || currentStatement.status === "exported");
+    const currentMonthCharges = hasRealCurrentStatement
+      ? Number(currentStatement.total_amount)
+      : recurringAmount + facilityUsageTotal + adHocTotal + bookingTotal;
 
     const verifiedPayments = contractPmts.filter((p) => p.status === "verified");
     const totalPaidThisMonth = verifiedPayments.reduce((sum, p) => sum + Number(p.amount), 0);

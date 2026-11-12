@@ -37,6 +37,7 @@ export function applyBillFilters<Q extends FilterableQuery>(
   if (get("approval_status"))    query = query.eq("approval_status", get("approval_status")) as Q;
   if (get("vendor_id"))          query = query.eq("vendor_id", get("vendor_id")) as Q;
   if (get("po_id"))              query = query.eq("po_id", get("po_id")) as Q;
+  if (get("company_id"))         query = query.eq("company_id", get("company_id")) as Q;
 
   if (get("has_irn") === "true")  query = query.not("approval_code", "is", null) as Q;
   if (get("has_irn") === "false") query = query.is("approval_code", null) as Q;

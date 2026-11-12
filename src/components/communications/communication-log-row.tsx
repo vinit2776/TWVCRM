@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Mail, MessageCircle, Smartphone, ChevronDown, ChevronUp, XCircle, Paperclip, ExternalLink } from "lucide-react";
+import { Mail, MessageCircle, Smartphone, Download, ChevronDown, ChevronUp, XCircle, Paperclip, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
 import type { CommunicationLogEntry } from "@/types";
@@ -10,18 +10,21 @@ const CHANNEL_ICONS = {
   email: Mail,
   whatsapp: MessageCircle,
   sms: Smartphone,
+  manual: Download,
 } as const;
 
 const CHANNEL_LABELS = {
   email: "Email",
   whatsapp: "WhatsApp",
   sms: "SMS",
+  manual: "Shared manually",
 } as const;
 
 const CHANNEL_COLORS = {
   email: "bg-blue-100 text-blue-600",
   whatsapp: "bg-green-100 text-green-600",
   sms: "bg-amber-100 text-amber-600",
+  manual: "bg-violet-100 text-violet-600",
 } as const;
 
 /**
@@ -79,6 +82,11 @@ export function CommunicationLogRow({
         <div className="border-t px-3 py-3 space-y-2 bg-muted/20">
           {failed && entry.error_message && (
             <p className="text-xs text-red-600">{entry.error_message}</p>
+          )}
+          {entry.cc && entry.cc.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Cc <span className="font-mono">{entry.cc.join(", ")}</span>
+            </p>
           )}
           {entry.subject && (
             <p className="text-sm font-medium">{entry.subject}</p>

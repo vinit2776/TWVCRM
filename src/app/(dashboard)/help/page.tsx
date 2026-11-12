@@ -11,60 +11,23 @@ import { HelpKeyboardShortcuts } from "@/components/help/help-keyboard-shortcuts
 import { HelpRolePermissions } from "@/components/help/help-role-permissions";
 import { HelpContactSupport } from "@/components/help/help-contact-support";
 import { HELP_CONTENT, type HelpSection as HelpSectionType } from "@/lib/help-content";
+import { filterSectionsForRole } from "@/lib/help/role-filter";
+import { scoreSections } from "@/lib/help/help-search";
+import { useCurrentUser } from "@/providers/current-user-provider";
 
 /* ------------------------------------------------------------------ */
-/*  Search filter logic                                                */
+/*  Search filter logic — role-filtered sections, then scored/matched  */
+/*  against the query via the same matcher the help-chat assistant     */
+/*  uses, so search and chat never disagree on what "matches" means.   */
 /* ------------------------------------------------------------------ */
 
-function filterSections(sections: HelpSectionType[], query: string) {
-  if (!query.trim()) return sections;
-
-  const q = query.toLowerCase();
-
-  return sections
-    .map((section) => {
-      const titleMatch = section.title.toLowerCase().includes(q);
-      const overviewMatch = section.overview.toLowerCase().includes(q);
-
-      const matchingWorkflows = section.workflows.filter(
-        (w) =>
-          w.title.toLowerCase().includes(q) ||
-          w.steps.some(
-            (s) =>
-              s.title.toLowerCase().includes(q) ||
-              s.description.toLowerCase().includes(q)
-          )
-      );
-
-      const matchingTips = section.tips.filter((t) =>
-        t.toLowerCase().includes(q)
-      );
-
-      const matchingFaqs = section.faqs.filter(
-        (f) =>
-          f.question.toLowerCase().includes(q) ||
-          f.answer.toLowerCase().includes(q)
-      );
-
-      const hasMatch =
-        titleMatch ||
-        overviewMatch ||
-        matchingWorkflows.length > 0 ||
-        matchingTips.length > 0 ||
-        matchingFaqs.length > 0;
-
-      if (!hasMatch) return null;
-
-      // If title or overview matches, show full section. Otherwise, show only matching parts.
-      return {
-        ...section,
-        workflows:
-          titleMatch || overviewMatch ? section.workflows : matchingWorkflows,
-        tips: titleMatch || overviewMatch ? section.tips : matchingTips,
-        faqs: titleMatch || overviewMatch ? section.faqs : matchingFaqs,
-      };
-    })
-    .filter(Boolean) as HelpSectionType[];
+function filterSections(sections: HelpSectionType[], query: string): HelpSectionType[] {
+  return scoreSections(sections, query).map((match) => ({
+    ...match.section,
+    workflows: match.matchedWorkflows,
+    tips: match.matchedTips,
+    faqs: match.matchedFaqs,
+  }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -75,11 +38,19 @@ export default function HelpPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const { user, loading: userLoading } = useCurrentUser();
+
+  // Sections this user's role can actually see — computed before search so
+  // a restricted section never shows up even via a matching search term.
+  const visibleSections = useMemo(
+    () => (userLoading ? [] : filterSectionsForRole(HELP_CONTENT.sections, user?.role ?? null)),
+    [user?.role, userLoading]
+  );
 
   // Filter sections based on search
   const filteredSections = useMemo(
-    () => filterSections(HELP_CONTENT.sections, searchQuery),
-    [searchQuery]
+    () => filterSections(visibleSections, searchQuery),
+    [visibleSections, searchQuery]
   );
 
   // Filter global FAQs based on search
@@ -117,7 +88,7 @@ export default function HelpPage() {
     if (searchQuery.trim()) return; // Don't track when searching
 
     const sectionIds = [
-      ...HELP_CONTENT.sections.map((s) => s.id),
+      ...visibleSections.map((s) => s.id),
       "global-faqs",
       "keyboard-shortcuts",
       "role-permissions",
@@ -143,7 +114,7 @@ export default function HelpPage() {
     });
 
     return () => observer.disconnect();
-  }, [searchQuery]);
+  }, [searchQuery, visibleSections]);
 
   return (
     <div className="space-y-6">
@@ -167,7 +138,7 @@ export default function HelpPage() {
         {/* Desktop sidebar nav */}
         {!searchQuery.trim() && (
           <HelpSidebarNav
-            sections={HELP_CONTENT.sections}
+            sections={visibleSections}
             activeSection={activeSection}
           />
         )}

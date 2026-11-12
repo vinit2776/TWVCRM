@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { processDispatchRun, triggerDispatchContinuation } from "@/lib/billing-dispatch";
+import { withCronHealth } from "@/lib/cron-ping";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -21,7 +22,7 @@ const CRON_SECRET = process.env.CRON_SECRET;
  * 'processing' from a crashed invocation (recovered after 6 min, checked
  * at the top of every processDispatchRun call).
  */
-export async function GET(req: NextRequest) {
+async function handler(req: NextRequest) {
   const secret = req.headers.get("x-cron-secret") || req.nextUrl.searchParams.get("secret");
   const authHeader = req.headers.get("authorization");
   const isAuthorized = secret === CRON_SECRET || authHeader === `Bearer ${CRON_SECRET}`;
@@ -55,3 +56,5 @@ export async function GET(req: NextRequest) {
 }
 
 export const maxDuration = 55; // stay under Vercel 60s function limit
+
+export const GET = withCronHealth("cron/billing-dispatch-pump", handler);

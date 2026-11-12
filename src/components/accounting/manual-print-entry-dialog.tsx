@@ -30,10 +30,12 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Printer, AlertCircle, Info } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
+import { usageContractOption } from "@/lib/usage-contract-label";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,10 @@ interface ContractOption {
   contract_number: string;
   lead?: { first_name: string; last_name: string; company?: string };
   location?: { name: string };
+  status?: string;
+  activated_at?: string | null;
+  terminated_at?: string | null;
+  end_date?: string | null;
 }
 
 interface ServiceQuota {
@@ -80,6 +86,9 @@ interface Props {
   defaultContractId?: string;
   /** Scope contract list to a specific lead (e.g. opened from the lead page) */
   filterLeadId?: string;
+  /** Period to pre-select on open — e.g. the month picked on the Billing
+   *  page — instead of the real current month. Still editable. */
+  defaultPeriod?: { year: number; month: number };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -93,17 +102,10 @@ function monthLabel(year: number, month: number) {
   return `${MONTHS[month - 1]} ${year}`;
 }
 
-function contractLabel(c: ContractOption) {
-  const customer = c.lead?.company
-    || `${c.lead?.first_name ?? ""} ${c.lead?.last_name ?? ""}`.trim()
-    || "Unknown";
-  return `${c.contract_number} — ${customer}`;
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function ManualPrintEntryDialog({
-  open, onOpenChange, onSuccess, defaultContractId, filterLeadId,
+  open, onOpenChange, onSuccess, defaultContractId, filterLeadId, defaultPeriod,
 }: Props) {
   const now = new Date();
   const [contracts, setContracts]             = useState<ContractOption[]>([]);
@@ -111,6 +113,13 @@ export function ManualPrintEntryDialog({
   const [contractId, setContractId]           = useState(defaultContractId ?? "");
   const [periodYear, setPeriodYear]           = useState(now.getFullYear());
   const [periodMonth, setPeriodMonth]         = useState(now.getMonth() + 1);
+  const defaultYear = defaultPeriod?.year;
+  const defaultMonth = defaultPeriod?.month;
+  useEffect(() => {
+    if (!open || !defaultYear || !defaultMonth) return;
+    setPeriodYear(defaultYear);
+    setPeriodMonth(defaultMonth);
+  }, [open, defaultYear, defaultMonth]);
   const [bwUsed, setBwUsed]                   = useState("");
   const [colourUsed, setColourUsed]           = useState("");
   const [notes, setNotes]                     = useState("");
@@ -268,7 +277,7 @@ export function ManualPrintEntryDialog({
   };
 
   // ── Year options (current year ± 1) ──────────────────────────────────────
-  const yearOptions = [now.getFullYear() - 1, now.getFullYear()];
+  const yearOptions = [...new Set([periodYear, now.getFullYear() - 1, now.getFullYear()])].sort();
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -287,21 +296,18 @@ export function ManualPrintEntryDialog({
           {/* Contract selector */}
           <div>
             <Label className="text-xs">Contract</Label>
-            <Select value={contractId} onValueChange={setContractId} disabled={contractsLoading || saving}>
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder={contractsLoading ? "Loading…" : "Select active contract"} />
-              </SelectTrigger>
-              <SelectContent>
-                {contracts.map(c => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {contractLabel(c)}
-                    {c.location && (
-                      <span className="text-muted-foreground ml-1 text-[11px]">· {c.location.name}</span>
-                    )}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* Searchable: the list runs to every active contract, so scrolling
+                for one contract number was the slow part of logging usage. */}
+            <SearchableSelect
+              className="mt-1"
+              value={contractId}
+              onValueChange={setContractId}
+              disabled={contractsLoading || saving}
+              placeholder={contractsLoading ? "Loading…" : "Select active contract"}
+              searchPlaceholder="Search by contract # or customer…"
+              emptyMessage="No matching contracts found."
+              options={contracts.map(usageContractOption)}
+            />
             {contracts.length === 0 && !contractsLoading && (
               <p className="text-[11px] text-muted-foreground mt-1">No active contracts found.</p>
             )}

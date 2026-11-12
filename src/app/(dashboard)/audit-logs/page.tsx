@@ -26,6 +26,7 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { formatDateTime } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import type { AuditLog } from "@/types";
 
 const ENTITY_TYPE_LABELS: Record<string, string> = {
@@ -155,6 +156,7 @@ export default function AuditLogsPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Audit Logs" }} />
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold">Audit Logs</h1>

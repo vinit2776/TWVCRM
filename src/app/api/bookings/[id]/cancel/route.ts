@@ -168,7 +168,7 @@ export async function POST(
 
   // ── 3. Side effects (shared with PATCH cancel + no-show paths) ──
   // Voucher revocation, usage charge waiver, and waitlist auto-offer.
-  await executeBookingCancellationSideEffects(supabase, {
+  const sideEffects = await executeBookingCancellationSideEffects(supabase, {
     bookingId: id,
     customerType: booking.customer_type,
     usageChargeId: booking.usage_charge_id,
@@ -250,5 +250,8 @@ export async function POST(
     refund_request_id: refundRequestId,
     caution_created: !!cautionToCreate,
     gst_invoice_required: gstInvoiceRequired,
+    // Ruijie codes released but NOT switched off (no revocation API). Staff
+    // must be told, or they'll assume cancelling cut the guest's internet.
+    vouchers_still_live: sideEffects.vouchersStillLive,
   });
 }

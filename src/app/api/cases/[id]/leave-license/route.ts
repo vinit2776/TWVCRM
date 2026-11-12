@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { caseAgreementGateError } from "@/lib/agreement-gate";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { previousAgreementDocumentId } from "@/lib/agreement-reset";
 import {
   mergeLeaveLicenseVariables,
   generateLeaveLicensePdf,
 } from "@/lib/leave-license-generator";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 /**
  * GET: Get Leave & License agreement details with signed PDF URL
@@ -132,6 +135,10 @@ export async function POST(
     clientCinNumber: caseData.client_cin_number,
     clientEmail: caseData.client_email,
     clientPhone: caseData.client_phone,
+    lesseeSignatoryName: caseData.represented_by_name || undefined,
+    lesseeSignatoryDesignation: caseData.represented_by_designation || undefined,
+    lesseeSignatoryIdType: caseData.represented_by_id_type || undefined,
+    lesseeSignatoryIdNumber: caseData.represented_by_id_number || undefined,
     locationName: location?.name || "The WorkVilla",
     locationAddress,
     purpose: caseData.purpose,
@@ -139,9 +146,14 @@ export async function POST(
     tenureMonths: caseData.tenure_months || 12,
     startDate: caseData.start_date || new Date().toISOString(),
     securityDeposit: caseData.security_deposit || 0,
+    renewalEscalationPercentage: caseData.renewal_escalation_percentage ?? 0,
   });
 
   // Generate PDF
+  // The case's approved special clause (if any) prints in every agreement generated for it.
+  (variables as { special_clause_text?: string | null }).special_clause_text =
+    caseData.special_clause_status === "approved" ? caseData.special_clause_text : null;
+
   const pdfDoc = generateLeaveLicensePdf(variables);
   const pdfBuffer = Buffer.from(pdfDoc.output("arraybuffer"));
 
@@ -163,7 +175,9 @@ export async function POST(
     );
   }
 
-  // Create document record
+  // Create document record. A regenerate supersedes the previous agreement's
+  // file, which stays reachable as the earlier version.
+  const supersededDocId = await previousAgreementDocumentId(supabase, caseId, "leave_license");
   const { data: docRecord } = await supabase
     .from("documents")
     .insert({
@@ -174,6 +188,7 @@ export async function POST(
       size_bytes: pdfBuffer.length,
       category: "case_document",
       uploaded_by: dbUser?.id,
+      ...(supersededDocId ? { parent_document_id: supersededDocId } : {}),
     })
     .select("id")
     .single();
@@ -278,6 +293,14 @@ export async function PUT(
 
   const existingVars = (existingAgreement.variables || {}) as Record<string, unknown>;
   const mergedVars = { ...existingVars, ...updatedVars };
+
+  // Keep the stored copy in step with the case's approved clause, so saving an edit
+  // also repairs an agreement whose PDF fell behind (see agreementClauseGate).
+  {
+    const { data: kase } = await supabase.from("cases").select("special_clause_status, special_clause_text").eq("id", caseId).single();
+    (mergedVars as Record<string, unknown>).special_clause_text =
+      kase?.special_clause_status === "approved" ? kase.special_clause_text : null;
+  }
 
   // Regenerate PDF
   const pdfDoc = generateLeaveLicensePdf(mergedVars as never);
@@ -414,6 +437,18 @@ export async function PATCH(
       { error: `Cannot ${action.replace(/_/g, " ")} — agreement must be in ${validTransitions[action].join(" or ")} status (currently: ${currentAgreement.status})` },
       { status: 400 }
     );
+  }
+
+  if (action === "mark_executed") {
+    const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+    if (gateError) {
+      return NextResponse.json({ error: gateError }, { status: 400 });
+    }
+  }
+
+  if (["send_to_client", "initiate_signing", "mark_executed"].includes(action)) {
+    const clauseBlock = await caseAgreementGateError(supabase, caseId, agreementId);
+    if (clauseBlock) return NextResponse.json({ error: clauseBlock }, { status: 409 });
   }
 
   const updateData: Record<string, unknown> = {};

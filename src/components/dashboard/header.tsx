@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu, Search, LogOut, HelpCircle } from "lucide-react";
+import { Menu, Search, LogOut, HelpCircle, BarChart3 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -109,6 +109,17 @@ export function Header() {
               <p className="text-sm font-medium">{userName || "—"}</p>
               <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
             </div>
+            <DropdownMenuSeparator />
+            {/* My activity storyboard — self-view, available regardless of /team access */}
+            {user?.id && (
+              <Link
+                href={`/team/${user.id}/activity`}
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted transition-colors rounded-sm"
+              >
+                <BarChart3 className="h-4 w-4" />
+                My Activity
+              </Link>
+            )}
             <DropdownMenuSeparator />
             {/* Logout */}
             <button

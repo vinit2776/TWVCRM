@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { logAudit } from "@/lib/audit";
+import { buildProrataLineItems } from "@/lib/prorata-correction";
+import { fixedShareOfItems } from "@/lib/rent-maintenance-split";
 
 /**
  * POST /api/contracts/[id]/prorata-link
@@ -122,30 +125,12 @@ export async function POST(
   const sgstAmount = isInterstate ? 0 : taxAmount - halfTax;
   const igstAmount = isInterstate ? taxAmount : 0;
 
-  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const monthLabel = monthNames[startMonth];
-
-  const lineItems = [
-    {
-      type: "rent",
-      label: "Pro-Rata Workspace Fee",
-      items: [
-        {
-          description: `Pro-Rata Workspace Fee (${monthLabel} ${startDay}–${daysInMonth})`,
-          quantity: 1,
-          unit: "month",
-          unit_price: prorataSubtotal,
-          amount: prorataSubtotal,
-          // Persisted so the PDF breakdown reflects the rate actually charged at
-          // renewal time, even if the contract's rate later changes.
-          monthly_rate: monthlySubtotal,
-          days_used: prorataDays,
-          days_in_month: daysInMonth,
-        },
-      ],
-      subtotal: prorataSubtotal,
-    },
-  ];
+  const lineItems = buildProrataLineItems({
+    startDate: contract.start_date,
+    prorataSubtotal,
+    monthlySubtotal,
+    fixedShare: fixedShareOfItems(contract.items),
+  });
 
   const dueDate = new Date();
   dueDate.setDate(dueDate.getDate() + 7);
@@ -203,7 +188,28 @@ export async function POST(
     ? body.cc.filter((e: unknown) => typeof e === "string" && (e as string).includes("@"))
     : [];
 
-  const result = mode === "gst_direct"
+  // GST Direct under Tally handoff v2: accounts issue the invoice from the
+  // Tally Inbox, so hand the statement over instead of the legacy CRM dispatch
+  // (which hits the CRM-GST standby gate and sends nothing). Skip if it is
+  // already with accounts or already has an invoice.
+  let handedToAccounts = false;
+  if (mode === "gst_direct") {
+    const { data: stmt } = await admin
+      .from("billing_statements")
+      .select("handoff_state, gst_invoice_number")
+      .eq("id", statementId!)
+      .single();
+    if (stmt?.handoff_state) {
+      handedToAccounts = true;
+    } else if (!stmt?.gst_invoice_number) {
+      const handoff = await handleStatementFinalized(admin, statementId!, "gst_direct", "prorata_link", dbUser.id);
+      handedToAccounts = handoff.skipLegacyDispatch;
+    }
+  }
+
+  const result = handedToAccounts
+    ? { success: true, error: undefined, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, routedToTally: false, standby: false }
+    : mode === "gst_direct"
     ? await dispatchGstDirect(admin, statementId!, dbUser.id, additionalCc)
     : await dispatchProforma(admin, statementId!, dbUser.id, additionalCc);
 
@@ -236,5 +242,7 @@ export async function POST(
     emailSkipped: result.emailSkipped,
     noContact: result.noContact,
     routedToTally: result.routedToTally,
+    handedToAccounts,
+    standby: result.standby ?? false,
   });
 }

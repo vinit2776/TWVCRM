@@ -1,9 +1,15 @@
-import jsPDF from "jspdf";
+import jsPDF, { GState } from "jspdf";
+import { MEMBERSHIP_SPECIAL_CLAUSE_NUMBER, stripClauseHeading } from "@/lib/special-clause/membership";
 import autoTable from "jspdf-autotable";
 import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatement, Location } from "@/types";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
+import { drawCompanyStamp } from "@/lib/company-stamp";
+import { composeProposalTerms } from "@/lib/proposal-terms";
+import { programmedEscalation } from "@/lib/auto-renewal";
+import { sanitizeForPdf } from "@/lib/pdf-text";
+import { buildScheduleLines, formatScheduleRow, readAgreementTerms } from "@/lib/agreement-terms";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -31,22 +37,6 @@ function formatCurrencyPDF(amount: number): string {
       maximumFractionDigits: 2,
     }).format(amount)
   );
-}
-
-// jsPDF's built-in "helvetica" font only supports WinAnsiEncoding (Latin-1).
-// Free-text fields (terms, notes, descriptions) can contain characters typed
-// or pasted by users — like ₹ or smart typography from Word/Docs — that fall
-// outside that range. Left unhandled, a single such character throws off
-// jsPDF's line-width calculation for the whole line it's in, producing
-// stretched-out spacing and clipped/missing text. Sanitize before rendering.
-function sanitizeForPdf(text: string): string {
-  return text
-    .replace(/₹/g, "Rs.")
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—]/g, "-")
-    .replace(/…/g, "...")
-    .replace(/[^\x00-\xFF]/g, "");
 }
 
 function formatDatePDF(date: string | Date): string {
@@ -312,7 +302,7 @@ function addLogoToDoc(doc: jsPDF): number {
   // Original logo aspect ratio is ~4:1 (1024x260)
   const logoW = 52;
   const logoH = 13;
-  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH);
+  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH, undefined, "FAST");
 
   // ── Company details (right-aligned, beside logo) ──
   doc.setFontSize(7.5);
@@ -334,12 +324,32 @@ function addLogoToDoc(doc: jsPDF): number {
   return 32;
 }
 
+const FOOTER_H = 20;
+const PAGE_TOP_Y = 20;
+
 function generatePDF(options: PDFOptions): jsPDF {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
+  // Lowest baseline content may use before running into the footer band.
+  const contentBottomY = doc.internal.pageSize.getHeight() - FOOTER_H - 6;
 
   // ── Header with Logo ──
   let y = addLogoToDoc(doc);
+
+  const ensureSpace = (needed: number) => {
+    if (y + needed > contentBottomY) {
+      doc.addPage();
+      y = PAGE_TOP_Y;
+    }
+  };
+
+  const writeLines = (lines: string[], lineH: number) => {
+    for (const line of lines) {
+      ensureSpace(lineH);
+      doc.text(line, 14, y);
+      y += lineH;
+    }
+  };
 
   // ── Divider ──
   doc.setDrawColor(...BRAND_TEAL);
@@ -492,7 +502,14 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   autoTable(doc, {
     startY: y,
-    head: [["#", "Description", "Qty", "Unit", "Unit Price", "Total"]],
+    head: [[
+      { content: "#", styles: { halign: "center" } },
+      "Description",
+      { content: "Qty", styles: { halign: "center" } },
+      { content: "Unit", styles: { halign: "center" } },
+      { content: "Unit Price", styles: { halign: "right" } },
+      { content: "Total", styles: { halign: "right" } },
+    ]],
     body: tableRows,
     theme: "striped",
     headStyles: {
@@ -513,13 +530,29 @@ function generatePDF(options: PDFOptions): jsPDF {
       4: { cellWidth: 36, halign: "right" },
       5: { cellWidth: 36, halign: "right" },
     },
-    margin: { left: 14, right: 14 },
+    margin: { left: 14, right: 14, top: PAGE_TOP_Y, bottom: FOOTER_H + 6 },
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   y = (doc as any).lastAutoTable.finalY + 8;
 
+  // Proposals with a rent/maintenance split say which lines escalate, so the
+  // customer reads the same terms the renewal will apply.
+  if (options.showServicesIncluded && options.items.some((i) => i.escalates === false)) {
+    ensureSpace(14);
+    doc.setFontSize(8.5);
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(80, 80, 80);
+    const note = doc.splitTextToSize(
+      "Annual escalation applies to rent only. Items listed as fixed, such as maintenance, do not escalate during the term.",
+      pageWidth - 28
+    );
+    doc.text(note, 14, y);
+    y += note.length * 4 + 4;
+  }
+
   // ── Totals Section ──
+  ensureSpace(44);
   const totalsX = pageWidth - 85;
   const totalsValueX = pageWidth - 14;
 
@@ -557,18 +590,20 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // Total amount with teal background
   doc.setFillColor(...BRAND_TEAL);
-  doc.roundedRect(totalsX - 2, y - 5, totalsValueX - totalsX + 4, 10, 2, 2, "F");
+  // Box stays inside the right margin so it lines up with Subtotal/Tax above.
+  doc.roundedRect(totalsX - 3, y - 5, totalsValueX - totalsX + 3, 10, 2, 2, "F");
   doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(255, 255, 255);
-  doc.text("Total:", totalsX + 2, y + 1);
-  doc.text(formatCurrencyPDF(options.totalAmount), totalsValueX - 2, y + 1, {
+  doc.text("Total:", totalsX, y + 1);
+  doc.text(formatCurrencyPDF(options.totalAmount), totalsValueX - 3, y + 1, {
     align: "right",
   });
   y += 14;
 
   // ── Description / Complimentary Services ──
   if (options.description) {
+    ensureSpace(12);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
@@ -578,14 +613,13 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
-    const descLines = doc.splitTextToSize(options.description, pageWidth - 28);
-    doc.text(descLines, 14, y);
-    y += descLines.length * 4.5 + 6;
+    writeLines(doc.splitTextToSize(options.description, pageWidth - 28), 4.5);
+    y += 6;
   }
 
   // ── Service Quotas table (proposals) ──
   if (options.serviceQuotas && options.serviceQuotas.length > 0) {
-    if (y + 20 > doc.internal.pageSize.getHeight() - 20) { doc.addPage(); y = 20; }
+    ensureSpace(20);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
@@ -601,7 +635,12 @@ function generatePDF(options: PDFOptions): jsPDF {
 
     autoTable(doc, {
       startY: y,
-      head: [["Service", "Unit", "Free quota / month", "Addl Usage rate"]],
+      head: [[
+        "Service",
+        "Unit",
+        { content: "Free quota / month", styles: { halign: "center" } },
+        { content: "Addl Usage rate", styles: { halign: "right" } },
+      ]],
       body: quotaRows,
       theme: "striped",
       headStyles: { fillColor: BRAND_TEAL, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
@@ -613,13 +652,14 @@ function generatePDF(options: PDFOptions): jsPDF {
         2: { cellWidth: 38, halign: "center" },
         3: { cellWidth: 48, halign: "right" },
       },
-      margin: { left: 14, right: 14 },
+      margin: { left: 14, right: 14, top: PAGE_TOP_Y, bottom: FOOTER_H + 6 },
     });
     y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
   }
 
   // ── Terms & Conditions ──
   if (options.termsAndConditions) {
+    ensureSpace(12);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
@@ -629,15 +669,16 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
-    const tcLines = doc.splitTextToSize(
-      sanitizeForPdf(options.termsAndConditions),
-      pageWidth - 28
+    writeLines(
+      doc.splitTextToSize(sanitizeForPdf(options.termsAndConditions), pageWidth - 28),
+      4.5
     );
-    doc.text(tcLines, 14, y);
-    y += tcLines.length * 4.5 + 6;
+    y += 6;
   }
 
   // ── Bank Details ──
+  // Keep the heading, all five lines and any QR code together on one page.
+  ensureSpace(options.qrCodeBase64 ? 52 : 30);
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
@@ -664,6 +705,7 @@ function generatePDF(options: PDFOptions): jsPDF {
   // ── Razorpay Payment Link — button + raw URL ──────────────────────────────
   if (options.razorpayPaymentLink) {
     y += 5;
+    ensureSpace(30);
 
     // Section label in small grey caps
     doc.setFontSize(8);
@@ -730,11 +772,11 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.rect(qrX - 1, qrY - 1, imgW + 2, imgH + 2);
 
     try {
-      doc.addImage(options.qrCodeBase64, "PNG", qrX, qrY, imgW, imgH);
+      doc.addImage(options.qrCodeBase64, "PNG", qrX, qrY, imgW, imgH, undefined, "FAST");
     } catch {
       // Fallback: try as JPEG if PNG fails
       try {
-        doc.addImage(options.qrCodeBase64, "JPEG", qrX, qrY, imgW, imgH);
+        doc.addImage(options.qrCodeBase64, "JPEG", qrX, qrY, imgW, imgH, undefined, "FAST");
       } catch {
         // Silently skip if image is invalid
       }
@@ -762,6 +804,7 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // ── Notes ──
   if (options.notes) {
+    ensureSpace(12);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
@@ -771,48 +814,51 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
-    const notesLines = doc.splitTextToSize(options.notes, pageWidth - 28);
-    doc.text(notesLines, 14, y);
+    writeLines(doc.splitTextToSize(options.notes, pageWidth - 28), 4.5);
   }
 
-  // ── Footer ──
+  // ── Footer (every page) ──
   const pageHeight = doc.internal.pageSize.getHeight();
-  const footerH = 20;
+  const footerH = FOOTER_H;
   const footerY = pageHeight - footerH;
+  const pageCount = doc.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page++) {
+    doc.setPage(page);
 
-  // Footer teal bar
-  doc.setFillColor(...BRAND_TEAL);
-  doc.rect(0, footerY, pageWidth, footerH, "F");
+    // Footer teal bar
+    doc.setFillColor(...BRAND_TEAL);
+    doc.rect(0, footerY, pageWidth, footerH, "F");
 
-  // Thin green accent line at top of footer
-  doc.setFillColor(...BRAND_GREEN);
-  doc.rect(0, footerY, pageWidth, 0.8, "F");
+    // Thin green accent line at top of footer
+    doc.setFillColor(...BRAND_GREEN);
+    doc.rect(0, footerY, pageWidth, 0.8, "F");
 
-  doc.setFontSize(7);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(255, 255, 255);
-  doc.text(
-    `${BRAND_NAME}  |  ${COMPANY_NAME}`,
-    pageWidth / 2,
-    footerY + 6,
-    { align: "center" }
-  );
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(255, 255, 255);
+    doc.text(
+      `${BRAND_NAME}  |  ${COMPANY_NAME}`,
+      pageWidth / 2,
+      footerY + 6,
+      { align: "center" }
+    );
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(6.5);
-  doc.setTextColor(200, 230, 220);
-  doc.text(
-    `${COMPANY_ADDRESS.join(" ")}  |  ${COMPANY_PHONE}  |  ${COMPANY_WEBSITE}`,
-    pageWidth / 2,
-    footerY + 11,
-    { align: "center" }
-  );
-  doc.text(
-    COMPANY_GST,
-    pageWidth / 2,
-    footerY + 16,
-    { align: "center" }
-  );
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(6.5);
+    doc.setTextColor(200, 230, 220);
+    doc.text(
+      `${COMPANY_ADDRESS.join(" ")}  |  ${COMPANY_PHONE}  |  ${COMPANY_WEBSITE}`,
+      pageWidth / 2,
+      footerY + 11,
+      { align: "center" }
+    );
+    doc.text(
+      COMPANY_GST,
+      pageWidth / 2,
+      footerY + 16,
+      { align: "center" }
+    );
+  }
 
   return doc;
 }
@@ -853,7 +899,8 @@ export function generateProposalPDF(
       ? `${proposal.title}\n${proposal.description}`
       : undefined,
     descriptionLabel: "Complimentary Services Offered",
-    termsAndConditions: proposal.terms_and_conditions,
+    // Generated deposit/term/lock-in/notice lines + free text — see proposal-terms.ts.
+    termsAndConditions: composeProposalTerms(proposal) || undefined,
     notes: proposal.notes,
     notesLabel: "Customer Notes",
     qrCodeBase64: paymentOptions?.qrCodeBase64,
@@ -1186,7 +1233,15 @@ function amountInWords(amount: number): string {
 export function generateMembershipAgreementPDF(
   contract: Contract,
   lead?: Partial<Lead>,
-  location?: Partial<Location>
+  location?: Partial<Location>,
+  options?: {
+    applyCompanyStamp?: boolean;
+    stampRef?: string;
+    /** Explicit DRAFT-watermark choice from the contract page's checkbox.
+     * When set, it wins outright. When omitted (stamp, e-sign and server-side
+     * callers), the watermark follows start_date confirmation. */
+    watermarkDraft?: boolean;
+  }
 ): jsPDF {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -1205,7 +1260,8 @@ export function generateMembershipAgreementPDF(
   const monthlyFee = contract.subtotal || contract.total_amount || 0;
   const securityDepositMonths = contract.security_deposit_months ?? 3;
   const ifrsd = monthlyFee * securityDepositMonths;
-  const escalation = contract.escalation_percentage || 10;
+  // The agreement's escalation, not a rate negotiated for one term only.
+  const escalation = programmedEscalation(contract);
   const noticePeriod = contract.notice_period_months || 2;
   // Fallback for contracts predating the lock_in_months column (migration 00222):
   // lock-in was previously implied as tenure minus notice period.
@@ -1245,7 +1301,7 @@ export function generateMembershipAgreementPDF(
   // White background behind logo so it prints clearly on the teal header
   doc.setFillColor(255, 255, 255);
   doc.rect(marginLeft - 2, 3, 54, 18, "F");
-  doc.addImage(TWV_LOGO_BASE64, "PNG", marginLeft, 5, 50, 12.5);
+  doc.addImage(TWV_LOGO_BASE64, "PNG", marginLeft, 5, 50, 12.5, undefined, "FAST");
 
   // Company details in header (right side)
   doc.setFontSize(7);
@@ -1346,28 +1402,21 @@ export function generateMembershipAgreementPDF(
   doc.text("SCHEDULE", pageWidth / 2, y, { align: "center" });
   y += 8;
 
+  // Saved wording is typed by staff, so strip characters helvetica can't draw (e.g. the rupee sign).
+  const scheduleLines = buildScheduleLines(readAgreementTerms(location?.agreement_terms), location?.proposal_amenity_icons);
+  for (const row of [scheduleLines.inclusions, scheduleLines.paid, scheduleLines.rates]) {
+    row.forEach((line, i) => { row[i] = sanitizeForPdf(line); });
+  }
   const scheduleData: [string, string, string][] = [
     ["1", "Location / Premises", `${locationName}\n${locationAddress}`],
     ["2", "Work Space Description", contract.workspace_description || "As per agreement"],
     ["3", "Parking Space", contract.parking_space || "Nil"],
-    ["4", "Inclusions",
-      "\u2022 Electricity & air conditioning consumed during office hours.\n" +
-      "\u2022 Wi-Fi and Internet as per fair usage Policy\n" +
-      "\u2022 Housekeeping, security and maintenance services\n" +
-      "\u2022 Hot tea & coffee from specified vending machine 12 cups per week, per seat."],
+    ["4", "Inclusions", formatScheduleRow(scheduleLines.inclusions)],
     ["5", "Complimentary Services\n(subject to availability)", (contract.complimentary_services || "TBD") +
       "\n\nThese Complimentary Services will not be rolled over from month to month. If these allocated Complimentary Services are exceeded, Member will be responsible for paying fees for such overages as per applicable rates at that time."],
-    ["6", "Additional Paid Services",
-      "\u2022 Conference Room beyond Complimentary Services (if any)\n" +
-      "\u2022 Printouts beyond Complimentary Services\n" +
-      "\u2022 Other Food & Beverages sales counters including Cafe / Vending Machine and others.\n" +
-      "\u2022 Other value-added member services as available.\n" +
-      "\u2022 Additional charges of Rs.2500/- per hour will be implemented after office hours and on Public Holidays."],
+    ["6", "Additional Paid Services", formatScheduleRow(scheduleLines.paid)],
     ["7", "Rack Rate of select paid services\n(subject to availability and revision\nwithout prior intimation by management)",
-      "\u2022 Conference Room @ INR 1000 per hour plus GST\n" +
-      "\u2022 Additional printouts - A4 - Color Rs.20 per sheet / B&W Rs. 5 per sheet. A3 - Color Rs.25 per sheet.\n" +
-      "\u2022 Coffee/Tea twice a day compliment, additional cups @ Rs.20/-\n" +
-      "\u2022 Additional Car & Bike parking slots - subject to availability."],
+      formatScheduleRow(scheduleLines.rates)],
     ["8", "Monthly Membership Fees (MMF)", (() => {
       const phases = contract.rate_phases ?? [];
       if (phases.length === 0) {
@@ -1558,6 +1607,15 @@ export function generateMembershipAgreementPDF(
       "\u2022 This Agreement constitutes the entire agreement between the Member & the Company as to its subject matter and supersedes all prior and contemporaneous agreements, proposals or representations, written or oral, concerning its subject matter. No modification, amendment or waiver of any provision of this Agreement shall be effective unless in writing."],
   ];
 
+  // Customer-specific clause, printed only once a manager/admin has approved it.
+  if (contract.special_clause_status === "approved" && contract.special_clause_text) {
+    clauses.push([
+      String(MEMBERSHIP_SPECIAL_CLAUSE_NUMBER),
+      "Special\nConditions",
+      stripClauseHeading(contract.special_clause_text, MEMBERSHIP_SPECIAL_CLAUSE_NUMBER),
+    ]);
+  }
+
   autoTable(doc, {
     startY: y,
     body: clauses,
@@ -1620,6 +1678,11 @@ export function generateMembershipAgreementPDF(
   doc.setLineWidth(0.3);
   doc.line(col1X, y, col1X + colWidth, y);
   doc.line(col2X, y, col2X + colWidth, y);
+
+  if (options?.applyCompanyStamp) {
+    drawCompanyStamp(doc, col1X, y, colWidth, options.stampRef);
+  }
+
   y += 5;
 
   doc.setFontSize(9);
@@ -1766,6 +1829,32 @@ export function generateMembershipAgreementPDF(
     doc.setFontSize(6);
     doc.setTextColor(200, 230, 220);
     doc.text(`Page ${i} of ${totalPageCount}  |  ${COMPANY_WEBSITE}`, pw / 2, ph - 4, { align: "center" });
+  }
+
+  // ================================================================
+  // DRAFT watermark — every page. The contract page's checkbox passes an
+  // explicit watermarkDraft and that choice is honoured unconditionally.
+  // Callers that don't pass it keep the default: watermarked until
+  // start_date is confirmed (see 00503_contract_start_date_confirmation.sql).
+  // ================================================================
+  const showWatermark =
+    options?.watermarkDraft !== undefined
+      ? options.watermarkDraft
+      : !contract.start_date_confirmed;
+  if (showWatermark) {
+    for (let i = 1; i <= totalPageCount; i++) {
+      doc.setPage(i);
+      const ph = doc.internal.pageSize.getHeight();
+      const pw = doc.internal.pageSize.getWidth();
+
+      doc.saveGraphicsState();
+      doc.setGState(new GState({ opacity: 0.15 }));
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(90);
+      doc.setTextColor(200, 30, 30);
+      doc.text("DRAFT", pw / 2, ph / 2, { align: "center", angle: 45 });
+      doc.restoreGraphicsState();
+    }
   }
 
   return doc;

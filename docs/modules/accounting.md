@@ -82,7 +82,7 @@ This separation prevents the same team that approves spending from also releasin
 - `PATCH /api/petty-cash/entries/[id]` — Approve/reject/issue entry
 - `GET /api/petty-cash/books` — PC books (per-user cash float)
 - `GET /api/petty-cash/categories` — PC expense categories
-- `GET /api/petty-cash/day-book` — Daily cashbook view
+- `GET /api/petty-cash/day-book` — Cron-only: emails the daily petty cash summary to admin/accounts. Requires `Authorization: Bearer $CRON_SECRET` (401 otherwise)
 
 ### API Routes (Finance Intelligence)
 - `GET /api/finance-intelligence/vendor-email-nag/audit` — Vendors missing email (count + details)

@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
   (rzpSettings || []).forEach((s) => { rzp[s.key] = s.value; });
 
   if (rzp.razorpay_enabled !== "true" || !rzp.razorpay_key_id || !rzp.razorpay_key_secret) {
-    await pingCronHealth("settlement-recon", "ok", { skipped: "razorpay disabled" });
+    await pingCronHealth("cron/settlement-recon", "ok", { skipped: "razorpay disabled" });
     return NextResponse.json({ status: "skipped", reason: "Razorpay not enabled" });
   }
 
@@ -100,13 +100,13 @@ export async function GET(request: NextRequest) {
   }
 
   if (reconByPaymentId.size === 0) {
-    await pingCronHealth("settlement-recon", fetchErrors.length ? "error" : "ok", {
+    await pingCronHealth("cron/settlement-recon", fetchErrors.length ? "error" : "ok", {
       stamped: 0, errors: fetchErrors.length,
     });
     return NextResponse.json({ status: "ok", dry, recon_rows: 0, stamped: 0, errors: fetchErrors });
   }
 
-  const stamped = { deposits: 0, topups: 0, invoices: 0, statements: 0 };
+  const stamped = { deposits: 0, parts: 0, topups: 0, invoices: 0, statements: 0 };
 
   const stamp = async (
     table: string,
@@ -139,6 +139,14 @@ export async function GET(request: NextRequest) {
     (q: any) => q.eq("deposit_payment_status", "paid"),
     "deposits",
   );
+  // A deposit collected in parts: each part carries its own payment id, so each
+  // is stamped on its own (the proposal's joined reference never matches one id).
+  await stamp(
+    "proposal_deposit_instalments", "payment_reference", "settled_at", "settlement_id",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (q: any) => q.eq("status", "paid"),
+    "parts",
+  );
   await stamp(
     "deposit_topups", "payment_reference", "settled_at", "settlement_id",
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -152,8 +160,8 @@ export async function GET(request: NextRequest) {
     "invoices",
   );
 
-  const total = stamped.deposits + stamped.topups + stamped.invoices;
-  await pingCronHealth("settlement-recon", fetchErrors.length ? "error" : "ok", {
+  const total = stamped.deposits + stamped.parts + stamped.topups + stamped.invoices;
+  await pingCronHealth("cron/settlement-recon", fetchErrors.length ? "error" : "ok", {
     stamped: total, errors: fetchErrors.length,
   });
 

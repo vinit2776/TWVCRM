@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Bell, Check, CheckCheck, Wrench, MessageCircle, UserCheck, ArrowRightLeft } from "lucide-react";
+import { Bell, Check, CheckCheck, Wrench, MessageCircle, UserCheck, ArrowRightLeft, MessageCircleQuestion, AtSign } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,8 +40,13 @@ function typeIcon(type: string) {
       return <MessageCircle className="h-3.5 w-3.5 text-green-600 shrink-0" />;
     case "facility_assigned":
       return <UserCheck className="h-3.5 w-3.5 text-purple-500 shrink-0" />;
+    case "facility_mentioned":
+      return <AtSign className="h-3.5 w-3.5 text-teal-600 shrink-0" />;
     case "facility_status_changed":
       return <ArrowRightLeft className="h-3.5 w-3.5 text-amber-500 shrink-0" />;
+    case "billing_query":
+    case "billing_query_reply":
+      return <MessageCircleQuestion className="h-3.5 w-3.5 text-indigo-500 shrink-0" />;
     default:
       return <Bell className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
   }

@@ -1,15 +1,255 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { daysPastBooking } from "@/lib/process-registry";
+import { checkInPaymentState, roundToRupee } from "@/lib/booking-payment-rules";
+import { noteProvisionalCheckIn } from "@/lib/booking-payment-server";
 import { deleteUserFromDevice } from "@/lib/cosec";
+import { computeVoucherSeatCap } from "@/lib/booking-vouchers";
+import { getCachedSettings } from "@/lib/app-settings-cache";
 
 export const maxDuration = 30;
 
-const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), facilities:booking_facilities(*)";
+const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state, wifi_voucher_mode), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, id_proof_path), facilities:booking_facilities(*)";
+
+/** Actual duration in hours between two real timestamps, to the minute
+ *  (two decimals — the quantity column is DECIMAL(10,2)). Billed exactly:
+ *  rounding every session up to the next hour overcharged short overruns
+ *  (4h00m48s billed as 5h). Both check_in_at/check_out_at are proper UTC
+ *  timestamptz values, so plain Date arithmetic is correct here — unlike
+ *  the booking.end_time comparison above (a bare "HH:MM" wall-clock
+ *  string with no timezone, implicitly IST), this never needs the
+ *  Intl/Asia-Kolkata dance. */
+function exactActualHours(checkInIso: string, checkOutAt: Date): number {
+  const checkIn = new Date(checkInIso);
+  const minutes = (checkOutAt.getTime() - checkIn.getTime()) / 60000;
+  return Math.round((Math.max(0, minutes) / 60) * 100) / 100;
+}
+
+/** Wall-clock time in IST for display in charge descriptions — check_in_at
+ *  and check_out_at are proper UTC timestamptz values, so this just needs
+ *  an explicit timeZone, not the bare-string IST dance used elsewhere. */
+function formatIstTime(d: Date): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d).toUpperCase();
+}
+
+/**
+ * Best-effort cancel of a booking's existing Razorpay payment link. Called
+ * when a reschedule changes the amount due, so a stale link can no longer
+ * be paid at the old (wrong) amount — see TWV-B-0219, where a reschedule
+ * left the previously-issued link showing an amount that no longer matched
+ * the booking. Never throws: a failed cancel just means the old link stays
+ * live at Razorpay until it expires on its own, which is not worse than the
+ * status quo before this existed.
+ */
+async function cancelStaleBookingPaymentLink(linkId: string): Promise<void> {
+  try {
+    const admin = createAdminClient();
+    const settings = await getCachedSettings(admin, [
+      "razorpay_key_id",
+      "razorpay_key_secret",
+      "razorpay_enabled",
+    ]);
+    if (settings["razorpay_enabled"] !== "true") return;
+    const keyId = settings["razorpay_key_id"];
+    const keySecret = settings["razorpay_key_secret"];
+    if (!keyId || !keySecret) return;
+
+    const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    try {
+      await fetch(`https://api.razorpay.com/v1/payment_links/${linkId}/cancel`, {
+        method: "POST",
+        headers: { Authorization: `Basic ${auth}` },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (err) {
+    console.warn("[reschedule] Could not cancel stale payment link (non-fatal):", err);
+  }
+}
+
+/**
+ * Model B (pooled monthly usage). See docs plan "Pooled Monthly Usage
+ * Billing (Model B)".
+ *
+ * Computes and posts this booking's contribution to its contract_facility's
+ * monthly pooled-usage charge: actual duration (check_in_at → check_out_at,
+ * to the minute), pooled sequentially against every
+ * other already-checked-out booking this calendar month for the same
+ * contract + facility (ordered by true checkout chronology — created_at,
+ * not booking_date), charged only for hours beyond the facility's
+ * free_quota.
+ *
+ * This is now the ONLY mechanism that charges a contract-holder booking
+ * against an hour-based facility — no charge is created at booking time
+ * (see bookings/route.ts), and the old checkout-time "overtime" charge
+ * (time past the booked slot, charged separately from quota/overage) has
+ * been retired in favor of this single unified charge. A shadow-gated
+ * rollout (allowlisted test contracts only, both mechanisms running in
+ * parallel) preceded this cutover — no gate remains; this runs for every
+ * contract now.
+ */
+async function maybePostPooledUsageCharge(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  params: {
+    bookingId: string;
+    contractId: string;
+    spaceId: string;
+    bookingDate: string;
+    checkInAt: string;
+    checkOutAt: Date;
+    createdBy: string;
+    bookedHours: number;
+    /** Staff-set substitute allocation from booking creation (see migration
+     *  00553) — when present, pool against this facility directly instead
+     *  of re-deriving one from the space name. Keeps checkout consistent
+     *  with whatever was decided when the booking was made. */
+    contractFacilityIdOverride?: string | null;
+  }
+): Promise<void> {
+  const { bookingId, contractId, spaceId, bookingDate, checkInAt, checkOutAt, createdBy, bookedHours, contractFacilityIdOverride } = params;
+
+  const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let facility: any;
+
+  if (contractFacilityIdOverride) {
+    const { data: overrideFacility } = await supabase
+      .from("contract_facilities")
+      .select("id, name, free_quota, cost_per_unit")
+      .eq("id", contractFacilityIdOverride)
+      .maybeSingle();
+    if (!overrideFacility) return; // override facility deleted since booking — nothing to pool against
+    facility = overrideFacility;
+  } else {
+    // Resolve the hour-based contract_facility for this space — the same
+    // name-match heuristic used at booking creation, promoted here to the
+    // only path since Model B never links a booking to a charge at
+    // creation time (there's no booking.usage_charge_id to originate from).
+    const [{ data: spaceRow }, { data: facilities }] = await Promise.all([
+      supabase.from("spaces").select("name").eq("id", spaceId).maybeSingle(),
+      supabase
+        .from("contract_facilities")
+        .select("id, name, free_quota, cost_per_unit")
+        .eq("contract_id", contractId)
+        .in("unit", HOUR_UNITS),
+    ]);
+    if (!facilities || facilities.length === 0) return; // no hour-based quota on this contract — nothing to pool
+
+    const spaceLower = (spaceRow?.name || "").toLowerCase();
+    // No "first row" fallback when ambiguous — mirrors the tightened logic
+    // at booking creation (see bookings/route.ts). An ambiguous booking's
+    // facility_resolution is already 'unresolved' from creation time, so
+    // there's nothing to pool here either; Accounts resolves it manually.
+    facility =
+      facilities.length === 1
+        ? facilities[0]
+        : facilities.find(
+            (f: { name: string }) =>
+              spaceLower.includes(f.name.toLowerCase()) || f.name.toLowerCase().includes(spaceLower)
+          ) || null;
+    if (!facility) return;
+  }
+
+  const actualHours = exactActualHours(checkInAt, checkOutAt);
+  if (actualHours <= 0) return;
+
+  // Pool against every other already-checked-out booking this calendar
+  // month for this contract + facility. Summing `quantity` on prior
+  // pooled_usage charges gives hours consumed so far directly — each
+  // charge's quantity IS that booking's full actual duration
+  // (see insert below), regardless of how much of it was free vs. paid,
+  // so this sum is exactly the running pool total the next booking needs.
+  const [year, month] = bookingDate.split("-").map(Number);
+  const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  const { data: priorCharges } = await supabase
+    .from("usage_charges")
+    .select("quantity")
+    .eq("contract_id", contractId)
+    .eq("contract_facility_id", facility.id)
+    .eq("booking_charge_kind", "pooled_usage")
+    .gte("charge_date", monthStart)
+    .lte("charge_date", monthEnd)
+    .order("created_at", { ascending: true });
+  const hoursConsumedSoFar = Math.round(
+    (priorCharges || []).reduce((sum: number, c: { quantity: number }) => sum + Number(c.quantity || 0), 0) * 100
+  ) / 100;
+
+  const freeQuota = Number(facility.free_quota);
+  const freeRemaining = Math.round(Math.max(0, freeQuota - hoursConsumedSoFar) * 100) / 100;
+  // Round off float noise from subtracting two-decimal hours (5.45 - 3 = 2.4500000000000002).
+  const overageHours = Math.round(Math.max(0, actualHours - freeRemaining) * 100) / 100;
+  const rate = Number(facility.cost_per_unit);
+  const total = parseFloat((overageHours * rate).toFixed(2));
+
+  const { data: contractRow } = await supabase
+    .from("contracts")
+    .select("lead_id, tax_percentage")
+    .eq("id", contractId)
+    .single();
+  const gstRate = Number(contractRow?.tax_percentage ?? 18);
+  const gstAmount = parseFloat((total * gstRate / 100).toFixed(2));
+  const totalWithGst = parseFloat((total + gstAmount).toFixed(2));
+
+  // Split the charged (overage) hours into "usage" (within the booked
+  // slot) vs. "extra" (checkout ran past the booked end time) — purely
+  // descriptive, doesn't change quantity/total/gst below. Mirrors the
+  // display-only split in contract-bookings-section.tsx so both places
+  // read consistently.
+  const extraHoursNeeded = Math.round(Math.max(0, actualHours - bookedHours) * 100) / 100;
+  const extraBilled = Math.min(overageHours, extraHoursNeeded);
+  const usageBilled = Math.round((overageHours - extraBilled) * 100) / 100;
+  const bookedNote = extraHoursNeeded > 0 ? `, ${bookedHours}hr booked` : "";
+  const timeRange = `${formatIstTime(new Date(checkInAt))} – ${formatIstTime(checkOutAt)}`;
+
+  const chargedParts = [
+    ...(usageBilled > 0 ? [`${usageBilled}hr usage`] : []),
+    ...(extraBilled > 0 ? [`${extraBilled}hr extra`] : []),
+  ];
+  const chargedSegment = `${chargedParts.join(" + ")} charged`;
+
+  const description = overageHours > 0
+    ? `Pooled usage: ${facility.name} — ${timeRange} (${actualHours}hr actual${bookedNote}) — ${hoursConsumedSoFar}hr already used this month, ${freeQuota}hr/mo free — ${chargedSegment}`
+    : `Pooled usage: ${facility.name} — ${timeRange} (${actualHours}hr actual${bookedNote}, within ${freeQuota}hr/mo quota, ${hoursConsumedSoFar + actualHours}hr used total)`;
+
+  const { error } = await supabase.from("usage_charges").insert({
+    contract_id: contractId,
+    booking_id: bookingId,
+    lead_id: contractRow?.lead_id ?? null,
+    contract_facility_id: facility.id,
+    booking_charge_kind: "pooled_usage",
+    description,
+    quantity: actualHours,
+    unit_price: rate,
+    total,
+    gst_rate: gstRate,
+    gst_amount: gstAmount,
+    total_with_gst: totalWithGst,
+    charge_date: bookingDate,
+    status: overageHours > 0 ? "pending" : "waived",
+    created_by: createdBy,
+  });
+  if (error) {
+    console.error("[checkout] pooled_usage charge insert failed (shadow contract):", error);
+  }
+}
 
 /**
  * Recompute the booking's GST + grand-total fields from a new ex-GST
@@ -37,7 +277,7 @@ async function computeBookingTotalsWithAddons(
     0
   );
 
-  const totalWithGst = parseFloat((newSubtotal + baseGstAmount + addonTotal).toFixed(2));
+  const totalWithGst = roundToRupee(newSubtotal + baseGstAmount + addonTotal);
   return {
     total_amount: newSubtotal,
     gst_amount: baseGstAmount,
@@ -62,12 +302,19 @@ export async function GET(
 
   if (error) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
-  // Also fetch voucher issuances for this booking
+  // Also fetch voucher issuances for this booking — both active AND revoked.
+  // A revoked issuance is still a real support record (code was issued,
+  // emailed to the customer, then killed) and must stay visible on the
+  // booking page rather than vanishing entirely. Ordered by seat_number so
+  // the display groups by seat regardless of active/revoked status; within
+  // a seat, issued_at ascending keeps history (original -> replacement) in
+  // chronological order.
   const { data: vouchers } = await supabase
     .from("voucher_issuances")
     .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status)")
     .eq("booking_id", id)
-    .eq("is_active", true);
+    .order("seat_number", { ascending: true })
+    .order("issued_at", { ascending: true });
 
   // Fetch all feedback for this booking (staff + customer)
   const { data: allFeedbacks } = await supabase
@@ -132,6 +379,35 @@ export async function GET(
     }
   }
 
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "booking", entityId: id, performedBy: dbUser.id });
+  }
+
+  // Most recent PIN delivery outcome, if any (logged post-delivery by provision-booking-access.ts).
+  // Historical bookings / PINs provisioned before this logging change will have none — that's expected.
+  let pinDelivery: { whatsapp: string; sms: string; email: string; at: string } | null = null;
+  try {
+    const { data: deliveryAudit, error: deliveryError } = await supabase
+      .from("audit_trail")
+      .select("changes, created_at")
+      .eq("entity_type", "booking")
+      .eq("entity_id", id)
+      .not("changes->pin_delivery", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (deliveryError) {
+      console.error("Failed to fetch pin_delivery audit row:", deliveryError);
+    } else if (deliveryAudit?.changes?.pin_delivery?.new) {
+      const delivery = deliveryAudit.changes.pin_delivery.new as { whatsapp: string; sms: string; email: string };
+      pinDelivery = { ...delivery, at: deliveryAudit.created_at };
+    }
+  } catch (err) {
+    console.error("Failed to fetch pin_delivery audit row:", err);
+  }
+
   return NextResponse.json({
     data: {
       ...data,
@@ -143,6 +419,8 @@ export async function GET(
       checked_out_by_name: actorMap[data.checked_out_by] || null,
       cancelled_by_name: actorMap[data.cancelled_by] || null,
       quota_info: quotaInfo,
+      pin_delivery: pinDelivery,
+      voucher_seat_cap: computeVoucherSeatCap(data, data.space as { capacity?: number | null } | null),
     },
   });
 }
@@ -158,7 +436,7 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, role")
+    .select("id, role, full_name")
     .eq("auth_id", user.id)
     .single();
 
@@ -288,6 +566,21 @@ export async function PATCH(
       updates.original_start_time = booking.start_time;
       updates.original_end_time = booking.end_time;
     }
+
+    // A payment link already sent to the customer is now stale if the total
+    // changed — cancel it and clear it from the booking so the next "Share
+    // Payment Link" click generates a fresh one off the corrected total,
+    // instead of resending the old (wrong) amount. Staff still control when
+    // the customer actually gets messaged; this only stops the wrong link
+    // from being payable.
+    if (
+      booking.razorpay_payment_link_id &&
+      Number(rsTotals.total_amount_with_gst) !== Number(booking.total_amount_with_gst)
+    ) {
+      await cancelStaleBookingPaymentLink(booking.razorpay_payment_link_id as string);
+      updates.razorpay_payment_link_id = null;
+      updates.razorpay_payment_link_url = null;
+    }
   }
 
   // ── Extend action (for checked-in bookings) ──
@@ -374,15 +667,30 @@ export async function PATCH(
     updates.notes = body.notes;
   }
 
+  // Set when a walk-in checks in on a UPI payment accounts haven't verified yet.
+  let provisionalCheckIn = false;
+
   // Status transitions
   if (body.status) {
     const { status: newStatus } = body;
-    const canManage = ["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin"].includes(dbUser.role);
+    const canManage = ["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin", "coordinator"].includes(dbUser.role);
 
     switch (newStatus) {
       case "checked_in": {
         if (booking.status !== "confirmed") {
           return NextResponse.json({ error: "Can only check in confirmed bookings" }, { status: 400 });
+        }
+
+        // A booking from an earlier day can't be checked in "now": the stamped
+        // time would be wrong and the staff member who allowed the customer in
+        // without it would never be seen. Close out completes it as booked and
+        // records the lapse. Contract bookings are billed monthly, so they are
+        // not offered Close out and keep their existing behaviour.
+        if (booking.customer_type !== "contract_holder" && daysPastBooking(booking.booking_date, new Date()) >= 1) {
+          return NextResponse.json({
+            error: `This booking was for ${booking.booking_date}. Use Close out so it is recorded as handled late.`,
+            close_out_required: true,
+          }, { status: 409 });
         }
 
         // Day-pass spaces: enforce that check-in happens during the centre's
@@ -411,27 +719,32 @@ export async function PATCH(
         // We compare against the GST-inclusive grand total, the same figure
         // the customer is told to pay — using ex-GST here would have let
         // walk-ins check in after paying only the pre-tax amount.
+        //
+        // Verified payments count in full. A manual UPI payment that is still
+        // waiting for accounts also counts, provided staff attached its proof
+        // (screenshot or UTR) — the customer is at the counter and accounts
+        // may not look at the bank for hours. That is a provisional check-in:
+        // it is logged, and the GST invoice still waits for verification
+        // because only a verified payment marks the booking paid.
         if (booking.customer_type === "walk_in") {
-          const { data: verifiedPayments } = await supabase
+          const { data: bookingPayments } = await supabase
             .from("booking_payments")
-            .select("amount")
-            .eq("booking_id", id)
-            .eq("status", "verified");
+            .select("amount, status, payment_mode, payment_reference, screenshot_path")
+            .eq("booking_id", id);
 
-          const totalPaid = (verifiedPayments || []).reduce(
-            (sum: number, p: { amount: number }) => sum + Number(p.amount), 0
-          );
           const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
+          const paymentState = checkInPaymentState(grandTotal, bookingPayments || []);
 
-          if (totalPaid < grandTotal) {
+          if (!paymentState.covered) {
             return NextResponse.json({
               error: "Payment required before check-in",
               payment_required: true,
               total_amount: grandTotal,
-              amount_paid: totalPaid,
-              balance_due: grandTotal - totalPaid,
+              amount_paid: paymentState.verified,
+              balance_due: Math.max(0, grandTotal - paymentState.verified - paymentState.provisional),
             }, { status: 402 });
           }
+          provisionalCheckIn = paymentState.isProvisional;
         }
 
         updates.status = "checked_in";
@@ -509,6 +822,15 @@ export async function PATCH(
               },
               is_day_pass: true,
             };
+          } else if (booking.customer_type === "contract_holder" && booking.contract_id) {
+            // Intentionally a no-op. Contract-holder charging against an
+            // hour-based facility is now handled unconditionally below by
+            // maybePostPooledUsageCharge (Model B — pooled monthly usage),
+            // regardless of whether checkout ran past the booked end time.
+            // This branch exists only so a contract-holder late checkout
+            // doesn't fall through to the walk-in/guest `else` below and
+            // get a spurious ephemeral `_overtime` suggestion in the
+            // response — it was never a real charge for them anyway.
           } else {
             const hourlyRate = Number(booking.hourly_rate || booking.space?.hourly_rate || 0);
             const overtimeCharge = overtimeHours * hourlyRate;
@@ -521,6 +843,24 @@ export async function PATCH(
               is_day_pass: false,
             };
           }
+        }
+
+        // Model B — pooled monthly usage. Runs regardless of overtimeMinutes:
+        // every checked-out hour-facility booking contributes to the monthly
+        // pool, not just late ones. No-ops instantly if the contract has no
+        // hour-based facility configured. See maybePostPooledUsageCharge.
+        if (booking.customer_type === "contract_holder" && booking.contract_id && booking.check_in_at) {
+          await maybePostPooledUsageCharge(supabase, {
+            bookingId: id,
+            contractId: booking.contract_id,
+            spaceId: booking.space_id,
+            bookingDate: booking.booking_date,
+            checkInAt: booking.check_in_at,
+            checkOutAt: now,
+            createdBy: dbUser.id,
+            bookedHours: Number(booking.duration_hours),
+            contractFacilityIdOverride: booking.contract_facility_id_override,
+          });
         }
 
         // Revoke any active WiFi vouchers on checkout (fire-and-forget, non-fatal).
@@ -692,6 +1032,14 @@ export async function PATCH(
     performedBy: dbUser.id,
     changes: diffChanges(booking, { ...booking, ...updates }),
   });
+
+  if (body.status === "checked_in" && provisionalCheckIn) {
+    void noteProvisionalCheckIn(createAdminClient(), {
+      bookingId: id,
+      bookingNumber: booking.booking_number as string,
+      actor: { id: dbUser.id, role: dbUser.role, full_name: dbUser.full_name ?? "Staff" },
+    });
+  }
 
   // Log activity on lead timeline for status changes
   if (booking.lead_id && body.status) {

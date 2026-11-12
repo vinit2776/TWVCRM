@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createInvoiceSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
+import { adhocInvoiceTotal } from "@/lib/adhoc-invoice-total";
+import { razorpayLinkDates } from "@/lib/razorpay-link-dates";
+import { decideAttachment, loadLiveContracts, contractBelongsToLead, AUTO_ATTRIBUTION_PURPOSE } from "@/lib/adhoc-contract-attach";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -13,6 +18,7 @@ export async function GET(request: NextRequest) {
   const limit = parseInt(searchParams.get("limit") || "25");
   const status = searchParams.get("status");
   const leadId = searchParams.get("lead_id");
+  const caseId = searchParams.get("case_id");
 
   const offset = (page - 1) * limit;
 
@@ -22,6 +28,7 @@ export async function GET(request: NextRequest) {
 
   if (status) query = query.eq("status", status);
   if (leadId) query = query.eq("lead_id", leadId);
+  if (caseId) query = query.eq("case_id", caseId);
   query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;
@@ -61,20 +68,60 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // A live contract captures all of the customer's financial activity, so the
+  // invoice is tied to it at creation. Case-raised invoices have no lead and
+  // stay on the ad-hoc page.
+  const { contract_id: requestedContractId, ...invoiceFields } = result.data;
+  let attachContractId: string | null = null;
+  let attachedContractNumber: string | null = null;
+  if (result.data.lead_id && !result.data.case_id) {
+    const live = await loadLiveContracts(supabase, result.data.lead_id);
+    const belongs = requestedContractId
+      ? await contractBelongsToLead(supabase, requestedContractId, result.data.lead_id)
+      : false;
+    const decision = decideAttachment(live, requestedContractId, belongs);
+    if (decision.kind === "choose") {
+      return NextResponse.json(
+        { error: "This customer has more than one live contract. Choose which contract this invoice belongs to." },
+        { status: 400 }
+      );
+    }
+    if (decision.kind === "invalid") {
+      return NextResponse.json(
+        { error: "That contract does not belong to this customer." },
+        { status: 400 }
+      );
+    }
+    if (decision.kind === "attach") {
+      attachContractId = decision.contractId;
+      attachedContractNumber = live.find((c) => c.id === decision.contractId)?.contract_number ?? null;
+    }
+  } else if (requestedContractId) {
+    return NextResponse.json({ error: "A contract can only be chosen for a lead invoice." }, { status: 400 });
+  }
+
   const items = result.data.items;
   const subtotal = items.reduce((sum, item) => sum + item.total, 0);
   const taxAmount = subtotal * (result.data.tax_percentage / 100);
   const discountAmount = subtotal * (result.data.discount_percentage / 100);
-  const totalAmount = subtotal + taxAmount - discountAmount;
+  const totalAmount = adhocInvoiceTotal(subtotal, taxAmount, discountAmount);
 
-  const { count } = await supabase.from("proforma_invoices").select("*", { count: "exact", head: true });
-  const invoiceNumber = `INV-${String((count || 0) + 1).padStart(4, "0")}`;
-
+  // invoice_number is left unset so the generate_invoice_number() DB trigger
+  // assigns it atomically within the INSERT — computing it here via a separate
+  // SELECT COUNT(*) round trip was racy under concurrent invoice creation and
+  // could violate the invoice_number UNIQUE constraint.
   const { data, error } = await supabase
     .from("proforma_invoices")
     .insert({
-      ...result.data,
-      invoice_number: invoiceNumber,
+      ...invoiceFields,
+      ...(attachContractId
+        ? {
+            contract_id: attachContractId,
+            attribution_purpose: AUTO_ATTRIBUTION_PURPOSE,
+            attributed_at: new Date().toISOString(),
+            attributed_by: dbUser?.id,
+          }
+        : {}),
       status: "draft",
       subtotal,
       tax_amount: taxAmount,
@@ -86,6 +133,23 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const invoiceNumber: string = data.invoice_number;
+
+  if (data && dbUser?.id && attachContractId) {
+    logAudit(supabase, {
+      entityType: "contract",
+      entityId: attachContractId,
+      action: "invoice_attributed",
+      performedBy: dbUser.id,
+      changes: {
+        invoice_number: { old: null, new: invoiceNumber },
+        amount: { old: null, new: totalAmount },
+        attribution_purpose: { old: null, new: AUTO_ATTRIBUTION_PURPOSE },
+        automatic: { old: null, new: attachedContractNumber ? `live contract ${attachedContractNumber}` : "live contract" },
+      },
+    });
+  }
 
   if (data && dbUser?.id) {
     logAudit(supabase, {
@@ -100,7 +164,7 @@ export async function POST(request: NextRequest) {
   // ── Auto-create Razorpay payment link at creation time ────────────────────
   // This makes the link available immediately in the PDF download and avoids
   // recreating it on every email send.
-  if (data && totalAmount > 0 && result.data.lead_id) {
+  if (data && totalAmount > 0 && (result.data.lead_id || result.data.case_id)) {
     try {
       const adminSupabase = createAdminClient();
       const { data: rzpSettings } = await adminSupabase
@@ -112,19 +176,34 @@ export async function POST(request: NextRequest) {
       (rzpSettings || []).forEach((s: { key: string; value: string }) => { rzpMap[s.key] = s.value; });
 
       if (rzpMap.razorpay_enabled === "true" && rzpMap.razorpay_key_id && rzpMap.razorpay_key_secret) {
-        // Fetch lead contact details for Razorpay customer prefill
-        const { data: lead } = await supabase
-          .from("leads")
-          .select("first_name, last_name, email, phone, mobile")
-          .eq("id", result.data.lead_id)
-          .single();
+        // Prefill the Razorpay customer with whoever is actually being billed.
+        // On a case that is the case's billing party — an aggregator for a
+        // partner-billed case — not the end client, who does not owe it.
+        let party = null;
+        if (result.data.case_id) {
+          const { data: caseRow } = await supabase
+            .from("cases")
+            .select("client_name, client_company_name, client_email, client_phone, client_gst_number, aggregator_id, bill_to, aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone, gst_number)")
+            .eq("id", result.data.case_id)
+            .maybeSingle();
+          if (caseRow) {
+            party = invoiceParty({
+              case: caseRow as unknown as InvoiceCaseLike,
+              billClientOverride: result.data.bill_client_override,
+            });
+          }
+        } else {
+          const { data: lead } = await supabase
+            .from("leads")
+            .select("first_name, last_name, company, email, phone, mobile")
+            .eq("id", result.data.lead_id!)
+            .single();
+          party = invoiceParty({ lead });
+        }
 
-        const customerName = lead
-          ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim()
-          : "";
-        const customerEmail = (lead as { email?: string } | null)?.email || "";
-        const customerPhone = ((lead as { phone?: string; mobile?: string } | null)?.phone ||
-          (lead as { phone?: string; mobile?: string } | null)?.mobile || "");
+        const customerName = party?.name ?? "";
+        const customerEmail = party?.email ?? "";
+        const customerPhone = party?.phone ?? "";
 
         const auth = Buffer.from(
           `${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`
@@ -133,14 +212,12 @@ export async function POST(request: NextRequest) {
           process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app"
         ).trim();
 
-        // Expire at due date (if set) or 30 days from now
-        const defaultExpiry = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
-        const expireBy = result.data.due_date
-          ? Math.max(
-              Math.floor(new Date(result.data.due_date).getTime() / 1000),
-              defaultExpiry
-            )
-          : defaultExpiry;
+        // Longest validity Razorpay allows, deliberately NOT tied to due_date:
+        // a date-only due_date parses as 00:00 UTC (05:30 IST), which expired
+        // INV-0060's link at the start of its own due day. The customer must
+        // still be able to pay after the due date; overdue handling is ours.
+        const expireBy =
+          Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const payload: Record<string, any> = {
@@ -189,6 +266,12 @@ export async function POST(request: NextRequest) {
           // Return the enriched record so the UI can show the link immediately
           data.razorpay_link_id = linkData.id;
           data.razorpay_link_url = linkData.short_url;
+          // Separate from the write above so a DB that hasn't got the date
+          // columns yet can never cost us the link itself.
+          const linkDates = razorpayLinkDates(linkData);
+          const { error: datesErr } = await supabase.from("proforma_invoices").update(linkDates).eq("id", data.id);
+          if (datesErr) console.warn("[invoice create] Could not save link dates:", datesErr.message);
+          else Object.assign(data, linkDates);
         } else {
           console.warn(
             "[invoice create] Razorpay link creation failed:",

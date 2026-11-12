@@ -10,7 +10,7 @@
  * bookmarkable / shareable. Empty values are stripped to keep URLs short.
  */
 
-export type BillApprovalFilter = "" | "pending" | "approved" | "rejected";
+export type BillApprovalFilter = "" | "pending" | "approved" | "rejected" | "withdrawn";
 export type BillPaymentFilter = "" | "unpaid" | "partially_paid" | "paid";
 export type BillPaymentBatchTypeFilter = "" | "immediate" | "15th" | "25th";
 export type HasIrnFilter = "" | "true" | "false";
@@ -29,6 +29,9 @@ export interface BillFilters {
   // Vendor / PO scoping
   vendor_id: string;
   po_id: string;
+
+  // Company scoping (multi-company procurement)
+  company_id: string;
 
   // Money
   min_amount: string;       // strings to preserve URL semantics; coerced when used
@@ -70,6 +73,7 @@ export const EMPTY_FILTERS: BillFilters = {
   rejection_outcome: "",
   vendor_id: "",
   po_id: "",
+  company_id: "",
   min_amount: "",
   max_amount: "",
   min_approved_amount: "",
@@ -147,6 +151,7 @@ export interface FilterChip {
 export function describeFilterChips(filters: BillFilters, lookups?: {
   vendors?: Record<string, string>;       // vendor_id → name
   approvers?: Record<string, string>;     // user_id → full_name
+  companies?: Record<string, string>;     // company_id → brand_name
 }): FilterChip[] {
   const chips: FilterChip[] = [];
   const push = (key: keyof BillFilters, label: string) => chips.push({ key, label });
@@ -165,6 +170,10 @@ export function describeFilterChips(filters: BillFilters, lookups?: {
   if (filters.approver_id) {
     const name = lookups?.approvers?.[filters.approver_id];
     push("approver_id", `Approver: ${name ?? filters.approver_id.slice(0, 8)}`);
+  }
+  if (filters.company_id) {
+    const name = lookups?.companies?.[filters.company_id];
+    push("company_id", `Company: ${name ?? filters.company_id.slice(0, 8)}`);
   }
 
   if (filters.min_amount || filters.max_amount) {

@@ -1,5 +1,9 @@
+import { leadStaleState, latestInstant, NON_EVENT_SUBJECTS } from "@/lib/lead-stale";
+import { isLastContactActivity } from "@/lib/lead-last-contact";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { normalizePhoneFields, normalizeStoredPhone } from "@/lib/phone";
+import { phoneMatchClauses } from "@/lib/phone-search";
 import { createLeadSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
@@ -18,7 +22,7 @@ export async function GET(request: NextRequest) {
   const page = parseInt(searchParams.get("page") || "1");
   const limit = parseInt(searchParams.get("limit") || "25");
   const status = searchParams.get("status");
-  const source = searchParams.get("source");
+  const sources = searchParams.get("source")?.split(",").filter(Boolean) ?? [];
   const search = searchParams.get("search");
   const assigned_to = searchParams.get("assigned_to");
   const rating = searchParams.get("rating");
@@ -27,28 +31,109 @@ export async function GET(request: NextRequest) {
   const sort_order = searchParams.get("sort_order") || "desc";
   const phone_exact = searchParams.get("phone_exact");
   const include_archived = searchParams.get("include_archived") === "true";
+  const pinnedOnly = searchParams.get("pinned") === "true";
+  // Leads page tabs. "overdue" returns only leads with an overdue/due-today follow-up;
+  // "all" is a plain sort with no follow-up reordering, so a backlog of stale follow-ups
+  // can't push newly created leads off page 1. Absent = legacy overdue-first merge
+  // (other callers: pipeline, task dialog, command palette).
+  const view = searchParams.get("view");
+  // view=ids: exactly these leads, in this order (the Follow-ups tab loads one group's rows this way).
+  const idsFilter =
+    view === "ids"
+      ? (searchParams.get("ids") ?? "").split(",").filter((s) => /^[0-9a-f-]{36}$/i.test(s)).slice(0, 100)
+      : null;
 
   // Quick phone lookup — returns just id, id_proof_path fields
   if (phone_exact) {
     const { data } = await supabase
       .from("leads")
       .select("id, first_name, last_name, id_proof_path")
-      .or(`phone.eq.${phone_exact.trim()},mobile.eq.${phone_exact.trim()}`)
+      .or(`phone.eq.${normalizeStoredPhone(phone_exact)},mobile.eq.${normalizeStoredPhone(phone_exact)}`)
       .limit(1);
     return NextResponse.json({ data: data ?? [] });
+  }
+
+  // Free-text search matches name/email/phone/company, plus any lead that owns an enquiry
+  // whose reference matches (TWV-E-0042, TWV-E-42 or E42).
+  let searchOr = "";
+  if (search && !search.startsWith("#")) {
+    searchOr = `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`;
+    const phoneClauses = phoneMatchClauses(search, ["phone", "mobile"]);
+    if (phoneClauses.length) searchOr += `,${phoneClauses.join(",")}`;
+    const refMatch = search.trim().match(/^(?:twv-)?e-?(\d+)$/i);
+    if (refMatch) {
+      const reference = `TWV-E-${refMatch[1].padStart(4, "0")}`;
+      const { data: refRows } = await supabase
+        .from("lead_enquiries")
+        .select("lead_id")
+        .eq("reference", reference)
+        .not("lead_id", "is", null)
+        .limit(1);
+      const leadId = (refRows?.[0] as { lead_id: string } | undefined)?.lead_id;
+      if (leadId) searchOr += `,id.eq.${leadId}`;
+    }
   }
 
   const offset = (page - 1) * limit;
   const today = new Date().toISOString().slice(0, 10);
 
   const LEAD_SELECT =
-    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(follow_up_date, is_follow_up_done)";
+    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(id, follow_up_date, is_follow_up_done, follow_up_notes, subject, type)";
 
-  type Followup = { follow_up_date: string | null; is_follow_up_done: boolean };
+  type Followup = {
+    id: string;
+    follow_up_date: string | null;
+    is_follow_up_done: boolean;
+    follow_up_notes: string | null;
+    subject: string | null;
+    type: string;
+  };
+  type NextFollowup = {
+    activity_id: string;
+    due_at: string;
+    days_overdue: number;
+    notes: string | null;
+    subject: string | null;
+    type: string;
+  };
+  type EnquiryGlance = {
+    source: string;
+    received_at: string;
+    workspace_type: string | null;
+    seat_capacity: number | null;
+    budget_per_seat: number | null;
+    preferred_location: string | null;
+    message: string | null;
+  };
+  type EnquiryRow = {
+    lead_id: string;
+    source: string;
+    received_at: string;
+    payload: {
+      workspace_type?: string;
+      seat_capacity?: number;
+      budget_per_seat?: number;
+      preferred_location?: string;
+      description?: string;
+      messages?: { text?: string }[];
+    } | null;
+  };
   type LeadRow = {
     id: string;
+    status: string;
+    created_at: string;
+    archived_at?: string | null;
+    pinned_at?: string | null;
+    _stale?: unknown;
+    _last_contact?: { subject: string; at: string; note: string | null } | null;
+    _enquiry?: EnquiryGlance | null;
     _pending_followups?: Followup[];
-    _followup?: { overdue: boolean; due_today: boolean; upcoming: boolean } | null;
+    _followup?: {
+      overdue: boolean;
+      due_today: boolean;
+      upcoming: boolean;
+      next?: NextFollowup;
+    } | null;
   };
 
   function attachFollowupFlags(rows: LeadRow[]) {
@@ -64,7 +149,27 @@ export async function GET(request: NextRequest) {
           else if (d === today) flags.due_today = true;
           else flags.upcoming = true;
         }
-        l._followup = flags;
+        // The pending follow-up that's due soonest (or longest overdue) — what the Follow-ups
+        // tab shows as "when" and "next action".
+        const soonest = [...pending].sort((a, b) =>
+          (a.follow_up_date as string).localeCompare(b.follow_up_date as string)
+        )[0];
+        const dueDay = (soonest.follow_up_date as string).slice(0, 10);
+        const days_overdue = Math.max(
+          0,
+          Math.round((Date.parse(today) - Date.parse(dueDay)) / 86_400_000)
+        );
+        l._followup = {
+          ...flags,
+          next: {
+            activity_id: soonest.id,
+            due_at: soonest.follow_up_date as string,
+            days_overdue,
+            notes: soonest.follow_up_notes,
+            subject: soonest.subject,
+            type: soonest.type,
+          },
+        };
       }
       // Remove raw embed from the response — downstream code doesn't need it
       delete l._pending_followups;
@@ -76,8 +181,10 @@ export async function GET(request: NextRequest) {
   let countQuery = supabase.from("leads").select("id", { count: "exact", head: true });
   if (!include_archived) countQuery = countQuery.is("archived_at", null);
   if (status) countQuery = countQuery.eq("status", status);
-  if (source) countQuery = countQuery.eq("source", source);
-  if (assigned_to) countQuery = countQuery.eq("assigned_to", assigned_to);
+  if (sources.length > 0) countQuery = countQuery.in("source", sources);
+  // "none" = leads nobody is handling yet (the Unclaimed filter).
+  if (pinnedOnly) countQuery = countQuery.not("pinned_at", "is", null);
+  if (assigned_to) countQuery = assigned_to === "none" ? countQuery.is("assigned_to", null) : countQuery.eq("assigned_to", assigned_to);
   if (rating) countQuery = countQuery.eq("rating", rating);
   if (location_id) countQuery = countQuery.eq("location_id", location_id);
   if (search) {
@@ -85,11 +192,11 @@ export async function GET(request: NextRequest) {
       countQuery = countQuery.eq("id", search.slice(1));
     } else {
       countQuery = countQuery.or(
-        `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`
+        searchOr
       );
     }
   }
-  const { count, error: countError } = await countQuery;
+  const { count, error: countError } = idsFilter ? { count: idsFilter.length, error: null } : await countQuery;
   if (countError) {
     return NextResponse.json({ error: countError.message }, { status: 500 });
   }
@@ -107,8 +214,9 @@ export async function GET(request: NextRequest) {
 
   if (!include_archived) priorityQuery = priorityQuery.is("leads.archived_at", null);
   if (status) priorityQuery = priorityQuery.eq("leads.status", status);
-  if (source) priorityQuery = priorityQuery.eq("leads.source", source);
-  if (assigned_to) priorityQuery = priorityQuery.eq("leads.assigned_to", assigned_to);
+  if (sources.length > 0) priorityQuery = priorityQuery.in("leads.source", sources);
+  if (pinnedOnly) priorityQuery = priorityQuery.not("leads.pinned_at", "is", null);
+  if (assigned_to) priorityQuery = assigned_to === "none" ? priorityQuery.is("leads.assigned_to", null) : priorityQuery.eq("leads.assigned_to", assigned_to);
   if (rating) priorityQuery = priorityQuery.eq("leads.rating", rating);
   if (location_id) priorityQuery = priorityQuery.eq("leads.location_id", location_id);
   if (search) {
@@ -116,14 +224,15 @@ export async function GET(request: NextRequest) {
       priorityQuery = priorityQuery.eq("leads.id", search.slice(1));
     } else {
       priorityQuery = priorityQuery.or(
-        `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`,
+        searchOr,
         { referencedTable: "leads" }
       );
     }
   }
   priorityQuery = priorityQuery.order("follow_up_date", { ascending: true });
 
-  const { data: priorityRows, error: priorityError } = await priorityQuery;
+  const { data: priorityRows, error: priorityError } =
+    view === "all" || idsFilter ? { data: [], error: null } : await priorityQuery;
   if (priorityError) {
     return NextResponse.json({ error: priorityError.message }, { status: 500 });
   }
@@ -137,6 +246,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  if (idsFilter) {
+    for (const id of idsFilter) {
+      if (!seenPriorityIds.has(id)) {
+        seenPriorityIds.add(id);
+        priorityIds.push(id);
+      }
+    }
+  }
+
   // Merge: overdue/due-today leads occupy the front of the combined ordering, then the
   // rest of the filtered leads fill in behind them in the requested sort order.
   const pageEnd = offset + limit;
@@ -144,7 +262,7 @@ export async function GET(request: NextRequest) {
     Math.min(offset, priorityIds.length),
     Math.min(pageEnd, priorityIds.length)
   );
-  const restNeeded = limit - prioritySliceIds.length;
+  const restNeeded = view === "overdue" || idsFilter ? 0 : limit - prioritySliceIds.length;
   const restOffset = Math.max(0, offset - priorityIds.length);
 
   let priorityLeads: LeadRow[] = [];
@@ -167,8 +285,9 @@ export async function GET(request: NextRequest) {
     let restQuery = supabase.from("leads").select(LEAD_SELECT);
     if (!include_archived) restQuery = restQuery.is("archived_at", null);
     if (status) restQuery = restQuery.eq("status", status);
-    if (source) restQuery = restQuery.eq("source", source);
-    if (assigned_to) restQuery = restQuery.eq("assigned_to", assigned_to);
+    if (sources.length > 0) restQuery = restQuery.in("source", sources);
+    if (pinnedOnly) restQuery = restQuery.not("pinned_at", "is", null);
+    if (assigned_to) restQuery = assigned_to === "none" ? restQuery.is("assigned_to", null) : restQuery.eq("assigned_to", assigned_to);
     if (rating) restQuery = restQuery.eq("rating", rating);
     if (location_id) restQuery = restQuery.eq("location_id", location_id);
     if (search) {
@@ -176,7 +295,7 @@ export async function GET(request: NextRequest) {
         restQuery = restQuery.eq("id", search.slice(1));
       } else {
         restQuery = restQuery.or(
-          `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`
+          searchOr
         );
       }
     }
@@ -199,20 +318,86 @@ export async function GET(request: NextRequest) {
 
   // Within the "rest" group (no overdue/due-today items — those were already pulled out
   // above), still float upcoming-followup leads ahead of leads with no followup at all.
-  restLeads.sort((a, b) => {
-    const priority = (f: LeadRow["_followup"]) => (f?.upcoming ? 0 : 1);
-    return priority(a._followup) - priority(b._followup);
-  });
+  if (view !== "all") {
+    restLeads.sort((a, b) => {
+      const priority = (f: LeadRow["_followup"]) => (f?.upcoming ? 0 : 1);
+      return priority(a._followup) - priority(b._followup);
+    });
+  }
 
   const leads = [...priorityLeads, ...restLeads];
+
+  // What the latest public enquiry asked for. A form lead's requirement lives on the enquiry,
+  // not on the lead, so without this the list can't say what a lead wants or when they last asked.
+  const leadIds = leads.map((l) => l.id);
+  if (leadIds.length > 0) {
+    const { data: enquiryRows } = await supabase
+      .from("lead_enquiries")
+      .select("lead_id, source, received_at, payload")
+      .in("lead_id", leadIds)
+      .or("resolution_outcome.is.null,resolution_outcome.neq.spam")
+      .order("received_at", { ascending: false });
+    const latest = new Map<string, EnquiryGlance>();
+    for (const row of (enquiryRows || []) as EnquiryRow[]) {
+      if (latest.has(row.lead_id)) continue;
+      const p = row.payload ?? {};
+      const thread = (p.messages ?? []).map((m) => (m.text ?? "").trim()).filter(Boolean);
+      latest.set(row.lead_id, {
+        source: row.source,
+        received_at: row.received_at,
+        workspace_type: p.workspace_type ?? null,
+        seat_capacity: p.seat_capacity ?? null,
+        budget_per_seat: p.budget_per_seat ?? null,
+        preferred_location: p.preferred_location ?? null,
+        message: (thread[thread.length - 1] ?? p.description?.trim()) || null,
+      });
+    }
+    for (const l of leads) l._enquiry = latest.get(l.id) ?? null;
+
+    // How long each lead has been quiet, with the same rule the daily archive job uses.
+    const { data: activityRows } = await supabase
+      .from("activities")
+      .select("lead_id, created_at, subject, type, description")
+      .in("lead_id", leadIds)
+      .order("created_at", { ascending: false })
+      .limit(3000);
+    const lastActivity = new Map<string, string>();
+    // The last time someone actually spoke to or met them, for the "Last:" line on the row.
+    const lastContact = new Map<string, { subject: string; at: string; note: string | null }>();
+    for (const a of (activityRows || []) as {
+      lead_id: string;
+      created_at: string;
+      subject: string | null;
+      type: string;
+      description: string | null;
+    }[]) {
+      if ((NON_EVENT_SUBJECTS as readonly string[]).includes(a.subject ?? "")) continue;
+      if (!lastActivity.has(a.lead_id)) lastActivity.set(a.lead_id, a.created_at);
+      if (!lastContact.has(a.lead_id) && isLastContactActivity(a)) {
+        lastContact.set(a.lead_id, { subject: a.subject || a.type, at: a.created_at, note: a.description?.trim() || null });
+      }
+    }
+    for (const l of leads) {
+      l._last_contact = lastContact.get(l.id) ?? null;
+      const stale = leadStaleState({
+        status: l.status,
+        archivedAt: l.archived_at,
+        pinnedAt: l.pinned_at,
+        lastEventAt:
+          latestInstant([l.created_at, lastActivity.get(l.id), l._enquiry?.received_at]) ?? l.created_at,
+        hasFutureFollowUp: !!(l._followup?.upcoming || l._followup?.due_today),
+      });
+      if (stale.state !== "active") l._stale = stale;
+    }
+  }
 
   return NextResponse.json({
     data: leads,
     pagination: {
       page,
       limit,
-      total: count || 0,
-      totalPages: Math.ceil((count || 0) / limit),
+      total: view === "overdue" ? priorityIds.length : count || 0,
+      totalPages: Math.ceil((view === "overdue" ? priorityIds.length : count || 0) / limit),
     },
   });
 }
@@ -247,7 +432,7 @@ export async function POST(request: NextRequest) {
   const { data, error } = await supabase
     .from("leads")
     .insert({
-      ...result.data,
+      ...normalizePhoneFields(result.data),
       created_by: dbUser?.id,
       assigned_to: result.data.assigned_to || dbUser?.id,
     })
@@ -267,25 +452,25 @@ export async function POST(request: NextRequest) {
       changes: { record: { old: null, new: data } },
     });
 
-    // WhatsApp alert to all staff with a phone number — fire-and-forget
-    (async () => {
-      const { data: staffList } = await supabase
-        .from("users")
-        .select("phone")
-        .not("phone", "is", null)
-        .neq("phone", "");
+    // WhatsApp alert to the lead's owner only — skip if they created it themselves
+    if (data.assigned_to && data.assigned_to !== dbUser.id) {
+      (async () => {
+        const { data: owner } = await supabase
+          .from("users")
+          .select("phone")
+          .eq("id", data.assigned_to)
+          .single();
 
-      const leadName = `${data.first_name} ${data.last_name}`.trim();
-      const company  = data.company ?? "—";
-      const source   = data.source  ?? "direct";
+        if (owner?.phone) {
+          const leadName = `${data.first_name} ${data.last_name}`.trim();
+          const company  = data.company ?? "—";
+          const source   = data.source  ?? "direct";
 
-      staffList?.forEach((staff) => {
-        if (staff.phone) {
-          messaging.internalNewLead(staff.phone, leadName, company, source, data.id)
+          messaging.internalNewLead(owner.phone, leadName, company, source, data.id)
             .catch(console.error);
         }
-      });
-    })();
+      })();
+    }
   }
 
   return NextResponse.json({ data }, { status: 201 });

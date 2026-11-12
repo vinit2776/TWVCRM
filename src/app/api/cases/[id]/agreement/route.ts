@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { caseAgreementGateError } from "@/lib/agreement-gate";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { previousAgreementDocumentId } from "@/lib/agreement-reset";
 import {
   getTemplateKey,
   mergeVariables,
@@ -8,6 +10,8 @@ import {
 } from "@/lib/agreement-generator";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { dltSms } from "@/lib/whatsapp";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { applyDraftWatermark, isDraftAgreement } from "@/lib/draft-watermark";
 
 /**
  * GET: Get agreement details with a signed URL for viewing the PDF
@@ -139,6 +143,10 @@ export async function POST(
     clientCinNumber: caseData.client_cin_number,
     clientEmail: caseData.client_email,
     clientPhone: caseData.client_phone,
+    representedByName: caseData.represented_by_name,
+    representedByDesignation: caseData.represented_by_designation,
+    representedByIdType: caseData.represented_by_id_type,
+    representedByIdNumber: caseData.represented_by_id_number,
     locationName: location?.name || "The WorkVilla",
     locationAddress,
     purpose: caseData.purpose,
@@ -149,6 +157,10 @@ export async function POST(
   });
 
   // Generate PDF
+  // The case's approved special clause (if any) prints in every agreement generated for it.
+  (variables as { special_clause_text?: string | null }).special_clause_text =
+    caseData.special_clause_status === "approved" ? caseData.special_clause_text : null;
+
   const pdfDoc = generateAgreementPdf(templateKey, variables);
   const pdfBuffer = Buffer.from(pdfDoc.output("arraybuffer"));
 
@@ -170,7 +182,9 @@ export async function POST(
     );
   }
 
-  // Create document record for the PDF
+  // Create document record for the PDF. A regenerate supersedes the previous
+  // proposal's file, which stays reachable as the earlier version.
+  const supersededDocId = await previousAgreementDocumentId(supabase, caseId, "proposal");
   const { data: docRecord } = await supabase
     .from("documents")
     .insert({
@@ -181,6 +195,7 @@ export async function POST(
       size_bytes: pdfBuffer.length,
       category: "case_document",
       uploaded_by: dbUser?.id,
+      ...(supersededDocId ? { parent_document_id: supersededDocId } : {}),
     })
     .select("id")
     .single();
@@ -287,6 +302,14 @@ export async function PUT(
   // Merge existing variables with updated ones
   const existingVars = (existingAgreement.variables || {}) as Record<string, unknown>;
   const mergedVars = { ...existingVars, ...updatedVars };
+
+  // Keep the stored copy in step with the case's approved clause, so saving an edit
+  // also repairs an agreement whose PDF fell behind (see agreementClauseGate).
+  {
+    const { data: kase } = await supabase.from("cases").select("special_clause_status, special_clause_text").eq("id", caseId).single();
+    (mergedVars as Record<string, unknown>).special_clause_text =
+      kase?.special_clause_status === "approved" ? kase.special_clause_text : null;
+  }
 
   // Regenerate PDF with updated variables
   const templateKey = existingAgreement.template_key;
@@ -428,32 +451,21 @@ export async function PATCH(
     );
   }
 
-  // Prepaid aggregators require an approved Payment Proof document before
-  // the Leave & License Agreement can be executed.
+  // Prepaid aggregators and direct clients (no aggregator) both require a
+  // paid VO case invoice before the Leave & License Agreement can execute —
+  // see src/lib/case-invoicing.ts. This replaces the earlier manual
+  // "approved Payment Proof document" gate with the real, Tally-issued
+  // invoice's payment status.
   if (action === "mark_executed" && currentAgreement.type === "leave_license") {
-    const { data: caseRow } = await supabase
-      .from("cases")
-      .select("aggregator:aggregators!cases_aggregator_id_fkey(billing_method)")
-      .eq("id", caseId)
-      .single();
-
-    const aggregator = caseRow?.aggregator as { billing_method?: string } | null;
-
-    if (aggregator?.billing_method === "prepaid") {
-      const { data: paymentProof } = await supabase
-        .from("case_documents")
-        .select("status")
-        .eq("case_id", caseId)
-        .eq("document_type", "payment_proof")
-        .maybeSingle();
-
-      if (!paymentProof || paymentProof.status !== "approved") {
-        return NextResponse.json(
-          { error: "This aggregator is prepaid — Payment Proof must be uploaded and approved (Documents tab) before this agreement can be executed." },
-          { status: 400 }
-        );
-      }
+    const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+    if (gateError) {
+      return NextResponse.json({ error: gateError }, { status: 400 });
     }
+  }
+
+  if (["send_to_client", "initiate_signing", "mark_executed"].includes(action)) {
+    const clauseBlock = await caseAgreementGateError(supabase, caseId, agreementId);
+    if (clauseBlock) return NextResponse.json({ error: clauseBlock }, { status: 409 });
   }
 
   const updateData: Record<string, unknown> = {};
@@ -537,9 +549,20 @@ export async function PATCH(
             .download(doc.file_path);
           if (fileData) {
             const arrayBuffer = await fileData.arrayBuffer();
+            // The client must never receive an unstamped agreement that looks
+            // final. Watermarked on the way out only — the stored file stays
+            // clean because it is what goes to Leegality for e-signature.
+            const draft = isDraftAgreement(currentAgreement as {
+              status?: string | null;
+              signed_document_id?: string | null;
+              stamp_reference?: string | null;
+            });
+            const bytes = draft
+              ? await applyDraftWatermark(new Uint8Array(arrayBuffer))
+              : new Uint8Array(arrayBuffer);
             pdfAttachment = {
-              filename: `${agreementNumber || "Agreement"}.pdf`,
-              content: Buffer.from(arrayBuffer),
+              filename: `${draft ? "DRAFT-" : ""}${agreementNumber || "Agreement"}.pdf`,
+              content: Buffer.from(bytes),
               contentType: "application/pdf",
             };
           }

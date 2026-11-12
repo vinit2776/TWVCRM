@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateCaseSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { caseAddressText } from "@/lib/agreement-address-gate";
+import {
+  AGREEMENT_RESET_MIN_REASON,
+  AGREEMENT_RESET_ROLES,
+  cancelOpenSigningRequests,
+  findSignedAgreements,
+  resetAgreementsForNewAddress,
+  type SignedAgreementRow,
+} from "@/lib/agreement-reset";
+import { caseEndDate } from "@/lib/case-workflow";
+import { generateDocumentChecklist } from "@/lib/compliance";
+import type { EntityType, VoPurpose } from "@/types";
 
 export async function GET(
   _request: NextRequest,
@@ -18,12 +30,12 @@ export async function GET(
   }
 
   // Fetch case with all related data
-  const [caseRes, docsRes, complianceRes, agreementRes, llAgreementRes, commentsRes] =
+  const [caseRes, docsRes, complianceRes, agreementRes, llAgreementRes, billingRes, commentsRes] =
     await Promise.all([
       supabase
         .from("cases")
         .select(
-          "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, code, primary_email), aggregator_contact:aggregator_contacts!cases_aggregator_contact_id_fkey(id, name, email, phone), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)"
+          "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, company_name, code, primary_email, billing_method, billing_mode), aggregator_contact:aggregator_contacts!cases_aggregator_contact_id_fkey(id, name, email, phone), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)"
         )
         .eq("id", id)
         .single(),
@@ -53,6 +65,14 @@ export async function GET(
         .order("created_at", { ascending: false })
         .limit(1),
       supabase
+        .from("billing_statements")
+        .select("id, statement_number, payment_status, handoff_state, total_amount, voided_at")
+        .eq("case_id", id)
+        .eq("statement_type", "vo_case")
+        .is("voided_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1),
+      supabase
         .from("case_comments")
         .select(
           "*, creator:users!case_comments_created_by_fkey(id, full_name, email)"
@@ -73,6 +93,7 @@ export async function GET(
       compliance_checks: complianceRes.data || [],
       agreement: agreementRes.data?.[0] || null,
       ll_agreement: llAgreementRes.data?.[0] || null,
+      billing_statement: billingRes.data?.[0] || null,
       comments: commentsRes.data || [],
     },
   });
@@ -109,12 +130,75 @@ export async function PATCH(
     .eq("id", id)
     .single();
 
+  // Keep the expiry honest when either of its inputs moves. A stale end_date
+  // would leave the renewal cron chasing the wrong date rather than none.
+  const patch: Record<string, unknown> = { ...result.data };
+  const touchesTerm = "start_date" in patch || "tenure_months" in patch;
+  if (touchesTerm) {
+    const startDate = (patch.start_date as string | undefined) ?? oldCase?.start_date;
+    const tenure = (patch.tenure_months as number | undefined) ?? oldCase?.tenure_months;
+    const derived = caseEndDate(startDate, tenure);
+    // Renewal advances end_date beyond the original term, so only ever move
+    // it forward — never pull a renewed case back to its first term's end.
+    if (derived && (!oldCase?.end_date || derived > oldCase.end_date)) {
+      patch.end_date = derived;
+    }
+  }
+
+  // A signed (or out-for-signature) agreement carries the old address. Changing
+  // the address would invalidate that signature, so it needs an explicit,
+  // reasoned acceptance from admin/manager first; nothing is changed until then.
+  let signedToReset: SignedAgreementRow[] = [];
+  let newAddress = "";
+  let resetReason = "";
+  let addressChanged = false;
+  const touchesAddress = ["client_address", "client_city", "client_state", "client_pincode"].some((k) => k in patch);
+  if (touchesAddress && oldCase) {
+    newAddress = caseAddressText({ ...oldCase, ...patch } as Record<string, string | null>);
+    const squash = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+    const changed = !!newAddress && squash(newAddress) !== squash(caseAddressText(oldCase as Record<string, string | null>));
+    addressChanged = changed;
+    if (changed) {
+      const adminForReset = await createAdminClient();
+      signedToReset = await findSignedAgreements(adminForReset, id);
+      if (signedToReset.length > 0) {
+        const { data: actor } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+        if (!actor || !AGREEMENT_RESET_ROLES.includes(actor.role)) {
+          return NextResponse.json(
+            { error: "This case has a signed agreement. Only an admin, manager or sales rep can change the client address, which requires the agreement to be signed again." },
+            { status: 403 }
+          );
+        }
+        const req = body as { confirm_agreement_reset?: unknown; agreement_reset_reason?: unknown };
+        if (req.confirm_agreement_reset !== true) {
+          return NextResponse.json(
+            {
+              error: "Changing the address will reset the signed agreement. It must be signed again.",
+              code: "AGREEMENT_RESET_REQUIRED",
+              agreements: signedToReset.map((a) => ({ type: a.type, status: a.status })),
+            },
+            { status: 409 }
+          );
+        }
+        resetReason = typeof req.agreement_reset_reason === "string" ? req.agreement_reset_reason.trim() : "";
+        if (resetReason.length < AGREEMENT_RESET_MIN_REASON) {
+          return NextResponse.json(
+            { error: `Give a reason of at least ${AGREEMENT_RESET_MIN_REASON} characters for resetting the signed agreement.` },
+            { status: 400 }
+          );
+        }
+        const cancelErr = await cancelOpenSigningRequests(signedToReset);
+        if (cancelErr) return NextResponse.json({ error: cancelErr }, { status: 502 });
+      }
+    }
+  }
+
   const { data, error } = await supabase
     .from("cases")
-    .update(result.data)
+    .update(patch)
     .eq("id", id)
     .select(
-      "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, code), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)"
+      "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, company_name, code), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)"
     )
     .single();
 
@@ -122,12 +206,73 @@ export async function PATCH(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  // The KYC document checklist is only ever generated once, at case
+  // creation, from purpose + client_entity_type at that moment (see
+  // src/app/api/cases/route.ts). If either changes later, top up the
+  // checklist with whatever the new combination requires that isn't
+  // already present — additive only, so existing uploaded/approved
+  // documents (which may still be valid, e.g. a director's personal PAN)
+  // are never touched or removed.
+  const touchesChecklistInputs = "client_entity_type" in patch || "purpose" in patch;
+  if (touchesChecklistInputs && oldCase) {
+    const newEntityType = (patch.client_entity_type as EntityType | undefined) ?? oldCase.client_entity_type;
+    const newPurpose = (patch.purpose as VoPurpose | undefined) ?? oldCase.purpose;
+    const checklist = generateDocumentChecklist(newPurpose, newEntityType);
+
+    if (checklist.length > 0) {
+      const { data: existingDocs } = await supabase
+        .from("case_documents")
+        .select("document_type")
+        .eq("case_id", id);
+
+      const existingTypes = new Set((existingDocs || []).map((d) => d.document_type));
+      const missing = checklist.filter((doc) => !existingTypes.has(doc.type));
+
+      if (missing.length > 0) {
+        await supabase.from("case_documents").insert(
+          missing.map((doc) => ({
+            case_id: id,
+            document_type: doc.type,
+            label: doc.label,
+            is_required: doc.required,
+            status: "pending" as const,
+          }))
+        );
+      }
+    }
+  }
+
+  // An address change never rebuilds an agreement by itself. The stored
+  // agreement is now out of step with the case, which locks send/sign/upload
+  // (caseAgreementGateError) until a person clicks Regenerate on the agreement tab.
+
   // Audit log
   const { data: dbUser } = await supabase
     .from("users")
     .select("id")
     .eq("auth_id", user.id)
     .single();
+
+  if (signedToReset.length > 0) {
+    const outcome = await resetAgreementsForNewAddress(await createAdminClient(), id, signedToReset, resetReason);
+    if (dbUser?.id) {
+      for (const agreementId of outcome.reset) {
+        logAudit(supabase, {
+          entityType: "case_agreement",
+          entityId: agreementId,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: { action: { old: null, new: "reset_for_address_change" }, reason: { old: null, new: resetReason } },
+        });
+      }
+    }
+    if (outcome.failed.length > 0) {
+      return NextResponse.json(
+        { data, warning: "The address was saved, but the signed agreement could not be reset. Try saving the case again." },
+        { status: 207 }
+      );
+    }
+  }
 
   if (dbUser?.id && oldCase) {
     logAudit(supabase, {
@@ -142,7 +287,19 @@ export async function PATCH(
     });
   }
 
-  return NextResponse.json({ data });
+  // Tell the form which tab now holds an agreement waiting to be regenerated.
+  let regenerateTab: "agreement" | "proposal" | null = null;
+  if (addressChanged) {
+    const { data: unsigned } = await supabase
+      .from("case_agreements")
+      .select("type")
+      .eq("case_id", id)
+      .not("status", "in", "(executed,signing)");
+    const types = (unsigned ?? []).map((a) => a.type);
+    regenerateTab = types.includes("leave_license") ? "agreement" : types.includes("proposal") ? "proposal" : null;
+  }
+
+  return NextResponse.json({ data, ...(regenerateTab ? { regenerate_tab: regenerateTab } : {}) });
 }
 
 export async function DELETE(
@@ -182,6 +339,65 @@ export async function DELETE(
     .select("*")
     .eq("id", id)
     .single();
+
+  // billing_statements.case_id is ON DELETE SET NULL, but a vo_case statement
+  // (src/lib/case-invoicing.ts) is typically owned by case_id alone — no
+  // contract/booking/proposal/invoice/aggregator. Nulling out its only source
+  // reference violates billing_statements_source_check and fails the whole
+  // case delete with a raw Postgres error. Since these statements have no
+  // reason to survive their case's deletion, remove case-only-owned ones
+  // first — unless they're already paid or Tally-issued, in which case block
+  // the delete instead of silently destroying real financial records.
+  const { data: caseStatements } = await supabase
+    .from("billing_statements")
+    .select("id, statement_number, issuance_channel, contract_id, booking_id, proposal_id, invoice_id, aggregator_id")
+    .eq("case_id", id);
+
+  const caseOnlyStatements = (caseStatements ?? []).filter(
+    (s) => !s.contract_id && !s.booking_id && !s.proposal_id && !s.invoice_id && !s.aggregator_id
+  );
+
+  for (const statement of caseOnlyStatements) {
+    if (statement.issuance_channel === "tally") {
+      return NextResponse.json(
+        {
+          error: `Cannot delete — invoice ${statement.statement_number ?? statement.id.slice(0, 8)} was issued by Tally. Handle it via the cancel/credit-note flow before deleting this case.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    const { data: payments } = await supabase
+      .from("billing_payments")
+      .select("id")
+      .eq("billing_statement_id", statement.id)
+      .limit(1);
+
+    if (payments && payments.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Cannot delete — invoice ${statement.statement_number ?? statement.id.slice(0, 8)} has payments recorded. Reverse or delete payments first.`,
+        },
+        { status: 409 }
+      );
+    }
+  }
+
+  if (caseOnlyStatements.length > 0) {
+    // billing_statements has RLS enabled with no DELETE policy for
+    // `authenticated` (only SELECT/INSERT/UPDATE) — the RLS-scoped client
+    // would silently delete 0 rows here, leaving the case delete below to
+    // still hit the same constraint violation. Admin client required.
+    const adminSupabase = await createAdminClient();
+    const { error: statementDeleteError } = await adminSupabase
+      .from("billing_statements")
+      .delete()
+      .in("id", caseOnlyStatements.map((s) => s.id));
+
+    if (statementDeleteError) {
+      return NextResponse.json({ error: statementDeleteError.message }, { status: 500 });
+    }
+  }
 
   const { error } = await supabase.from("cases").delete().eq("id", id);
 

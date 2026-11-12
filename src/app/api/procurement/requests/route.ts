@@ -2,22 +2,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
-import { PROCUREMENT_APPROVAL_THRESHOLDS } from "@/lib/constants";
+import { PROCUREMENT_APPROVAL_THRESHOLDS, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS, PRICE_TOLERANCE_MAX_PERCENT } from "@/lib/constants";
 
 const createPrItemSchema = z.object({
   item_id: z.string().uuid().optional().nullable(),
   item_name: z.string().min(1),
   quantity: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"]),
+  unit: z.enum(ITEM_UNITS),
   estimated_price: z.number().min(0).optional().nullable(),
   notes: z.string().optional(),
+  // AMC requests: the asset this line covers (one line per asset).
+  linked_asset_id: z.string().uuid().optional().nullable(),
 });
 
 const createPrSchema = z.object({
+  company_id: z.string().uuid("Select which company this request is for"),
   department: z.enum(["pantry", "maintenance", "administration", "asset", "amc", "reimbursement"]),
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
   expenditure_type: z.enum(["operational", "amc"]).default("operational"),
+  // Room the requester wants between this estimate and the final vendor invoice.
+  // The approver accepts or changes it (tolerance_percent is set at approval).
+  tolerance_requested_percent: z.number().int().min(0).max(PRICE_TOLERANCE_MAX_PERCENT).default(0),
+  tolerance_reason: z.string().trim().optional().nullable(),
   items: z.array(createPrItemSchema).min(1, "At least one item is required"),
   submit: z.boolean().optional(), // If true, create in "submitted" state
 
@@ -33,6 +40,9 @@ const createPrSchema = z.object({
   amc_start_date: z.string().optional().nullable(),
   amc_end_date: z.string().optional().nullable(),
   amc_visits_covered: z.number().int().positive().optional().nullable(),
+  // A contract already running when entered here: cycles settled and visits done before.
+  opening_cycles: z.number().int().min(0).max(120).default(0),
+  opening_visits: z.number().int().min(0).max(500).default(0),
   amc_contact_name: z.string().optional().nullable(),
   amc_helpline_number: z.string().optional().nullable(),
   amc_contact_email: z.string().email().optional().nullable().or(z.literal("")),
@@ -43,18 +53,19 @@ const createPrSchema = z.object({
   advance_amount: z.number().min(0).optional().nullable(),
   advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]).optional().nullable(),
   advance_notes: z.string().optional().nullable(),
+}).refine((data) => data.tolerance_requested_percent === 0 || !!data.tolerance_reason, {
+  message: "Say why the final invoice may differ from the estimate",
+  path: ["tolerance_reason"],
 }).refine((data) => data.department !== "reimbursement" || !!data.billable_contract_id, {
   message: "billable_contract_id is required when department is 'reimbursement'",
   path: ["billable_contract_id"],
-});
-
-function generatePrNumber(count: number): string {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const seq = String(count + 1).padStart(3, "0");
-  return `PR-${yy}${mm}-${seq}`;
-}
+}).refine(
+  (data) => !(CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(data.department) || !!data.location_id,
+  {
+    message: "Select which center this request is for",
+    path: ["location_id"],
+  }
+);
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -68,6 +79,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const department = searchParams.get("department");
   const locationId = searchParams.get("location_id");
+  const companyId = searchParams.get("company_id");
   const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
@@ -77,10 +89,13 @@ export async function GET(request: NextRequest) {
   const fetchAll = searchParams.get("all") === "1";
   const ALL_ROWS_CAP = 1000;
 
+  // Opt-in so the many other callers of this list don't pay for the extra join.
+  const includeQuotations = searchParams.get("include_quotations") === "1";
+
   let query = supabase
     .from("purchase_requests")
     .select(
-      `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)`,
+      `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)${includeQuotations ? ", material_request_quotations(id, vendor_name, amount)" : ""}`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false });
@@ -88,7 +103,7 @@ export async function GET(request: NextRequest) {
   query = fetchAll ? query.limit(ALL_ROWS_CAP) : query.range(offset, offset + limit - 1);
 
   // Only procurement roles can see all; others are blocked at the route level
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -96,14 +111,18 @@ export async function GET(request: NextRequest) {
   const toDate = searchParams.get("to_date");
   const expenditureType = searchParams.get("expenditure_type");
 
-  // "active" is a meta-status: all non-cancelled, non-rejected — matches what the budget bar counts
+  // "active" is a meta-status: all non-cancelled, non-rejected.
+  // "committed" is a meta-status: approved and beyond — matches what the budget bar counts as spend.
   if (status === "active") {
     query = query.not("status", "in", '("cancelled","rejected")');
+  } else if (status === "committed") {
+    query = query.in("status", ["approved", "partially_ordered", "po_created"]);
   } else if (status) {
     query = query.eq("status", status);
   }
   if (department) query = query.eq("department", department);
   if (locationId) query = query.eq("location_id", locationId);
+  if (companyId) query = query.eq("company_id", companyId);
   if (fromDate) query = query.gte("created_at", fromDate);
   if (toDate) query = query.lte("created_at", toDate);
   if (expenditureType) query = query.eq("expenditure_type", expenditureType);
@@ -134,7 +153,7 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -147,6 +166,25 @@ export async function POST(request: NextRequest) {
   }
 
   const { items, submit, ...prData } = parsed.data;
+  // Service/AMC contracts bill fixed cycle amounts — tolerance never applies.
+  if (prData.department === "amc") {
+    prData.tolerance_requested_percent = 0;
+    prData.tolerance_reason = null;
+  }
+  if (prData.tolerance_requested_percent === 0) prData.tolerance_reason = null;
+  // Only a running AMC has an opening position.
+  if (prData.department !== "amc") {
+    prData.opening_cycles = 0;
+    prData.opening_visits = 0;
+  }
+
+  // One line per asset — the same asset on two lines would double-count it.
+  if (prData.department === "amc") {
+    const assetIds = items.map((i) => i.linked_asset_id).filter((a): a is string => !!a);
+    if (new Set(assetIds).size !== assetIds.length) {
+      return NextResponse.json({ error: "Each asset can only appear on one line" }, { status: 400 });
+    }
+  }
 
   // Compute total estimated
   const totalEstimated = items.reduce((sum, item) => {
@@ -156,19 +194,15 @@ export async function POST(request: NextRequest) {
     return sum;
   }, 0);
 
-  // Generate PR number within a transaction-safe approach
-  const { count: existingCount } = await supabase
-    .from("purchase_requests")
-    .select("*", { count: "exact", head: true });
-
-  const prNumber = generatePrNumber(existingCount ?? 0);
+  // pr_number is assigned by the generate_purchase_request_number() DB
+  // trigger, company-scoped via prData.company_id — see
+  // 00541_procurement_number_counters.sql.
   const status = submit ? "submitted" : "draft";
 
   const { data: pr, error: prError } = await supabase
     .from("purchase_requests")
     .insert({
       ...prData,
-      pr_number: prNumber,
       status,
       requested_by: dbUser.id,
       total_estimated_amount: totalEstimated,
@@ -188,6 +222,8 @@ export async function POST(request: NextRequest) {
     estimated_price: item.estimated_price || null,
     total_estimated: item.estimated_price ? item.quantity * item.estimated_price : null,
     notes: item.notes || null,
+    // Only AMC lines are tied to an asset.
+    linked_asset_id: prData.department === "amc" ? item.linked_asset_id || null : null,
   }));
 
   const { error: itemsError } = await supabase.from("purchase_request_items").insert(lineItems);

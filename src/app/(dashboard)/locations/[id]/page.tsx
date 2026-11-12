@@ -27,6 +27,8 @@ import { LocationFormDialog } from "@/components/locations/location-form-dialog"
 import { ElectricityConfigTab } from "@/components/locations/electricity-config-tab";
 import { LocationServicesTab } from "@/components/locations/location-services-tab";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { canEditAgreementTerms } from "@/lib/agreement-terms";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import type { Location, LocationFloor, SpaceUnit, SpaceAnalytics } from "@/types";
 
 type Tab = "overview" | "spaces" | "analytics" | "electricity" | "services";
@@ -63,6 +65,7 @@ export default function LocationDetailPage({
   // Electricity config access
   const { user } = useCurrentUser();
   const canEditElectricity = user?.role === "admin" || user?.role === "manager";
+  const canEditTerms = canEditAgreementTerms(user?.role);
 
   // ── Fetchers ─────────────────────────────────────────────────────────────
   const fetchLocation = useCallback(async () => {
@@ -194,6 +197,10 @@ export default function LocationDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: location.name }}
+        fallbackParent={{ href: "/locations", label: "Locations" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -225,7 +232,7 @@ export default function LocationDetailPage({
       <div className="flex border-b gap-1 flex-wrap">
         {(["overview", "spaces", "analytics", "electricity", "services"] as Tab[]).map((t) => {
           if (t === "electricity" && !canEditElectricity) return null;
-          if (t === "services" && !canEditElectricity) return null;
+          if (t === "services" && !canEditTerms) return null;
           return (
             <button
               key={t}
@@ -567,7 +574,9 @@ export default function LocationDetailPage({
         <LocationServicesTab
           locationId={id}
           canEdit={canEditElectricity}
+          canEditAgreementTerms={canEditTerms}
           initialAmenityIcons={location.proposal_amenity_icons}
+          initialAgreementTerms={location.agreement_terms}
         />
       )}
 

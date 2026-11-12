@@ -48,7 +48,7 @@ $$ LANGUAGE plpgsql;
 -- USERS
 -- =============================================
 CREATE TABLE users (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   auth_id UUID UNIQUE NOT NULL,
   email VARCHAR(255) NOT NULL,
   full_name VARCHAR(255) NOT NULL,
@@ -71,7 +71,7 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
 -- LEADS
 -- =============================================
 CREATE TABLE leads (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   first_name VARCHAR(255) NOT NULL,
   last_name VARCHAR(255) NOT NULL,
   company VARCHAR(255),
@@ -149,7 +149,7 @@ CREATE TRIGGER update_leads_updated_at BEFORE UPDATE ON leads
 -- ACTIVITIES
 -- =============================================
 CREATE TABLE activities (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
   type activity_type NOT NULL,
   subject VARCHAR(500),
@@ -180,7 +180,7 @@ CREATE TRIGGER update_activities_updated_at BEFORE UPDATE ON activities
 -- MEETING ATTENDEES
 -- =============================================
 CREATE TABLE meeting_attendees (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   activity_id UUID NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   external_name VARCHAR(255),
@@ -195,7 +195,7 @@ CREATE INDEX idx_meeting_attendees_activity ON meeting_attendees(activity_id);
 -- MEETING MINUTES
 -- =============================================
 CREATE TABLE meeting_minutes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   activity_id UUID UNIQUE NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
   agenda TEXT,
   minutes_content TEXT NOT NULL,
@@ -213,7 +213,7 @@ CREATE TRIGGER update_meeting_minutes_updated_at BEFORE UPDATE ON meeting_minute
 -- PROPOSALS
 -- =============================================
 CREATE TABLE proposals (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
   proposal_number VARCHAR(50) UNIQUE,
   title VARCHAR(500) NOT NULL,
@@ -265,7 +265,7 @@ CREATE TRIGGER update_proposals_updated_at BEFORE UPDATE ON proposals
 -- PROFORMA INVOICES
 -- =============================================
 CREATE TABLE proforma_invoices (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   lead_id UUID REFERENCES leads(id) ON DELETE SET NULL,
   proposal_id UUID REFERENCES proposals(id) ON DELETE SET NULL,
   invoice_number VARCHAR(50) UNIQUE,
@@ -314,7 +314,7 @@ CREATE TRIGGER update_invoices_updated_at BEFORE UPDATE ON proforma_invoices
 -- TASKS
 -- =============================================
 CREATE TABLE tasks (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   title VARCHAR(500) NOT NULL,
   description TEXT,
   status task_status DEFAULT 'todo',
@@ -343,7 +343,7 @@ CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks
 -- DOCUMENT FOLDERS
 -- =============================================
 CREATE TABLE document_folders (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   name VARCHAR(255) NOT NULL,
   parent_folder_id UUID REFERENCES document_folders(id) ON DELETE CASCADE,
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -357,7 +357,7 @@ CREATE INDEX idx_folders_parent ON document_folders(parent_folder_id);
 -- DOCUMENTS
 -- =============================================
 CREATE TABLE documents (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   title VARCHAR(500) NOT NULL,
   description TEXT,
   file_name VARCHAR(500) NOT NULL,
@@ -385,7 +385,7 @@ CREATE TRIGGER update_documents_updated_at BEFORE UPDATE ON documents
 -- LEAD DOCUMENTS (junction)
 -- =============================================
 CREATE TABLE lead_documents (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
   document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -399,7 +399,7 @@ CREATE INDEX idx_lead_docs_doc ON lead_documents(document_id);
 -- AUDIT TRAIL
 -- =============================================
 CREATE TABLE audit_trail (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   entity_type VARCHAR(50) NOT NULL,
   entity_id UUID NOT NULL,
   action VARCHAR(50) NOT NULL,

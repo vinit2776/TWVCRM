@@ -7,8 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
+import { formatDate } from "@/lib/utils";
 import { useBookingForm } from "./booking-form-context";
 
 export const CustomerDetailsSection = memo(function CustomerDetailsSection() {
@@ -20,13 +22,17 @@ export const CustomerDetailsSection = memo(function CustomerDetailsSection() {
     guestCompany, setGuestCompany, bookerGstNumber, setBookerGstNumber,
     gstError, setGstError, selectedCustomer,
     idProofFile, setIdProofFile, leadHasIdProof, idProofLookingUp,
-    contracts, handleSearchInput, selectCustomerSuggestion, clearCustomerSelection,
+    contracts, includeTerminatedContracts, setIncludeTerminatedContracts,
+    handleSearchInput, selectCustomerSuggestion, clearCustomerSelection,
   } = useBookingForm();
 
   const contractOptions = contracts.map(c => ({
     value: c.id,
-    label: `${c.contract_number} — ${c.lead?.company || `${c.lead?.first_name} ${c.lead?.last_name}`}`,
+    label: `${c.contract_number} — ${c.lead?.company || `${c.lead?.first_name} ${c.lead?.last_name}`}`
+      + (c.status === "terminated" ? " (Terminated)" : ""),
   }));
+
+  const selectedContract = contracts.find(c => c.id === contractId);
 
   const handleContractSelect = (value: string) => {
     setContractId(value);
@@ -142,7 +148,16 @@ export const CustomerDetailsSection = memo(function CustomerDetailsSection() {
         {/* Contract Holder */}
         {customerType === "contract_holder" && (
           <div className="space-y-2">
-            <Label>Active Contract *</Label>
+            <div className="flex items-center justify-between">
+              <Label>{includeTerminatedContracts ? "Contract *" : "Active Contract *"}</Label>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                <Checkbox
+                  checked={includeTerminatedContracts}
+                  onCheckedChange={(v) => setIncludeTerminatedContracts(v === true)}
+                />
+                Include terminated contracts (backdated booking)
+              </label>
+            </div>
             <SearchableSelect
               options={contractOptions}
               value={contractId}
@@ -151,7 +166,16 @@ export const CustomerDetailsSection = memo(function CustomerDetailsSection() {
               searchPlaceholder="Search by contract # or name..."
               emptyMessage="No matching contracts."
             />
-            <p className="text-xs text-muted-foreground">Booking amount will be posted to their billing. Mobile number auto-fills from the contract.</p>
+            {selectedContract?.status === "terminated" ? (
+              <p className="text-xs text-amber-600">
+                This contract was terminated. The booking date must fall on or after{" "}
+                {formatDate(selectedContract.start_date)} and on or before the date it was
+                terminated — otherwise the booking will be rejected. Check the contract page
+                for the exact termination date if unsure.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">Booking amount will be posted to their billing. Mobile number auto-fills from the contract.</p>
+            )}
           </div>
         )}
 

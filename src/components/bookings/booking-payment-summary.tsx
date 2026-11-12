@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Booking, BookingPayment } from "@/types";
+import { reportedPaymentState } from "@/lib/booking-payment-rules";
 
 const MONTH_LABELS = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];
@@ -45,9 +46,13 @@ interface Props {
   payments?: BookingPayment[];
   onViewScreenshot?: (paymentId: string, screenshotPath: string) => void;
   loadingScreenshotId?: string | null;
+  /** Opens the "correct payment method" dialog; omit when the viewer can't edit. */
+  onCorrectMethod?: () => void;
+  /** GST invoice already uploaded — show the lock note instead of the action. */
+  methodLocked?: boolean;
 }
 
-export function BookingPaymentSummary({ booking, variant = "full", payments, onViewScreenshot, loadingScreenshotId }: Props) {
+export function BookingPaymentSummary({ booking, variant = "full", payments, onViewScreenshot, loadingScreenshotId, onCorrectMethod, methodLocked }: Props) {
   const total = Number(booking.total_amount_with_gst || booking.total_amount || 0);
   const screenshotPayment = payments
     ?.filter((p) => p.payment_mode === "upi" && p.screenshot_path)
@@ -148,6 +153,27 @@ export function BookingPaymentSummary({ booking, variant = "full", payments, onV
         icon: AlertCircle,
       };
     }
+    const reportedState = reportedPaymentState(total, payments ?? []);
+    if (reportedState.coveredByReport) {
+      return {
+        kind: "pending" as const,
+        title: "Pending verification",
+        sub: reportedState.overReported
+          ? `${formatCurrency(reportedState.reported)} reported on a ${formatCurrency(total)} booking — check for a duplicate`
+          : `${formatCurrency(reportedState.reported)} reported, waiting for accounts to verify`,
+        tone: "amber",
+        icon: AlertCircle,
+      };
+    }
+    if (reportedState.reported > 0) {
+      return {
+        kind: "pending" as const,
+        title: "Pending Collection",
+        sub: `${formatCurrency(reportedState.left)} left to collect · ${formatCurrency(reportedState.reported)} reported, waiting for accounts`,
+        tone: "amber",
+        icon: AlertCircle,
+      };
+    }
     return {
       kind: "pending" as const,
       title: "Pending Collection",
@@ -214,6 +240,19 @@ export function BookingPaymentSummary({ booking, variant = "full", payments, onV
                 <ImageIcon className="h-3 w-3" />
               )}
               View payment screenshot
+            </button>
+          )}
+
+          {summary.kind === "paid" && methodLocked && (
+            <div className="text-[11px] text-muted-foreground mt-2">Method locked — GST invoice issued</div>
+          )}
+          {summary.kind === "paid" && !methodLocked && onCorrectMethod && (
+            <button
+              type="button"
+              className={cn("inline-flex items-center text-xs font-medium mt-2 hover:underline underline-offset-2", tone.text)}
+              onClick={onCorrectMethod}
+            >
+              Wrong method? Correct it
             </button>
           )}
 

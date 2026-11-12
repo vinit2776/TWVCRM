@@ -19,6 +19,8 @@ import {
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
 import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
 import type { FacilityIssue, FacilityIssueStatus } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 type Tab = "open" | "in_progress" | "resolved_today";
 type Mode = "assigned" | "reported";
@@ -106,6 +108,7 @@ export default function MyFacilityIssuesPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-3xl mx-auto pb-24 md:pb-6 space-y-4">
+      <PageBreadcrumb resetTo={{ label: "My Issues" }} />
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">My Tasks</h1>
@@ -224,6 +227,7 @@ function Card({ issue, showAssignee }: { issue: FacilityIssue; showAssignee: boo
     <Link
       href={`/facility/issues/${issue.id}`}
       className="block rounded-lg border bg-card p-3 active:bg-muted/40 transition"
+      onClick={() => pushTrailEntry({ href: `/facility/issues/${issue.id}`, label: issue.title })}
     >
       <div className="flex items-start gap-3">
         <span className={cn("mt-1 h-3 w-3 rounded-full shrink-0", PRIORITY_STYLES[issue.priority].dot)} />

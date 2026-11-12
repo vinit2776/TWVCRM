@@ -28,11 +28,13 @@ import {
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
+  CENTER_SCOPED_DEPARTMENTS,
 } from "@/lib/constants";
+import type { Company } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-const DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+const DEPARTMENTS = CENTER_SCOPED_DEPARTMENTS;
 
 const DEPT_LABELS: Record<string, string> = {
   pantry: "Pantry",
@@ -53,6 +55,18 @@ const MONTHS = [
   "July","August","September","October","November","December",
 ];
 
+type CenterBudgetRow = {
+  location_id: string;
+  location_name: string;
+  monthly_budget: number | null;
+  is_active: boolean;
+  id: string | null;
+  spent_this_month: number;
+  provisional_this_month: number;
+  utilisation_pct: number | null;
+  is_over_budget: boolean;
+};
+
 type BudgetRow = {
   department: string;
   monthly_budget: number | null;
@@ -65,7 +79,11 @@ type BudgetRow = {
   is_over_budget: boolean;
   updated_at: string | null;
   updater: { full_name: string } | null;
+  centers: CenterBudgetRow[];
+  unattributed_spend_this_month: number;
 };
+
+type CenterEditState = { monthly_budget: string; is_active: boolean };
 
 type MrRow = {
   id: string;
@@ -137,7 +155,7 @@ function LifecycleView({ data }: { data: LifecycleData }) {
   const submitted = audit_trail.find((e) => e.entity_id === mr.id && e.action === "submit");
   milestones.push({
     label: "Submitted for Approval",
-    done: !!submitted || ["approved","partially_ordered","po_created","fully_ordered","closed"].includes(mr.status),
+    done: !!submitted || ["approved","partially_ordered","po_created"].includes(mr.status),
     date: submitted?.created_at,
     actor: submitted?.performer?.full_name,
     color: "bg-indigo-500",
@@ -416,10 +434,21 @@ function DeptDrilldownSheet({
 
   if (!dept) return null;
 
+  const COMMITTED_STATUSES = ["approved", "partially_ordered", "po_created"];
   const operationalMrs = mrs.filter((m) => m.expenditure_type !== "amc");
   const amcMrs = mrs.filter((m) => m.expenditure_type === "amc");
-  const operationalTotal = operationalMrs.reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
-  const amcTotal = amcMrs.reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
+  // Only committed (approved+) requests count as real spend — matches the budget
+  // bar and approval gate. Draft/submitted/rejected/cancelled are shown in the
+  // list below for visibility but excluded from this total.
+  const operationalTotal = operationalMrs
+    .filter((m) => COMMITTED_STATUSES.includes(m.status))
+    .reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
+  const operationalPipeline = operationalMrs
+    .filter((m) => m.status === "submitted")
+    .reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
+  const amcTotal = amcMrs
+    .filter((m) => COMMITTED_STATUSES.includes(m.status))
+    .reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
 
   return (
     <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -446,6 +475,13 @@ function DeptDrilldownSheet({
                   <p className="text-[10px] text-muted-foreground">of {formatCurrency(budgetAmt)} budget</p>
                 )}
               </div>
+              {operationalPipeline > 0 && (
+                <div className="rounded-lg border bg-amber-50 border-amber-200 px-3 py-2 flex-1 min-w-[120px]">
+                  <p className="text-[10px] text-amber-700 font-medium uppercase tracking-wide">In Pipeline</p>
+                  <p className="text-sm font-bold text-amber-800 mt-0.5">{formatCurrency(operationalPipeline)}</p>
+                  <p className="text-[10px] text-amber-600">Submitted, pending approval</p>
+                </div>
+              )}
               {amcTotal > 0 && (
                 <div className="rounded-lg border bg-purple-50 border-purple-200 px-3 py-2 flex-1 min-w-[120px]">
                   <p className="text-[10px] text-purple-700 font-medium uppercase tracking-wide">AMC / Annual Contracts</p>
@@ -698,12 +734,105 @@ function AmcBudgetCard({
   );
 }
 
+// ── Per-center budget breakdown ───────────────────────────────────────────────
+
+function CenterBreakdown({
+  centers, unattributedSpend, centerEdits, onCenterEditChange, isAdmin, isCurrentMonth,
+}: {
+  centers: CenterBudgetRow[];
+  unattributedSpend: number;
+  centerEdits: Record<string, CenterEditState>;
+  onCenterEditChange: (locationId: string, patch: Partial<CenterEditState>) => void;
+  isAdmin: boolean;
+  isCurrentMonth: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const sumOfCenters = centers.reduce((s, c) => {
+    const edit = centerEdits[c.location_id];
+    const amt = edit?.monthly_budget ? parseFloat(edit.monthly_budget) : 0;
+    return s + (isNaN(amt) ? 0 : amt);
+  }, 0);
+
+  return (
+    <div className="mt-3 pt-3 border-t">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        Break down by center
+        {sumOfCenters > 0 && <span className="text-muted-foreground font-normal">(sum: {formatCurrency(sumOfCenters)})</span>}
+      </button>
+
+      {open && (
+        <div className="mt-2.5 space-y-2 pl-4">
+          {centers.map((c) => {
+            const edit = centerEdits[c.location_id] ?? { monthly_budget: "", is_active: false };
+            const budgetAmt = parseFloat(edit.monthly_budget) || null;
+            const pct = budgetAmt ? Math.min(Math.round((c.spent_this_month / budgetAmt) * 100), 110) : null;
+            const isOver = budgetAmt != null && c.spent_this_month > budgetAmt;
+            return (
+              <div key={c.location_id} className="flex flex-wrap items-center gap-3">
+                <span className="text-xs w-40 shrink-0 truncate" title={c.location_name}>{c.location_name}</span>
+                <div className="relative w-32 shrink-0">
+                  <IndianRupee className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                  <Input
+                    type="number"
+                    step="1000"
+                    min="0"
+                    value={edit.monthly_budget}
+                    onChange={(e) => onCenterEditChange(c.location_id, { monthly_budget: e.target.value })}
+                    className="pl-6 h-7 text-xs"
+                    placeholder="0"
+                    disabled={!isAdmin || !isCurrentMonth}
+                  />
+                </div>
+                <div className="flex-1 min-w-[100px]">
+                  <span className={`text-xs font-medium ${isOver ? "text-red-700" : pct != null && pct >= 80 ? "text-amber-700" : "text-muted-foreground"}`}>
+                    {formatCurrency(c.spent_this_month)}
+                    {budgetAmt && <span className="font-normal"> / {formatCurrency(budgetAmt)}</span>}
+                  </span>
+                  {budgetAmt ? (
+                    <div className="w-full h-1 rounded-full bg-muted mt-0.5">
+                      <div
+                        className={`h-1 rounded-full ${isOver ? "bg-red-500" : pct != null && pct >= 80 ? "bg-amber-400" : "bg-green-500"}`}
+                        style={{ width: `${Math.min(pct ?? 0, 100)}%` }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                {isAdmin && isCurrentMonth && (
+                  <Switch
+                    checked={edit.is_active}
+                    onCheckedChange={(checked) => onCenterEditChange(c.location_id, { is_active: checked })}
+                    className="shrink-0"
+                  />
+                )}
+              </div>
+            );
+          })}
+          {unattributedSpend > 0 && (
+            <p className="text-[11px] text-muted-foreground italic pt-1">
+              + {formatCurrency(unattributedSpend)} spent this month with no center set (older requests) — not counted against any center above.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  // Budgets are entity-specific — no combined view, so a company must always
+  // be selected. Defaults to the first company returned (Workvilla).
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyId, setCompanyId] = useState<string>("");
   const [rows, setRows] = useState<BudgetRow[]>([]);
   const [amcSummary, setAmcSummary] = useState<AmcBudgetSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -716,6 +845,9 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   // Editable state for operational departments
   const [edits, setEdits] = useState<Record<string, { monthly_budget: string; is_active: boolean; notes: string }>>({});
 
+  // Editable state for per-center budgets — department -> location_id -> edit
+  const [centerEdits, setCenterEdits] = useState<Record<string, Record<string, CenterEditState>>>({});
+
   // Editable state for AMC annual budget
   const [amcEdit, setAmcEdit] = useState<{ annual_budget: string; is_active: boolean; notes: string }>({
     annual_budget: "", is_active: false, notes: "",
@@ -725,23 +857,87 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   const isAdmin = userRole === "admin";
   const currentFY = getCurrentFY();
 
+  // MR approval threshold — global, not scoped to company/month/year.
+  const [approvalThreshold, setApprovalThreshold] = useState("");
+  const [thresholdLoading, setThresholdLoading] = useState(true);
+  const [savingThreshold, setSavingThreshold] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/procurement/settings")
+      .then((r) => r.json())
+      .then((j) => setApprovalThreshold(String(j.data?.approval_threshold ?? "")))
+      .finally(() => setThresholdLoading(false));
+  }, []);
+
+  const handleSaveThreshold = async () => {
+    const threshold = parseInt(approvalThreshold, 10);
+    if (isNaN(threshold) || threshold < 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSavingThreshold(true);
+    const res = await fetch("/api/procurement/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threshold }),
+    });
+    if (res.ok) {
+      toast.success("Approval threshold updated");
+    } else {
+      const json = await res.json().catch(() => ({}));
+      toast.error(json.error || "Failed to update threshold");
+    }
+    setSavingThreshold(false);
+  };
+
+  // Companies — default to the first (Workvilla) once loaded, since this page
+  // has no combined view and always needs exactly one company selected.
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => {
+        const all: Company[] = j.data || [];
+        setCompanies(all);
+        if (!companyId && all.length > 0) setCompanyId(all[0].id);
+      })
+      .catch(() => setCompanies([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const fetchBudgets = useCallback(async () => {
+    if (!companyId) return;
     setLoading(true);
-    const res = await fetch(`/api/procurement/budget?year=${year}&month=${month}`);
+    // Clear stale data up front so a company switch never shows the
+    // previous company's departments/centers/AMC while the new fetch is in flight.
+    setRows([]);
+    setEdits({});
+    setCenterEdits({});
+    setAmcSummary(null);
+    const res = await fetch(`/api/procurement/budget?company_id=${companyId}&year=${year}&month=${month}`);
     if (res.ok) {
       const json = await res.json();
       const safeRows: BudgetRow[] = Array.isArray(json.data) ? json.data : [];
       setRows(safeRows);
 
       const initial: Record<string, { monthly_budget: string; is_active: boolean; notes: string }> = {};
+      const initialCenters: Record<string, Record<string, CenterEditState>> = {};
       for (const row of safeRows) {
         initial[row.department] = {
           monthly_budget: row.monthly_budget != null ? String(row.monthly_budget) : "",
           is_active: row.is_active,
           notes: row.notes ?? "",
         };
+        const centerMap: Record<string, CenterEditState> = {};
+        for (const c of row.centers ?? []) {
+          centerMap[c.location_id] = {
+            monthly_budget: c.monthly_budget != null ? String(c.monthly_budget) : "",
+            is_active: c.is_active,
+          };
+        }
+        initialCenters[row.department] = centerMap;
       }
       setEdits(initial);
+      setCenterEdits(initialCenters);
 
       // AMC summary
       if (json.amc) {
@@ -755,24 +951,40 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
       }
     }
     setLoading(false);
-  }, [year, month]);
+  }, [companyId, year, month]);
 
   useEffect(() => { fetchBudgets(); }, [fetchBudgets]);
 
+  const handleCenterEditChange = (dept: string, locationId: string, patch: Partial<CenterEditState>) => {
+    setCenterEdits((prev) => ({
+      ...prev,
+      [dept]: {
+        ...prev[dept],
+        [locationId]: { ...(prev[dept]?.[locationId] ?? { monthly_budget: "", is_active: false }), ...patch },
+      },
+    }));
+  };
+
   // Save operational department budgets
   const handleSave = async () => {
+    if (!companyId) { toast.error("Select a company first"); return; }
     setSaving(true);
     const budgets = DEPARTMENTS.map((dept) => ({
       department: dept,
       monthly_budget: edits[dept]?.monthly_budget ? parseFloat(edits[dept].monthly_budget) : null,
       is_active: edits[dept]?.is_active ?? false,
       notes: edits[dept]?.notes || null,
+      centers: Object.entries(centerEdits[dept] ?? {}).map(([location_id, edit]) => ({
+        location_id,
+        monthly_budget: edit.monthly_budget ? parseFloat(edit.monthly_budget) : null,
+        is_active: edit.is_active,
+      })),
     }));
 
     const res = await fetch("/api/procurement/budget", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ budgets }),
+      body: JSON.stringify({ company_id: companyId, budgets }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -786,11 +998,13 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
 
   // Save AMC annual budget
   const handleSaveAmc = async () => {
+    if (!companyId) { toast.error("Select a company first"); return; }
     setSavingAmc(true);
     const res = await fetch("/api/procurement/budget", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        company_id: companyId,
         amc: {
           financial_year: currentFY,
           annual_budget: amcEdit.annual_budget ? parseFloat(amcEdit.annual_budget) : null,
@@ -828,6 +1042,88 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
 
   return (
     <div className="space-y-6">
+      {/* ── MR Approval Thresholds — global, not scoped to company/month/year ── */}
+      <Card>
+        <CardContent className="pt-4 pb-4 space-y-4">
+          <div>
+            <h3 className="font-semibold text-base">Material Request Approval Thresholds</h3>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Who can approve a material request on their own, and how large it can be before it needs the next role up.
+            </p>
+          </div>
+
+          {thresholdLoading ? (
+            <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left text-xs text-muted-foreground font-medium py-2">Role</th>
+                    <th className="text-left text-xs text-muted-foreground font-medium py-2 w-28">Can approve</th>
+                    <th className="text-right text-xs text-muted-foreground font-medium py-2 w-48">Threshold</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b">
+                    <td className="py-2.5 font-medium">Admin</td>
+                    <td className="py-2.5">
+                      <Badge variant="secondary" className="text-[10px] bg-green-100 text-green-700 px-1.5">Yes</Badge>
+                    </td>
+                    <td className="py-2.5 text-right text-muted-foreground italic">No limit</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="py-2.5 font-medium">Manager</td>
+                    <td className="py-2.5">
+                      <Badge variant="secondary" className="text-[10px] bg-green-100 text-green-700 px-1.5">Yes</Badge>
+                    </td>
+                    <td className="py-2.5">
+                      <div className="relative ml-auto w-40">
+                        <IndianRupee className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                        <Input
+                          type="number"
+                          step="1000"
+                          min="0"
+                          value={approvalThreshold}
+                          onChange={(e) => setApprovalThreshold(e.target.value)}
+                          className="pl-8 h-8 text-sm text-right"
+                          disabled={!isAdmin}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                  {["Sales Rep", "Floor Incharge", "Accounts", "Facility Manager", "Office Administrator", "IT Team"].map((role) => (
+                    <tr key={role} className="border-b last:border-b-0">
+                      <td className="py-2.5 text-muted-foreground">{role}</td>
+                      <td className="py-2.5">
+                        <Badge variant="secondary" className="text-[10px] bg-gray-100 text-gray-500 px-1.5">No</Badge>
+                      </td>
+                      <td className="py-2.5 text-right text-muted-foreground">—</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="text-xs text-muted-foreground bg-muted/30 rounded px-3 py-2 space-y-1">
+            <p>— A manager is also blocked, regardless of amount, if the MR has no vendor quotation attached, or if approving it would exceed the department&apos;s (or AMC&apos;s) monthly budget. Only admin can override either.</p>
+            <p>— Admin approval has no ceiling by design — it&apos;s the escalation path, not a role with a bigger number.</p>
+          </div>
+
+          {isAdmin && (
+            <div className="flex justify-end">
+              <Button size="sm" onClick={handleSaveThreshold} disabled={savingThreshold || thresholdLoading}>
+                {savingThreshold ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
+                {savingThreshold ? "Saving…" : "Save Threshold"}
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* ── Operational Department Budgets header ──────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -837,6 +1133,16 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Select value={companyId} onValueChange={setCompanyId}>
+            <SelectTrigger className="w-[150px] h-8 text-xs">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={String(month)} onValueChange={(v) => setMonth(parseInt(v))}>
             <SelectTrigger className="w-[120px] h-8 text-xs">
               <SelectValue />
@@ -1002,6 +1308,16 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
                       {row.updater ? ` by ${row.updater.full_name}` : ""}
                     </p>
                   )}
+
+                  {/* Per-center breakdown */}
+                  <CenterBreakdown
+                    centers={row.centers ?? []}
+                    unattributedSpend={row.unattributed_spend_this_month ?? 0}
+                    centerEdits={centerEdits[row.department] ?? {}}
+                    onCenterEditChange={(locationId, patch) => handleCenterEditChange(row.department, locationId, patch)}
+                    isAdmin={isAdmin}
+                    isCurrentMonth={isCurrentMonth}
+                  />
                 </CardContent>
               </Card>
             );

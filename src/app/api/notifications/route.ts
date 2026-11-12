@@ -33,12 +33,19 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Also get unread count
+  // Unread count windowed to the last 30 days — nothing today marks old
+  // notifications read on its own, so without a window the badge just
+  // accumulates forever and stops meaning "needs your attention" (a ticket
+  // update from months ago showing up as "you have 103 things to check" is
+  // noise, not a signal). Old unread rows are still fully visible in the list,
+  // just excluded from the badge/header count.
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const { count } = await supabase
     .from("notifications")
     .select("*", { count: "exact", head: true })
     .eq("user_id", dbUser.id)
-    .is("read_at", null);
+    .is("read_at", null)
+    .gte("created_at", thirtyDaysAgo);
 
   return NextResponse.json({
     data: data ?? [],

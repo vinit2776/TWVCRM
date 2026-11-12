@@ -6,7 +6,19 @@
  * so the badge reflects "today", not "the day the PO was created".
  */
 
-import type { AmcStatus } from "@/types";
+import type { AmcEventType, AmcStatus } from "@/types";
+
+/**
+ * Visit types that use up one of the contract's covered visits. Breakdowns are
+ * unlimited and remote support is a phone call, so neither counts — otherwise
+ * a few call-outs would mark a contract "Exhausted" before any scheduled
+ * service has happened.
+ */
+export const AMC_COUNTED_EVENT_TYPES: readonly AmcEventType[] = ["preventive", "annual_service"];
+
+export function countsTowardVisits(eventType: AmcEventType | string): boolean {
+  return (AMC_COUNTED_EVENT_TYPES as readonly string[]).includes(eventType);
+}
 
 export interface AmcLifecycle {
   /** Computed status reflecting today's date + visit usage */
@@ -128,7 +140,7 @@ export function computeAmcLifecycle(po: Input, today: Date = new Date()): AmcLif
   if (visitsCovered !== null && visitsUsed >= visitsCovered) {
     return {
       status: "exhausted",
-      label: `Exhausted (${visitsUsed}/${visitsCovered} visits used)`,
+      label: `Exhausted (${visitsUsed}/${visitsCovered} preventive visits used)`,
       badgeClass: BADGE_CLASSES.exhausted,
       daysToStart,
       daysToEnd,

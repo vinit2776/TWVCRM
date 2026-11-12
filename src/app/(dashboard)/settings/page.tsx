@@ -12,15 +12,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client"; // still needed for handleSave
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle, PieChart, FileText, Sparkles } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle, PieChart, FileText, Sparkles, PenLine, CalendarClock } from "lucide-react";
 import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
 import { FacilityClassifierSettings } from "@/components/settings/facility-classifier-settings";
+import { LeegalitySettings } from "@/components/settings/leegality-settings";
+import { VoRenewalSettings } from "@/components/settings/vo-renewal-settings";
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
 import { DashboardSettings } from "@/components/settings/dashboard-settings";
 import { PettyCashSettings } from "@/components/settings/petty-cash-settings";
 import { ReorderSettings } from "@/components/settings/reorder-settings";
 import { ProcurementBudgetSettings } from "@/components/settings/procurement-budget-settings";
 import { EInvoiceSettings } from "@/components/settings/e-invoice-settings";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -93,6 +96,7 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Settings" }} />
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
         <p className="text-muted-foreground">Manage your account and preferences</p>
@@ -151,6 +155,16 @@ export default function SettingsPage() {
           {profile.role === "admin" && (
             <TabsTrigger value="facility-classifier" className="justify-start gap-2 px-3 py-2 text-sm">
               <Sparkles className="h-4 w-4 shrink-0" />Facility Classifier
+            </TabsTrigger>
+          )}
+          {profile.role === "admin" && (
+            <TabsTrigger value="e-signing" className="justify-start gap-2 px-3 py-2 text-sm">
+              <PenLine className="h-4 w-4 shrink-0" />E-Signing
+            </TabsTrigger>
+          )}
+          {profile.role === "admin" && (
+            <TabsTrigger value="virtual-office" className="justify-start gap-2 px-3 py-2 text-sm">
+              <CalendarClock className="h-4 w-4 shrink-0" />Virtual Office
             </TabsTrigger>
           )}
         </TabsList>
@@ -344,6 +358,16 @@ export default function SettingsPage() {
         {profile.role === "admin" && (
           <TabsContent value="facility-classifier" className="mt-0">
             <FacilityClassifierSettings />
+          </TabsContent>
+        )}
+        {profile.role === "admin" && (
+          <TabsContent value="e-signing" className="mt-0">
+            <LeegalitySettings />
+          </TabsContent>
+        )}
+        {profile.role === "admin" && (
+          <TabsContent value="virtual-office" className="mt-0">
+            <VoRenewalSettings />
           </TabsContent>
         )}
         </div>

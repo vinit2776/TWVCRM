@@ -19,6 +19,8 @@ import Link from "next/link";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { PAYROLL_RUN_STATUS_COLORS, PAYROLL_RUN_STATUS_LABELS } from "@/lib/constants";
 import type { PayrollRun } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -73,6 +75,7 @@ export default function PayrollRunsPage() {
 
   return (
     <div className="p-6 space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Payroll Runs" }} />
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -160,7 +163,14 @@ export default function PayrollRunsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Button variant="ghost" size="sm" asChild>
-                        <Link href={`/payroll/runs/${run.id}`}><Eye className="h-3.5 w-3.5 mr-1" />View</Link>
+                        <Link
+                          href={`/payroll/runs/${run.id}`}
+                          onClick={() => {
+                            pushTrailEntry({ href: `/payroll/runs/${run.id}`, label });
+                          }}
+                        >
+                          <Eye className="h-3.5 w-3.5 mr-1" />View
+                        </Link>
                       </Button>
                     </td>
                   </tr>

@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
     .eq("enabled", true);
 
   if (!configs || configs.length === 0) {
-    await pingCronHealth("electricity-nag", "ok", { reason: "no enabled locations" });
+    await pingCronHealth("cron/electricity-nag", "ok", { reason: "no enabled locations" });
     return NextResponse.json({ skipped: true, reason: "no enabled locations" });
   }
 
@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
     .map((c) => c.locations);
 
   if (missing.length === 0) {
-    await pingCronHealth("electricity-nag", "ok", { reason: "all locations billed" });
+    await pingCronHealth("cron/electricity-nag", "ok", { reason: "all locations billed" });
     return NextResponse.json({ ok: true, missing: 0 });
   }
 
@@ -91,7 +91,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (recipients.length === 0) {
-    await pingCronHealth("electricity-nag", "error", { reason: "no recipients" });
+    await pingCronHealth("cron/electricity-nag", "error", { reason: "no recipients" });
     return NextResponse.json({ error: "No digest_recipients configured" }, { status: 400 });
   }
 
@@ -140,7 +140,7 @@ export async function GET(request: NextRequest) {
     html,
   });
 
-  await pingCronHealth("electricity-nag", "ok", { missing: missing.length });
+  await pingCronHealth("cron/electricity-nag", "ok", { missing: missing.length });
 
   return NextResponse.json({ ok: true, missing: missing.length, locations: missing.map((l) => l.code) });
 }

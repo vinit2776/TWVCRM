@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -76,6 +76,7 @@ export function ProformaBillingCard({
   const [previewItems, setPreviewItems] = useState<PreviewItem[] | null>(null);
   const [expandedRow, setExpandedRow]   = useState<string | null>(null);
   const [alreadySent, setAlreadySent]   = useState<string[]>([]);
+  const [newSinceLastRun, setNewSinceLastRun] = useState<Set<string>>(new Set());
   const [previewing, setPreviewing]     = useState(false);
   const [previewed, setPreviewed]       = useState(false);
   const [running, setRunning]           = useState(false);
@@ -83,6 +84,43 @@ export function ProformaBillingCard({
   const [doneThisCycle, setDoneThisCycle] = useState<boolean | null>(null);
   // Background dispatch run state (rent mode only)
   const [activeRunId, setActiveRunId]   = useState<string | null>(null);
+  // Contract numbers covered by the last *completed* run for this period —
+  // used to detect stragglers (e.g. a contract activated after the run
+  // finished) so Preview can highlight them instead of silently folding
+  // them in unnoticed. Null = no completed run on record yet.
+  const [lastRunContractNumbers, setLastRunContractNumbers] = useState<Set<string> | null>(null);
+
+  // Restore the Dispatch Progress panel on mount/navigation if a run for
+  // this period is still in flight or ended with failures — otherwise a
+  // page refresh mid-run silently drops the only visibility into per-contract
+  // send status until someone thinks to reopen it manually. The same fetch
+  // also captures the last completed run's contract list, at no extra
+  // request cost, so Preview can flag anything new since then.
+  useEffect(() => {
+    if (!isRent) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = new URLSearchParams({ mode: "rent" });
+        if (month) params.set("month", String(month));
+        if (year) params.set("year", String(year));
+        const res = await fetch(`/api/billing/dispatch-run?${params.toString()}`);
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        const run = json.run as { id: string; status: string } | null;
+        if (run && ["queued", "running", "partial", "failed"].includes(run.status)) {
+          setActiveRunId(run.id);
+        }
+        if (run && run.status === "completed") {
+          const jobs = (json.jobs ?? []) as { contract_number: string }[];
+          setLastRunContractNumbers(new Set(jobs.map((j) => j.contract_number)));
+        }
+      } catch {
+        // Best-effort restore — silent failure just means the panel stays closed.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isRent, month, year]);
 
   const handlePreview = async () => {
     setPreviewing(true);
@@ -102,6 +140,11 @@ export function ProformaBillingCard({
         : (json.usage_statements?.already_sent ?? []);
       setPreviewItems(items);
       setAlreadySent(skipped);
+      setNewSinceLastRun(
+        lastRunContractNumbers
+          ? new Set(items.filter((it) => !lastRunContractNumbers.has(it.contract_number)).map((it) => it.contract_number))
+          : new Set()
+      );
       setPreviewed(true);
       setDoneThisCycle(items.length === 0 && skipped.length === 0);
       if (json.errors?.length) for (const e of json.errors) toast.error(e);
@@ -138,6 +181,7 @@ export function ProformaBillingCard({
         setConfirmOpen(false);
         setPreviewItems(null);
         setAlreadySent([]);
+        setNewSinceLastRun(new Set());
         setPreviewed(false);
         toast.success(`Dispatch run started — ${json.total_jobs} contract${json.total_jobs !== 1 ? "s" : ""} queued. Processing in the background.`);
       } else {
@@ -145,7 +189,7 @@ export function ProformaBillingCard({
         const res = await fetch("/api/billing/auto-generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode, ...(month ? { month } : {}), ...(year ? { year } : {}) }),
+          body: JSON.stringify({ dry_run: false, mode, ...(month ? { month } : {}), ...(year ? { year } : {}) }),
         });
         const json = await res.json();
         if (!res.ok) { toast.error(json.error || "Run failed"); return; }
@@ -194,7 +238,7 @@ export function ProformaBillingCard({
       {!isRent && pendingDraftsCount > 0 && (
         <div className="mb-3 rounded-md border border-orange-300 bg-orange-50 px-3 py-2 text-sm text-orange-900">
           <strong>⚠ {pendingDraftsCount} usage draft{pendingDraftsCount !== 1 ? "s" : ""} pending review</strong>
-          {" — finalize and send each in the Proforma Statements section below (Usage filter chip). Don&rsquo;t let them carry forward unsent."}
+          {" — open each one in Current cycle — ready to send, below, to finalize and send it. Don’t let them carry forward unsent."}
         </div>
       )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -239,6 +283,11 @@ export function ProformaBillingCard({
               ✓ {alreadySent.length} contract{alreadySent.length !== 1 ? "s" : ""} already billed (skipped to avoid double-billing): {alreadySent.join(", ")}
             </div>
           )}
+          {newSinceLastRun.size > 0 && (
+            <div className="px-3 py-2 bg-amber-50 border-b text-xs text-amber-900 font-medium">
+              ⚡ {newSinceLastRun.size} contract{newSinceLastRun.size !== 1 ? "s" : ""} detected since the last completed run — not covered by a previous Run &amp; Send (highlighted below): {[...newSinceLastRun].join(", ")}
+            </div>
+          )}
           {previewItems.length === 0 ? (
             <p className="text-xs text-muted-foreground px-3 py-3">Nothing to {isRent ? "generate" : "create"} — all contracts are already covered for this period.</p>
           ) : (
@@ -264,10 +313,11 @@ export function ProformaBillingCard({
                   const rowKey = it.contract_number;
                   const isExpanded = expandedRow === rowKey;
                   const hasBreakdown = (it.line_items?.length ?? 0) > 0;
+                  const isNew = newSinceLastRun.has(it.contract_number);
                   return (
                     <Fragment key={rowKey}>
                       <tr
-                        className={`border-b ${hasBreakdown ? "cursor-pointer hover:bg-muted/30" : ""}`}
+                        className={`border-b ${hasBreakdown ? "cursor-pointer hover:bg-muted/30" : ""} ${isNew ? "bg-amber-50/60" : ""}`}
                         onClick={() => hasBreakdown && setExpandedRow(isExpanded ? null : rowKey)}
                       >
                         <td className="px-3 py-2">
@@ -275,7 +325,12 @@ export function ProformaBillingCard({
                             <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                           )}
                         </td>
-                        <td className="px-3 py-2 font-mono text-xs">{it.contract_number}</td>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {it.contract_number}
+                          {isNew && (
+                            <Badge className="ml-2 bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0 align-middle">NEW</Badge>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-xs">{it.customer_name || "—"}</td>
                         <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">{it.period_label}</td>
                         <td className="px-3 py-2 text-right">{formatCurrency(it.subtotal)}</td>
@@ -410,6 +465,7 @@ export function ProformaBillingCard({
               setActiveRunId(null);
               if (onSuccess) void onSuccess();
             }}
+            onTerminal={() => { if (onSuccess) void onSuccess(); }}
           />
         </div>
       )}

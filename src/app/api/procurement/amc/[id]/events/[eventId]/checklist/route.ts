@@ -47,7 +47,7 @@ export async function PUT(
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  const allowed = ["admin", "manager", "fms", "accounts", "office_admin"];
+  const allowed = ["admin", "manager", "fms", "accounts", "office_admin", "coordinator"];
   if (!allowed.includes(dbUser.role)) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }

@@ -21,9 +21,10 @@ import {
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { ImproveWordingButton } from "@/components/billing/improve-wording-button";
+import { UsageMonthPicker } from "@/components/billing/usage-month-picker";
 import { Loader2, FileText, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
 import { HSN_SAC_OPTIONS } from "@/lib/e-invoice/sac-codes";
 
 interface Contract {
@@ -99,6 +100,11 @@ export function AddUsageChargeDialog({
   const [chargeDate, setChargeDate] = useState(
     defaultChargeDate || new Date().toISOString().split("T")[0]
   );
+  // The dialog stays mounted between opens, so the initial useState value
+  // alone would freeze on whatever month was selected at first render.
+  useEffect(() => {
+    if (open && defaultChargeDate) setChargeDate(defaultChargeDate);
+  }, [open, defaultChargeDate]);
   const [notes, setNotes] = useState("");
   const [hsnSacCode, setHsnSacCode] = useState("999799");
   const [submitting, setSubmitting] = useState(false);
@@ -254,7 +260,7 @@ export function AddUsageChargeDialog({
       return;
     }
     if (!chargeDate) {
-      toast.error("Please select a charge date");
+      toast.error("Please select a usage month");
       return;
     }
 
@@ -337,7 +343,7 @@ export function AddUsageChargeDialog({
           )}
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           {/* Charge type toggle — hide if pre-locked to a specific source */}
           {!contractId && !bookingId && (
             <div className="space-y-2">
@@ -576,27 +582,8 @@ export function AddUsageChargeDialog({
             </div>
           </div>
 
-          {/* Charge Date */}
-          <div className="space-y-2">
-            <Label htmlFor="charge-date">
-              Charge Date <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id="charge-date"
-              type="date"
-              value={chargeDate}
-              onChange={(e) => setChargeDate(e.target.value)}
-            />
-            {chargeDate && (
-              <p className="text-xs text-muted-foreground">
-                Will appear in the{" "}
-                <span className="font-semibold text-foreground">
-                  {new Date(chargeDate + "T00:00:00").toLocaleString("en-IN", { month: "long", year: "numeric" })}
-                </span>{" "}
-                billing cycle
-              </p>
-            )}
-          </div>
+          {/* Usage month: files the charge under that month's invoice; the invoice itself is dated when it is sent */}
+          <UsageMonthPicker id="charge-date" value={chargeDate} onChange={setChargeDate} description={description} />
 
           {/* HSN / SAC code */}
           <div className="space-y-2">

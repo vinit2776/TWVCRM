@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import Link from "next/link";
+import type { SetupGap } from "@/lib/electricity-setup-checks";
 import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye, Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +31,10 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
+import { LandlordInvoiceField, gstRateFromInvoice, useDuplicateWarning, useLandlordInvoice } from "@/components/electricity/landlord-invoice";
+import type { ExtractedInvoice, SuggestionField } from "@/lib/procurement/invoice-check";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface EbLine {
   line_type: "utility" | "generator" | "other";
@@ -62,6 +67,8 @@ interface CustomerBillInfo {
   customer_total: number | null;
   billing_statement_id: string | null;
   created_by: string;
+  confirmed_at?: string | null;
+  updated_at?: string | null;
   customer_units_billed: number | null;
   customer_utility_pct: number | null;
   customer_generator_pct: number | null;
@@ -85,6 +92,8 @@ interface CustomerBillInfo {
     payment_status: string;
     total_amount: number;
     handoff_state: string | null;
+    finalized_at?: string | null;
+    due_date?: string | null;
   } | null;
 }
 
@@ -122,12 +131,17 @@ interface EbBill {
   landlord_gst_rate?: number | null;
   landlord_gst_amount?: number;
   vendor_bill_id?: string | null;
+  source_vendor_bill_id?: string | null;
+  /** Where the payable came from: made with this bill at capture, or uploaded under Procurement → Bills. */
+  vendor_bill_origin?: "created" | "uploaded" | null;
   notes?: string | null;
   created_at: string;
   electricity_bill_lines: EbLine[];
   locations?: { id: string; name: string; code: string };
   vendor_bill?: VendorBillInfo | null;
   customer_bills?: CustomerBillInfo[];
+  /** Required setup gaps at this bill's location (see electricity-setup-checks). */
+  setup_gaps?: SetupGap[];
 }
 
 interface LocationConfig {
@@ -156,7 +170,8 @@ export default function ElectricityBillsPage() {
   const { user } = useCurrentUser();
   const [bills, setBills] = useState<EbBill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"open" | "completed">("open");
+  const [activeTab, setActiveTab] = useState<"problems" | "needs" | "waiting" | "done">("needs");
+  const [gapPanelBillId, setGapPanelBillId] = useState<string | null>(null);
   const [listLocationFilter, setListLocationFilter] = useState("");
   const [tallyHandoffV2Enabled, setTallyHandoffV2Enabled] = useState(false);
   // Draft bills (awaiting approval) default to expanded — the full line-item
@@ -170,6 +185,9 @@ export default function ElectricityBillsPage() {
   const [approving, setApproving] = useState<string | null>(null);
   const [revising, setRevising] = useState<string | null>(null);
   const [deletingBillId, setDeletingBillId] = useState<string | null>(null);
+  // Approve and Revise confirm in an in-app dialog: a native window.confirm() is silently
+  // dismissed by some browsers (and embedded views), which made the buttons do nothing.
+  const [pendingAction, setPendingAction] = useState<{ kind: "approve" | "revise" | "send"; id: string; label: string; detail?: string; title?: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; billSide: "landlord" | "customer"; label: string } | null>(null);
   const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
   const [previewsByBillId, setPreviewsByBillId] = useState<Record<string, ApprovalPreviewItem[] | "loading">>({});
@@ -177,6 +195,7 @@ export default function ElectricityBillsPage() {
   // Form state
   const [locations, setLocations] = useState<Location[]>([]);
   const [locCfg, setLocCfg] = useState<LocationConfig | null>(null);
+  const [landlordVendor, setLandlordVendor] = useState<{ id: string; name: string } | null>(null);
   const [mappedContracts, setMappedContracts] = useState<MappedContract[] | null>(null);
   const [form, setForm] = useState({
     location_id: "",
@@ -190,6 +209,22 @@ export default function ElectricityBillsPage() {
   });
   const [lines, setLines] = useState<EbLine[]>([emptyLine()]);
   const [submitting, setSubmitting] = useState(false);
+
+  // If the invoice prints GST, switch the landlord-GST toggle on (and take its rate); the person can still change it.
+  const onInvoiceRead = useCallback((extracted: ExtractedInvoice) => {
+    // Take the number and date off the invoice when they have not been typed yet.
+    setForm((f) => ({
+      ...f,
+      landlord_bill_number: f.landlord_bill_number || extracted.invoiceNumber || "",
+      landlord_bill_date: f.landlord_bill_date || extracted.invoiceDate || "",
+    }));
+    const rate = gstRateFromInvoice(extracted);
+    if (rate === null) return;
+    setForm((f) => ({ ...f, landlord_gst_applicable: true, landlord_gst_rate: rate }));
+    toast.message(`The invoice shows GST — switched on at ${rate}%. Change it below if that's wrong.`);
+  }, []);
+  const invoice = useLandlordInvoice(onInvoiceRead);
+  const duplicateWarning = useDuplicateWarning(form.location_id, form.landlord_bill_number);
 
   const fetchBills = useCallback(async () => {
     setLoading(true);
@@ -264,12 +299,13 @@ export default function ElectricityBillsPage() {
 
   const handleLocationChange = async (locId: string) => {
     setForm((f) => ({ ...f, location_id: locId }));
-    if (!locId) { setLocCfg(null); setMappedContracts(null); return; }
+    if (!locId) { setLocCfg(null); setLandlordVendor(null); setMappedContracts(null); return; }
     const res = await fetch(`/api/locations/${locId}/electricity-config`);
     if (res.ok) {
       const json = await res.json();
       const cfg = json.data as LocationConfig | null;
       setLocCfg(cfg);
+      setLandlordVendor((json.landlord_vendor as { id: string; name: string } | null) ?? null);
       setMappedContracts((json.mapped_contracts as MappedContract[] | undefined) ?? []);
       // Pre-fill line rates from location config
       if (cfg) {
@@ -312,6 +348,25 @@ export default function ElectricityBillsPage() {
     : 0;
   const landlordPayableTotal = grandTotal + landlordGstAmount;
 
+  const enteredForCheck = useMemo(
+    () => ({
+      invoiceNumber: form.landlord_bill_number,
+      invoiceDate: form.landlord_bill_date,
+      vendorName: landlordVendor?.name ?? null,
+      amount: grandTotal > 0 ? grandTotal : null,
+      gstAmount: form.landlord_gst_applicable && landlordGstAmount > 0 ? landlordGstAmount : null,
+    }),
+    [form.landlord_bill_number, form.landlord_bill_date, form.landlord_gst_applicable, grandTotal, landlordGstAmount, landlordVendor],
+  );
+
+  // Bill number and date can be taken straight from the invoice; the amounts are built from the lines, so a
+  // difference there is fixed in the lines (the card still shows what the invoice says).
+  const applyInvoiceSuggestion = useCallback((field: SuggestionField, value: string) => {
+    if (field === "invoiceNumber") setForm((f) => ({ ...f, landlord_bill_number: value }));
+    else if (field === "invoiceDate") setForm((f) => ({ ...f, landlord_bill_date: value }));
+    else toast.message("The amount is built from the line items below — adjust the units or rates to match the invoice.");
+  }, []);
+
   const addLine = () =>
     setLines((ls) => [...ls, { line_type: "other", label: "", amount: 0, sort_order: ls.length }]);
 
@@ -348,12 +403,17 @@ export default function ElectricityBillsPage() {
     setDialogOpen(false);
     setEditingBillId(null);
     setLines([emptyLine()]);
+    invoice.clear();
     setForm({ location_id: "", bill_month: new Date().getMonth() + 1, bill_year: new Date().getFullYear(), landlord_bill_number: "", landlord_bill_date: "", notes: "", landlord_gst_applicable: false, landlord_gst_rate: 18 });
   };
 
   const handleSubmit = async () => {
     if (!form.location_id) { toast.error("Select a location"); return; }
     if (lines.length === 0) { toast.error("Add at least one line"); return; }
+    if (!editingBillId && !invoice.file) { toast.error("Upload the landlord's invoice first — it is used to check what you entered"); return; }
+    if (!editingBillId) { const blocked = invoice.blockedReason(enteredForCheck, duplicateWarning); if (blocked) { toast.error(blocked); return; } }
+    // Editing keeps the invoice on file unless a corrected one is chosen; that one is checked like a new capture.
+    if (editingBillId && invoice.file) { const blocked = invoice.blockedReason(enteredForCheck); if (blocked) { toast.error(blocked); return; } }
     setSubmitting(true);
     const linesPayload = lines.map((l) => ({
       line_type: l.line_type,
@@ -364,6 +424,11 @@ export default function ElectricityBillsPage() {
       amount: l.line_type === "other" ? (l.amount ?? 0) : null,
       sort_order: l.sort_order,
     }));
+    let invoiceFileUrl: string | null = null;
+    if (!editingBillId || invoice.file) {
+      invoiceFileUrl = await invoice.upload();
+      if (!invoiceFileUrl) { setSubmitting(false); return; }
+    }
     const res = editingBillId
       ? await fetch(`/api/electricity-bills/${editingBillId}`, {
           method: "PATCH",
@@ -375,6 +440,7 @@ export default function ElectricityBillsPage() {
             landlord_gst_applicable: form.landlord_gst_applicable,
             landlord_gst_rate: form.landlord_gst_rate,
             lines: linesPayload,
+            ...(invoiceFileUrl ? { invoice_file_url: invoiceFileUrl, invoice_check: invoice.recordFor(enteredForCheck) } : {}),
           }),
         })
       : await fetch("/api/electricity-bills", {
@@ -385,12 +451,21 @@ export default function ElectricityBillsPage() {
             landlord_bill_number: form.landlord_bill_number || null,
             landlord_bill_date: form.landlord_bill_date || null,
             notes: form.notes || null,
+            invoice_file_url: invoiceFileUrl,
+            invoice_check: invoice.recordFor(enteredForCheck),
             lines: linesPayload,
           }),
         });
     const json = await res.json();
     if (res.ok) {
-      toast.success(editingBillId ? "Bill updated" : "Bill captured");
+      const captured = json.data as { auto_approved?: boolean; customer_bills_generated?: number } | undefined;
+      toast.success(
+        editingBillId
+          ? "Bill updated"
+          : captured?.auto_approved
+            ? `Bill captured and approved — ${captured.customer_bills_generated ?? 0} customer bill(s) ready to send`
+            : "Bill captured",
+      );
       closeDialog();
       fetchBills();
     } else {
@@ -401,9 +476,6 @@ export default function ElectricityBillsPage() {
   };
 
   const handleApprove = async (billId: string) => {
-    if (!window.confirm("Approving will generate the customer bill from these numbers and lock this landlord bill from further edits. Continue?")) {
-      return;
-    }
     setApproving(billId);
     const res = await fetch(`/api/electricity-bills/${billId}/approve`, { method: "POST" });
     const json = await res.json();
@@ -418,14 +490,6 @@ export default function ElectricityBillsPage() {
   };
 
   const handleRevise = async (billId: string) => {
-    if (
-      !window.confirm(
-        "No customer bills were generated when this was approved (the contract wasn't enabled for electricity billing yet). " +
-          "Revising will mark this landlord bill as revised and create a fresh draft with the same numbers, which you can then re-approve. Continue?",
-      )
-    ) {
-      return;
-    }
     setRevising(billId);
     const res = await fetch(`/api/electricity-bills/${billId}/revise`, { method: "POST" });
     const json = await res.json();
@@ -567,9 +631,15 @@ export default function ElectricityBillsPage() {
   };
 
   const overallStage = (bill: EbBill) => {
-    if (bill.status === "draft") return { label: "draft", className: STATUS_COLORS.draft };
+    // "invoiced" is the stored status for an approved landlord bill; nothing has been
+    // invoiced to a customer unless a customer bill exists, so say what it means.
+    if (bill.status === "draft") return { label: "Awaiting approval", className: STATUS_COLORS.draft };
     const cbs = bill.customer_bills ?? [];
-    if (cbs.length === 0) return { label: bill.status, className: STATUS_COLORS[bill.status] };
+    if (cbs.length === 0) {
+      return bill.status === "invoiced"
+        ? { label: "Approved — no customer bill", className: STATUS_COLORS.draft }
+        : { label: bill.status, className: STATUS_COLORS[bill.status] };
+    }
     const worst = Math.min(...cbs.map(customerBillRank));
     return OVERALL_STAGES[worst];
   };
@@ -649,7 +719,7 @@ export default function ElectricityBillsPage() {
   // issue by hand).
   const customerBillNextStepHint = (cb: CustomerBillInfo): string => {
     if (cb.status === "draft") {
-      return "Confirming will lock this amount in and enable Bill & Send.";
+      return "Confirming will lock this amount in and enable the send step.";
     }
     if (cb.status === "invoiced") {
       const isGstDirect = cb.contract?.billing_mode === "gst_direct";
@@ -668,6 +738,112 @@ export default function ElectricityBillsPage() {
     return "Sent — awaiting customer payment.";
   };
 
+  // What the send button really does for this contract. A GST Direct contract with the Tally
+  // handoff on does not email the customer: it hands the statement to accounts. Same test the
+  // hint above uses, so the label and the sentence under it can never disagree.
+  const sendActionLabel = (cb: CustomerBillInfo): { idle: string; busy: string } => {
+    const isGstDirect = cb.contract?.billing_mode === "gst_direct";
+    if (isGstDirect && tallyHandoffV2Enabled) return { idle: "Hand off to accounts", busy: "Handing off…" };
+    if (isGstDirect) return { idle: "Send invoice to customer", busy: "Sending…" };
+    return { idle: "Send proforma to customer", busy: "Sending…" };
+  };
+
+  // One line for the list: the single next step, who does it, and whether it is blocked.
+  // `roles` are the staff roles who can do it ([] = the customer); `target` is the customer bill the
+  // step acts on; `since` is when the bill reached this step, for the days-waiting line.
+  interface NextAction {
+    text: string;
+    owner: string;
+    roles: string[];
+    blocked: boolean;
+    kind: "approve" | "confirm" | "send" | "other";
+    target: CustomerBillInfo | null;
+    since: string | null;
+    overdue: boolean;
+  }
+  const nextAction = (bill: EbBill): NextAction | null => {
+    if (bill.status === "revised") return null;
+    const base = { target: null, since: bill.created_at ?? null, overdue: false, kind: "other" as const };
+    if (bill.status === "draft") return { ...base, kind: "approve", text: "Approve the bill", owner: "Admin, manager or accounts", roles: ["admin", "manager", "accounts"], blocked: false };
+    const cbs = bill.customer_bills ?? [];
+    if (cbs.length === 0) {
+      return { ...base, text: "No customer bill was made. Use Revise to bill again once a contract has electricity billing on", owner: "Admin or manager", roles: ["admin", "manager"], blocked: true };
+    }
+    const worst = cbs.reduce((a, b) => (customerBillRank(b) < customerBillRank(a) ? b : a));
+    const rank = customerBillRank(worst);
+    const stmt = worst.billing_statement;
+    const staff = ["admin", "manager", "accounts"];
+    if (rank === 0) return { ...base, target: worst, since: worst.updated_at ?? base.since, kind: "confirm", text: "Confirm the customer bill", owner: "Admin, manager or accounts", roles: staff, blocked: false };
+    if (rank === 1) return { ...base, target: worst, since: worst.confirmed_at ?? worst.updated_at ?? base.since, kind: "send", text: sendActionLabel(worst).idle, owner: "Admin, manager or accounts", roles: staff, blocked: false };
+    if (rank === 2) return { ...base, target: worst, since: stmt?.finalized_at ?? worst.updated_at ?? base.since, text: "Finish sending", owner: "Admin, manager or accounts", roles: staff, blocked: true };
+    if (rank === 3) return { ...base, target: worst, since: stmt?.finalized_at ?? base.since, text: "Statement was voided. Check before billing again", owner: "Admin", roles: ["admin"], blocked: true };
+    if (rank === 4) {
+      const handoff = stmt?.handoff_state ?? null;
+      const since = stmt?.finalized_at ?? base.since;
+      const due = stmt?.due_date ? new Date(`${stmt.due_date}T23:59:59`) : null;
+      // A proforma awaiting payment is the customer's step, not accounts'.
+      if (handoff === "pi_awaiting_payment") return { ...base, target: worst, since, text: "Waiting for the customer to pay the proforma", owner: "Customer", roles: [], blocked: false, overdue: !!due && due < new Date() };
+      if (handoff && HANDOFF_PENDING_STATES.has(handoff)) {
+        return { ...base, target: worst, since, text: "Issue the GST invoice in Tally and upload it", owner: "Accounts", roles: ["accounts", "admin"], blocked: false };
+      }
+      return { ...base, target: worst, since, text: "Waiting for the customer to pay", owner: "Customer", roles: [], blocked: false, overdue: !!due && due < new Date() };
+    }
+    return null;
+  };
+
+  const daysSince = (iso: string | null): number | null => {
+    if (!iso) return null;
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return null;
+    return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
+  };
+  const daysLabel = (n: number) => (n === 0 ? "today" : n === 1 ? "1 day" : `${n} days`);
+
+  // Which tab a bill lives in, for the viewer: Done once fully paid; Needs action when the next
+  // step is one this person's role can take; otherwise Waiting on others (customer, or another team).
+  const billBucket = (bill: EbBill): "needs" | "waiting" | "done" => {
+    if (resolveLifecycle(bill).complete) return "done";
+    const next = nextAction(bill);
+    if (!next || next.roles.length === 0) return "waiting";
+    return next.roles.includes(user?.role ?? "") ? "needs" : "waiting";
+  };
+
+  // The list's step trail. Its steps follow the contract's route, so the Tally step sits where it
+  // really happens: before payment when GST Direct hands off to accounts, after payment on a
+  // proforma. `current` is the step in progress; `done` means everything is finished.
+  const listTrail = (bill: EbBill): { steps: string[]; current: number; done: boolean } => {
+    const cbs = bill.customer_bills ?? [];
+    const worst = cbs.length > 0 ? cbs.reduce((a, b) => (customerBillRank(b) < customerBillRank(a) ? b : a)) : null;
+    // A GST Direct statement already created with no handoff state was sent before the Tally
+    // handoff existed (or outside it), so it never handed off: don't show steps that never happened.
+    // Proforma bills are left alone: their handoff state only appears around payment.
+    const neverHandedOff = !!worst && customerBillRank(worst) >= 2 && !worst.billing_statement?.handoff_state;
+    const handoffRoute = worst?.contract?.billing_mode === "gst_direct" && tallyHandoffV2Enabled && !neverHandedOff;
+    const proformaRoute = !!worst && worst.contract?.billing_mode !== "gst_direct";
+    const steps = handoffRoute
+      ? ["Captured", "Approved", "Confirmed", "Handed off", "Tally invoice", "Paid"]
+      : proformaRoute
+        ? ["Captured", "Approved", "Confirmed", "Sent", "Paid", "Tally invoice"]
+        : ["Captured", "Approved", "Confirmed", "Sent", "Paid"];
+    if (bill.status === "draft") return { steps, current: 1, done: false };
+    if (!worst) return { steps, current: 2, done: false };
+    const rank = customerBillRank(worst);
+    if (rank === 0) return { steps, current: 2, done: false };
+    if (rank <= 3) return { steps, current: 3, done: false };
+    const handoff = worst.billing_statement?.handoff_state ?? null;
+    const paid = worst.billing_statement?.payment_status === "paid";
+    if (handoffRoute) {
+      if (handoff && HANDOFF_PENDING_STATES.has(handoff)) return { steps, current: 4, done: false };
+      return paid ? { steps, current: 5, done: true } : { steps, current: 5, done: false };
+    }
+    if (proformaRoute) {
+      if (handoff === "pi_awaiting_payment" || !paid) return { steps, current: 4, done: false };
+      if (handoff && HANDOFF_PENDING_STATES.has(handoff)) return { steps, current: 5, done: false };
+      return { steps, current: 5, done: true };
+    }
+    return paid ? { steps, current: 4, done: true } : { steps, current: 4, done: false };
+  };
+
   // Location filter + Open/Completed bucketing — "Completed" reuses the same
   // resolveLifecycle() the stepper renders, so a bill only leaves the default
   // worklist once every customer bill on it has actually reached Paid (voided
@@ -676,26 +852,33 @@ export default function ElectricityBillsPage() {
     () => (listLocationFilter ? bills.filter((b) => b.location_id === listLocationFilter) : bills),
     [bills, listLocationFilter],
   );
-  const openBills = useMemo(
-    () => listFilteredBills.filter((b) => !resolveLifecycle(b).complete),
-    [listFilteredBills],
+  const bucketed = useMemo(
+    () => ({
+      needs: listFilteredBills.filter((b) => billBucket(b) === "needs"),
+      waiting: listFilteredBills.filter((b) => billBucket(b) === "waiting"),
+      done: listFilteredBills.filter((b) => billBucket(b) === "done"),
+      // A lens, not a bucket: open bills at a location with a required setup gap. They also sit in Needs action
+      // or Waiting on others, so nothing is hidden from the worklist by being listed here too.
+      problems: listFilteredBills.filter((b) => billBucket(b) !== "done" && (b.setup_gaps ?? []).length > 0),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listFilteredBills, user?.role, tallyHandoffV2Enabled],
   );
-  const completedBills = useMemo(
-    () => listFilteredBills.filter((b) => resolveLifecycle(b).complete),
-    [listFilteredBills],
-  );
-  const visibleBills = activeTab === "open" ? openBills : completedBills;
+  const visibleBills = bucketed[activeTab];
 
   const canCapture = ["admin", "manager", "accounts", "office_admin"].includes(user?.role ?? "");
   const canApprove = ["admin", "manager"].includes(user?.role ?? "");
+  // Accounts may approve (the API refuses when no customer contract is billable); Revise stays admin/manager.
+  const canApproveBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
   const canManageCustomerBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
-  // Edit/Delete are corrections tools for mis-entered data — admin only,
-  // stricter than who's allowed to capture a bill in the first place.
-  const canEditBills = user?.role === "admin";
+  // Delete is a corrections tool for mis-entered data — admin only. Edit is also open to accounts,
+  // but only until the landlord invoice has any payment (the API enforces the same lock).
+  const canEditBills = ["admin", "accounts"].includes(user?.role ?? "");
   const canDeleteBills = user?.role === "admin";
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Electricity" }} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
@@ -714,10 +897,14 @@ export default function ElectricityBillsPage() {
 
       {!loading && bills.length > 0 && (
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "open" | "completed")}>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "problems" | "needs" | "waiting" | "done")}>
             <TabsList>
-              <TabsTrigger value="open">Open ({openBills.length})</TabsTrigger>
-              <TabsTrigger value="completed">Completed ({completedBills.length})</TabsTrigger>
+              <TabsTrigger value="problems" className={bucketed.problems.length > 0 ? "text-red-700" : undefined}>
+                Problems to fix ({bucketed.problems.length})
+              </TabsTrigger>
+              <TabsTrigger value="needs">Needs action ({bucketed.needs.length})</TabsTrigger>
+              <TabsTrigger value="waiting">Waiting on others ({bucketed.waiting.length})</TabsTrigger>
+              <TabsTrigger value="done">Done ({bucketed.done.length})</TabsTrigger>
             </TabsList>
           </Tabs>
           <Select value={listLocationFilter || "all"} onValueChange={(v) => setListLocationFilter(v === "all" ? "" : v)}>
@@ -745,11 +932,15 @@ export default function ElectricityBillsPage() {
       ) : visibleBills.length === 0 ? (
         <EmptyState
           icon={Zap}
-          title={activeTab === "open" ? "No open bills" : "No completed bills"}
+          title={activeTab === "problems" ? "No setup problems" : activeTab === "needs" ? "Nothing needs your action" : activeTab === "waiting" ? "Nothing is waiting on others" : "No completed bills"}
           description={
-            activeTab === "open"
-              ? "Everything is fully paid and closed out — you're all caught up."
-              : "Nothing has reached Paid yet for this view."
+            activeTab === "problems"
+              ? "Every open bill's location has what it needs to bill."
+              : activeTab === "needs"
+                ? "Every open bill is with someone else or fully paid."
+                : activeTab === "waiting"
+                  ? "No bill is waiting on the customer or another team."
+                  : "Nothing has reached Paid yet for this view."
           }
         />
       ) : (
@@ -757,7 +948,7 @@ export default function ElectricityBillsPage() {
           {visibleBills.map((bill) => (
             <Card key={bill.id}>
               <CardHeader className="py-3 px-4">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
                   <div className="flex items-center gap-3 min-w-0">
                     <button
                       className="text-left"
@@ -775,13 +966,112 @@ export default function ElectricityBillsPage() {
                         {bill.landlord_bill_number && `Bill# ${bill.landlord_bill_number} · `}
                         {bill.landlord_bill_date && `${formatDate(bill.landlord_bill_date)} · `}
                         {formatCurrency(bill.landlord_total_amount)}
-                        {bill.vendor_bill_id && " · Vendor bill linked"}
+                        {bill.vendor_bill && ` · ${bill.vendor_bill_origin === "uploaded" ? "Uploaded vendor bill linked" : "Vendor bill linked"}`}
                       </p>
+                      {(() => {
+                        const next = nextAction(bill);
+                        if (!next) return null;
+                        const trail = listTrail(bill);
+                        return (
+                          <div className="mt-1 space-y-0.5">
+                            <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-1">
+                              {trail.steps.map((step, i) => (
+                                <span key={step} className="flex items-center gap-x-1">
+                                  <span className={trail.done || i < trail.current ? "" : i === trail.current ? "font-medium text-foreground" : "opacity-60"}>{step}</span>
+                                  {i < trail.steps.length - 1 && <span aria-hidden="true">›</span>}
+                                </span>
+                              ))}
+                            </p>
+                            <p className={`text-xs ${next.blocked || next.overdue ? "text-amber-700" : "text-muted-foreground"}`}>
+                              <span className="font-medium">Next:</span> {next.text} · <span>{next.owner}</span>
+                              {(() => {
+                                const d = daysSince(next.since);
+                                return d === null ? null : <span> · waiting {daysLabel(d)}</span>;
+                              })()}
+                              {next.overdue && <span className="font-medium"> · overdue</span>}
+                            </p>
+                          </div>
+                        );
+                      })()}
+                      {activeTab !== "done" && (bill.setup_gaps ?? []).length > 0 && (
+                        <div className="mt-1.5">
+                          <div className="flex flex-wrap gap-1.5">
+                            {(bill.setup_gaps ?? []).map((gap) => (
+                              <button
+                                key={gap.key}
+                                type="button"
+                                aria-expanded={gapPanelBillId === bill.id}
+                                onClick={() => setGapPanelBillId(gapPanelBillId === bill.id ? null : bill.id)}
+                                className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-100"
+                              >
+                                <span aria-hidden="true">●</span> {gap.text}
+                              </button>
+                            ))}
+                          </div>
+                          {gapPanelBillId === bill.id && (
+                            <div className="mt-2 rounded-md border bg-background p-3 text-xs space-y-2">
+                              {(bill.setup_gaps ?? []).map((gap) => (
+                                <div key={gap.key} className="flex gap-2">
+                                  <span className="text-red-600" aria-hidden="true">●</span>
+                                  <div>
+                                    <p className="font-medium">{gap.text}</p>
+                                    <p className="text-muted-foreground">{gap.detail}</p>
+                                    <p className="mt-0.5">
+                                      {gap.contracts?.map((ct) => (
+                                        <Link key={ct.id} href={`/contracts/${ct.id}`} className="mr-3 text-primary underline underline-offset-2">Open {ct.number}</Link>
+                                      ))}
+                                      <Link href={`/locations/${bill.location_id}`} className="text-primary underline underline-offset-2">Open {bill.locations?.name ?? "location"} → Electricity tab</Link>
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                              <p className="text-muted-foreground">Who fixes it: Admin</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <Badge className={overallStage(bill).className}>{overallStage(bill).label}</Badge>
-                    {canEditBills && bill.status === "draft" && (
+                    {(() => {
+                      const next = nextAction(bill);
+                      const cb = next?.target;
+                      if (!next || !cb || !canManageCustomerBill) return null;
+                      if (next.kind === "confirm") {
+                        return (
+                          <Button size="sm" disabled={actingOnCustomerBill === cb.id} onClick={() => handleConfirmCustomerBill(cb.id)}>
+                            <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                            {actingOnCustomerBill === cb.id ? "Confirming…" : "Confirm"}
+                          </Button>
+                        );
+                      }
+                      if (next.kind === "send") {
+                        return (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => window.open(`/api/electricity-bills/${cb.id}/preview`, "_blank")}>
+                              <Eye className="mr-1.5 h-3.5 w-3.5" /> Preview
+                            </Button>
+                            <Button
+                              size="sm"
+                              disabled={actingOnCustomerBill === cb.id}
+                              onClick={() => setPendingAction({
+                                kind: "send",
+                                id: cb.id,
+                                title: sendActionLabel(cb).idle,
+                                label: `${customerName(cb)} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year} · ${formatCurrency(Number(cb.customer_total ?? 0))}`,
+                                detail: customerBillNextStepHint(cb),
+                              })}
+                            >
+                              <Send className="mr-1.5 h-3.5 w-3.5" />
+                              {actingOnCustomerBill === cb.id ? sendActionLabel(cb).busy : sendActionLabel(cb).idle}
+                            </Button>
+                          </>
+                        );
+                      }
+                      return null;
+                    })()}
+                    {canEditBills && bill.status === "draft" && !(bill.vendor_bill && (bill.vendor_bill.payment_status === "paid" || Number(bill.vendor_bill.amount_paid ?? 0) > 0)) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -791,10 +1081,10 @@ export default function ElectricityBillsPage() {
                         Edit
                       </Button>
                     )}
-                    {canApprove && bill.status === "draft" && (
+                    {canApproveBill && bill.status === "draft" && (
                       <Button
                         size="sm"
-                        onClick={() => handleApprove(bill.id)}
+                        onClick={() => setPendingAction({ kind: "approve", id: bill.id, label: `${bill.locations?.name ?? "Bill"} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}` })}
                         disabled={approving === bill.id}
                       >
                         <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
@@ -805,7 +1095,7 @@ export default function ElectricityBillsPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => handleRevise(bill.id)}
+                        onClick={() => setPendingAction({ kind: "revise", id: bill.id, label: `${bill.locations?.name ?? "Bill"} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}` })}
                         disabled={revising === bill.id}
                       >
                         <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
@@ -966,9 +1256,15 @@ export default function ElectricityBillsPage() {
                                   </Badge>
                                   <Badge variant="outline">{vb.approval_status}</Badge>
                                 </div>
+                                <p className="text-muted-foreground">
+                                  {bill.vendor_bill_origin === "uploaded" ? "Uploaded under Procurement → Bills" : "Created with this bill"}
+                                  {vb.invoice_number ? ` · Invoice ${vb.invoice_number}` : ""}
+                                  {" · "}
+                                  <Link href={`/procurement/bills/${vb.id}`} className="text-primary underline underline-offset-2">Open vendor bill</Link>
+                                </p>
                               </>
                             ) : (
-                              <p className="text-muted-foreground">No vendor bill — landlord vendor not configured for this location.</p>
+                              <p className="text-muted-foreground">No payable exists for this bill, so nothing is waiting in Acc Payables. Set the landlord for this location, or link the uploaded invoice from Procurement → Bills.</p>
                             )}
                           </div>
 
@@ -1000,6 +1296,10 @@ export default function ElectricityBillsPage() {
                                         <span className="font-medium shrink-0">{formatCurrency(p.customer_total)}</span>
                                       </div>
                                       <div className="rounded border border-blue-200 bg-white/60 px-2 py-1.5 space-y-0.5">
+                                        <div className="flex justify-between text-muted-foreground">
+                                          <span>Annexure A — total units billed</span>
+                                          <span>{Math.round((p.customer_utility_units + p.customer_generator_units) * 100) / 100}</span>
+                                        </div>
                                         {p.customer_utility_units > 0 && (
                                           <div className="flex justify-between text-muted-foreground">
                                             <span>Utility/Grid: {p.customer_utility_units} units × {formatCurrency(p.customer_utility_rate)}</span>
@@ -1055,6 +1355,10 @@ export default function ElectricityBillsPage() {
                                     const b = customerBillBreakdown(cb);
                                     return (
                                       <div className="rounded border border-blue-200 bg-white/60 px-2 py-1.5 space-y-0.5">
+                                        <div className="flex justify-between text-muted-foreground">
+                                          <span>Annexure A — total units billed</span>
+                                          <span>{Math.round((b.utilityUnits + b.generatorUnits) * 100) / 100}</span>
+                                        </div>
                                         {b.utilityUnits > 0 && (
                                           <div className="flex justify-between text-muted-foreground">
                                             <span>Utility/Grid: {b.utilityUnits} units × {formatCurrency(b.utilityRate)}</span>
@@ -1121,7 +1425,7 @@ export default function ElectricityBillsPage() {
                                         onClick={() => handleDispatchCustomerBill(cb.id)}
                                       >
                                         <Send className="mr-1 h-3 w-3" />
-                                        {actingOnCustomerBill === cb.id ? "Sending…" : "Bill & Send"}
+                                        {actingOnCustomerBill === cb.id ? sendActionLabel(cb).busy : sendActionLabel(cb).idle}
                                       </Button>
                                     )}
                                     {canDeleteBills && (
@@ -1187,6 +1491,13 @@ export default function ElectricityBillsPage() {
                 {locCfg?.service_number && (
                   <p className="text-xs text-muted-foreground">Meter: <span className="font-mono">{locCfg.service_number}</span></p>
                 )}
+                {form.location_id && locCfg && (
+                  landlordVendor ? (
+                    <p className="text-xs text-muted-foreground">Payable to (landlord): <span className="font-medium text-foreground">{landlordVendor.name}</span></p>
+                  ) : (
+                    <p className="text-xs text-amber-700">No landlord vendor is set for this location — saving will not create a payable in Acc Payables.</p>
+                  )
+                )}
                 {locCfg && !locCfg.enabled && (
                   <p className="text-xs text-destructive">Electricity billing is not enabled for this location.</p>
                 )}
@@ -1227,9 +1538,9 @@ export default function ElectricityBillsPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Bill number</Label>
+                <Label>Bill number <span className="text-red-500">*</span></Label>
                 <Input
-                  placeholder="Optional"
+                  placeholder="As printed on the invoice"
                   value={form.landlord_bill_number}
                   onChange={(e) => setForm((f) => ({ ...f, landlord_bill_number: e.target.value }))}
                 />
@@ -1393,6 +1704,8 @@ export default function ElectricityBillsPage() {
               </div>
             </div>
 
+            <LandlordInvoiceField invoice={invoice} duplicate={editingBillId ? null : duplicateWarning} entered={enteredForCheck} onApply={applyInvoiceSuggestion} replace={!!editingBillId} />
+
             <div className="space-y-1">
               <Label>Notes</Label>
               <Input
@@ -1406,6 +1719,39 @@ export default function ElectricityBillsPage() {
             <Button variant="outline" onClick={closeDialog}>Cancel</Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? "Saving…" : editingBillId ? "Save Changes" : "Save as Draft"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!pendingAction} onOpenChange={(open) => !open && setPendingAction(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{pendingAction?.kind === "approve" ? "Approve and generate customer bills?" : pendingAction?.kind === "send" ? `${pendingAction.title ?? "Send"}?` : "Revise this bill?"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="font-medium">{pendingAction?.label}</p>
+            <p className="text-muted-foreground">
+              {pendingAction?.kind === "send"
+                ? pendingAction.detail
+                : pendingAction?.kind === "approve"
+                ? "This generates the customer bill from these numbers and locks the landlord bill from further edits. Nothing is sent to the customer until you use the send button."
+                : "No customer bills were generated for this bill. Revising marks it as revised and creates a fresh draft with the same numbers, which you can then approve again."}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingAction(null)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                const action = pendingAction;
+                setPendingAction(null);
+                if (!action) return;
+                if (action.kind === "approve") void handleApprove(action.id);
+                else if (action.kind === "send") void handleDispatchCustomerBill(action.id);
+                else void handleRevise(action.id);
+              }}
+            >
+              {pendingAction?.kind === "approve" ? "Approve & Generate" : pendingAction?.kind === "send" ? (pendingAction.title ?? "Send") : "Revise"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -13,7 +13,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { annexureFromSections } from "@/lib/electricity-annexure";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { logCommunication } from "@/lib/communications-log";
 import type { CommunicationLogEntry } from "@/types";
@@ -23,6 +24,8 @@ import QRCode from "qrcode";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { usageLine, toUsageLineInput, type UsageChargeRow } from "@/lib/booking-usage-line";
+import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
  *  slow/hung Razorpay or email call must not stall the whole batch loop. */
@@ -96,7 +99,12 @@ export async function dispatchProforma(
         id, proposal_number,
         lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total)
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number, tenure_months,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number),
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code, charge_date, booking_charge_kind, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name))
     `)
     .eq("id", statementId)
     .single();
@@ -105,21 +113,62 @@ export async function dispatchProforma(
     return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "Statement not found" };
   }
 
+  // On hold — something on this statement is being clarified/corrected.
+  // Blocks send only; the draft itself stays editable elsewhere.
+  if (statement.held_at) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: `Statement is on hold: ${statement.hold_reason}` };
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract = statement.contract as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const proposal = statement.proposal as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const voCase = statement.case as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const voAggregator = statement.aggregator as any;
 
-  if (!contract && !proposal) {
-    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "No contract or proposal linked to this statement" };
+  if (!contract && !proposal && !voCase && !voAggregator) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "No contract, proposal, case, or aggregator linked to this statement" };
+  }
+
+  /** Synthesizes the same lead shape (id/company/email/phone/mobile/gst_number)
+   *  used elsewhere in this function from a Virtual Office case or aggregator —
+   *  mirrors leadFromVoSource in upload-gst-invoice/route.ts. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function leadFromVoSource(): any {
+    if (voCase) {
+      const billToAggregator = voCase.bill_to === "aggregator" ? voCase.aggregator : null;
+      if (billToAggregator) {
+        return {
+          id: billToAggregator.id, first_name: null, last_name: null, company: billToAggregator.name,
+          email: billToAggregator.primary_email, phone: null, mobile: billToAggregator.primary_phone,
+          state: null, gst_number: billToAggregator.gst_number, billing_emails: null,
+        };
+      }
+      return {
+        id: voCase.id, first_name: null, last_name: null, company: voCase.client_company_name || voCase.client_name,
+        email: voCase.client_email, phone: null, mobile: voCase.client_phone,
+        state: null, gst_number: voCase.client_gst_number, billing_emails: null,
+      };
+    }
+    if (voAggregator) {
+      return {
+        id: voAggregator.id, first_name: null, last_name: null, company: voAggregator.name,
+        email: voAggregator.primary_email, phone: null, mobile: voAggregator.primary_phone,
+        state: null, gst_number: voAggregator.gst_number, billing_emails: null,
+      };
+    }
+    return null;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const lead = (contract?.lead ?? proposal?.lead) as any;
+  const lead = (contract?.lead ?? proposal?.lead ?? leadFromVoSource()) as any;
   // Reference label printed on the PDF / in emails wherever a contract number
   // would normally go — falls back to the proposal number for a PI that hasn't
-  // converted into a contract yet.
-  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? "";
+  // converted into a contract yet, or the case/aggregator identifier for
+  // Virtual Office statements.
+  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? voCase?.case_number ?? voAggregator?.name ?? "";
 
   // ── Check for contact info ───────────────────────────────────────────────
   const customerEmail = lead?.email as string | undefined;
@@ -134,7 +183,18 @@ export async function dispatchProforma(
   // (the same data the table below is built from) so the totals box can
   // never drift from what's printed. Falls back to the legacy per-field sum
   // only for statements predating the structured line_items JSONB.
-  const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
+  //
+  // Ad-hoc charges are the one exception: add-charge/waive-charge
+  // (POST .../add-charge, .../waive-charge) update usage_charges and the
+  // statement's flat total_amount atomically, but never touch this frozen
+  // line_items snapshot — so a charge added (or waived) after generation
+  // would otherwise silently vanish from (or wrongly stay on) what actually
+  // gets billed and printed. The live usage_charges table, filtered to
+  // non-waived, is the source of truth for that section; every other
+  // section type (facility/service/booking usage) has no post-generation
+  // edit path, so the frozen snapshot is safe to trust as-is.
+  const usageCharges = ((statement.usage_charges || []) as (UsageChargeRow & { is_waived: boolean })[])
+    .filter((c) => !c.is_waived);
   const usageAmount = usageCharges.reduce((s: number, c: { total: number }) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
@@ -142,8 +202,9 @@ export async function dispatchProforma(
   const structuredSections = (statement.line_items || []) as Array<{
     type: string; label: string; items: Record<string, unknown>[]; subtotal: number
   }>;
+  const nonAdHocSections = structuredSections.filter((sec) => sec.type !== "ad_hoc_charges");
   const subtotal = structuredSections.length > 0
-    ? structuredSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0)
+    ? nonAdHocSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0) + usageAmount
     : fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
 
@@ -185,7 +246,7 @@ export async function dispatchProforma(
           currency: "INR",
           description: `Proforma ${proformaRef} — ${partyRef} — The WorkVilla`,
           reference_id: refId,
-          expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
+          expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
           notify: { sms: !!customerPhone, email: !!customerEmail },
           reminder_enable: true,
           notes: { statement_id: statementId, contract_number: partyRef, proforma: "true" },
@@ -243,7 +304,7 @@ export async function dispatchProforma(
   const lineItems: GstInvoiceData["lineItems"] = [];
 
   if (structuredSections.length > 0) {
-    for (const section of structuredSections) {
+    for (const section of nonAdHocSections) {
       for (const item of section.items) {
         const desc = item.description || item.booking_number || section.label;
         let label = String(desc);
@@ -252,6 +313,7 @@ export async function dispatchProforma(
         }
         lineItems.push({
           description: withProrationBreakdown(label || section.label, item),
+          workings: item.workings ? String(item.workings) : undefined,
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
           qty: resolveLineItemQty(item, "send-proforma"),
           rate: resolveLineItemRate(item),
@@ -259,13 +321,12 @@ export async function dispatchProforma(
         });
       }
     }
-  } else {
-    if (fixedAmount > 0) {
-      lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
-    }
-    for (const charge of usageCharges) {
-      lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
-    }
+  } else if (fixedAmount > 0) {
+    lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
+  }
+  for (const charge of usageCharges) {
+    const line = usageLine(toUsageLineInput(charge));
+    lineItems.push({ description: line.description, workings: line.workings, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
   }
 
   // ── Generate PDF ─────────────────────────────────────────────────────────
@@ -278,7 +339,14 @@ export async function dispatchProforma(
     } catch { /* skip QR */ }
   }
 
+  // Customer-facing proof attached at bill-customer time — appended as extra
+  // pages after the PDF is generated below (see mergeSupportingDocuments).
+  const supportingDocs = (statement.statement_type as string) === "reimbursement"
+    ? await fetchSupportingDocuments(adminSupabase, statement.id as string)
+    : [];
+
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber: proformaRef,
     // Rent proformas: invoice date = 1st of the billed month (period_start).
     //   e.g. June rent sent May 30 → prints "1 June 2026"
@@ -299,6 +367,7 @@ export async function dispatchProforma(
     periodEnd: statement.period_end as string,
     dueDate: (statement.due_date as string | null) || undefined,
     contractNumber: partyRef,
+    poNumber: statement.po_number as string | null,
     lineItems,
     subtotal,
     cgst,
@@ -310,10 +379,14 @@ export async function dispatchProforma(
     razorpayUrl: razorpayLinkUrl ?? undefined,
     razorpayQrBase64,
     razorpayExpiry: razorpayLinkUrl ? razorpayExpiry : undefined,
+    supportingDocsCount: supportingDocs.length || undefined,
   };
 
   const doc = generateGstInvoicePDF(invoiceData);
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  let pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  if (supportingDocs.length > 0) {
+    pdfBuffer = await mergeSupportingDocuments(adminSupabase, pdfBuffer, supportingDocs);
+  }
 
   // Upload PDF to storage
   const storagePath = `proforma/${proformaRef.replace(/\//g, "-")}.pdf`;
@@ -325,7 +398,16 @@ export async function dispatchProforma(
   const appBaseUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
   const proformaTrackingUrl = `${appBaseUrl}/api/billing-statements/${statement.id}/track?type=proforma`;
 
-  const periodLabel = new Date((statement.period_start as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" });
+  // Virtual Office case statements bill the case's whole tenure as a single
+  // one-time license fee (see src/lib/case-invoicing.ts), not a calendar
+  // month — a "Aug 2026"-style period label misrepresents it. Contract/
+  // proposal-sourced proformas are unaffected and keep the month label.
+  const periodLabel = voCase && voCase.tenure_months
+    ? `${voCase.tenure_months} month${voCase.tenure_months === 1 ? "" : "s"}`
+    : new Date((statement.period_start as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" });
+  const introSentence = voCase
+    ? "Please find attached your proforma invoice for Virtual Office space. Kindly make the payment at your earliest convenience."
+    : `Please find attached your proforma invoice for <strong>${periodLabel}</strong>. Kindly make the payment at your earliest convenience.`;
   const dueDateStr = statement.due_date
     ? new Date((statement.due_date as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })
     : null;
@@ -350,7 +432,7 @@ export async function dispatchProforma(
       </div>
       <div style="padding:32px;">
         <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
-        <p style="color:#333;font-size:14px;">Please find attached your proforma invoice for <strong>${periodLabel}</strong>. Kindly make the payment at your earliest convenience.</p>
+        <p style="color:#333;font-size:14px;">${introSentence}</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
           <tr><td style="padding:6px 0;color:#666;">Proforma Ref</td><td style="padding:6px 0;font-weight:600;">${proformaRef}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">${contract ? "Contract" : "Proposal Ref"}</td><td style="padding:6px 0;">${partyRef}</td></tr>
@@ -365,7 +447,7 @@ export async function dispatchProforma(
         ${razorpayLinkUrl ? `
         <div style="text-align:center;margin:12px 0;">
           <a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
-          <p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 15 days. If expired, please contact us to regenerate a new link.</p>
+          <p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 180 days. If it has expired, please contact us and we will send a new one.</p>
         </div>` : ""}
         <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
         <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:10px 16px;margin-top:24px;font-size:11px;color:#5d4037;">
@@ -517,13 +599,19 @@ export async function dispatchGstDirect(
         start_date, end_date, billing_cycle, location_id, items,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code, charge_date, booking_charge_kind, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name))
     `)
     .eq("id", statementId)
     .single();
 
   if (fetchErr || !statement) {
     return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "Statement not found" };
+  }
+
+  // On hold — something on this statement is being clarified/corrected.
+  // Blocks send only; the draft itself stays editable elsewhere.
+  if (statement.held_at) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: `Statement is on hold: ${statement.hold_reason}` };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -579,7 +667,12 @@ export async function dispatchGstDirect(
   // data the table below is built from) so the totals box can never drift
   // from what's printed. Falls back to the legacy per-field sum only for
   // statements predating the structured line_items JSONB. ───────────────────
-  const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
+  // Ad-hoc charges are the one exception — see dispatchProforma's matching
+  // comment above: add-charge/waive-charge never update this frozen
+  // snapshot, so the live usage_charges table (filtered to non-waived) is
+  // the source of truth for that section specifically.
+  const usageCharges = ((statement.usage_charges || []) as (UsageChargeRow & { is_waived: boolean })[])
+    .filter((c) => !c.is_waived);
   const usageAmount = usageCharges.reduce((s: number, c: { total: number }) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
@@ -587,8 +680,9 @@ export async function dispatchGstDirect(
   const structuredSections = (statement.line_items || []) as Array<{
     type: string; label: string; items: Record<string, unknown>[]; subtotal: number
   }>;
+  const nonAdHocSections = structuredSections.filter((sec) => sec.type !== "ad_hoc_charges");
   const subtotal = structuredSections.length > 0
-    ? structuredSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0)
+    ? nonAdHocSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0) + usageAmount
     : fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
   const isInterstate = false;
@@ -642,7 +736,7 @@ export async function dispatchGstDirect(
         currency: "INR",
         description: `Tax Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`,
         reference_id: refId,
-        expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
+        expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
         notify: { sms: !!customerPhone, email: !!customerEmail },
         reminder_enable: true,
         notes: { statement_id: statementId, contract_number: contract.contract_number, gst_invoice: "true" },
@@ -678,19 +772,23 @@ export async function dispatchGstDirect(
   // ── Build PDF line items ──────────────────────────────────────────────────
   const lineItems: GstInvoiceData["lineItems"] = [];
   if (structuredSections.length > 0) {
-    for (const section of structuredSections) {
+    for (const section of nonAdHocSections) {
       for (const item of section.items) {
         const desc = item.description || item.booking_number || section.label;
         let label = String(desc);
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        lineItems.push({ description: withProrationBreakdown(label || section.label, item), hsnSac: "997212", qty: resolveLineItemQty(item, "gst-direct"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
+        lineItems.push({ description: withProrationBreakdown(label || section.label, item),
+          workings: item.workings ? String(item.workings) : undefined, hsnSac: "997212", qty: resolveLineItemQty(item, "gst-direct"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
       }
     }
-  } else {
-    if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: "997212", qty: 1, rate: fixedAmount, amount: fixedAmount });
-    for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: "997212", qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+  } else if (fixedAmount > 0) {
+    lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: "997212", qty: 1, rate: fixedAmount, amount: fixedAmount });
+  }
+  for (const charge of usageCharges) {
+    const line = usageLine(toUsageLineInput(charge));
+    lineItems.push({ description: line.description, workings: line.workings, hsnSac: "997212", qty: line.quantity, rate: line.unitPrice, amount: line.amount });
   }
 
   // ── Generate PDF (actual GST invoice, not proforma) ───────────────────────
@@ -698,10 +796,21 @@ export async function dispatchGstDirect(
   if (razorpayLinkUrl) {
     try { razorpayQrBase64 = await QRCode.toDataURL(razorpayLinkUrl, { width: 200, margin: 1, errorCorrectionLevel: "M" }); } catch { /* skip */ }
   }
+
+  // Customer-facing proof attached at bill-customer time — appended as extra
+  // pages after the PDF is generated below (see mergeSupportingDocuments).
+  const supportingDocs = (statement.statement_type as string) === "reimbursement"
+    ? await fetchSupportingDocuments(adminSupabase, statement.id as string)
+    : [];
+
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber,
     invoiceDate: issueDateYmd,
     isProforma: false,
+    // Reimbursement GST-direct invoices collapse to Description | Amount, same
+    // as the proforma and on-demand PDF paths for this statement type.
+    compactLineItems: (statement.statement_type as string) === "reimbursement",
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerGstin: lead?.gst_number || undefined,
     buyerState: lead?.state || undefined,
@@ -709,6 +818,7 @@ export async function dispatchGstDirect(
     periodEnd: statement.period_end as string,
     dueDate,
     contractNumber: contract.contract_number,
+    poNumber: statement.po_number as string | null,
     lineItems,
     subtotal,
     cgst,
@@ -720,9 +830,13 @@ export async function dispatchGstDirect(
     razorpayUrl: razorpayLinkUrl ?? undefined,
     razorpayQrBase64,
     razorpayExpiry: undefined,
+    supportingDocsCount: supportingDocs.length || undefined,
   };
   const doc = generateGstInvoicePDF(invoiceData);
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  let pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  if (supportingDocs.length > 0) {
+    pdfBuffer = await mergeSupportingDocuments(adminSupabase, pdfBuffer, supportingDocs);
+  }
 
   const storagePath = `gst-invoices/${invoiceNumber.replace(/\//g, "-")}.pdf`;
   await adminSupabase.storage.from("crm-documents").upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
@@ -764,7 +878,7 @@ export async function dispatchGstDirect(
           <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
         </table>
         ${paymentOptionsHtml}
-        ${razorpayLinkUrl ? `<div style="text-align:center;margin:24px 0;"><a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a><p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 15 days. If expired, please contact us to regenerate a new link.</p></div>` : ""}
+        ${razorpayLinkUrl ? `<div style="text-align:center;margin:24px 0;"><a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a><p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 180 days. If it has expired, please contact us and we will send a new one.</p></div>` : ""}
         <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
       </div>
       <div style="background:#015E65;padding:12px 32px;text-align:center;">

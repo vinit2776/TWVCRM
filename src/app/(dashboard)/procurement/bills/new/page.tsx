@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle, Lightbulb, TrendingUp, CalendarClock, PackageSearch } from "lucide-react";
+import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle, Lightbulb, TrendingUp, CalendarClock, PackageSearch, ShieldCheck, Clock } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -16,8 +17,13 @@ import { toast } from "sonner";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
-import type { ProcurementVendor, PurchaseOrder } from "@/types";
+import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } from "@/types";
+import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
+import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
+import { buildInvoiceCheckRecord, checkInvoice, type SuggestionField } from "@/lib/procurement/invoice-check";
+import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
+import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
   if (!po.purchase_order_items || !po.po_delivery_receipts) return null;
@@ -50,6 +56,7 @@ function NewVendorBillForm() {
   const [invoiceDate, setInvoiceDate] = useState(today);
   const [dueDate, setDueDate] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
+  const [toleranceReason, setToleranceReason] = useState("");
   const [gstAmount, setGstAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -80,12 +87,29 @@ function NewVendorBillForm() {
 
   // File upload state
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  // Advisory read of the uploaded invoice (never blocks, never overwrites typed values)
+  const [invoiceCheck, setInvoiceCheck] = useState<InvoiceCheckState>({ status: "idle" });
+  const extractSeq = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
   const [poData, setPoData] = useState<PurchaseOrder | null>(null);
   const [loadingPo, setLoadingPo] = useState(false);
   const [vendorLocked, setVendorLocked] = useState(false);
+
+  // Recurring-bill (blanket approval) rule for the selected vendor, if any
+  const [activeRule, setActiveRule] = useState<RecurringBillRule | null>(null);
+
+  // Company selector — required for standalone bills (no PO); inherited read-only when a PO is linked
+  const [companyId, setCompanyId] = useState<string>("");
+  const [companies, setCompanies] = useState<Company[]>([]);
+
+  // Electricity-provider vendors: a standalone bill must say which location it is for.
+  const [elec, setElec] = useState<ElectricityBillFieldsValue>(EMPTY_ELECTRICITY_FIELDS);
+  const [elecStatus, setElecStatus] = useState<{ ok: boolean; reason: string | null }>({ ok: true, reason: null });
+  const showElectricity = !poId && !!vendors.find((v) => v.id === vendorId)?.is_electricity_provider;
+  // Whatever was entered for one vendor means nothing for another.
+  useEffect(() => { setElec(EMPTY_ELECTRICITY_FIELDS); }, [vendorId]);
 
   // Replacement-bill mode
   const [replacesBill, setReplacesBill] = useState<{
@@ -98,6 +122,18 @@ function NewVendorBillForm() {
     fetch("/api/procurement/vendors").then((r) => r.json()).then((j) => {
       setVendors(j.data || []);
     });
+  }, []);
+
+  // Companies — deliberately not preselected for standalone bills (no PO): a default is easy to
+  // overlook and books the bill to the wrong company. The user must choose; submit is gated on it.
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => {
+        const all: Company[] = j.data || [];
+        setCompanies(all);
+      })
+      .catch(() => setCompanies([]));
   }, []);
 
   // When ?replaces=<id> is present, fetch the predecessor bill so we can show its
@@ -131,6 +167,7 @@ function NewVendorBillForm() {
         setPoData(po);
         setVendorId(po.vendor_id);
         setVendorLocked(true);
+        setCompanyId(po.company_id);
         if (po.total_ordered_amount > 0) {
           // Pre-fill with received value if there's a shortfall, otherwise full PO value
           const rv = po.po_type !== "service" ? computeReceivedValue(po) : null;
@@ -140,6 +177,52 @@ function NewVendorBillForm() {
       })
       .finally(() => setLoadingPo(false));
   }, [poId]);
+
+  // ── Steer AMC service invoices to the guided flow ───────────────────────────
+  // A standalone bill here has no service_report_id, isn't capped at the cycle
+  // cost, and doesn't count against the contract's cycle limit — the invoice
+  // dialog on the PO page is the only place those guardrails apply. If the
+  // vendor picked here already has an open AMC contract, point at it instead
+  // of letting the user quietly bill outside that flow.
+  const [vendorAmcPos, setVendorAmcPos] = useState<
+    Array<{ id: string; po_number: string; billing_cycle: string | null }>
+  >([]);
+  const [amcBannerDismissed, setAmcBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    setAmcBannerDismissed(false);
+    if (poId || !vendorId) { setVendorAmcPos([]); return; }
+    let cancelled = false;
+    fetch(`/api/procurement/orders?vendor_id=${vendorId}&limit=25`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const pos = (json.data ?? []).filter(
+          (po: PurchaseOrder) =>
+            po.po_type === "service" && !!po.amc_start_date &&
+            !po.amc_terminated_at && po.status !== "cancelled"
+        );
+        setVendorAmcPos(pos);
+      })
+      .catch(() => { if (!cancelled) setVendorAmcPos([]); });
+    return () => { cancelled = true; };
+  }, [vendorId, poId]);
+
+  // Recurring-bill rule lookup — tells the user upfront whether this vendor is
+  // pre-approved so they don't have to check the vendor's Recurring Bills tab first.
+  useEffect(() => {
+    if (!vendorId) { setActiveRule(null); return; }
+    let cancelled = false;
+    fetch(`/api/procurement/vendors/${vendorId}/recurring-bill-rules`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const rules: RecurringBillRule[] = json.data ?? [];
+        setActiveRule(rules.find((r) => r.status === "active") ?? null);
+      })
+      .catch(() => { if (!cancelled) setActiveRule(null); });
+    return () => { cancelled = true; };
+  }, [vendorId]);
 
   // ── Duplicate-invoice detector — debounced check ─────────────────────────
   useEffect(() => {
@@ -255,9 +338,29 @@ function NewVendorBillForm() {
       return;
     }
     setInvoiceFile(file);
+    runInvoiceCheck(file);
   };
 
+  // One read per upload. Any failure just hides the card; manual entry carries on.
+  const runInvoiceCheck = (file: File) => {
+    const seq = ++extractSeq.current;
+    setInvoiceCheck({ status: "loading" });
+    requestInvoiceExtraction(file).then((extracted) => {
+      if (seq !== extractSeq.current) return;
+      setInvoiceCheck(extracted ? { status: "ok", extracted } : { status: "unavailable" });
+    });
+  };
+
+  const applyInvoiceSuggestion = useCallback((field: SuggestionField, value: string) => {
+    if (field === "amount") setTotalAmount(value);
+    else if (field === "gstAmount") setGstAmount(value);
+    else if (field === "invoiceNumber") setInvoiceNumber(value);
+    else setInvoiceDate(value);
+  }, []);
+
   const removeFile = () => {
+    extractSeq.current++;
+    setInvoiceCheck({ status: "idle" });
     setInvoiceFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -267,10 +370,53 @@ function NewVendorBillForm() {
   // Effective ceiling: received value if shortfall, otherwise full PO value
   const effectiveCeiling = hasShortfall ? receivedValue! : (poData ? Number(poData.total_ordered_amount) : null);
 
-  // Inline real-time error shown below the amount field
+  // Price tolerance (goods POs): the invoice may drift past the PO value inside the band;
+  // outside it the bill is flagged for an admin, with a reason from here.
+  const tolerancePercent = poData && poData.po_type !== "service" ? clampTolerancePercent(poData.tolerance_percent) : 0;
   const amountNum = parseFloat(totalAmount);
+  const priorInvoiced = ((poData as unknown as { vendor_bills?: { id: string; total_amount: number; approval_status: string }[] } | null)?.vendor_bills ?? [])
+    .filter((b) => b.approval_status !== "rejected" && b.id !== replacesBill?.id)
+    .reduce((sum, b) => sum + Number(b.total_amount), 0);
+  const toleranceOutcome =
+    tolerancePercent > 0 && effectiveCeiling && amountNum > 0
+      ? evaluateInvoiceTolerance({
+          invoiceTotal: amountNum,
+          base: effectiveCeiling,
+          tolerancePercent,
+          priorInvoiced,
+          fullyReceived: !hasShortfall,
+        })
+      : null;
+  const needsToleranceReason = toleranceOutcome?.kind === "exception";
+
+  // Inputs for the advisory invoice check card
+  const vendorNameForCheck = vendors.find((v) => v.id === vendorId)?.name ?? null;
+  const gstNum = parseFloat(gstAmount);
+  const enteredForCheck = useMemo(
+    () => ({
+      invoiceNumber,
+      invoiceDate,
+      vendorName: vendorNameForCheck,
+      amount: isFinite(amountNum) && amountNum > 0 ? amountNum : null,
+      gstAmount: isFinite(gstNum) && gstNum > 0 ? gstNum : null,
+    }),
+    [invoiceNumber, invoiceDate, vendorNameForCheck, amountNum, gstNum],
+  );
+  const checkCeiling = effectiveCeiling ? effectiveCeiling * (1 + tolerancePercent / 100) : null;
+  // The invoice check's findings, echoed on the amount field and the Save button so they aren't missed
+  const invoiceFindings = useMemo(
+    () =>
+      invoiceCheck.status === "ok"
+        ? checkInvoice({ extracted: invoiceCheck.extracted, entered: enteredForCheck, poCeiling: checkCeiling })
+        : [],
+    [invoiceCheck, enteredForCheck, checkCeiling],
+  );
+  const amountCheckFinding = invoiceFindings.find((f) => f.code === "amount_looks_gst_inclusive" || f.code === "amount_differs_subtotal");
+
+  // Inline real-time error shown below the amount field
   const amountError: string | null = (() => {
     if (!totalAmount || isNaN(amountNum) || amountNum <= 0) return null;
+    if (tolerancePercent > 0) return null;
     if (hasShortfall && amountNum > receivedValue!) {
       return `Exceeds received value of ${formatCurrency(receivedValue!)} — only ${formatCurrency(receivedValue!)} of goods received out of PO value ${formatCurrency(poData!.total_ordered_amount)}.`;
     }
@@ -282,16 +428,29 @@ function NewVendorBillForm() {
 
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
+    if (!poId && !companyId) return "Select which company this bill is for";
     if (!invoiceDate) return "Invoice date is required";
     const amount = parseFloat(totalAmount);
     if (!totalAmount || isNaN(amount) || amount <= 0) return "Invoice amount must be greater than 0";
     if (amountError) return amountError;
+    if (needsToleranceReason && !toleranceReason.trim()) return "Add a reason for the difference from the PO value";
     const gst = parseFloat(gstAmount) || 0;
     const maxGst = Math.round(amount * 0.28 * 100) / 100;
     if (gst > maxGst) return `GST amount (₹${gst.toLocaleString("en-IN")}) cannot exceed 28% of the invoice base (max ₹${maxGst.toLocaleString("en-IN")})`;
     // File is mandatory when linked to a PO
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
+    if (showElectricity && !elecStatus.ok) return elecStatus.reason ?? "Choose the location this electricity bill is for";
     return null;
+  };
+
+  // Findings from the invoice check get one pause at Save — a guide, never a block ("Save anyway").
+  const [findingsConfirmOpen, setFindingsConfirmOpen] = useState(false);
+
+  const handleSave = () => {
+    const err = validate();
+    if (err) { toast.error(err, { duration: 6000 }); return; }
+    if (invoiceFindings.length > 0) { setFindingsConfirmOpen(true); return; }
+    void handleSubmit();
   };
 
   const handleSubmit = async () => {
@@ -324,6 +483,7 @@ function NewVendorBillForm() {
 
       const payload = {
         po_id: poId ?? null,
+        company_id: companyId || null,
         vendor_id: vendorId,
         invoice_number: invoiceNumber.trim() || null,
         invoice_date: invoiceDate,
@@ -332,7 +492,19 @@ function NewVendorBillForm() {
         gst_amount: parseFloat(gstAmount) || 0,
         notes: notes.trim() || null,
         invoice_file_url: invoiceFileUrl,
+        invoice_check: invoiceCheck.status === "ok" ? buildInvoiceCheckRecord(invoiceCheck.extracted, invoiceFindings) : null,
         replaces_bill_id: replacesBill?.id ?? null,
+        ...(needsToleranceReason ? { tolerance_exception_reason: toleranceReason.trim() } : {}),
+        ...(showElectricity
+          ? {
+              location_id: elec.location_id || null,
+              connection_id: elec.connection_id || null,
+              consumer_number: elec.consumer_number.trim() || null,
+              printed_name: elec.printed_name.trim() || null,
+              acknowledge_mismatch: elec.acknowledge_mismatch,
+              remember_name: elec.remember_name,
+            }
+          : {}),
       };
 
       const res = await fetch("/api/procurement/bills", {
@@ -346,6 +518,7 @@ function NewVendorBillForm() {
         return;
       }
       toast.success(`Vendor invoice recorded — ${json.data.bill_number}`);
+      for (const w of (json.warnings as string[] | undefined) ?? []) toast.warning(w, { duration: 8000 });
       router.push(`/procurement/bills/${json.data.id}`);
     } finally {
       setSubmitting(false);
@@ -412,8 +585,8 @@ function NewVendorBillForm() {
           <div>
             <strong>Delivery shortfall detected.</strong> Only goods worth{" "}
             <strong>{formatCurrency(receivedValue!)}</strong> have been received out of the PO value of{" "}
-            <strong>{formatCurrency(poData!.total_ordered_amount)}</strong>. The invoice amount cannot exceed{" "}
-            <strong>{formatCurrency(receivedValue!)}</strong>.
+            <strong>{formatCurrency(poData!.total_ordered_amount)}</strong>. The invoice amount should not exceed{" "}
+            <strong>{formatCurrency(receivedValue!)}</strong>{tolerancePercent > 0 ? ` (± ${tolerancePercent}% allowed)` : ""}.
           </div>
         </div>
       )}
@@ -445,6 +618,102 @@ function NewVendorBillForm() {
               <p className="text-xs text-muted-foreground">Vendor is locked to the linked purchase order</p>
             )}
           </div>
+
+          {/* Steer AMC invoices to the guided per-cycle flow instead of a standalone bill */}
+          {!amcBannerDismissed && vendorAmcPos.length > 0 && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm text-blue-900 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-medium">
+                  This vendor has {vendorAmcPos.length} active AMC contract{vendorAmcPos.length > 1 ? "s" : ""}
+                </p>
+                <p className="text-xs mt-0.5 text-blue-800">
+                  If this invoice is for a service cycle, record it from the contract instead —
+                  a standalone bill here skips the service report requirement and won&apos;t count
+                  against the cycle limit.
+                </p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                  {vendorAmcPos.map((po) => (
+                    <Link
+                      key={po.id}
+                      href={`/procurement/orders/${po.id}`}
+                      target="_blank"
+                      className="text-xs font-mono text-blue-700 hover:underline"
+                    >
+                      {po.po_number} →
+                    </Link>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAmcBannerDismissed(true)}
+                className="text-blue-500 hover:text-blue-700 shrink-0"
+                aria-label="Dismiss"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Blanket-approval banner — this vendor has a recurring-bill rule */}
+          {activeRule && (
+            activeRule.first_bill_id ? (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 flex items-start gap-3">
+                <ShieldCheck className="h-4 w-4 flex-shrink-0 mt-0.5 text-emerald-600" />
+                <div>
+                  <p className="font-medium">Pre-approved vendor</p>
+                  <p className="text-xs text-emerald-800 mt-0.5">
+                    Invoices around <strong>{formatCurrency(activeRule.expected_amount)}</strong> (±{activeRule.tolerance_percent}%),
+                    up to <strong>{formatCurrency(activeRule.max_auto_approve_amount)}</strong>, skip approval automatically once saved and go
+                    straight to Payables. Outside that range, it falls back to the normal approval queue — nothing is blocked either way.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-3">
+                <Clock className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
+                <div>
+                  <p className="font-medium">Recurring-bill rule set up, not active yet</p>
+                  <p className="text-xs text-amber-800 mt-0.5">
+                    This vendor has a rule waiting on its first-bill confirmation. This invoice still needs a manual approval —
+                    once it&apos;s approved, future bills from this vendor will start auto-approving.
+                  </p>
+                </div>
+              </div>
+            )
+          )}
+
+          {/* Company */}
+          <div className="space-y-1.5">
+            <Label htmlFor="company">Company <span className="text-red-500">*</span></Label>
+            {poId ? (
+              <p className="text-sm rounded-md border bg-muted/50 px-3 py-2">
+                Company: <strong>{poData?.companies?.brand_name ?? "—"}</strong>
+              </p>
+            ) : (
+              <Select
+                value={companyId || "__none__"}
+                onValueChange={(v) => setCompanyId(v === "__none__" ? "" : v)}
+              >
+                <SelectTrigger id="company">
+                  <SelectValue placeholder="Select company" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Select a company…</SelectItem>
+                  {companies.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {poId && (
+              <p className="text-xs text-muted-foreground">Company is inherited from the linked purchase order</p>
+            )}
+          </div>
+
+          {showElectricity && (
+            <ElectricityBillFields vendorId={vendorId} companyId={companyId} value={elec} onChange={setElec} onStatus={setElecStatus} onRequestCompany={setCompanyId} />
+          )}
 
           {/* Duplicate-invoice warning (Finance Intelligence) */}
           {(hasExactDuplicate || (!duplicateDismissed && duplicates.length > 0)) && (
@@ -508,7 +777,8 @@ function NewVendorBillForm() {
           {/* ── Finance Intelligence hints (Day 3-5) ────────────────────────── */}
 
           {/* PO cumulative warning */}
-          {hints?.po_cumulative?.is_warning && (
+          {/* On a flexible PO the tolerance message under the amount says it better than a blanket "over budget". */}
+          {hints?.po_cumulative?.is_warning && !(tolerancePercent > 0 && hints.po_cumulative.is_over_budget) && (
             <div className={`rounded-lg border px-3 py-2.5 text-sm flex items-start gap-2.5 ${
               hints.po_cumulative.is_over_budget
                 ? "border-red-300 bg-red-50 text-red-900"
@@ -581,18 +851,65 @@ function NewVendorBillForm() {
                 id="total_amount"
                 type="number"
                 min="0.01"
-                max={effectiveCeiling ?? undefined}
+                max={tolerancePercent > 0 ? undefined : (effectiveCeiling ?? undefined)}
                 step="0.01"
                 placeholder="0.00"
                 value={totalAmount}
                 onChange={(e) => setTotalAmount(e.target.value)}
-                className={amountError ? "border-red-500 focus-visible:ring-red-500" : ""}
+                className={amountError ? "border-red-500 focus-visible:ring-red-500" : amountCheckFinding ? "border-amber-400 bg-amber-50 focus-visible:ring-amber-400" : ""}
               />
+              {!amountError && amountCheckFinding && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-amber-800">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="flex-1 min-w-[10rem]">
+                    {amountCheckFinding.code === "amount_looks_gst_inclusive"
+                      ? "Looks GST-inclusive — this field takes the amount before GST."
+                      : "Differs from the pre-GST amount on the uploaded invoice."}
+                  </span>
+                  {amountCheckFinding.suggestion && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-6 bg-white px-2 text-xs"
+                      onClick={() => applyInvoiceSuggestion("amount", amountCheckFinding.suggestion!.value)}
+                    >
+                      {amountCheckFinding.suggestion.label}
+                    </Button>
+                  )}
+                </div>
+              )}
               {amountError ? (
                 <p className="text-xs text-red-600 flex items-start gap-1">
                   <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
                   {amountError}
                 </p>
+              ) : tolerancePercent > 0 && effectiveCeiling ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    PO is flexible ± {tolerancePercent}% on {formatCurrency(effectiveCeiling)} ({hasShortfall ? "received value" : "PO value"}) — accepts{" "}
+                    {formatCurrency(effectiveCeiling * (1 - tolerancePercent / 100))} to {formatCurrency(effectiveCeiling * (1 + tolerancePercent / 100))}.
+                  </p>
+                  {toleranceOutcome?.kind === "within" && (
+                    <p className="text-xs text-green-700 rounded bg-green-50 border border-green-200 px-2 py-1.5">
+                      {priorInvoiced > 0 ? "Invoiced total on this PO would be " : "This is "}{toleranceOutcome.variancePercent}% above the PO value — inside the agreed ± {tolerancePercent}%. Follows the normal approval path; the difference is recorded.
+                    </p>
+                  )}
+                  {toleranceOutcome?.kind === "exception" && (
+                    <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 space-y-1.5">
+                      <p className="text-xs text-amber-800 flex items-start gap-1">
+                        <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                        {priorInvoiced > 0 ? "Invoiced total on this PO would be " : "This is "}{Math.abs(toleranceOutcome.variancePercent)}% {toleranceOutcome.direction === "above" ? "above" : "below"} the PO value — outside the agreed ± {tolerancePercent}%. This needs special approval from an admin.
+                      </p>
+                      <Input
+                        value={toleranceReason}
+                        onChange={(e) => setToleranceReason(e.target.value)}
+                        placeholder="Why is the invoice different? (required)"
+                        className="bg-white"
+                      />
+                    </div>
+                  )}
+                </div>
               ) : effectiveCeiling !== null && effectiveCeiling > 0 ? (
                 <p className="text-xs text-muted-foreground">
                   Max: {formatCurrency(effectiveCeiling)} ({hasShortfall ? "proportionate received value" : "PO value"})
@@ -724,6 +1041,7 @@ function NewVendorBillForm() {
               className="sr-only"
               onChange={handleFileChange}
             />
+            <InvoiceCheckCard state={invoiceCheck} entered={enteredForCheck} poCeiling={checkCeiling} onApply={applyInvoiceSuggestion} />
           </div>
 
           <div className="space-y-1.5">
@@ -774,8 +1092,22 @@ function NewVendorBillForm() {
         </CardContent>
       </Card>
 
-      <div className="flex justify-end">
-        <Button onClick={handleSubmit} disabled={submitting || !!amountError || hasExactDuplicate} size="lg">
+      <div className="flex flex-col items-end gap-2">
+        {invoiceFindings.length > 0 && (
+          <p className="flex items-start gap-1.5 text-xs text-amber-800 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5 max-w-md">
+            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+            <span>
+              The uploaded invoice differs from what you entered in {invoiceFindings.length} {invoiceFindings.length === 1 ? "place" : "places"} — check the
+              invoice review above. This is a guide only; you can still save.
+            </span>
+          </p>
+        )}
+        <Button
+          onClick={handleSave}
+          disabled={submitting || !!amountError || hasExactDuplicate}
+          size="lg"
+          className={invoiceFindings.length > 0 ? "bg-amber-600 hover:bg-amber-700 text-white" : undefined}
+        >
           {submitting ? (
             <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving…</>
           ) : (
@@ -783,6 +1115,36 @@ function NewVendorBillForm() {
           )}
         </Button>
       </div>
+
+      <Dialog open={findingsConfirmOpen} onOpenChange={setFindingsConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-800">
+              <AlertTriangle className="h-5 w-5" /> Check before saving
+            </DialogTitle>
+            <DialogDescription>
+              The uploaded invoice differs from what you entered. This is a guide only — you can still save.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-2 text-sm">
+            {invoiceFindings.map((f) => (
+              <li key={f.code} className="flex items-start gap-2 rounded border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-900">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <span>{f.message}</span>
+              </li>
+            ))}
+          </ul>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={() => setFindingsConfirmOpen(false)}>Go back and review</Button>
+            <Button
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => { setFindingsConfirmOpen(false); void handleSubmit(); }}
+            >
+              Save anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { generateConsolidatedInvoice } from "@/lib/aggregator-invoicing";
 import { z } from "zod";
@@ -10,6 +10,9 @@ const generateInvoiceSchema = z.object({
   period_year: z.number().int().min(2020).max(2100),
   tax_percentage: z.number().min(0).max(100).default(18),
   notes: z.string().optional(),
+  // Explicit case selection from the Referrals list — omit to auto-pull
+  // every currently-billable case for the aggregator ("bill all").
+  case_ids: z.array(z.string().uuid()).optional(),
 });
 
 /**
@@ -40,7 +43,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("aggregator_invoices")
     .select(
-      "*, aggregator:aggregators!aggregator_invoices_aggregator_id_fkey(id, name, code)",
+      "*, aggregator:aggregators!aggregator_invoices_aggregator_id_fkey(id, name, code), billing_statement:billing_statements!aggregator_invoices_billing_statement_id_fkey(id, statement_number, handoff_state, payment_status)",
       { count: "exact" }
     );
 
@@ -89,7 +92,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { aggregator_id, period_month, period_year, tax_percentage, notes } =
+  const { aggregator_id, period_month, period_year, tax_percentage, notes, case_ids } =
     result.data;
 
   const { data: dbUser } = await supabase
@@ -98,14 +101,16 @@ export async function POST(request: NextRequest) {
     .eq("auth_id", user.id)
     .single();
 
+  const adminSupabase = await createAdminClient();
   const { invoice, error, status } = await generateConsolidatedInvoice({
-    supabase,
+    supabase: adminSupabase,
     aggregatorId: aggregator_id,
     periodMonth: period_month,
     periodYear: period_year,
     taxPercentage: tax_percentage,
     notes,
     createdBy: dbUser?.id,
+    caseIds: case_ids,
   });
 
   if (error) {

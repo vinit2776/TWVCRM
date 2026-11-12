@@ -71,7 +71,7 @@ export async function drawEInvoiceBlock(
   pdf.rect(position.x, position.y, widthMm, qrSizeMm + 2 * padMm);
 
   // QR image
-  pdf.addImage(qrDataUrl, "PNG", position.x + padMm, position.y + padMm, qrSizeMm, qrSizeMm);
+  pdf.addImage(qrDataUrl, "PNG", position.x + padMm, position.y + padMm, qrSizeMm, qrSizeMm, undefined, "FAST");
 
   // Text block
   const textX = position.x + qrSizeMm + 2 * padMm;

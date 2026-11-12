@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   Shield,
@@ -27,6 +28,7 @@ import {
   Copy,
   CheckCheck,
   Share2,
+  BarChart3,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,10 +52,12 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { USER_ROLE_LABELS } from "@/lib/constants";
-import { getInitials, formatDate } from "@/lib/utils";
+import { getInitials, formatDate, preventEnterSubmit } from "@/lib/utils";
 import type { User as UserType } from "@/types";
 import { toast } from "sonner";
 import { UserActivityLogDialog } from "@/components/team/user-activity-log";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   admin: ShieldCheck,
@@ -63,6 +67,7 @@ const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   accounts: Receipt,
   fms: Wrench,
   office_admin: Briefcase,
+  coordinator: Briefcase,
   it_team: Wrench,
 };
 
@@ -74,6 +79,7 @@ const ROLE_COLORS: Record<string, string> = {
   accounts:      "bg-amber-100 text-amber-800",
   fms:           "bg-purple-100 text-purple-800",
   office_admin:  "bg-orange-100 text-orange-800",
+  coordinator:   "bg-teal-100 text-teal-800",
   it_team:       "bg-cyan-100 text-cyan-800",
 };
 
@@ -85,6 +91,7 @@ const ROLE_ICON_COLORS: Record<string, string> = {
   accounts:      "text-amber-600",
   fms:           "text-purple-600",
   office_admin:  "text-orange-600",
+  coordinator:   "text-teal-600",
   it_team:       "text-cyan-600",
 };
 
@@ -96,6 +103,7 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
   accounts:      "Billing statements, invoicing, and payment confirmation",
   fms:           "Procurement dashboard, purchase requests, and facility operations",
   office_admin:  "Vendor management, purchase requests, and reorder configuration",
+  coordinator:   "Sales, operations, procurement requests and facility — no finance, payroll or admin",
   it_team:       "IT support, technical coordination, and system access management",
 };
 
@@ -588,6 +596,7 @@ export default function TeamPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Team" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Team Management</h1>
@@ -869,6 +878,17 @@ export default function TeamPage() {
                                 <Eye className="h-4 w-4" />
                                 Activity Log
                               </button>
+                              <Link
+                                href={`/team/${member.id}/activity`}
+                                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+                                onClick={() => {
+                                  pushTrailEntry({ href: `/team/${member.id}/activity`, label: member.full_name });
+                                  setOpenMenuId(null);
+                                }}
+                              >
+                                <BarChart3 className="h-4 w-4" />
+                                Activity Storyboard
+                              </Link>
                               <div className="my-1 h-px bg-border" />
                               <button
                                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
@@ -950,7 +970,7 @@ export default function TeamPage() {
               <DialogHeader>
                 <DialogTitle>Add Team Member</DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleCreateUser} className="space-y-4">
+              <form onSubmit={handleCreateUser} onKeyDown={preventEnterSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="create-name">
                     Full Name <span className="text-destructive">*</span>
@@ -1042,6 +1062,8 @@ export default function TeamPage() {
                       <SelectItem value="office_admin">Office Administrator</SelectItem>
                       <SelectItem value="it_team">IT Team</SelectItem>
                       <SelectItem value="viewer">Management Viewer</SelectItem>
+                      <SelectItem value="coordinator">Coordinator</SelectItem>
+                      <SelectItem value="enquiry_viewer">Enquiry Log Viewer</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1113,7 +1135,7 @@ export default function TeamPage() {
                   )}
                 </DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleChangePassword} className="space-y-4">
+              <form onSubmit={handleChangePassword} onKeyDown={preventEnterSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="new-password">
                     New Password <span className="text-destructive">*</span>
@@ -1170,7 +1192,7 @@ export default function TeamPage() {
               Edit User
             </DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleEditUser} className="space-y-4">
+          <form onSubmit={handleEditUser} onKeyDown={preventEnterSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="edit-name">
                 Full Name <span className="text-destructive">*</span>
@@ -1227,6 +1249,8 @@ export default function TeamPage() {
                   <SelectItem value="office_admin">Office Administrator</SelectItem>
                   <SelectItem value="it_team">IT Team</SelectItem>
                   <SelectItem value="viewer">Management Viewer</SelectItem>
+                      <SelectItem value="coordinator">Coordinator</SelectItem>
+                      <SelectItem value="enquiry_viewer">Enquiry Log Viewer</SelectItem>
                 </SelectContent>
               </Select>
             </div>

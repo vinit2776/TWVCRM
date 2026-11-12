@@ -1,8 +1,15 @@
+import { invoiceCheckRecordSchema } from "@/lib/procurement/invoice-check";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createVendorBill } from "@/lib/vendor-bills";
+import { resolveVendorBillRef } from "@/lib/electricity-vendor-bill";
+import { findDuplicateLandlordBill, findDuplicateVendorBill } from "@/lib/electricity-bill-context-server";
+import { autoApproveCapturedBill } from "@/lib/electricity-auto-approve";
+import { setupGaps, type SetupGap } from "@/lib/electricity-setup-checks";
+import { loadSetupChecks } from "@/lib/electricity-setup-server";
+import { canSeeElectricityRebilling, stripRebilling } from "@/lib/electricity-visibility";
 
 const lineSchema = z.object({
   line_type: z.enum(["utility", "generator", "other"]),
@@ -25,9 +32,12 @@ const createSchema = z.object({
   location_id: z.string().uuid(),
   bill_month: z.number().int().min(1).max(12),
   bill_year: z.number().int().min(2020),
-  landlord_bill_number: z.string().nullish(),
+  landlord_bill_number: z.string().trim().min(1, "Bill number is required — it is on the landlord's invoice"),
   landlord_bill_date: z.string().nullish(),
   notes: z.string().nullish(),
+  // Required: the landlord's invoice is what the entries are checked against and what the approver compares with.
+  invoice_file_url: z.string().url({ message: "Upload the landlord's invoice" }),
+  invoice_check: invoiceCheckRecordSchema.nullish(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
   // Per-bill override — some landlords charge GST, some don't, and it can
   // change month to month, so this isn't fixed at the location config level.
@@ -41,6 +51,10 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const supabase = createAdminClient();
+
+  const { data: viewer } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+  if (!viewer) return NextResponse.json({ error: "User not found" }, { status: 403 });
+  const canSeeRebilling = canSeeElectricityRebilling(viewer.role);
 
   const { searchParams } = new URL(request.url);
   const locationId = searchParams.get("location_id");
@@ -64,7 +78,12 @@ export async function GET(request: NextRequest) {
 
   if (locationId) query = query.eq("location_id", locationId);
   if (contractId) query = query.eq("contract_id", contractId);
+  // Customer-side bills are the re-billing side; payables-only roles never get them.
+  if (!canSeeRebilling && billSide === "customer") {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
   if (billSide) query = query.eq("bill_side", billSide);
+  else if (!canSeeRebilling) query = query.eq("bill_side", "landlord");
   if (month) query = query.eq("bill_month", parseInt(month));
   if (year) query = query.eq("bill_year", parseInt(year));
   if (status) query = query.eq("status", status);
@@ -77,7 +96,33 @@ export async function GET(request: NextRequest) {
   // (outward receivable) so the UI can show both legs of the same transaction together.
   if (billSide === "landlord" && data && data.length > 0) {
     const landlordIds = data.map((b) => b.id);
-    const vendorBillIds = data.map((b) => b.vendor_bill_id).filter((id): id is string => !!id);
+    // A payable reaches the bill two ways: created with it at capture (vendor_bill_id), or an invoice
+    // someone uploaded under Procurement → Bills and then linked here (source_vendor_bill_id, kept in its
+    // own column on purpose so approving/editing this bill can never touch an uploaded payable). Both are real.
+    const vendorBillIds = data
+      .map((b) => b.vendor_bill_id ?? b.source_vendor_bill_id)
+      .filter((id): id is string => !!id);
+
+    // A revised draft may not carry the link yet (bills revised before the link was carried over):
+    // fall back to the payable that points at the bill it was revised from.
+    const revisedFromIds = data
+      .filter((b) => !b.vendor_bill_id && !b.source_vendor_bill_id && b.revised_from_id)
+      .map((b) => b.revised_from_id as string);
+    const fallbackVendorBillByBill = new Map<string, string>();
+    if (revisedFromIds.length > 0) {
+      const { data: fallback } = await supabase
+        .from("vendor_bills")
+        .select("id, electricity_bill_id")
+        .in("electricity_bill_id", revisedFromIds);
+      const byOld = new Map((fallback ?? []).map((v) => [v.electricity_bill_id as string, v.id as string]));
+      for (const b of data) {
+        const vid = b.revised_from_id ? byOld.get(b.revised_from_id as string) : undefined;
+        if (!b.vendor_bill_id && !b.source_vendor_bill_id && vid) {
+          fallbackVendorBillByBill.set(b.id, vid);
+          vendorBillIds.push(vid);
+        }
+      }
+    }
 
     const [vendorBillsRes, customerBillsRes] = await Promise.all([
       vendorBillIds.length > 0
@@ -86,15 +131,17 @@ export async function GET(request: NextRequest) {
             .select("id, invoice_number, total_amount, amount_paid, payment_status, approval_status, due_date, vendor:procurement_vendors(id, name)")
             .in("id", vendorBillIds)
         : Promise.resolve({ data: [] as Record<string, unknown>[] }),
-      supabase
+      !canSeeRebilling
+        ? Promise.resolve({ data: [] as Record<string, unknown>[] })
+        : supabase
         .from("electricity_bills")
         .select(`
           id, landlord_bill_id, contract_id, status, customer_total, billing_statement_id, created_by,
           customer_units_billed, customer_utility_pct, customer_generator_pct,
           customer_utility_rate, customer_generator_rate,
-          customer_subtotal, customer_cgst, customer_sgst, customer_round_off, gst_rate,
+          customer_subtotal, customer_cgst, customer_sgst, customer_round_off, gst_rate, confirmed_at, updated_at,
           contract:contracts(id, contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)),
-          billing_statement:billing_statements(id, statement_number, status, payment_status, total_amount, handoff_state)
+          billing_statement:billing_statements(id, statement_number, status, payment_status, total_amount, handoff_state, finalized_at, due_date)
         `)
         .in("landlord_bill_id", landlordIds)
         .eq("bill_side", "customer"),
@@ -109,13 +156,37 @@ export async function GET(request: NextRequest) {
       customerBillsByLandlord.set(key, arr);
     }
 
+    // Required setup gaps per location (one lookup each, however many bills share it), so a bill that will
+    // never reach Acc Payables or a customer says why on its row. A failed lookup shows no chips rather than
+    // a false claim either way.
+    const gapsByLocation = new Map<string, SetupGap[]>();
+    const locationIds = [...new Set((data as Record<string, unknown>[]).map((b) => b.location_id as string))];
+    await Promise.all(
+      locationIds.map(async (locId) => {
+        try {
+          gapsByLocation.set(locId, setupGaps(await loadSetupChecks(supabase, locId)));
+        } catch (err) {
+          console.error("[electricity-bills] setup lookup failed:", err instanceof Error ? err.message : "unknown error");
+        }
+      }),
+    );
+
     for (const bill of data as Record<string, unknown>[]) {
-      bill.vendor_bill = bill.vendor_bill_id ? vendorBillMap.get(bill.vendor_bill_id as string) ?? null : null;
+      bill.setup_gaps = gapsByLocation.get(bill.location_id as string) ?? [];
+      const ref = resolveVendorBillRef(
+        bill as { vendor_bill_id?: string | null; source_vendor_bill_id?: string | null },
+        fallbackVendorBillByBill.get(bill.id as string),
+      );
+      bill.vendor_bill = ref.id ? vendorBillMap.get(ref.id) ?? null : null;
+      // Lets the screen say where the payable came from.
+      bill.vendor_bill_origin = bill.vendor_bill ? ref.origin : null;
       bill.customer_bills = customerBillsByLandlord.get(bill.id as string) ?? [];
     }
   }
 
-  return NextResponse.json({ data });
+  return NextResponse.json({
+    data: canSeeRebilling || !data ? data : (data as Record<string, unknown>[]).map((b) => stripRebilling(b)),
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -142,9 +213,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
+  // Differences between the entries and the invoice must have been explained.
+  if (parsed.data.invoice_check && parsed.data.invoice_check.findings.length > 0 && (parsed.data.invoice_check.override_reason ?? "").length < 5) {
+    return NextResponse.json({ error: "What was entered differs from the landlord's invoice. Correct it, or explain the difference." }, { status: 422 });
+  }
+
   const {
     location_id, bill_month, bill_year, landlord_bill_number, landlord_bill_date, notes, lines,
-    landlord_gst_applicable, landlord_gst_rate,
+    landlord_gst_applicable, landlord_gst_rate, invoice_file_url, invoice_check,
   } = parsed.data;
 
   // ── Fetch config ──────────────────────────────────────────────────────────
@@ -157,6 +233,13 @@ export async function POST(request: NextRequest) {
   if (!config) {
     return NextResponse.json({ error: "Electricity config not found for this location. Configure it first under Location → Electricity tab." }, { status: 422 });
   }
+
+  // Landlord vendor bill (below) inherits its company from this location.
+  const { data: locationRow } = await supabase
+    .from("locations")
+    .select("company_id")
+    .eq("id", location_id)
+    .single();
   if (!config.enabled) {
     return NextResponse.json({ error: "Electricity billing is not enabled for this location." }, { status: 422 });
   }
@@ -182,17 +265,40 @@ export async function POST(request: NextRequest) {
   // Real-world trigger: the same physical bill captured twice under different
   // months by mistake, spawning a duplicate vendor bill + customer bill.
   if (landlord_bill_number) {
-    const { count: dupeNumber } = await supabase
-      .from("electricity_bills")
-      .select("*", { count: "exact", head: true })
-      .eq("location_id", location_id)
-      .eq("bill_side", "landlord")
-      .eq("landlord_bill_number", landlord_bill_number)
-      .neq("status", "revised");
-
-    if (dupeNumber && dupeNumber > 0) {
+    let dupe;
+    try {
+      dupe = await findDuplicateLandlordBill(supabase, location_id, landlord_bill_number);
+    } catch (err) {
+      console.error("[electricity-bills] duplicate bill-number check failed:", err instanceof Error ? err.message : "unknown error");
+      return NextResponse.json({ error: "Could not check for an existing bill" }, { status: 500 });
+    }
+    if (dupe) {
       return NextResponse.json(
-        { error: `Bill number "${landlord_bill_number}" is already in use for this location. Check for a duplicate entry.` },
+        { error: `Bill number "${landlord_bill_number}" is already recorded for this location (${dupe.bill_month}/${dupe.bill_year}). Check for a duplicate entry.` },
+        { status: 409 },
+      );
+    }
+  }
+
+  // ── Block a bill that was already recorded as a vendor bill ───────────────
+  // This path creates its own vendor bill, so capturing a bill that Procurement already holds
+  // (uploaded through Procurement → Bills) would put a second payable for the same invoice in the
+  // payment queue. Match on the vendor's number ignoring case, spacing and punctuation.
+  if (config.landlord_vendor_id && landlord_bill_number) {
+    let existingBill;
+    try {
+      existingBill = await findDuplicateVendorBill(supabase, config.landlord_vendor_id, landlord_bill_number);
+    } catch (err) {
+      console.error("[electricity-bills] duplicate vendor-bill check failed:", err instanceof Error ? err.message : "unknown error");
+      return NextResponse.json({ error: "Could not check for an existing vendor bill" }, { status: 500 });
+    }
+    if (existingBill) {
+      return NextResponse.json(
+        {
+          error:
+            `Bill number "${landlord_bill_number}" already exists as vendor bill ${existingBill.bill_number} (${existingBill.approval_status}). ` +
+            `Capturing it here would create a second payable for the same invoice — open that bill instead.`,
+        },
         { status: 409 },
       );
     }
@@ -268,6 +374,7 @@ export async function POST(request: NextRequest) {
       const dueDate = new Date(bill_year, bill_month - 1, dueDay).toISOString().split("T")[0];
 
       const vb = await createVendorBill(supabase, {
+        company_id: locationRow!.company_id,
         vendor_id: config.landlord_vendor_id,
         invoice_number: landlord_bill_number ?? null,
         invoice_date: landlord_bill_date ?? today,
@@ -275,6 +382,8 @@ export async function POST(request: NextRequest) {
         total_amount: landlordTotal,
         gst_amount: landlordGstAmount,
         notes: notes ?? null,
+        invoice_file_url,
+        invoice_check: invoice_check ?? null,
         electricity_bill_id: bill.id,
         created_by: dbUser.id,
       });
@@ -304,5 +413,22 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  return NextResponse.json({ data: { id: bill.id, vendor_bill_id: vendorBillId } }, { status: 201 });
+  const autoApprove = await autoApproveCapturedBill(supabase, {
+    landlordBillId: bill.id,
+    locationId: location_id,
+    performedBy: dbUser.id,
+  });
+
+  return NextResponse.json(
+    {
+      data: {
+        id: bill.id,
+        vendor_bill_id: vendorBillId,
+        auto_approved: autoApprove.approved,
+        customer_bills_generated: autoApprove.customerBillIds.length,
+        auto_approve_skipped_reason: autoApprove.skippedReason ?? null,
+      },
+    },
+    { status: 201 },
+  );
 }

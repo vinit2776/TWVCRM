@@ -127,6 +127,9 @@ export const LEAD_SOURCES = [
   "meta_ads",
   "google_ads",
   "direct_walkin",
+  "whatsapp",
+  "website",
+  "inbound_call",
   "referral",
   "cold_call",
   "aggregator",
@@ -136,6 +139,9 @@ export const LEAD_SOURCE_LABELS: Record<string, string> = {
   meta_ads: "Meta Ads",
   google_ads: "Google Ads",
   direct_walkin: "Direct/Walk-in",
+  whatsapp: "WhatsApp",
+  website: "Website",
+  inbound_call: "Inbound call",
   referral: "Referral",
   cold_call: "Cold Call",
   aggregator: "Aggregator",
@@ -228,6 +234,7 @@ export const PROPOSAL_STATUSES = [
   "accepted",
   "rejected",
   "expired",
+  "superseded",
 ] as const;
 
 export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
@@ -237,6 +244,7 @@ export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
   accepted: "Accepted",
   rejected: "Rejected",
   expired: "Expired",
+  superseded: "Superseded",
 };
 
 export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
@@ -246,7 +254,16 @@ export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
   accepted: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
   expired: "bg-orange-100 text-orange-800",
+  superseded: "bg-slate-100 text-slate-600",
 };
+
+// Content edits (line items, pricing, terms) are only allowed in these
+// statuses — enforced server-side in PATCH /api/proposals/[id]; mirrored
+// here so the Edit action only renders where it will actually be accepted.
+// Once a proposal is sent its terms are locked: changes go through
+// POST /api/proposals/[id]/revise (PROPOSAL_REVISABLE_STATUSES).
+export const PROPOSAL_EDITABLE_STATUSES = ["draft", "rejected"] as const;
+export const PROPOSAL_REVISABLE_STATUSES = ["sent", "viewed"] as const;
 
 export const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "cancelled"] as const;
 
@@ -258,7 +275,51 @@ export const INVOICE_STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"] as const;
+// ==========================================
+// Payment Recording Permission
+// ==========================================
+// Who may record money as received — against a billing statement, a security
+// deposit, a deposit top-up or an ad-hoc invoice.
+//
+// Deliberately narrower than the roles that can *see* receivables. Recording
+// a payment moves the ledger, and everyone else now has "Report paid"
+// instead: they tell accounts what the customer told them, and accounts
+// confirm it against the bank. One team owns the bank statement, so one team
+// records against it.
+//
+// `manager` was removed when reporting shipped. It had recorded exactly one
+// payment in the system's history, a ₹5 test, so nothing real depended on it.
+// Managers keep everything else — finalising and sending invoices, voiding,
+// approving deposit adjustments.
+//
+// NOT the same list as the roles that record *booking* payments at the front
+// desk (see src/components/bookings/record-payment-dialog.tsx) — taking
+// money for a booking is a floor-manager job and is untouched by this.
+// Razorpay rejects expire_by more than six calendar months after creation (the
+// shortest span of six months is 181 days). 180 days leaves a safe margin, so
+// this is the longest validity we can request.
+export const RAZORPAY_MAX_LINK_VALIDITY_SECONDS = 180 * 24 * 60 * 60;
+
+export const PAYMENT_RECORDING_ROLES = ["admin", "accounts"] as const;
+
+export function canRecordPayments(role: string | null | undefined): boolean {
+  return !!role && (PAYMENT_RECORDING_ROLES as readonly string[]).includes(role);
+}
+
+// Roles allowed to mark a booking as a "substitute allocation" — i.e. attribute
+// a booking's hour-based quota consumption to a different contract_facilities
+// row than the one auto-matched by room name (see bookings/route.ts and
+// maybePostPooledUsageCharge in bookings/[id]/route.ts). This directly moves
+// money against a customer's billed quota, so it's kept to the roles who
+// actually run day-to-day bookings and are accountable for them — not every
+// role that can create a booking at all.
+export const BOOKING_FACILITY_OVERRIDE_ROLES = ["admin", "manager", "floor_manager"] as const;
+
+export function canOverrideBookingFacility(role: string | null | undefined): boolean {
+  return !!role && (BOOKING_FACILITY_OVERRIDE_ROLES as readonly string[]).includes(role);
+}
+
+export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "coordinator"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -268,10 +329,12 @@ export const USER_ROLE_LABELS: Record<string, string> = {
   accounts: "Accounts",
   fms: "Facility Manager",
   office_admin: "Office Administrator",
+  coordinator: "Coordinator",
   it_team: "IT Team",
   it_manager: "IT Manager",
   it_technician: "IT Technician",
   viewer: "Management Viewer",
+  enquiry_viewer: "Enquiry Log Viewer",
 };
 
 export const RATINGS = ["none", "hot", "warm", "cold"] as const;
@@ -370,6 +433,8 @@ export const CONTRACT_STATUS_LABELS: Record<string, string> = {
   renewed: "Renewed",
   expired: "Expired",
   terminated: "Terminated",
+  // Display-only: never a stored status. See contractDisplayStatus().
+  withdrawn: "Withdrawn",
 };
 
 export const CONTRACT_STATUS_COLORS: Record<string, string> = {
@@ -383,7 +448,18 @@ export const CONTRACT_STATUS_COLORS: Record<string, string> = {
   renewed: "bg-blue-100 text-blue-800",
   expired: "bg-orange-100 text-orange-800",
   terminated: "bg-red-100 text-red-800",
+  withdrawn: "bg-gray-100 text-gray-700",
 };
+
+/**
+ * The status to *show* for a contract. Withdrawing a contract that never
+ * activated is stored as `terminated` (so every existing terminal-state rule
+ * keeps working), but it was never a live contract — label it "Withdrawn".
+ * Use this for labels/badges only; never to branch business logic.
+ */
+export function contractDisplayStatus(c: { status: string; activated_at?: string | null }): string {
+  return c.status === "terminated" && !c.activated_at ? "withdrawn" : c.status;
+}
 
 // Valid status transitions for the contract state machine.
 // Mirrors the CASE_STATUS_TRANSITIONS pattern. Used by the PATCH
@@ -403,12 +479,36 @@ export const CONTRACT_STATUS_COLORS: Record<string, string> = {
  *   - `draft → active` is intentionally removed — contracts must go
  *     through sent → viewed/accepted first to ensure the customer
  *     has seen and agreed to the terms.
+ *   - `draft → accepted` exists only for a draft that already has a signed
+ *     agreement attached (e.g. uploaded off-band before Send/View/Accept was
+ *     ever walked through) — the PATCH handler further restricts this one to
+ *     admin/manager and requires signed_document_id to already be set. It's
+ *     not a general shortcut around the send/view steps.
  */
+// A contract that never reached activation can be "withdrawn" — stored as
+// `terminated`, but opened up to sales reps too, since abandoned and superseded
+// drafts otherwise sit in the list forever with no way to close them.
+export const CONTRACT_PRE_ACTIVATION_STATUSES: readonly ContractStatus[] = ["draft", "sent", "viewed", "accepted"];
+export const CONTRACT_WITHDRAW_ROLES = ["admin", "manager", "sales_rep"] as const;
+
+export function canWithdrawContract(
+  contract: { status: string; is_renewal?: boolean | null },
+  role: string | null | undefined,
+): boolean {
+  return (
+    (CONTRACT_PRE_ACTIVATION_STATUSES as readonly string[]).includes(contract.status) &&
+    // A renewal draft is closed via Cancel Renewal on its parent, which also
+    // restores the parent from renewal_in_progress back to active.
+    !contract.is_renewal &&
+    !!role && (CONTRACT_WITHDRAW_ROLES as readonly string[]).includes(role)
+  );
+}
+
 export const CONTRACT_STATUS_TRANSITIONS: Record<string, string[]> = {
-  draft:                 ["sent", "terminated"],
-  sent:                  ["viewed", "accepted", "rejected"],
-  viewed:                ["accepted", "rejected"],
-  accepted:              ["active", "rejected"],
+  draft:                 ["sent", "accepted", "terminated"],
+  sent:                  ["viewed", "accepted", "rejected", "terminated"],
+  viewed:                ["accepted", "rejected", "terminated"],
+  accepted:              ["active", "rejected", "terminated"],
   rejected:              [],           // terminal — clone to new draft instead
   active:                ["renewal_in_progress", "expired", "terminated"],
   renewal_in_progress:   ["renewed", "active", "terminated"],
@@ -509,26 +609,34 @@ export const BILLING_STATEMENT_STATUSES = [
   "exported",
 ] as const;
 
+// voided and discarded are terminal states reached through the void/discard
+// routes rather than the normal progression, so they are not offered as
+// choices in BILLING_STATEMENT_STATUSES — but rows in those states still need
+// a badge wherever an unfiltered list surfaces them.
 export const BILLING_STATEMENT_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
   finalized: "Finalized",
   exported: "Exported",
+  voided: "Voided",
+  discarded: "Discarded",
 };
 
 export const BILLING_STATEMENT_STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-800",
   finalized: "bg-blue-100 text-blue-800",
   exported: "bg-green-100 text-green-800",
+  voided: "bg-red-100 text-red-800",
+  discarded: "bg-gray-100 text-gray-500 line-through",
 };
 
 // ==========================================
 // Default Terms & Conditions
 // ==========================================
+// Deposit, term/lock-in and notice period lines are deliberately absent — they
+// are generated from the proposal's own fields (src/lib/proposal-terms.ts) so
+// the printed terms can never disagree with what was selected.
 export const DEFAULT_PROPOSAL_TERMS = `• Taxes as applicable
-• 3 months rent payable as an interest free refundable security deposit
 • Advance monthly rent payable on or before 5th of every month
-• Term 1 year (Lock-in 11 months)
-• Notice period 2 months post lock-in
 • Center timing Monday - Saturday 9AM to 7PM
 • This proposal is valid upto 10 days only from the date of issue.`;
 
@@ -705,6 +813,31 @@ export const BOOKING_PAYMENT_STATUS_COLORS: Record<string, string> = {
   posted_to_bill: "bg-blue-100 text-blue-800",
   prepaid: "bg-purple-100 text-purple-800",
 };
+
+// ==========================================
+// Statement Payment Modes
+// ==========================================
+// How money arrives against a billing statement. Shared by the Record
+// Payment dialog and the "report payment received" form so a mode reported
+// by ops maps straight onto the payment accounts eventually record — when
+// the two lists drift, the verify step silently loses the reporter's answer.
+export const STATEMENT_PAYMENT_MODES = [
+  { value: "neft",          label: "NEFT" },
+  { value: "rtgs",          label: "RTGS" },
+  { value: "imps",          label: "IMPS" },
+  { value: "bank_transfer", label: "Bank transfer" },
+  { value: "upi",           label: "UPI" },
+  { value: "cheque",        label: "Cheque" },
+  { value: "cash",          label: "Cash" },
+  { value: "razorpay",      label: "Razorpay (manually reconciled)" },
+  { value: "other",         label: "Other" },
+] as const;
+
+export type StatementPaymentMode = (typeof STATEMENT_PAYMENT_MODES)[number]["value"];
+
+export const STATEMENT_PAYMENT_MODE_LABELS: Record<string, string> = Object.fromEntries(
+  STATEMENT_PAYMENT_MODES.map((m) => [m.value, m.label]),
+);
 
 export const PAYMENT_MODES = ["upi", "cash", "card", "online"] as const;
 
@@ -964,6 +1097,22 @@ export const ENTITY_TYPE_LABELS: Record<string, string> = {
 };
 
 // ==========================================
+// Case Representative Designation Options
+// ==========================================
+export const CASE_DESIGNATION_OPTIONS = [
+  "Director",
+  "Managing Director",
+  "Partner",
+  "Designated Partner",
+  "Proprietor",
+  "Authorized Signatory",
+  "Trustee",
+  "Karta",
+  "Secretary",
+  "President",
+] as const;
+
+// ==========================================
 // KYC Documents Required per Entity Type
 // ==========================================
 export const KYC_DOCUMENTS: Record<string, string[]> = {
@@ -1049,30 +1198,44 @@ export const KYC_DOCUMENTS: Record<string, string[]> = {
 // ==========================================
 // Case Status Constants
 // ==========================================
+// Event-derived pipeline. Each state is written by the system when the
+// corresponding thing actually happens — see the write-sites listed in
+// supabase/migrations/00521_case_status_paid.sql. "Change Status" remains as
+// an admin override for corrections, not as the normal mechanism.
+//
+// Seven hand-off states were retired here (docs_requested, under_review,
+// compliance_check, sent_for_client_approval, client_approved,
+// signing_in_progress, executed): they described who was holding the file
+// rather than what had happened, and had 3 cases between them across the
+// product's entire history. The enum still carries them — Postgres cannot
+// drop a value — so a code rollback restores the old pipeline unaided.
 export const CASE_STATUSES = [
-  "intake_received", "docs_requested", "docs_received", "under_review",
-  "compliance_check", "internal_approved", "sent_for_client_approval",
-  "client_approved", "signing_in_progress", "executed",
-  "invoiced", "active", "renewal_due", "grace_period", "renewed", "lapsed",
+  "intake_received", "docs_received", "internal_approved",
+  "invoiced", "paid", "active",
+  "renewal_due", "grace_period", "renewed", "lapsed",
 ] as const;
 
+// Retired states keep labels so historical rows and audit entries still read
+// properly wherever they are displayed.
 export const CASE_STATUS_LABELS: Record<string, string> = {
   intake_received: "Intake Received",
-  docs_requested: "Docs Requested",
   docs_received: "Docs Received",
-  under_review: "Under Review",
-  compliance_check: "Compliance Check",
-  internal_approved: "Internally Approved",
-  sent_for_client_approval: "Sent for Client Approval",
-  client_approved: "Client Approved",
-  signing_in_progress: "Signing in Progress",
-  executed: "Executed",
+  internal_approved: "Approved",
   invoiced: "Invoiced",
+  paid: "Paid",
   active: "Active",
   renewal_due: "Renewal Due",
   grace_period: "Grace Period",
   renewed: "Renewed",
   lapsed: "Lapsed",
+  // Retired — retained for historical rows only.
+  docs_requested: "Docs Requested",
+  under_review: "Under Review",
+  compliance_check: "Compliance Check",
+  sent_for_client_approval: "Sent for Client Approval",
+  client_approved: "Client Approved",
+  signing_in_progress: "Signing in Progress",
+  executed: "Executed",
 };
 
 export const CASE_STATUS_COLORS: Record<string, string> = {
@@ -1082,6 +1245,7 @@ export const CASE_STATUS_COLORS: Record<string, string> = {
   under_review: "bg-indigo-100 text-indigo-800",
   compliance_check: "bg-purple-100 text-purple-800",
   internal_approved: "bg-emerald-100 text-emerald-800",
+  paid: "bg-green-100 text-green-800",
   sent_for_client_approval: "bg-cyan-100 text-cyan-800",
   client_approved: "bg-teal-100 text-teal-800",
   signing_in_progress: "bg-orange-100 text-orange-800",
@@ -1095,30 +1259,48 @@ export const CASE_STATUS_COLORS: Record<string, string> = {
 };
 
 // Valid status transitions for the case state machine
+// Allowed manual overrides. The system writes these states from events; this
+// map only constrains what a human may correct a case to via "Change Status".
+// Retired states are keys-only (a case still sitting on one can be moved off
+// it) and are never targets.
 export const CASE_STATUS_TRANSITIONS: Record<string, string[]> = {
-  intake_received: ["docs_requested"],
-  docs_requested: ["docs_received"],
-  docs_received: ["under_review"],
-  under_review: ["compliance_check", "docs_requested"],
-  compliance_check: ["internal_approved", "under_review"],
-  internal_approved: ["sent_for_client_approval"],
-  sent_for_client_approval: ["client_approved", "internal_approved"],
-  client_approved: ["signing_in_progress"],
-  signing_in_progress: ["executed"],
-  executed: ["invoiced"],
-  invoiced: ["active"],
+  intake_received: ["docs_received"],
+  docs_received: ["internal_approved", "intake_received"],
+  internal_approved: ["invoiced", "docs_received"],
+  invoiced: ["paid", "internal_approved"],
+  paid: ["active", "invoiced"],
   active: ["renewal_due", "lapsed"],
   renewal_due: ["grace_period", "renewed", "lapsed"],
   grace_period: ["renewed", "lapsed"],
   renewed: ["active"],
   lapsed: [],
+  // Retired — exits only, so legacy rows are not stranded.
+  docs_requested: ["docs_received", "intake_received"],
+  under_review: ["docs_received", "internal_approved"],
+  compliance_check: ["internal_approved", "docs_received"],
+  sent_for_client_approval: ["internal_approved"],
+  client_approved: ["internal_approved"],
+  signing_in_progress: ["internal_approved"],
+  executed: ["active", "paid"],
 };
+
+// Statuses where the agreement is actually live, so its end_date means
+// something. The 00525 backfill derived end_date for every case from
+// start_date + tenure_months regardless of whether the agreement was ever
+// executed — so a case still at intake carries a date for a term that never
+// began. Expiry is only ever surfaced, filtered or highlighted for these.
+//
+// 'lapsed' is deliberately absent: it is terminal, and a permanently red row
+// for a closed case is noise rather than a warning.
+export const EXPIRY_RELEVANT_STATUSES = [
+  "active", "renewal_due", "grace_period",
+] as const;
 
 // Group statuses for Kanban / pipeline view
 export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: string[] }> = {
   intake: { label: "Intake", statuses: ["intake_received", "docs_requested", "docs_received"] },
   review_approval: { label: "Review & Approval", statuses: ["under_review", "compliance_check", "internal_approved", "sent_for_client_approval", "client_approved"] },
-  execution: { label: "Execution", statuses: ["signing_in_progress", "executed", "invoiced"] },
+  execution: { label: "Execution", statuses: ["signing_in_progress", "executed", "invoiced", "paid"] },
   active: { label: "Active", statuses: ["active"] },
   closed: { label: "Closed", statuses: ["renewal_due", "grace_period", "renewed", "lapsed"] },
 };
@@ -1126,13 +1308,14 @@ export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: strin
 // ==========================================
 // Case Document Status Constants
 // ==========================================
-export const CASE_DOC_STATUSES = ["pending", "uploaded", "approved", "rejected"] as const;
+export const CASE_DOC_STATUSES = ["pending", "uploaded", "approved", "rejected", "waived"] as const;
 
 export const CASE_DOC_STATUS_LABELS: Record<string, string> = {
   pending: "Pending Upload",
   uploaded: "Uploaded",
   approved: "Approved",
   rejected: "Rejected",
+  waived: "Waived",
 };
 
 export const CASE_DOC_STATUS_COLORS: Record<string, string> = {
@@ -1140,6 +1323,7 @@ export const CASE_DOC_STATUS_COLORS: Record<string, string> = {
   uploaded: "bg-blue-100 text-blue-800",
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
+  waived: "bg-slate-200 text-slate-700",
 };
 
 // ==========================================
@@ -1195,6 +1379,42 @@ export const AGREEMENT_TYPE_LABELS: Record<string, string> = {
   proposal: "Proposal",
   leave_license: "Leave & License Agreement",
 };
+
+// ==========================================
+// Case Lifecycle Substate Helpers (Proposal / Agreement / Invoice)
+// ==========================================
+// Shared by CaseStatusPipeline (case detail captions) and CaseLifecycleIcons
+// (cases list row icons) so both surfaces derive the same tone/label from
+// the same underlying proposal/agreement/billing-statement status instead
+// of duplicating the mapping in two places.
+export type LifecycleSubstateTone = "muted" | "amber" | "green" | "red";
+
+export interface LifecycleSubstate {
+  tone: LifecycleSubstateTone;
+  label: string;
+}
+
+export const LIFECYCLE_SUBSTATE_TEXT_COLORS: Record<LifecycleSubstateTone, string> = {
+  muted: "text-gray-400",
+  amber: "text-amber-600",
+  green: "text-green-600",
+  red: "text-red-600",
+};
+
+export function agreementLifecycleSubstate(status?: string | null): LifecycleSubstate {
+  if (!status) return { tone: "muted", label: "Not started" };
+  const tone: LifecycleSubstateTone =
+    status === "executed" ? "green" : status === "expired" ? "red" : "amber";
+  return { tone, label: AGREEMENT_STATUS_LABELS[status] || status };
+}
+
+export function invoiceLifecycleSubstate(
+  billingStatement?: { payment_status?: string | null } | null
+): LifecycleSubstate {
+  if (!billingStatement) return { tone: "muted", label: "Not generated" };
+  if (billingStatement.payment_status === "paid") return { tone: "green", label: "Paid" };
+  return { tone: "red", label: "Awaiting payment" };
+}
 
 // ==========================================
 // Purpose-based Document Checklists
@@ -1641,11 +1861,44 @@ export const TICKET_STATUS_COLORS: Record<string, string> = {
 // ==========================================
 
 export const PROCUREMENT_APPROVAL_THRESHOLDS = {
-  ADMIN_REQUIRED_ABOVE: 25000, // INR — PRs above this amount require admin approval
+  ADMIN_REQUIRED_ABOVE: 20000, // INR — PRs above this amount require admin approval
 };
+
+// Price tolerance: how far the final vendor invoice may drift from the PO value
+// without needing a special approval. Requested on the purchase request,
+// accepted or changed by the approver, inherited by the PO. Goods POs only.
+export const PRICE_TOLERANCE_OPTIONS = [0, 5, 10] as const;
+export const PRICE_TOLERANCE_MAX_PERCENT = 10;
+export const PRICE_TOLERANCE_REASONS = [
+  "Quantity not final",
+  "Market rate varies",
+  "Freight or installation extra",
+  "Scope may change on site",
+] as const;
 
 export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset", "amc", "reimbursement"] as const;
 export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
+
+/**
+ * Departments a catalog item can be tagged with. Excludes "reimbursement" (a
+ * billing treatment, not an item category — see items API) and "amc" (annual
+ * service contracts, not one-off purchasable goods). Matches the department
+ * enum accepted by POST/PATCH /api/procurement/items.
+ */
+export const ITEM_CATALOG_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+
+/**
+ * Departments that are purchased centrally (from NUN 5th floor) and then
+ * distributed to individual centers for consumption. These can have an
+ * optional per-center monthly budget in addition to the company-wide cap, and
+ * a material request must say which center it's for. AMC (annual contracts)
+ * and reimbursement (billed back to a customer's contract) are not
+ * center-specific spend and stay global-only. Currently the same set as
+ * ITEM_CATALOG_DEPARTMENTS, but kept as its own export since budget scoping
+ * and catalog tagging are separate concerns that could diverge later.
+ */
+export const CENTER_SCOPED_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+export type CenterScopedDepartment = (typeof CENTER_SCOPED_DEPARTMENTS)[number];
 
 /**
  * Departments whose items are physical, movable stock — the only ones that can
@@ -1717,8 +1970,96 @@ export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
   general: "General",
 };
 
-export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"] as const;
+/**
+ * Units of measure for procurement items (catalog, material requests, POs).
+ * Every value here must also exist in the Postgres `item_unit` enum — add new
+ * ones via a migration (`ALTER TYPE item_unit ADD VALUE IF NOT EXISTS ...`)
+ * before adding them here, or inserts fail with "invalid input value for enum".
+ * Order matters: it drives the grouped dropdown via ITEM_UNIT_GROUPS below.
+ */
+export const ITEM_UNITS = [
+  // Count & discrete
+  "piece", "nos", "pair", "dozen", "set", "sheet", "ream", "roll", "bundle",
+  // Packaging
+  "packet", "sachet", "box", "carton", "bag", "bottle", "can", "tin", "tube", "drum", "cylinder",
+  // Weight
+  "gram", "kg", "ton",
+  // Volume
+  "ml", "litre",
+  // Length
+  "inch", "feet", "metre", "rft", "rmt", "km",
+  // Area
+  "sqft", "sqm",
+  // Cubic
+  "cft", "cbm",
+  // Time & service
+  "hr", "day", "month", "quarter", "half_year", "year", "manday", "visit",
+  // Other
+  "lumpsum", "kwh",
+] as const;
 export type ItemUnit = (typeof ITEM_UNITS)[number];
+
+/** Display labels for units — the raw enum values are terse/lowercase. */
+export const ITEM_UNIT_LABELS: Record<ItemUnit, string> = {
+  piece: "Piece",
+  nos: "Nos",
+  pair: "Pair",
+  dozen: "Dozen",
+  set: "Set",
+  sheet: "Sheet",
+  ream: "Ream",
+  roll: "Roll",
+  bundle: "Bundle",
+  packet: "Packet",
+  sachet: "Sachet",
+  box: "Box",
+  carton: "Carton",
+  bag: "Bag",
+  bottle: "Bottle",
+  can: "Can",
+  tin: "Tin",
+  tube: "Tube",
+  drum: "Drum",
+  cylinder: "Cylinder",
+  gram: "Gram (g)",
+  kg: "Kilogram (kg)",
+  ton: "Tonne",
+  ml: "Millilitre (ml)",
+  litre: "Litre (L)",
+  inch: "Inch",
+  feet: "Feet",
+  metre: "Metre (m)",
+  rft: "Running Feet (Rft)",
+  rmt: "Running Metre (Rmt)",
+  km: "Kilometre (km)",
+  sqft: "Square Feet (Sqft)",
+  sqm: "Square Metre (Sqm)",
+  cft: "Cubic Feet (Cft)",
+  cbm: "Cubic Metre (Cbm)",
+  hr: "Hour",
+  day: "Day",
+  month: "Month",
+  quarter: "Quarter",
+  half_year: "Half-Year",
+  year: "Year",
+  manday: "Man-day",
+  visit: "Visit",
+  lumpsum: "Lumpsum",
+  kwh: "Unit (kWh)",
+};
+
+/** Grouped for the unit dropdown — 40+ flat options are unusable to scan. */
+export const ITEM_UNIT_GROUPS: { label: string; units: readonly ItemUnit[] }[] = [
+  { label: "Count", units: ["piece", "nos", "pair", "dozen", "set", "sheet", "ream", "roll", "bundle"] },
+  { label: "Packaging", units: ["packet", "sachet", "box", "carton", "bag", "bottle", "can", "tin", "tube", "drum", "cylinder"] },
+  { label: "Weight", units: ["gram", "kg", "ton"] },
+  { label: "Volume", units: ["ml", "litre"] },
+  { label: "Length", units: ["inch", "feet", "metre", "rft", "rmt", "km"] },
+  { label: "Area", units: ["sqft", "sqm"] },
+  { label: "Cubic", units: ["cft", "cbm"] },
+  { label: "Time & Service", units: ["hr", "day", "month", "quarter", "half_year", "year", "manday", "visit"] },
+  { label: "Other", units: ["lumpsum", "kwh"] },
+];
 
 /** Vending machine drink types tracked on the Consumption > Beverages tab. A pure usage tally — not linked to ingredient stock. */
 export const BEVERAGE_TYPES = [
@@ -1752,6 +2093,15 @@ export const PR_STATUSES = [
   "partially_ordered", "po_created", "cancelled",
 ] as const;
 export type PrStatus = (typeof PR_STATUSES)[number];
+
+/**
+ * Statuses in which a Material Request can still be edited in full (department,
+ * location, items, quantities, prices, AMC details). Once approved, the MR is a
+ * committed spend that budgets and POs are already derived from, so it becomes
+ * read-only — the remaining correction paths are the admin-only department fix
+ * (PATCH `correct_department`) and, for cancelled MRs, raising a fresh request.
+ */
+export const MR_EDITABLE_STATUSES: readonly PrStatus[] = ["draft", "submitted", "rejected"];
 
 export const PR_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
@@ -1787,7 +2137,7 @@ export const PO_STATUS_LABELS: Record<string, string> = {
   invoice_received: "Invoice Received",
   invoice_approved: "Invoice Approved",
   cancelled: "Cancelled",
-  partially_cancelled: "Partially Cancelled",
+  partially_cancelled: "Closed Short",
 };
 
 export const PO_STATUS_COLORS: Record<string, string> = {
@@ -1826,20 +2176,57 @@ export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
 };
 
 // Bill Approval
-export const BILL_APPROVAL_STATUSES = ["pending", "approved", "rejected"] as const;
+export const BILL_APPROVAL_STATUSES = ["pending", "approved", "rejected", "withdrawn"] as const;
 export type BillApprovalStatus = (typeof BILL_APPROVAL_STATUSES)[number];
+
+/**
+ * Bills in these statuses are out of play: they never count toward a PO's
+ * invoiced total, a billing-cycle cap, a duplicate-invoice check or any payable.
+ * Use with `.not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)`.
+ * (rejected = admin said no; withdrawn = admin pulled it back, see 00599.)
+ */
+export const DEAD_BILL_STATUSES = ["rejected", "withdrawn"] as const;
+export const DEAD_BILL_STATUSES_FILTER = `(${DEAD_BILL_STATUSES.join(",")})`;
+export const isDeadBillStatus = (s: string | null | undefined): boolean =>
+  !!s && (DEAD_BILL_STATUSES as readonly string[]).includes(s);
 
 export const BILL_APPROVAL_STATUS_LABELS: Record<string, string> = {
   pending: "Pending Payment Approval",
   approved: "Approved for Payment",
   rejected: "Rejected",
+  withdrawn: "Withdrawn",
 };
 
 export const BILL_APPROVAL_STATUS_COLORS: Record<string, string> = {
   pending: "bg-yellow-100 text-yellow-800",
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
+  withdrawn: "bg-gray-100 text-gray-600",
 };
+
+// Recurring Bill Rules — auto-approval of pre-vetted vendor invoices
+export const RECURRING_BILL_RULE_STATUSES = ["active", "paused"] as const;
+
+export const RECURRING_BILL_RULE_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  paused: "Paused",
+};
+
+export const RECURRING_BILL_RULE_STATUS_COLORS: Record<string, string> = {
+  active: "bg-emerald-100 text-emerald-800",
+  paused: "bg-gray-100 text-gray-600",
+};
+
+// Distinct from BILL_APPROVAL_STATUS_COLORS.approved — an auto-approved bill
+// should always be visually distinguishable from a human approval.
+export const AUTO_APPROVED_BADGE_CLASS = "bg-violet-100 text-violet-800";
+
+export const RECURRING_BILL_RULE_DEFAULT_TOLERANCE_PERCENT = 10;
+export const RECURRING_BILL_RULE_DEFAULT_MAX_AUTO_APPROVE_AMOUNT = 5000;
+
+// amc is excluded — it already has its own visit-based recurring flow via Service POs.
+// reimbursement is excluded — it's billed back to a customer, not a standing vendor expense.
+export const RECURRING_BILL_RULE_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
 
 export const REJECTION_OUTCOME_LABELS: Record<string, string> = {
   return: "Return Goods & Cancel PO",
@@ -1870,8 +2257,8 @@ export const ITEM_TYPE_LABELS: Record<string, string> = {
   service: "Service",
 };
 
-// Service PO billing cycles (subset of contract BILLING_CYCLES — excludes half_yearly)
-export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "yearly"] as const;
+// Service PO billing cycles. Mirrors the contract-side BILLING_CYCLES.
+export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "half_yearly", "yearly"] as const;
 export type ServicePoBillingCycle = (typeof SERVICE_PO_BILLING_CYCLES)[number];
 
 // PO Advance Payment
@@ -2065,6 +2452,26 @@ export const RENT_MANAGEMENT_ROLES = ["admin"] as const;
 // Finance › Rent Payable tab (view + process approved payments): admin + accounts + viewer
 export const RENT_PAYABLE_ROLES = ["admin", "accounts", "viewer"] as const;
 
+/**
+ * Why a missed rent month won't be billed through the CRM
+ * (contract_rent_waivers.waiver_kind, migration 00615). A new waiver must be
+ * one of the first two; rows made before the column existed read "unknown".
+ */
+export const RENT_WAIVER_KINDS = ["giveaway", "billed_elsewhere"] as const;
+export type RentWaiverKind = (typeof RENT_WAIVER_KINDS)[number];
+export type StoredRentWaiverKind = RentWaiverKind | "unknown";
+
+export const RENT_WAIVER_KIND_LABELS: Record<StoredRentWaiverKind, string> = {
+  giveaway: "Given to the customer",
+  billed_elsewhere: "Billed outside the CRM",
+  unknown: "Not classified",
+};
+
+export const RENT_WAIVER_KIND_HELP: Record<RentWaiverKind, string> = {
+  giveaway: "The customer was deliberately not charged for this month. Counts as a concession.",
+  billed_elsewhere: "The rent was collected outside the CRM, for example before rent billing moved in. No rent is given away.",
+};
+
 export const LEASE_STATUSES = ["active", "expired", "terminated", "on_hold"] as const;
 
 export const LEASE_STATUS_LABELS: Record<string, string> = {
@@ -2247,6 +2654,38 @@ export const ACCOUNTING_HEAD_COLORS: Record<AccountingHead, string> = {
   other_income: "bg-gray-100 text-gray-800 border-gray-200",
 };
 
+// What an ad-hoc invoice attributed to a contract is understood to cover.
+// Mirrors the proforma_invoices_attribution_purpose_check constraint (00426).
+export const ADHOC_ATTRIBUTION_PURPOSES = [
+  "prorata_first_invoice",
+  "monthly_rent",
+  "security_deposit",
+  "other",
+] as const;
+
+export type AdhocAttributionPurpose = (typeof ADHOC_ATTRIBUTION_PURPOSES)[number];
+
+export const ADHOC_ATTRIBUTION_PURPOSE_LABELS: Record<AdhocAttributionPurpose, string> = {
+  prorata_first_invoice: "Pro-rata / first invoice",
+  monthly_rent: "Monthly rent",
+  security_deposit: "Security deposit",
+  other: "Other contract charge",
+};
+
+export const ADHOC_ATTRIBUTION_PURPOSE_DESCRIPTIONS: Record<AdhocAttributionPurpose, string> = {
+  prorata_first_invoice:
+    "The partial first month or first invoice for this contract. Once paid, this satisfies the activation payment gate.",
+  monthly_rent: "A regular monthly charge billed ad hoc instead of through a billing statement.",
+  security_deposit:
+    "A security deposit collected through a paid ad-hoc invoice, before deposits were redirected to the proposal deposit link. Adds the amount to the customer's security deposit pool. Must be paid and GST-free.",
+  other: "Belongs to this contract, but is neither the first invoice nor monthly rent.",
+};
+
+// The only purpose that may unblock contract activation. Keeping this as a
+// named constant rather than an inline string makes the blast radius of the
+// activation gate greppable.
+export const ACTIVATION_UNBLOCKING_PURPOSE: AdhocAttributionPurpose = "prorata_first_invoice";
+
 export const ACCOUNTING_HEAD_GST: Record<
   AccountingHead,
   { taxable: boolean; defaultRate: number }
@@ -2396,3 +2835,47 @@ export const ELECTRICITY_MARKUP_TYPE_LABELS: Record<string, string> = {
 // floor managers can submit charges but cannot remove them.
 export const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts", "floor_manager", "sales_rep"];
 
+// Holding or waiving a specific charge — same admin/manager gate the
+// PATCH /api/usage-charges/[id] waive branch already uses (narrower than
+// CHARGE_ALLOWED_ROLES, which also covers everyday charge entry).
+export const CHARGE_HOLD_ALLOWED_ROLES = ["admin", "manager"];
+
+// A pending charge (any of the 3 usage sources) older than this many days
+// drops out of generateUsageStatements' automatic sweep — it needs an
+// explicit "Bill anyway" (sets reviewed_at), Waive, or Hold before it can
+// reach an invoice. Protects against something genuinely stale silently
+// reaching a customer months after the fact. Shared with the frontend so
+// the Unbilled list's "needs review" flag matches what generation actually
+// enforces.
+export const USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS = 60;
+
+
+/**
+ * Reasons offered on the one-tap "Not interested" action in the Leads list. Each maps onto the
+ * lead's existing lost reason (reports keep one vocabulary), except Junk, which is a status of its
+ * own and hides the lead from the pipeline.
+ */
+export const NOT_INTERESTED_REASONS = ["junk", "price", "location", "space", "other"] as const;
+export type NotInterestedReason = (typeof NOT_INTERESTED_REASONS)[number];
+
+export const NOT_INTERESTED_REASON_LABELS: Record<NotInterestedReason, string> = {
+  junk: "Junk",
+  price: "Price",
+  location: "Location",
+  space: "Space",
+  other: "Other",
+};
+
+/** The lost reason each Not interested reason is stored as. Junk has none: it sets status `junk`. */
+export const NOT_INTERESTED_TO_LOST_REASON: Record<Exclude<NotInterestedReason, "junk">, string> = {
+  price: "budget",
+  location: "location",
+  space: "requirements_not_met",
+  other: "other",
+};
+
+/** Why a call got no answer, as picked on the one-tap "No answer" action. */
+export const NO_ANSWER_REASONS = ["Switched off", "No response", "Not reachable (no incoming)"] as const;
+
+/** Roles that can handle (own) a lead: follow-ups, reminders and tour alerts go to this person. */
+export const LEAD_HANDLER_ROLES = ["admin", "manager", "sales_rep"] as const;

@@ -31,6 +31,8 @@ import {
 import { toast } from "sonner";
 import type { PropertyLease, LeasePayment, LeaseEscalation, LeaseAsset, LeaseDocument, LeaseServiceOffering } from "@/types";
 import { AssetManager } from "@/components/rent-management/AssetManager";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface LeaseHandover {
   id: string;
@@ -274,6 +276,10 @@ export default function LeaseDetailPage() {
 
   return (
     <div className="p-6 space-y-6">
+      <PageBreadcrumb
+        current={{ label: lease.location?.name ?? "Lease" }}
+        fallbackParent={{ href: "/rent-management/leases", label: "Leases" }}
+      />
       {/* Header */}
       <div className="flex items-start justify-between">
         <div className="flex items-start gap-3">
@@ -294,7 +300,10 @@ export default function LeaseDetailPage() {
         </div>
         {isAdmin && (
           <Button variant="outline" size="sm" asChild>
-            <Link href={`/rent-management/leases/${id}/edit`}>
+            <Link
+              href={`/rent-management/leases/${id}/edit`}
+              onClick={() => pushTrailEntry({ href: `/rent-management/leases/${id}/edit`, label: "Edit" })}
+            >
               <Edit className="h-4 w-4 mr-2" />Edit
             </Link>
           </Button>

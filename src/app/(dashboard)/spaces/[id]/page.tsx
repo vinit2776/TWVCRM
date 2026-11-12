@@ -19,6 +19,7 @@ import { formatCurrency } from "@/lib/utils";
 import { BOOKING_STATUS_COLORS, BOOKING_STATUS_LABELS, BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
 import type { Space, Booking } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const DAY_LABELS: Record<string, string> = {
   monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday", thursday: "Thursday",
@@ -151,6 +152,10 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: space.name }}
+        fallbackParent={{ href: "/spaces", label: "Spaces" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">

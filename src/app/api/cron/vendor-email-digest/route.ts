@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
   // Feature gate
   const settings = await loadVendorEmailNagSettings(supabase);
   if (!settings.enabled || !settings.digest_enabled) {
-    await pingCronHealth("vendor-email-digest", "ok", { reason: "feature disabled" });
+    await pingCronHealth("cron/vendor-email-digest", "ok", { reason: "feature disabled" });
     return NextResponse.json({ skipped: true, reason: "feature disabled" });
   }
 
@@ -66,13 +66,13 @@ export async function GET(request: NextRequest) {
     recipients = [];
   }
   if (recipients.length === 0) {
-    await pingCronHealth("vendor-email-digest", "error", { reason: "no recipients" });
+    await pingCronHealth("cron/vendor-email-digest", "error", { reason: "no recipients" });
     return NextResponse.json({ error: "No digest_recipients configured" }, { status: 400 });
   }
 
   const gaps = await listVendorsMissingEmail(supabase);
   if (gaps.length === 0) {
-    await pingCronHealth("vendor-email-digest", "ok", { reason: "no gaps" });
+    await pingCronHealth("cron/vendor-email-digest", "ok", { reason: "no gaps" });
     return NextResponse.json({ skipped: true, reason: "no vendor email gaps" });
   }
 
@@ -156,7 +156,7 @@ export async function GET(request: NextRequest) {
       subject: `Vendor Email Audit — ${gaps.length} gap${gaps.length === 1 ? "" : "s"}${highPriority > 0 ? ` (${highPriority} urgent)` : ""}`,
       html,
     });
-    await pingCronHealth("vendor-email-digest", "ok", {
+    await pingCronHealth("cron/vendor-email-digest", "ok", {
       count: gaps.length,
       high_priority: highPriority,
       recipients: recipients.length,
@@ -164,7 +164,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: true, sent_to: recipients.length, vendors_listed: gaps.length });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await pingCronHealth("vendor-email-digest", "error", { error: msg });
+    await pingCronHealth("cron/vendor-email-digest", "error", { error: msg });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

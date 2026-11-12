@@ -18,8 +18,18 @@ SET device_code = 'TWV-D-' || LPAD(o.rn::text, 3, '0')
 FROM ordered o
 WHERE d.id = o.id;
 
--- Advance the sequence past the backfilled values so next insert continues correctly
-SELECT setval('cosec_device_code_seq', (SELECT COUNT(*) FROM cosec_devices WHERE device_code IS NOT NULL));
+-- Advance the sequence past the backfilled values so next insert continues correctly.
+-- setval() errors on 0 (sequence minvalue is 1), which a freshly created sequence
+-- already satisfies for an empty table, so only advance it when there's a nonzero count.
+DO $$
+DECLARE
+  v_count INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO v_count FROM cosec_devices WHERE device_code IS NOT NULL;
+  IF v_count > 0 THEN
+    PERFORM setval('cosec_device_code_seq', v_count);
+  END IF;
+END $$;
 
 -- Trigger function: auto-assign device_code on INSERT if not provided
 CREATE OR REPLACE FUNCTION assign_cosec_device_code()

@@ -43,11 +43,12 @@ Both routes are `"use client"` pages. There are no server-component wrappers.
 | GET | `/api/proposals` | List all proposals (paginated, filterable) |
 | POST | `/api/proposals` | Create proposal (Zod validated) |
 | GET | `/api/proposals/[id]` | Fetch single proposal with lead + location join |
-| PATCH | `/api/proposals/[id]` | Update allowed fields (status, timestamps, razorpay links, occupation date) |
+| PATCH | `/api/proposals/[id]` | Update allowed fields (status, timestamps, razorpay links, occupation date). Content (terms, items, pricing) is editable only in `draft`/`rejected`; a sent proposal returns 400 and must be revised |
+| POST | `/api/proposals/[id]/revise` | Revise a `sent`/`viewed` proposal: creates `PROP-xxxx-R2` as a draft from the full new content, marks the original `superseded`, voids its unpaid pro-rata invoice and cancels its payment links. 409 if money is collected/credited. admin/manager/sales_rep |
 | POST | `/api/proposals/[id]/accept` | Accept proposal: mark accepted, create deposit link, send booking confirmation email + WhatsApp |
 | POST | `/api/proposals/[id]/send-invoice` | Generate prorated GST invoice, send email + WhatsApp (supports `preview: true` mode) |
 | POST | `/api/proposals/[id]/deposit-link` | Create/reuse deposit Razorpay link, send email + WhatsApp (supports `preview: true`) |
-| POST | `/api/proposals/[id]/deposit-payment` | Record manual bank transfer deposit payment (admin/manager/accounts only) |
+| POST | `/api/proposals/[id]/deposit-payment` | Record manual bank transfer deposit payment (admin/accounts only) |
 | POST | `/api/proposals/[id]/payment-link` | Auto-create Razorpay link for monthly charge (idempotent — reuses existing link) |
 | POST | `/api/proposals/[id]/monthly-link` | Create monthly charge Razorpay link and email it (manual trigger) |
 | POST | `/api/proposals/[id]/email` | Send proposal PDF to customer via email + optional WhatsApp document |
@@ -181,7 +182,7 @@ UNIQUE constraint: `(proposal_id, service_id)`
 ## Status Machine
 
 ### `proposal_status` enum values
-`draft` → `sent` → `viewed` → `accepted` | `rejected` | `expired`
+`draft` → `sent` → `viewed` → `accepted` | `rejected` | `expired` | `superseded`
 
 ```
 draft
@@ -200,6 +201,8 @@ viewed       ← set by /track route when customer clicks email link (idempotent
   └──► rejected  ← manual only (requires rejection_reason)
 ```
 
+**`superseded`** (`00608`) is set only by `/revise`. Once a proposal is sent its terms are locked (no in-place edit). A revision is a new proposal numbered `PROP-0231-R2` (`revision_of`, `revision_number`), the original becomes `superseded` (`superseded_by`), its deposit/monthly links are cancelled (link ids are kept on the dead record so a late payment is still recorded, without reviving it), and its unpaid pro-rata invoice is voided. The public `/track` link of a superseded proposal shows a "proposal updated" notice. Once any money is collected or credited the proposal is fully locked and cannot be revised; an accepted proposal is never amended, a new proposal is created instead.
+
 **`expired`** exists in the enum but is not set by any code path in the current codebase. It may be set externally or reserved for future use.
 
 ### `deposit_payment_status` values (TEXT, not enum)
@@ -211,7 +214,7 @@ viewed       ← set by /track route when customer clicks email link (idempotent
 ### Status transitions enforced server-side
 
 - `/accept` route: only `sent` or `viewed` → `accepted` (HTTP 400 otherwise)
-- `/email` route: sets status to `sent` (from any status, no guard)
+- `/email` route: sets status to `sent` (from any status except `superseded`, which returns 409)
 - `/track` route: only `sent` → `viewed` (idempotent)
 - `/send-invoice` route: requires status in `['sent', 'viewed', 'accepted']`
 - `/deposit-link` route: requires status in `['sent', 'viewed', 'accepted']`
@@ -230,7 +233,7 @@ viewed       ← set by /track route when customer clicks email link (idempotent
 
 4. **Deposit link reuse on `/deposit-link`:** The `/deposit-link` route reuses the existing `deposit_razorpay_link_url` if one already exists (to avoid duplicate links). Only creates a new one if `deposit_razorpay_link_url` is null.
 
-5. **Manual deposit payment roles:** Only `admin`, `manager`, `accounts` roles can call `/deposit-payment`. HTTP 403 for others.
+5. **Manual deposit payment roles:** Only `admin` and `accounts` can call `/deposit-payment`. HTTP 403 for others, pointing them at **Report paid**.
 
 6. **Deposit shortfall tolerance:** If manual deposit amount is less than expected:
    - More than 10% short: hard block (HTTP 400).
@@ -319,7 +322,7 @@ If `security_deposit_amount` is not supplied, it defaults to `security_deposit_m
 | Download / Send proposal PDF | All authenticated (blocked for zero-deposit without OTP) |
 | Send deposit email | All authenticated |
 | Send GST invoice | All authenticated |
-| Record manual deposit payment | `admin`, `manager`, `accounts` only (HTTP 403 for others) |
+| Record manual deposit payment | `admin`, `accounts` only (HTTP 403 for others) |
 | Approve deposit shortfall | `admin`, `manager` only |
 | Request/verify deposit waiver OTP | Any authenticated user can request; OTP goes to all `admin` users |
 | Mark deposit as accounted | All authenticated (via `/api/accounting/proposal-payments`) |
@@ -501,6 +504,8 @@ The `/deposit-payment` route uses `createClient()` for storage upload, which mea
 
 ### Shortfall approval checkbox is role-checked both client and server
 Only `admin` and `manager` roles see the shortfall approval checkbox in the UI (`currentUser.role` check). The server independently checks `SHORTFALL_APPROVER_ROLES = ["admin", "manager"]`. The `accounts` role can record deposits but cannot approve shortfalls even if they find a way to send the field.
+
+**Since recording narrowed to `admin`/`accounts`, a short deposit can in practice only be recorded by an `admin`** — they are the only role that both records and approves. `accounts` can record a full-value deposit but not a short one; `manager` can still approve a shortfall but can no longer record. That is deliberate separation, not an oversight; if it bites, the fix is to widen `SHORTFALL_APPROVER_ROLES`, not to re-widen recording.
 
 ### `/track` is a public endpoint with no auth
 `GET /api/proposals/[id]/track` uses `createAdminClient()` and requires no session. It marks the proposal as `viewed`. Anyone with a proposal ID can trigger this. This is by design (email tracking), but means any proposal can be marked viewed without authentication.

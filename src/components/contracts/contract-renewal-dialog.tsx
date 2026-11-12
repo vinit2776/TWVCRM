@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { PROPOSAL_MAX_TENURE_MONTHS } from "@/lib/proposal-terms";
+import { programmedEscalation } from "@/lib/auto-renewal";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { RENEWAL_NOTE_MAX_LENGTH } from "@/lib/renewal-note";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -41,6 +44,7 @@ import {
 import { BILLING_CYCLE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
+import { escalateUnitPrice } from "@/lib/line-item-escalation";
 import type { Contract } from "@/types";
 
 // ─── Field Help Tooltip ─────────────────────────────────────────────────────
@@ -79,7 +83,10 @@ export function ContractRenewalDialog({
   const [tenureMonths, setTenureMonths] = useState(contract.tenure_months);
   const [seats, setSeats] = useState(contract.seats || 1);
   const [billingCycle, setBillingCycle] = useState<string>(contract.billing_cycle || "monthly");
-  const [escalationPct, setEscalationPct] = useState(contract.escalation_percentage || 0);
+  // Starts from the agreement's escalation, not from a rate that was negotiated
+  // for the previous term only.
+  const [escalationPct, setEscalationPct] = useState(() => programmedEscalation(contract));
+  const [agreedNote, setAgreedNote] = useState("");
   const [startDate, setStartDate] = useState(() => {
     const end = new Date(contract.end_date);
     end.setDate(end.getDate() + 1);
@@ -93,13 +100,13 @@ export function ContractRenewalDialog({
   const multiplier = 1 + escalationPct / 100;
 
   // Preview: compute escalated subtotal per-item then sum (matches API logic)
-  type Item = { unit_price: number; quantity: number };
+  type Item = { unit_price: number; quantity: number; escalates?: boolean };
   const previewSubtotal = useMemo(() => {
     const items = (contract.items || []) as Item[];
     const oldSeats = contract.seats || 1;
     return items.reduce((sum, item) => {
       const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
-      const newPrice = roundToRupee(item.unit_price * multiplier);
+      const newPrice = escalateUnitPrice(item, multiplier, roundToRupee);
       return sum + newPrice * newQuantity;
     }, 0);
   }, [contract.items, multiplier, seats, contract.seats]);
@@ -121,7 +128,7 @@ export function ContractRenewalDialog({
   }, [startDate, tenureMonths]);
 
   // Check if escalation needs admin approval (reduction or waiver by non-admin)
-  const parentEscPct = contract.escalation_percentage || 0;
+  const parentEscPct = programmedEscalation(contract);
   const needsEscalationApproval = userRole !== "admin" && (escalationPct < parentEscPct || escalationPct === 0);
 
   // Gap calculation
@@ -144,6 +151,7 @@ export function ContractRenewalDialog({
           seats,
           billing_cycle: billingCycle,
           escalation_percentage: escalationPct,
+          agreed_note: agreedNote,
         }),
       });
 
@@ -221,7 +229,7 @@ export function ContractRenewalDialog({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate Negotiation</p>
             <div className="grid grid-cols-3 gap-3 items-end">
               <div className="space-y-1">
-                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line item. Set to 0 for no change. The escalated rate is rounded to the nearest ₹1." /></Label>
+                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line marked Escalates. Lines marked fixed (such as maintenance) stay as they are. Set to 0 for no change. The escalated rate is rounded to the nearest ₹1." /></Label>
                 <Input
                   type="number"
                   min={0}
@@ -231,6 +239,9 @@ export function ContractRenewalDialog({
                   onChange={(e) => setEscalationPct(parseFloat(e.target.value) || 0)}
                   className="h-9"
                 />
+                <p className="text-[10px] text-muted-foreground">
+                  Agreement: {parentEscPct}%. A different rate applies to this term only.
+                </p>
               </div>
               <div className="text-center pb-2">
                 <ArrowRight className="h-4 w-4 text-muted-foreground mx-auto" />
@@ -257,6 +268,34 @@ export function ContractRenewalDialog({
                 <p className="font-mono font-semibold">{formatCurrency(previewTotal)}</p>
               </div>
             </div>
+            {(contract.items || []).some((i) => i.escalates === false) && (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground border-b">
+                    <th className="py-1 text-left font-normal">Item</th>
+                    <th className="py-1 text-right font-normal">Current</th>
+                    <th className="py-1 text-right font-normal">Renewal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(contract.items || []).map((item, idx) => {
+                    const q = item.quantity === (contract.seats || 1) ? seats : item.quantity;
+                    return (
+                      <tr key={idx} className="border-b last:border-b-0">
+                        <td className="py-1">
+                          {item.description}
+                          {item.escalates === false && <span className="ml-1 text-amber-700">(fixed)</span>}
+                        </td>
+                        <td className="py-1 text-right font-mono">{formatCurrency(item.unit_price * item.quantity)}</td>
+                        <td className="py-1 text-right font-mono">
+                          {formatCurrency(escalateUnitPrice(item, multiplier, roundToRupee) * q)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
             <p className="text-[10px] text-muted-foreground text-center">
               Rates rounded to nearest ₹1 for cleaner invoicing
             </p>
@@ -267,14 +306,14 @@ export function ContractRenewalDialog({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Renewal Terms</p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs" htmlFor="renewal-tenure">Tenure (months)<FieldHelp tip="Duration of the renewal contract (1–18 months). For longer custom tenures, set the end date directly on the contract after renewal." /></Label>
+                <Label className="text-xs" htmlFor="renewal-tenure">Tenure (months)<FieldHelp tip="Duration of the renewal contract (1–60 months)." /></Label>
                 <Select
                   value={String(tenureMonths)}
                   onValueChange={(v) => setTenureMonths(parseInt(v) || contract.tenure_months)}
                 >
                   <SelectTrigger id="renewal-tenure" className="h-9"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 18 }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: PROPOSAL_MAX_TENURE_MONTHS }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>
@@ -321,6 +360,24 @@ export function ContractRenewalDialog({
                 Period: {formatDate(startDate)} → {formatDate(previewEndDate)} ({tenureMonths} months)
               </p>
             )}
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor="renewal-agreed-note">
+                What was agreed (optional)
+                <FieldHelp tip="Internal note on the negotiation, for example why the increase was reduced or what the customer gave in return. Shown to admins on the lead's Value tab. Never appears on the agreement or invoices." />
+              </Label>
+              <Textarea
+                id="renewal-agreed-note"
+                value={agreedNote}
+                onChange={(e) => setAgreedNote(e.target.value)}
+                maxLength={RENEWAL_NOTE_MAX_LENGTH}
+                rows={2}
+                placeholder="Held the rate in return for two more seats and a 12-month term"
+                className="text-sm"
+              />
+              <p className="text-right text-[10px] text-muted-foreground">
+                {agreedNote.length} / {RENEWAL_NOTE_MAX_LENGTH}
+              </p>
+            </div>
           </div>
 
           {/* Gap Warning */}
@@ -505,6 +562,114 @@ export function DeclineRenewalDialog({
               </>
             ) : (
               "Decline Renewal"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Cancel Renewal Dialog (for a renewal already in progress) ─────────────
+
+interface CancelRenewalDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  contract: Contract;
+  renewalDraft: { id: string; contract_number: string } | null;
+  onSuccess: () => void;
+}
+
+export function CancelRenewalDialog({
+  open,
+  onOpenChange,
+  contract,
+  renewalDraft,
+  onSuccess,
+}: CancelRenewalDialogProps) {
+  const [cancelling, setCancelling] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const handleCancel = async () => {
+    if (!reason.trim()) {
+      toast.error("Please provide a reason for cancelling");
+      return;
+    }
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/contracts/${contract.id}/cancel-renewal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success(json?.message || "Renewal cancelled");
+        setReason("");
+        onOpenChange(false);
+        onSuccess();
+      } else {
+        toast.error(json?.error || "Failed to cancel renewal");
+      }
+    } catch {
+      toast.error("Network error — please try again");
+    }
+    setCancelling(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-destructive">
+            <XCircle className="h-4 w-4" />
+            Cancel Renewal
+          </DialogTitle>
+          <DialogDescription>
+            {renewalDraft
+              ? <>This deletes the renewal draft <strong>{renewalDraft.contract_number}</strong> and any escalation
+                  approval pending on it. {contract.contract_number} will not continue past its current term.</>
+              : <>This cancels the renewal in progress on {contract.contract_number}.</>}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-2">
+          <Label htmlFor="cancel-renewal-reason">
+            Reason <span className="text-destructive">*</span>
+          </Label>
+          <Textarea
+            id="cancel-renewal-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g., Customer confirmed they are not renewing..."
+            rows={3}
+          />
+        </div>
+
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <p>
+            <strong>Note:</strong> Only a still-draft renewal can be cancelled this way. If it has
+            already been sent to the customer, reject it from the renewal draft itself instead.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Back
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={handleCancel}
+            disabled={cancelling || !reason.trim()}
+          >
+            {cancelling ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Cancelling...
+              </>
+            ) : (
+              "Cancel Renewal"
             )}
           </Button>
         </DialogFooter>

@@ -20,9 +20,17 @@
  * getSigningStatus() in case the API returns them, but nothing sets them.
  *
  * Webhook HMAC: LEEGALITY_PRIVATE_SALT — used to verify inbound webhook signatures
+ *
+ * Feature toggle: app_settings.leegality_enabled gates every *initiation*
+ * entry point (contract e-signing, L&L case e-signing) — see
+ * isLeegalitySigningEnabled() below. It does not affect status checks,
+ * webhook processing, or downloading already-signed documents, so a
+ * signing request already in progress when the flag flips off can still be
+ * tracked to completion (or cancelled — see cancelSigningRequest()).
  */
 
 import crypto from "crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 // ================================================================
 // Types
@@ -100,6 +108,29 @@ function getAuthHeaders() {
     "X-Auth-Token": API_KEY!,
     "Content-Type": "application/json",
   };
+}
+
+// ================================================================
+// Feature toggle
+// ================================================================
+
+/**
+ * Whether new Leegality signing requests may be initiated right now.
+ * Checked by every *initiate* action (contract e-signing, L&L case
+ * e-signing) — never by status checks, webhook handling, or downloads, so
+ * flipping this off never orphans a request already in progress.
+ * Unset key = enabled, so existing behavior is unchanged until an admin
+ * explicitly turns it off from Settings → E-Signing.
+ */
+export async function isLeegalitySigningEnabled(
+  admin: SupabaseClient
+): Promise<boolean> {
+  const { data } = await admin
+    .from("app_settings")
+    .select("value")
+    .eq("key", "leegality_enabled")
+    .maybeSingle();
+  return data?.value !== "false";
 }
 
 // ================================================================
@@ -430,6 +461,41 @@ export async function downloadStampedDocument(
     pdfBase64: Buffer.from(arrayBuffer).toString("base64"),
     fileName: `stamped-signed-${documentId}.pdf`,
   };
+}
+
+// ================================================================
+// Cancel a signing request
+// ================================================================
+
+/**
+ * Cancel a Leegality signing request outright — DELETE /v3.0/sign/request.
+ * Per Leegality's API docs this removes the document entirely, invalidating
+ * any outstanding signing links (including ones already emailed to a
+ * signer). Use when a request needs to be withdrawn rather than left to
+ * expire on its own (30 days by default).
+ *
+ * A document Leegality no longer recognises (already completed, expired,
+ * or previously cancelled) is treated as already-cancelled rather than an
+ * error — the caller's goal ("this request is not live") is already true.
+ */
+export async function cancelSigningRequest(documentId: string): Promise<void> {
+  if (!API_KEY) {
+    console.warn("[Leegality] No API key configured — treating cancel as a no-op.");
+    return;
+  }
+
+  const response = await fetch(
+    `${BASE_URL}/sign/request?documentId=${encodeURIComponent(documentId)}`,
+    {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    }
+  );
+
+  if (response.ok || response.status === 404) return;
+
+  const errText = await response.text();
+  throw new Error(`Leegality cancel failed [${response.status}]: ${errText}`);
 }
 
 // ================================================================

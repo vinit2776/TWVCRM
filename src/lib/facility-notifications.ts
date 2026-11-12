@@ -17,6 +17,7 @@ export type FacilityNotifyEvent =
   | {
       type: "status_changed"; from: string; to: string; actorName: string;
       reporterEmail?: string | null; satisfactionToken?: string | null;
+      reportedByUserId?: string | null;
     }
   | { type: "priority_escalated"; from: string; to: string; actorName: string }
   | { type: "assigned"; assigneeName: string | null; actorName: string }
@@ -63,8 +64,10 @@ function emailHtml(params: {
 /**
  * Notify the assigned technician, backup CC, and collaborators about an issue event.
  * Falls back to managers + office_admin if the issue has no assignee.
+ * Returns the user IDs that were actually notified, so callers can avoid
+ * double-pinging someone (e.g. an @mention on a user who's already the assignee).
  */
-export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotifyEvent): Promise<void> {
+export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotifyEvent): Promise<string[]> {
   try {
     const supabase = createAdminClient();
     const url = issueUrl(issue.id);
@@ -104,6 +107,16 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
       }
     }
 
+    // The ticket's own creator (an internal user, distinct from the external
+    // reporter_email path below) gets pinged too, but only on the actual
+    // completion event — not every status_changed — same reasoning as the
+    // reporter_email branch in the switch below: resolved is the one
+    // terminal state worth interrupting the creator for.
+    if (event.type === "status_changed" && event.to === "resolved" && event.reportedByUserId
+        && !recipientIds.includes(event.reportedByUserId)) {
+      recipientIds.push(event.reportedByUserId);
+    }
+
     let pushUserIds: string[];
     let emailTo: string[];
     let waPhones: string[];
@@ -128,7 +141,7 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
       waPhones = (userRows ?? []).map((u) => u.phone as string).filter(Boolean);
     }
 
-    if (pushUserIds.length === 0) return;
+    if (pushUserIds.length === 0) return [];
 
     // "reopened" arrives as a status_changed event — treat it as its own
     // broadcast tier without needing a separate event type end-to-end.
@@ -276,8 +289,47 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
     if (reporterEmailResult.status === "rejected") console.error("[facility-notify] reporter email failed:", reporterEmailResult.reason);
     waResults.forEach((r) => { if (r.status === "rejected") console.error("[facility-notify] whatsapp failed:", r.reason); });
     console.log(`[facility-notify] ${event.type} — push/in-app to ${pushUserIds.length} users, email to ${emailTo.join(", ")}${isFullBroadcast ? `, whatsapp to ${waPhones.length}` : ""}`);
+    return pushUserIds;
   } catch (err) {
     console.error("[facility-notify] unexpected error:", err);
+    return [];
+  }
+}
+
+/**
+ * Notify specific users that they were @mentioned in a comment — push + in-app
+ * only, same tier as a plain comment (see FULL_BROADCAST_EVENTS above). Anyone
+ * who'd already be notified via notifyIssueAssignee for this same comment
+ * should be excluded by the caller so they don't get pinged twice.
+ */
+export async function notifyMentionedUsers(
+  issue: IssueRef,
+  params: { actorName: string; message: string; userIds: string[] }
+): Promise<void> {
+  if (params.userIds.length === 0) return;
+  try {
+    const url = issueUrl(issue.id);
+    const pushTitle = `${issue.issue_number} — You were mentioned`;
+    const pushBody = `${params.actorName}: ${params.message.slice(0, 100)}`;
+    const issuePath = `/facility/issues/${issue.id}`;
+
+    const [pushResult, inAppResult] = await Promise.allSettled([
+      sendPushToUsers(params.userIds, { title: pushTitle, body: pushBody, url, tag: `facility-${issue.id}` }),
+      createNotificationsForUsers(params.userIds, {
+        type: "facility_mentioned",
+        title: pushTitle,
+        body: pushBody,
+        url: issuePath,
+        entityType: "facility_issue",
+        entityId: issue.id,
+      }),
+    ]);
+
+    if (pushResult.status === "rejected") console.error("[facility-notify] mention push failed:", pushResult.reason);
+    if (inAppResult.status === "rejected") console.error("[facility-notify] mention in-app failed:", inAppResult.reason);
+    console.log(`[facility-notify] mentioned — push/in-app to ${params.userIds.length} users`);
+  } catch (err) {
+    console.error("[facility-notify] mention notify failed:", err);
   }
 }
 

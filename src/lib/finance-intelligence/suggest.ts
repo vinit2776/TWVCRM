@@ -36,6 +36,7 @@ export async function getRecentBillsForVendor(
     .order("invoice_date", { ascending: false })
     .limit(opts.limit ?? 10);
   if (!opts.includeUnapproved) q = q.eq("approval_status", "approved");
+  q = q.neq("approval_status", "withdrawn");
   const { data } = await q;
   return (data ?? []) as VendorBillHistorySlim[];
 }

@@ -5,14 +5,14 @@
  * DOCX template ("New VO Agreement Format-1.DOCX").
  * Uses jsPDF with shared branding from pdf-utils.ts.
  */
+import { stripSpecialConditionsHeading } from "@/lib/special-clause/membership";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS } from "@/lib/constants";
+import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS, KYC_DOCUMENTS } from "@/lib/constants";
 import {
   BRAND_TEAL,
   BRAND_DARK,
   COMPANY_NAME,
-  LL_PROPERTY_ADDRESS,
   LESSOR_DIRECTOR,
   formatCurrency,
   formatDate,
@@ -20,6 +20,8 @@ import {
   addFooter,
   createPdfContext,
 } from "@/lib/pdf-utils";
+import { drawCompanyStampInBox } from "@/lib/company-stamp";
+import { cleanAddressText } from "@/lib/agreement-address-gate";
 import type { VoPurpose, EntityType } from "@/types";
 
 // ================================================================
@@ -48,6 +50,12 @@ export interface LeaveLicenseVariables {
   rate: number;
   rate_formatted: string;
   tenure_months: number;
+  /** Agreed renewal escalation. 0 means the term renews at the same rate, and
+   *  the clause below drops the escalation sentence rather than promising a
+   *  increase nobody agreed to. */
+  renewal_escalation_percentage?: number;
+  /** Approved customer-specific clause (special_clauses); printed as clause 11 when present. */
+  special_clause_text?: string | null;
   start_date: string;
   start_date_formatted: string;
   end_date: string;
@@ -58,6 +66,8 @@ export interface LeaveLicenseVariables {
   lessor_signatory_name: string;
   lessee_signatory_name: string;
   lessee_signatory_designation?: string;
+  lessee_signatory_id_label?: string;
+  lessee_signatory_id_number?: string;
   nature_of_business: string;
   witness_1_name?: string;
   witness_1_aadhaar_last4?: string;
@@ -96,6 +106,8 @@ export function mergeLeaveLicenseVariables(params: {
   natureOfBusiness?: string;
   lesseeSignatoryName?: string;
   lesseeSignatoryDesignation?: string;
+  lesseeSignatoryIdType?: 'pan' | 'aadhaar';
+  lesseeSignatoryIdNumber?: string;
   witness1Name?: string;
   witness1AadhaarLast4?: string;
   witness1Mobile?: string;
@@ -103,10 +115,12 @@ export function mergeLeaveLicenseVariables(params: {
   witness2AadhaarLast4?: string;
   witness2Mobile?: string;
   estampValue?: number;
+  renewalEscalationPercentage?: number;
 }): LeaveLicenseVariables {
   const startDate = new Date(params.startDate);
   const endDate = new Date(startDate);
   endDate.setMonth(endDate.getMonth() + params.tenureMonths);
+  endDate.setDate(endDate.getDate() - 1);
   const serviceRetainer = 1000; // Fixed INR 1000 + GST as per template
 
   return {
@@ -116,7 +130,7 @@ export function mergeLeaveLicenseVariables(params: {
     client_company_name: params.clientCompanyName,
     client_entity_type: params.clientEntityType,
     entity_type_label: ENTITY_TYPE_LABELS[params.clientEntityType] || params.clientEntityType,
-    client_address: params.clientAddress || "To be provided",
+    client_address: cleanAddressText(params.clientAddress) || "To be provided",
     client_gst_number: params.clientGstNumber,
     client_pan_number: params.clientPanNumber,
     client_cin_number: params.clientCinNumber,
@@ -124,12 +138,13 @@ export function mergeLeaveLicenseVariables(params: {
     client_phone: params.clientPhone,
     location_name: params.locationName,
     location_address: params.locationAddress,
-    property_address: LL_PROPERTY_ADDRESS,
+    property_address: params.locationAddress,
     purpose: params.purpose,
     purpose_label: VO_PURPOSE_LABELS[params.purpose] || params.purpose,
     rate: params.rate,
     rate_formatted: formatCurrency(params.rate),
     tenure_months: params.tenureMonths,
+    renewal_escalation_percentage: params.renewalEscalationPercentage ?? 0,
     start_date: params.startDate,
     start_date_formatted: formatDate(params.startDate),
     end_date: endDate.toISOString(),
@@ -139,6 +154,8 @@ export function mergeLeaveLicenseVariables(params: {
     lessor_signatory_name: LESSOR_DIRECTOR,
     lessee_signatory_name: params.lesseeSignatoryName || params.clientName,
     lessee_signatory_designation: params.lesseeSignatoryDesignation || "Authorized Signatory",
+    lessee_signatory_id_label: params.lesseeSignatoryIdType === "aadhaar" ? "Aadhaar" : "PAN",
+    lessee_signatory_id_number: params.lesseeSignatoryIdNumber,
     nature_of_business: params.natureOfBusiness || "To be provided",
     witness_1_name: params.witness1Name,
     witness_1_aadhaar_last4: params.witness1AadhaarLast4,
@@ -192,38 +209,8 @@ function getTermsOfUsagePurpose(purpose: VoPurpose): string {
 }
 
 function getRequiredDocuments(entityType: EntityType): string[][] {
-  const docs: Record<string, string[][]> = {
-    individual: [
-      ["1", "Aadhar Card"],
-      ["2", "PAN Card"],
-      ["3", "Cancelled cheque"],
-      ["4", "GST Certificate"],
-    ],
-    company: [
-      ["1", "PAN Card for Company"],
-      ["2", "Certificate of Incorporation"],
-      ["3", "Board Resolution in favour of the authorized Signatory executing the membership agreement"],
-      ["4", "MOA & AOA"],
-      ["5", "KYC (Pan Card & Aadhar card) of all the Directors"],
-      ["6", "Cancelled cheque"],
-      ["7", "GST Certificate"],
-    ],
-    partnership: [
-      ["1", "Partnership Agreement / registration certificate if Partnership is registered"],
-      ["2", "Authority letter in favour of the person executing the membership agreement"],
-      ["3", "KYC (Pan Card & Aadhar card) of all the partners"],
-      ["4", "Cancelled cheque"],
-      ["5", "GST Certificate"],
-    ],
-    llp: [
-      ["1", "LLP Agreement / registration certificate if LLP is registered"],
-      ["2", "LLP PAN Card"],
-      ["3", "KYC (Pan Card & Aadhar card) of all the partners"],
-      ["4", "Cancelled cheque"],
-      ["5", "GST Certificate"],
-    ],
-  };
-  return docs[entityType] || docs.individual;
+  const docs = KYC_DOCUMENTS[entityType] || KYC_DOCUMENTS.other;
+  return docs.map((label, i) => [String(i + 1), label]);
 }
 
 // ================================================================
@@ -241,7 +228,8 @@ const LL_LESSOR_REG_OFFICE =
  * Content matches the authoritative DOCX template exactly.
  */
 export function generateLeaveLicensePdf(
-  variables: LeaveLicenseVariables
+  variables: LeaveLicenseVariables,
+  options?: { applyCompanyStamp?: boolean; stampRef?: string }
 ): jsPDF {
   const doc = new jsPDF();
   const startY = addBrandHeader(doc);
@@ -348,12 +336,15 @@ export function generateLeaveLicensePdf(
     const panText = variables.client_pan_number
       ? `, with PAN Number ${variables.client_pan_number}`
       : "";
-    lesseeDesc = `${variables.client_company_name}, through its ${variables.lessee_signatory_designation || "Director"} ${variables.lessee_signatory_name}, having registered office at ${variables.client_address}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
+    const signatoryIdText = variables.lessee_signatory_id_number
+      ? ` (${variables.lessee_signatory_id_label}: ${variables.lessee_signatory_id_number})`
+      : "";
+    lesseeDesc = `${variables.client_company_name}, through its ${variables.lessee_signatory_designation || "Director"} ${variables.lessee_signatory_name}${signatoryIdText}, having registered office at ${cleanAddressText(variables.client_address)}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
   } else {
     const panText = variables.client_pan_number
       ? `, with PAN Number ${variables.client_pan_number}`
       : "";
-    lesseeDesc = `${variables.client_name}, residing at ${variables.client_address}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
+    lesseeDesc = `${variables.client_name}, residing at ${cleanAddressText(variables.client_address)}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
   }
   addBodyText(lesseeDesc);
   ctx.y += 6;
@@ -437,8 +428,16 @@ export function generateLeaveLicensePdf(
     BRAND_DARK,
     5
   );
+  // The escalation sentence states the figure actually agreed for this case.
+  // It was previously hardcoded to "a minimum 5%" on every agreement while the
+  // renewal billing applied none, so every renewal invoice contradicted the
+  // executed contract.
+  const escalation = variables.renewal_escalation_percentage ?? 0;
   addBodyText(
-    "Following the expiration of the Term mentioned hereinabove, this Agreement may be renewed for a further period as mutually agreed by the parties, on terms and conditions as mutually agreed by the parties. Each renewal term shall be subject to a minimum 5% escalation in License Fees."
+    "Following the expiration of the Term mentioned hereinabove, this Agreement may be renewed for a further period as mutually agreed by the parties, on terms and conditions as mutually agreed by the parties."
+    + (escalation > 0
+      ? ` Each renewal term shall be subject to an escalation of ${escalation % 1 === 0 ? escalation : escalation.toFixed(2)}% in License Fees.`
+      : "")
   );
   ctx.y += 6;
 
@@ -613,6 +612,14 @@ export function generateLeaveLicensePdf(
   );
   ctx.y += 6;
 
+  // ── 11. SPECIAL CONDITIONS (customer-specific, approved) ──
+  if (variables.special_clause_text) {
+    ctx.checkPageBreak(30);
+    addClauseHeading("11. SPECIAL CONDITIONS");
+    addBodyText(stripSpecialConditionsHeading(variables.special_clause_text));
+    ctx.y += 6;
+  }
+
   // ── REQUIRED DOCUMENTS ──
   ctx.checkPageBreak(40);
   addClauseHeading("REQUIRED DOCUMENTS");
@@ -713,7 +720,10 @@ export function generateLeaveLicensePdf(
   );
   ctx.y += 10;
 
-  ctx.checkPageBreak(45);
+  // The signature row is tall (room to sign/stamp above the line, see
+  // didParseCell below), so reserve for it — otherwise the block starts low
+  // enough to split, stranding the Lessor cell on the previous page.
+  ctx.checkPageBreak(62);
 
   autoTable(doc, {
     startY: ctx.y,
@@ -731,6 +741,9 @@ export function generateLeaveLicensePdf(
         "Designation/Title: Director",
         `Designation/Title: ${variables.lessee_signatory_designation || "Director"}`,
       ],
+      ...(variables.lessee_signatory_id_number
+        ? [["", `${variables.lessee_signatory_id_label}: ${variables.lessee_signatory_id_number}`]]
+        : []),
       [
         `Date: ${variables.agreement_date}`,
         `Date: ${variables.agreement_date}`,
@@ -740,6 +753,29 @@ export function generateLeaveLicensePdf(
     headStyles: { fillColor: BRAND_TEAL, fontSize: 9, fontStyle: "bold" },
     bodyStyles: { fontSize: 8.5, cellPadding: 4, minCellHeight: 12 },
     margin: { left: ctx.marginLeft, right: ctx.marginRight },
+    didParseCell: (data) => {
+      if (data.section === "body" && data.row.index === 0) {
+        // Signature line sits at the bottom of the cell (signing space above
+        // it, stamp included) for both parties.
+        data.cell.styles.valign = "bottom";
+        data.cell.styles.minCellHeight = 26;
+      }
+    },
+    didDrawCell: (data) => {
+      // Draw the stamp here, not after autoTable() returns. autoTable is on
+      // the correct page while it renders this cell; once it has finished,
+      // the document's current page is wherever the table ENDED. When the
+      // signature table splits across a page break the two differ, and the
+      // seal landed on the following page at coordinates that mean nothing
+      // there — the reported "wrong page, wrong area".
+      if (options?.applyCompanyStamp && data.section === "body" && data.row.index === 0 && data.column.index === 0) {
+        drawCompanyStampInBox(
+          doc,
+          { x: data.cell.x, y: data.cell.y, width: data.cell.width, height: data.cell.height },
+          options?.stampRef,
+        );
+      }
+    },
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

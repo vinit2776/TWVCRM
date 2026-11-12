@@ -14,14 +14,23 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle } from "lucide-react";
+import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle, CalendarPlus } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { unbilledMonths, backfillableRentMonths, type BillingMonth } from "@/lib/billing-months";
 import { toast } from "sonner";
 import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
+import { WaiveRentMonthDialog } from "@/components/billing/waive-rent-month-dialog";
+import { RENT_WAIVER_KIND_LABELS, type StoredRentWaiverKind } from "@/lib/constants";
 
 interface Statement {
   id: string;
   statement_number: string;
+  contract_id: string | null;
+  billed_on_behalf_of_contract_id: string | null;
+  statement_type: string;
+  prepaid_month: number | null;
+  prepaid_year: number | null;
+  voided_at: string | null;
   period_start: string;
   period_end: string;
   total_amount: number;
@@ -60,6 +69,13 @@ const PAYMENT_STATUS_COLORS: Record<string, string> = {
   paid: "bg-green-50 text-green-700 border-green-200",
 };
 
+// The proforma-pdf route 400s on draft/voided statements — their numbers
+// aren't locked yet, so there's nothing to render. Keep this in sync with
+// the status checks in src/app/api/billing-statements/[id]/proforma-pdf/route.ts.
+function canPreviewPdf(status: string) {
+  return status !== "draft" && status !== "voided";
+}
+
 function periodLabel(start: string, end: string) {
   const s = new Date(start + "T00:00:00Z");
   const e = new Date(end + "T00:00:00Z");
@@ -76,9 +92,70 @@ interface ContractInvoicesSectionProps {
   contractId: string;
   billingMode?: 'proforma_first' | 'gst_direct' | null;
   contractStatus?: string;
+  /** Proposal linked to this contract — the pro-rata invoice that was
+   *  collected before activation lives on the proposal, not the contract,
+   *  so it needs its own lookup rather than showing up in `statements`. */
+  proposalId?: string;
+  proposalNumber?: string;
+  prorataPaymentStatus?: string;
+  prorataPaymentReceivedAt?: string;
+  billingCycle?: string | null;
+  nextBillingDate?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  createdAt?: string | null;
+  activatedAt?: string | null;
+  terminatedAt?: string | null;
 }
 
-export function ContractInvoicesSection({ contractId, billingMode, contractStatus }: ContractInvoicesSectionProps) {
+/** A live admin waiver — a missed rent month deliberately not billed through the CRM. */
+interface RentWaiver {
+  id: string;
+  waived_month: string;
+  reason: string;
+  waiver_kind: StoredRentWaiverKind;
+  waived_at: string;
+  waived_by_user: { full_name: string | null } | null;
+}
+
+/** One rent line the upcoming-cycle preview would bill. */
+interface CyclePreviewLine {
+  description: string;
+  amount: number;
+  qty?: number;
+  unit_price?: number;
+  note?: string;
+}
+
+interface CyclePreview {
+  period_label: string;
+  subtotal: number;
+  tax_amount: number;
+  total_amount: number;
+  line_items?: CyclePreviewLine[];
+  note?: string;
+}
+
+const BILLING_ROLES = ["admin", "manager", "accounts"];
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+export function ContractInvoicesSection({
+  contractId,
+  billingMode,
+  contractStatus,
+  proposalId,
+  proposalNumber,
+  prorataPaymentStatus,
+  prorataPaymentReceivedAt,
+  billingCycle,
+  nextBillingDate,
+  startDate,
+  endDate,
+  createdAt,
+  activatedAt,
+  terminatedAt,
+}: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingMode, setSavingMode] = useState(false);
@@ -89,20 +166,40 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
     "Contract billing mode switched to GST Direct — clearing pending proforma."
   );
   const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [prorataStatement, setProrataStatement] = useState<Statement | null>(null);
+  const [cycleDialogOpen, setCycleDialogOpen] = useState(false);
+  const [cyclePreviewing, setCyclePreviewing] = useState(false);
+  const [cyclePreview, setCyclePreview] = useState<CyclePreview | null>(null);
+  const [cycleBlockedReason, setCycleBlockedReason] = useState<string | null>(null);
+  const [cycleSending, setCycleSending] = useState(false);
+  const [waivers, setWaivers] = useState<RentWaiver[]>([]);
+  const [waiveTarget, setWaiveTarget] = useState<{ contractId: string; month: string; monthLabel: string } | null>(null);
+  const [undoingWaiverId, setUndoingWaiverId] = useState<string | null>(null);
 
   useEffect(() => {
     setCurrentMode(billingMode || 'proforma_first');
   }, [billingMode]);
 
+  // Chain-wide: the unbilled-month check needs the parent's statements too (a
+  // renewal's opening months are billed there while it awaits activation). The
+  // table below still lists only this contract's own statements.
   const refreshStatements = () => {
-    return fetch(`/api/billing-statements?contract_id=${contractId}&limit=100`)
+    return fetch(`/api/billing-statements?contract_id=${contractId}&include_chain=1&limit=200`)
       .then((r) => r.json())
       .then((d) => setStatements((d.data || []) as Statement[]))
       .catch(() => setStatements([]));
   };
 
+  const refreshWaivers = () => {
+    return fetch(`/api/contracts/${contractId}/rent-waivers`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setWaivers(Array.isArray(d) ? (d as RentWaiver[]) : []))
+      .catch(() => setWaivers([]));
+  };
+
   useEffect(() => {
     refreshStatements().finally(() => setLoading(false));
+    refreshWaivers();
     fetch("/api/me")
       .then((r) => r.json())
       .then((d) => setUserRole(d.role ?? null))
@@ -110,19 +207,52 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractId]);
 
+  // The pro-rata invoice (generated via the proposal's "Preview & Send GST
+  // Invoice" step) is a billing_statements row keyed by proposal_id, not
+  // contract_id — the contract didn't exist yet when it was sent.
+  useEffect(() => {
+    if (!proposalId) {
+      setProrataStatement(null);
+      return;
+    }
+    fetch(`/api/billing-statements?proposal_id=${proposalId}&limit=1`)
+      .then((r) => r.json())
+      .then((d) => setProrataStatement(((d.data || []) as Statement[])[0] || null))
+      .catch(() => setProrataStatement(null));
+  }, [proposalId]);
+
+  // Only this contract's own statements belong in the invoice table — an
+  // ancestor's rows are fetched for the coverage check, not for display.
+  const ownStatements = useMemo(
+    () => statements.filter((s) => !s.contract_id || s.contract_id === contractId),
+    [statements, contractId],
+  );
+
+  // Voided statements stay for the audit trail but are tucked away by default —
+  // an inline voided Oct row beside the live one reads like double billing.
+  const [showVoided, setShowVoided] = useState(false);
+  const voidedStatements = useMemo(
+    () => ownStatements.filter((s) => s.status === "voided" || !!s.voided_at),
+    [ownStatements],
+  );
+  const visibleStatements = useMemo(
+    () => (showVoided ? ownStatements : ownStatements.filter((s) => !voidedStatements.includes(s))),
+    [showVoided, ownStatements, voidedStatements],
+  );
+
   // Proformas still open under the old Proforma First flow — switching to
   // GST Direct only affects future cycles, so these are left behind unless
   // resolved via the GST override (convert-to-gst-early).
   const pendingUnpaidStatements = useMemo(
     () =>
-      statements.filter(
+      ownStatements.filter(
         (s) =>
           s.status === "finalized" &&
           s.payment_status !== "paid" &&
           !s.gst_invoice_number &&
           !s.pi_cancelled_at
       ),
-    [statements]
+    [ownStatements]
   );
 
   const applyModeChange = async (newMode: 'proforma_first' | 'gst_direct') => {
@@ -178,8 +308,217 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
     }
   };
 
+  // Months already past their billing run with no rent statement against them.
+  // Surfaced rather than auto-billed: rent is sometimes invoiced outside the
+  // CRM, so this is a prompt to check, not proof of lost revenue.
+  // Computed without waivers first, so a waived month that's still unbilled
+  // can be listed (and billed anyway) below; missedMonths then drops them.
+  const unbilledIncludingWaived = useMemo(() => {
+    // Until the statements arrive every past month looks unbilled — wait.
+    if (loading || !startDate || !endDate || !createdAt) return [];
+    return unbilledMonths({
+      startDate, endDate, createdAt,
+      today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      statements,
+      contractId,
+      contractStatus,
+      activatedAt,
+      terminatedAt,
+    });
+  }, [loading, startDate, endDate, createdAt, statements, contractId, contractStatus, activatedAt, terminatedAt]);
+
+  const waiverByMonthKey = useMemo(
+    () => new Map(waivers.map((w) => [w.waived_month.slice(0, 7), w])),
+    [waivers],
+  );
+  const monthKeyOf = (m: BillingMonth) => `${m.year}-${String(m.month).padStart(2, "0")}`;
+
+  const missedMonths = useMemo(
+    () => unbilledIncludingWaived.filter((m) => !waiverByMonthKey.has(monthKeyOf(m))),
+    [unbilledIncludingWaived, waiverByMonthKey],
+  );
+  // Waived months that still have no statement — shown so they can be billed anyway or undone.
+  const waivedOpenMonths = useMemo(
+    () => unbilledIncludingWaived.filter((m) => waiverByMonthKey.has(monthKeyOf(m))),
+    [unbilledIncludingWaived, waiverByMonthKey],
+  );
+
+  // Missed months this card may raise one at a time — June 2026 onward, for
+  // statuses the generator bills. See backfillableRentMonths() in
+  // billing-months.ts for the per-status rules.
+  const backfillableMonths = useMemo(
+    () => backfillableRentMonths({ missed: missedMonths, billingCycle, contractStatus, endDate }),
+    [missedMonths, billingCycle, contractStatus, endDate],
+  );
+  const backfillableWaivedKeys = useMemo(
+    () => new Set(backfillableRentMonths({ missed: waivedOpenMonths, billingCycle, contractStatus, endDate }).map(monthKeyOf)),
+    [waivedOpenMonths, billingCycle, contractStatus, endDate],
+  );
+
+  // Converts a PREPAID month (what's actually owed, e.g. September) into the
+  // auto-generate API's TARGET month (September's proforma is raised by a run
+  // whose target is August — see the comment below).
+  const prepaidToApiTarget = (m: BillingMonth) =>
+    m.month === 1 ? { month: 12, year: m.year - 1 } : { month: m.month - 1, year: m.year };
+
+  // A rent run bills the month AFTER the month it targets, so to bill the cycle
+  // this contract is actually due for, target the month before its billing
+  // anchor. Without this the button only works during the one calendar month
+  // the anchor happens to fall due in — an advance-billed contract asking for
+  // its next quarter early, or one whose dispatch failed and left the anchor
+  // behind, could never be billed from here.
+  // Monthly contracts are excluded: nothing advances their next_billing_date,
+  // so the stored value is stale by design — they bill from the current
+  // month. (A monthly contract's missing PAST months are reached via the
+  // per-row actions below, not this ordinary next-cycle target.)
+  const cycleTarget = useMemo(() => {
+    if (!nextBillingDate || !billingCycle || billingCycle === "monthly") return null;
+    const [y, m] = nextBillingDate.split("-").map(Number);
+    if (!y || !m) return null;
+    return m === 1 ? { month: 12, year: y - 1 } : { month: m - 1, year: y };
+  }, [nextBillingDate, billingCycle]);
+
+  // Which specific month this dialog invocation targets — set explicitly
+  // when opened, so runCycleBilling always sends exactly what the preview
+  // showed, never a value recomputed (and potentially different) later.
+  const [dialogTarget, setDialogTarget] = useState<{ month: number; year: number } | null>(null);
+  // True when the dialog was opened for a specific missing month from the
+  // list below, rather than the ordinary "Bill next cycle" button — purely
+  // for copy (title/description), the request itself is identical either way.
+  const [dialogIsBackfill, setDialogIsBackfill] = useState(false);
+
+  // Bill this one contract's upcoming rent cycle (or, for a specific missing
+  // month, `explicitTarget`) without running the whole month's batch. Same
+  // generator the batch uses (so proration, rate phases, GST and the
+  // advance-cycle length all behave identically) — just scoped to one
+  // contract_id. Previews first: this dispatches to the client for real.
+  const openCycleDialog = async (explicitTarget?: { month: number; year: number }) => {
+    const target = explicitTarget ?? cycleTarget;
+    setDialogTarget(target ?? null);
+    setDialogIsBackfill(!!explicitTarget);
+    setCycleDialogOpen(true);
+    setCyclePreview(null);
+    setCycleBlockedReason(null);
+    setCyclePreviewing(true);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: true, mode: "rent", contract_id: contractId, ...(target ?? {}) }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setCycleBlockedReason(json.error || "Preview failed");
+        return;
+      }
+      const rent = json.rent_proformas ?? {};
+      const item = (rent.preview ?? [])[0] as CyclePreview | undefined;
+      if (item) {
+        setCyclePreview(item);
+      } else if ((rent.already_sent ?? []).length > 0) {
+        setCycleBlockedReason("This cycle's rent proforma has already been sent to the client.");
+      } else if ((rent.cycle_skipped ?? []).length > 0) {
+        setCycleBlockedReason(
+          "Not due yet — this contract bills in advance, and its next billing date falls outside the upcoming month. Nothing to raise until then."
+        );
+      } else {
+        setCycleBlockedReason("Nothing to bill for the upcoming period.");
+      }
+    } catch {
+      setCycleBlockedReason("Preview failed");
+    } finally {
+      setCyclePreviewing(false);
+    }
+  };
+
+  const runCycleBilling = async () => {
+    setCycleSending(true);
+    try {
+      // Sends exactly what was previewed — dialogTarget was captured when the
+      // dialog opened, not recomputed now, so a background refresh between
+      // preview and send can't silently retarget the live request.
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: false, mode: "rent", contract_id: contractId, ...(dialogTarget ?? {}) }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to generate the proforma");
+        return;
+      }
+      const noContact: string[] = json.rent_proformas?.no_contact ?? [];
+      const notDelivered: string[] = json.rent_proformas?.not_delivered ?? [];
+      const errors: string[] = json.errors ?? [];
+      if (errors.length > 0) {
+        toast.error(errors[0]);
+      } else if (noContact.length > 0) {
+        toast.error("Proforma raised but not sent — no email or phone on file for this client.");
+      } else if (notDelivered.length > 0) {
+        // Never report this as sent: the statement is finalized, so no billing
+        // run will retry it. It needs a manual resend from the statement itself.
+        toast.error("Proforma raised but the send failed — resend it from the statement below.", {
+          duration: 10000,
+        });
+      } else if ((json.rent_proformas?.generated ?? 0) > 0) {
+        toast.success("Proforma raised and sent to the client");
+      } else {
+        toast.info("Nothing was generated for this period");
+      }
+      setCycleDialogOpen(false);
+      await refreshStatements();
+    } catch {
+      toast.error("Failed to generate the proforma");
+    } finally {
+      setCycleSending(false);
+    }
+  };
+
   // Show toggle for active/live contracts — locked for terminated/expired/completed/renewed
   const canEditMode = !contractStatus || ["active", "renewal_in_progress", "draft", "sent", "accepted"].includes(contractStatus);
+  const canBillCycle =
+    !!userRole &&
+    BILLING_ROLES.includes(userRole) &&
+    !!contractStatus &&
+    ["active", "renewal_in_progress"].includes(contractStatus);
+  // A renewed contract has no "next cycle" of its own left to bill, but it can
+  // still owe its remaining tenure — see backfillableMonths above.
+  const canBackfill =
+    !!userRole &&
+    BILLING_ROLES.includes(userRole) &&
+    !!contractStatus &&
+    ["active", "renewal_in_progress", "renewed"].includes(contractStatus);
+  const isRenewedParent = contractStatus === "renewed";
+  const canWaive = userRole === "admin";
+
+  // The month "Bill next cycle" will actually bill — named on the button so
+  // nobody raises November believing it's October. A rent run bills the month
+  // after its target; with no explicit target the API targets the current month.
+  const nextCycleLabel = useMemo(() => {
+    const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const t = cycleTarget ?? { month: nowIst.getUTCMonth() + 1, year: nowIst.getUTCFullYear() };
+    const m = t.month === 12 ? 1 : t.month + 1;
+    const y = t.month === 12 ? t.year + 1 : t.year;
+    return `${MONTH_LABELS[m - 1]} ${y}`;
+  }, [cycleTarget]);
+
+  const undoWaiver = async (waiver: RentWaiver) => {
+    setUndoingWaiverId(waiver.id);
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/rent-waivers/${waiver.id}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Couldn't undo the waiver");
+        return;
+      }
+      toast.success("Waiver undone");
+      await refreshWaivers();
+    } catch {
+      toast.error("Couldn't undo the waiver");
+    } finally {
+      setUndoingWaiverId(null);
+    }
+  };
 
   return (
     <Card>
@@ -188,13 +527,228 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
           <Receipt className="h-4 w-4 text-muted-foreground" />
           Monthly Invoices
         </CardTitle>
-        <Link href={`/billing?contract_id=${contractId}`}>
-          <Button variant="ghost" size="sm">
-            <ExternalLink className="h-3.5 w-3.5 mr-1" />
-            Billing
-          </Button>
-        </Link>
+        <div className="flex items-center gap-1">
+          {canBillCycle && (
+            <Button variant="outline" size="sm" onClick={() => openCycleDialog()}>
+              <CalendarPlus className="h-3.5 w-3.5 mr-1" />
+              Bill {nextCycleLabel}
+            </Button>
+          )}
+          <Link href={`/billing?contract_id=${contractId}`}>
+            <Button variant="ghost" size="sm">
+              <ExternalLink className="h-3.5 w-3.5 mr-1" />
+              Billing
+            </Button>
+          </Link>
+        </div>
       </CardHeader>
+
+      {/* Pro-rata invoice — collected via the proposal before the contract
+          existed, so it never shows up in the monthly statements table below. */}
+      {proposalId && (
+        <div className="px-6 pb-3">
+          <div className="flex items-center justify-between rounded-md border bg-muted/20 px-3 py-2">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-medium text-muted-foreground">Pro-rata Invoice</span>
+              {prorataStatement ? (
+                canPreviewPdf(prorataStatement.status) ? (
+                  <Link
+                    href={`/api/billing-statements/${prorataStatement.id}/proforma-pdf`}
+                    target="_blank"
+                    className="font-mono text-primary hover:underline"
+                  >
+                    {prorataStatement.statement_number}
+                  </Link>
+                ) : (
+                  <span
+                    className="font-mono text-muted-foreground"
+                    title="Finalize this statement in Billing to preview the PDF"
+                  >
+                    {prorataStatement.statement_number}
+                  </span>
+                )
+              ) : proposalNumber ? (
+                <Link href={`/proposals/${proposalId}`} className="text-primary hover:underline">
+                  via {proposalNumber}
+                </Link>
+              ) : null}
+              {(prorataStatement?.total_amount ?? undefined) !== undefined && (
+                <span className="text-muted-foreground">· {formatCurrency(prorataStatement!.total_amount)}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {(() => {
+                const paid = prorataStatement ? prorataStatement.payment_status === "paid" : prorataPaymentStatus === "paid";
+                const paidAt = prorataStatement ? undefined : prorataPaymentReceivedAt;
+                return (
+                  <>
+                    {paid && paidAt && (
+                      <span className="text-[10px] text-muted-foreground">{formatDate(paidAt)}</span>
+                    )}
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] ${paid ? PAYMENT_STATUS_COLORS.paid : PAYMENT_STATUS_COLORS.unpaid}`}
+                    >
+                      {paid ? "Paid" : "Unpaid"}
+                    </Badge>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Months already past their billing run with nothing charged against
+          them. Deliberately a prompt, not an alarm — rent is sometimes
+          invoiced outside the CRM, so a person decides what this means. */}
+      {missedMonths.length > 0 && (
+        <div className="px-6 pb-3">
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-medium">
+                  No rent invoiced for {missedMonths.map((m) => MONTH_LABELS[m.month - 1] + " " + m.year).join(", ")}
+                </span>
+                <p className="text-xs mt-1 text-amber-800">
+                  These months are past their billing run. If the rent was collected outside the CRM,
+                  {canWaive ? " waive the month" : " no action is needed"} — otherwise raise it before it ages further.
+                </p>
+                {canWaive && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {missedMonths.map((m) => (
+                      <Button
+                        key={`waive-${m.year}-${m.month}`}
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-xs bg-white"
+                        onClick={() => setWaiveTarget({
+                          contractId,
+                          month: `${monthKeyOf(m)}-01`,
+                          monthLabel: `${MONTH_LABELS[m.month - 1]} ${m.year}`,
+                        })}
+                      >
+                        Waive {MONTH_LABELS[m.month - 1]} {m.year}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Of the months above, the ones that can be raised from here (June 2026
+          onward — see backfillableRentMonths). Every month gets its own
+          explicit action, in full view of the others still outstanding,
+          rather than one button silently picking one for you. */}
+      {canBackfill && backfillableMonths.length > 0 && (
+        <div className="px-6 pb-3">
+          <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            <div className="flex items-start gap-2">
+              <CalendarPlus className="h-4 w-4 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <span className="font-medium">
+                  {isRenewedParent
+                    ? "Missing rent — remaining tenure after renewal"
+                    : contractStatus === "renewal_in_progress"
+                    ? "Missing rent — renewal not yet activated"
+                    : "Missing rent — month-end run missed"}
+                </span>
+                <p className="text-xs mt-1 text-blue-800">
+                  {isRenewedParent ? (
+                    <>
+                      This contract was renewed before its own term ended. The renewal only bills
+                      from its own start date, so each month below is billed here, at this
+                      contract&apos;s own rate. Raise them individually, in any order.
+                    </>
+                  ) : contractStatus !== "renewal_in_progress" ? (
+                    <>
+                      No rent invoice was raised for the months below. Check each preview and raise
+                      them individually, in any order.
+                    </>
+                  ) : (
+                    <>
+                      This contract&apos;s own term ended, but its renewal hasn&apos;t been activated —
+                      each month below is billed at the renewal&apos;s terms until it is. Raise them
+                      individually, in any order.
+                    </>
+                  )}
+                </p>
+                <div className="mt-2 space-y-1.5">
+                  {backfillableMonths.map((m) => (
+                    <div
+                      key={`${m.year}-${m.month}`}
+                      className="flex items-center justify-between rounded border border-blue-200 bg-white px-2.5 py-1.5"
+                    >
+                      <span className="text-xs font-medium text-foreground">
+                        {MONTH_LABELS[m.month - 1]} {m.year}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-xs"
+                        onClick={() => openCycleDialog(prepaidToApiTarget(m))}
+                      >
+                        Bill this month
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Months an admin waived that still have no statement. Still billable
+          from here (same rule as above) — a waiver hides the gap, it never
+          blocks billing. Only an admin can undo one. */}
+      {waivedOpenMonths.length > 0 && (
+        <div className="px-6 pb-3">
+          <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm">
+            <span className="font-medium">Waived — not billed through the CRM</span>
+            <div className="mt-2 space-y-1.5">
+              {waivedOpenMonths.map((m) => {
+                const waiver = waiverByMonthKey.get(monthKeyOf(m))!;
+                return (
+                  <div key={waiver.id} className="flex items-center justify-between gap-2 rounded border bg-background px-2.5 py-1.5">
+                    <div className="min-w-0">
+                      <span className="text-xs font-medium">{MONTH_LABELS[m.month - 1]} {m.year}</span>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {RENT_WAIVER_KIND_LABELS[waiver.waiver_kind ?? "unknown"]} · {waiver.reason}
+                        {waiver.waived_by_user?.full_name ? ` · ${waiver.waived_by_user.full_name}` : ""}
+                        {` · ${formatDate(waiver.waived_at)}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {canBackfill && backfillableWaivedKeys.has(monthKeyOf(m)) && (
+                        <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => openCycleDialog(prepaidToApiTarget(m))}>
+                          Bill this month
+                        </Button>
+                      )}
+                      {canWaive && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs"
+                          disabled={undoingWaiverId === waiver.id}
+                          onClick={() => undoWaiver(waiver)}
+                        >
+                          Undo
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Billing mode toggle */}
       {canEditMode && (
         <div className="px-6 pb-3">
@@ -238,7 +792,7 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : statements.length === 0 ? (
+        ) : ownStatements.length === 0 ? (
           <p className="text-sm text-muted-foreground py-4 text-center">
             No invoices generated yet. Statements are created automatically each month after contract activation.
           </p>
@@ -257,19 +811,28 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {statements.map((s) => (
+                {visibleStatements.map((s) => (
                   <tr key={s.id} className="hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 pr-4 whitespace-nowrap">
                       {periodLabel(s.period_start, s.period_end)}
                     </td>
                     <td className="py-2.5 pr-4">
-                      <Link
-                        href={`/api/billing-statements/${s.id}/proforma-pdf`}
-                        target="_blank"
-                        className="font-mono text-xs text-primary hover:underline"
-                      >
-                        {s.statement_number}
-                      </Link>
+                      {canPreviewPdf(s.status) ? (
+                        <Link
+                          href={`/api/billing-statements/${s.id}/proforma-pdf`}
+                          target="_blank"
+                          className="font-mono text-xs text-primary hover:underline"
+                        >
+                          {s.statement_number}
+                        </Link>
+                      ) : (
+                        <span
+                          className="font-mono text-xs text-muted-foreground"
+                          title="Finalize this statement in Billing to preview the PDF"
+                        >
+                          {s.statement_number}
+                        </span>
+                      )}
                     </td>
                     <td className="py-2.5 pr-4 text-right tabular-nums font-medium whitespace-nowrap">
                       {formatCurrency(s.total_amount)}
@@ -318,17 +881,122 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                         share one request. */}
                     <td className="py-2.5">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <StatementLifecycleBadge statementId={s.id} compact />
+                        <StatementLifecycleBadge statementId={s.id} compact fallbackStatus={s.status} />
                         <StatementQuickActions statementId={s.id} compact />
                       </div>
                     </td>
                   </tr>
                 ))}
+                {voidedStatements.length > 0 && (
+                  <tr>
+                    <td colSpan={7} className="py-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowVoided((v) => !v)}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        {showVoided ? "▾ Hide" : "▸ Show"} {voidedStatements.length} voided statement{voidedStatements.length === 1 ? "" : "s"}
+                      </button>
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
         )}
       </CardContent>
+
+      <Dialog open={cycleDialogOpen} onOpenChange={setCycleDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarPlus className="h-4 w-4 shrink-0" />
+              {dialogIsBackfill ? "Bill a missed month" : "Bill the upcoming cycle"}
+            </DialogTitle>
+            <DialogDescription>
+              {dialogIsBackfill && contractStatus === "active"
+                ? "This month never got a rent statement. Raises that month's rent proforma at this contract's rate, without running the month's batch. Sending it creates the payment link and emails the client."
+                : dialogIsBackfill && isRenewedParent
+                ? "This contract was renewed before its own term ended, and this month of its remaining tenure never got a rent statement. Raises that month's rent proforma at this contract's own rate, without running the month's batch. Sending it creates the payment link and emails the client."
+                : dialogIsBackfill
+                ? "This contract's renewal hasn't been activated yet, and this past month never got a rent statement. Raises that missed month's rent proforma at the renewal's terms, without running the month's batch. Sending it creates the payment link and emails the client."
+                : "Raises this contract's next rent proforma on its own, without running the month's batch. Sending it creates the payment link and emails the client."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {cyclePreviewing ? (
+            <div className="flex items-center gap-2 py-8 justify-center text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Working out what&apos;s due…
+            </div>
+          ) : cycleBlockedReason ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {cycleBlockedReason}
+            </div>
+          ) : cyclePreview ? (
+            <div className="space-y-3">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm text-muted-foreground">Period</span>
+                <span className="text-sm font-medium">{cyclePreview.period_label}</span>
+              </div>
+              <div className="border rounded-md max-h-64 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/40 text-xs text-muted-foreground sticky top-0">
+                    <tr>
+                      <th className="text-left font-medium py-2 px-3">Description</th>
+                      <th className="text-right font-medium py-2 px-3">Qty</th>
+                      <th className="text-right font-medium py-2 px-3">Rate</th>
+                      <th className="text-right font-medium py-2 px-3">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {(cyclePreview.line_items ?? []).map((li, i) => (
+                      <tr key={i}>
+                        <td className="py-2 px-3">
+                          {li.description}
+                          {li.note && <span className="block text-xs text-muted-foreground">{li.note}</span>}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums">{li.qty ?? "—"}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">
+                          {li.unit_price != null ? formatCurrency(li.unit_price) : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums">{formatCurrency(li.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span className="tabular-nums">{formatCurrency(cyclePreview.subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>GST</span>
+                  <span className="tabular-nums">{formatCurrency(cyclePreview.tax_amount)}</span>
+                </div>
+                <div className="flex justify-between font-medium">
+                  <span>Total</span>
+                  <span className="tabular-nums">{formatCurrency(cyclePreview.total_amount)}</span>
+                </div>
+              </div>
+              {cyclePreview.note && (
+                <p className="text-xs text-muted-foreground">{cyclePreview.note}</p>
+              )}
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCycleDialogOpen(false)} disabled={cycleSending}>
+              Cancel
+            </Button>
+            <Button onClick={runCycleBilling} disabled={!cyclePreview || cycleSending}>
+              {cycleSending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Raise &amp; send
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={pendingModeDialogOpen} onOpenChange={setPendingModeDialogOpen}>
         <DialogContent className="max-w-2xl">
@@ -370,7 +1038,7 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                       </Badge>
                     </td>
                     <td className="py-2 px-3 text-right whitespace-nowrap">
-                      {userRole && ["admin", "manager"].includes(userRole) ? (
+                      {userRole && ["admin", "manager", "sales_rep"].includes(userRole) ? (
                         <Button
                           size="sm"
                           variant="outline"
@@ -381,7 +1049,7 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                           {convertingId === s.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Convert to GST"}
                         </Button>
                       ) : (
-                        <span className="text-[10px] text-muted-foreground italic">Admin/manager only</span>
+                        <span className="text-[10px] text-muted-foreground italic">Admin/manager/sales only</span>
                       )}
                     </td>
                   </tr>
@@ -420,6 +1088,11 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <WaiveRentMonthDialog
+        target={waiveTarget}
+        onClose={() => setWaiveTarget(null)}
+        onWaived={refreshWaivers}
+      />
     </Card>
   );
 }

@@ -1,4 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
+import { dispatchProforma } from "@/lib/send-proforma";
+import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
+import { caseDisplayName } from "@/lib/case-workflow";
 
 export interface GenerateConsolidatedInvoiceParams {
   supabase: SupabaseClient;
@@ -8,6 +12,12 @@ export interface GenerateConsolidatedInvoiceParams {
   taxPercentage?: number;
   notes?: string;
   createdBy?: string;
+  /** Explicit case selection from the Referrals list — omit to bill every
+   *  currently-billable case for the aggregator (legacy "bill all"). Cases
+   *  outside this aggregator or not in a billable status are silently
+   *  dropped, not errored — the caller's list may be stale by the time this
+   *  runs. */
+  caseIds?: string[];
 }
 
 export interface GenerateConsolidatedInvoiceResult {
@@ -29,6 +39,7 @@ export async function generateConsolidatedInvoice({
   taxPercentage = 18,
   notes,
   createdBy,
+  caseIds,
 }: GenerateConsolidatedInvoiceParams): Promise<GenerateConsolidatedInvoiceResult> {
   // Check for duplicate invoice
   const { data: existing } = await supabase
@@ -48,7 +59,7 @@ export async function generateConsolidatedInvoice({
 
   const { data: aggregator } = await supabase
     .from("aggregators")
-    .select("id, name, same_state_as_twv")
+    .select("id, name, same_state_as_twv, gst_number, billing_mode, billing_state")
     .eq("id", aggregatorId)
     .single();
 
@@ -56,25 +67,37 @@ export async function generateConsolidatedInvoice({
     return { error: "Aggregator not found", status: 404 };
   }
 
-  // Get all active cases for this aggregator in the given period
-  const { data: cases } = await supabase
+  // Get billable cases for this aggregator — either the explicit selection
+  // from the Referrals list, or every currently-billable case (legacy "bill
+  // all" behavior, still used by the monthly cron).
+  let caseQuery = supabase
     .from("cases")
-    .select("id, case_number, client_name, purpose, rate, tenure_months, start_date, activated_at, status")
+    .select("id, case_number, client_name, client_company_name, purpose, rate, tenure_months, start_date, activated_at, status")
     .eq("aggregator_id", aggregatorId)
     .in("status", ["active", "renewal_due", "invoiced", "executed"]);
 
+  if (caseIds && caseIds.length > 0) {
+    caseQuery = caseQuery.in("id", caseIds);
+  }
+
+  const { data: cases } = await caseQuery;
+
   if (!cases || cases.length === 0) {
     return {
-      error: "No active cases found for this aggregator in the period",
+      error: "No billable cases found for this aggregator in the period",
       status: 400,
     };
   }
 
   // Calculate line items with pro-rating
-  const periodStart = new Date(periodYear, periodMonth - 1, 1);
   const periodEnd = new Date(periodYear, periodMonth, 0); // Last day of month
   const totalDaysInMonth = periodEnd.getDate();
-  void periodStart;
+  // Plain string formatting for the stored period bounds — going through
+  // Date + toISOString() here would construct a LOCAL midnight and then
+  // convert to UTC, shifting the date back a day whenever the server's
+  // timezone is ahead of UTC (e.g. IST).
+  const periodStartStr = `${periodYear}-${String(periodMonth).padStart(2, "0")}-01`;
+  const periodEndStr = `${periodYear}-${String(periodMonth).padStart(2, "0")}-${String(totalDaysInMonth).padStart(2, "0")}`;
 
   const lineItems = cases
     .filter((c) => c.rate && c.rate > 0)
@@ -103,8 +126,10 @@ export async function generateConsolidatedInvoice({
       return {
         case_id: c.id,
         case_number: c.case_number,
-        client_name: c.client_name,
+        client_name: caseDisplayName(c),
         purpose: c.purpose,
+        purpose_label: VO_PURPOSE_LABELS[c.purpose] || c.purpose,
+        tenure_months: c.tenure_months,
         rate: monthlyRate,
         pro_rated_days: proRatedDays,
         total_days: totalDaysInMonth,
@@ -154,5 +179,77 @@ export async function generateConsolidatedInvoice({
     return { error: invoiceError.message, status: 500 };
   }
 
-  return { invoice, status: 201 };
+  // Feed the real AR/Ageing/Tally Inbox pipeline — aggregator_invoices stays
+  // alive as the existing reconciliation record, but billing_statements is
+  // what accounts actually follows up on and what payment tracking hooks into.
+  const { data: statement, error: statementError } = await supabase
+    .from("billing_statements")
+    .insert({
+      aggregator_id: aggregatorId,
+      period_start: periodStartStr,
+      period_end: periodEndStr,
+      statement_type: "vo_aggregator_consolidated",
+      created_via: "vo_aggregator_monthly",
+      fixed_amount: subtotal,
+      usage_amount: 0,
+      subtotal,
+      tax_percentage: taxPercentage,
+      tax_amount: taxAmount,
+      cgst_amount: cgstAmount,
+      sgst_amount: sgstAmount,
+      igst_amount: igstAmount,
+      total_amount: totalAmount,
+      is_interstate: isInterstate,
+      place_of_supply: isInterstate ? (aggregator.billing_state || "Other") : "Tamil Nadu",
+      buyer_gstin: aggregator.gst_number ?? null,
+      status: "finalized",
+      finalized_at: new Date().toISOString(),
+      line_items: [
+        {
+          type: "prepaid_rent",
+          label: `Virtual Office Referrals — ${MONTH_NAMES[periodMonth - 1]} ${periodYear}`,
+          subtotal,
+          items: lineItems.map((item) => ({
+            description: `${item.case_number} — ${item.client_name} · ${item.purpose_label} · ${item.tenure_months} mo tenure${item.pro_rated_days ? ` (pro-rated ${item.pro_rated_days}/${item.total_days} days)` : ""}`,
+            quantity: 1,
+            rate: item.amount,
+            amount: item.amount,
+          })),
+        },
+      ],
+    })
+    .select("id")
+    .single();
+
+  if (statementError || !statement) {
+    // aggregator_invoices row already exists and is usable on its own — log
+    // and continue rather than failing the whole generate call. No sibling
+    // code in this repo spans a multi-table write in a transaction (see
+    // vo-renewal.ts), so a partial write here is an accepted, known risk.
+    console.error("[aggregator-invoicing] Failed to create billing_statements row:", statementError?.message);
+    return { invoice, status: 201 };
+  }
+
+  await supabase.from("billing_statement_cases").insert(
+    lineItems.map((item) => ({
+      billing_statement_id: statement.id,
+      case_id: item.case_id,
+      amount: item.amount,
+      pro_rated_days: item.pro_rated_days ?? null,
+      total_days: item.total_days ?? null,
+    })),
+  );
+
+  await supabase.from("aggregator_invoices").update({ billing_statement_id: statement.id }).eq("id", invoice.id);
+
+  const billingMode = (aggregator.billing_mode as "proforma_first" | "gst_direct" | null) ?? "gst_direct";
+  const handoff = await handleStatementFinalized(supabase, statement.id, billingMode, "aggregator_monthly_invoice");
+
+  if (billingMode === "proforma_first" && !handoff.skipLegacyDispatch) {
+    await dispatchProforma(supabase, statement.id);
+  }
+  // gst_direct: no dispatch — statement sits in the Tally Inbox until an
+  // accountant uploads the real GST invoice (upload-gst-invoice/route.ts).
+
+  return { invoice: { ...invoice, billing_statement_id: statement.id }, status: 201 };
 }

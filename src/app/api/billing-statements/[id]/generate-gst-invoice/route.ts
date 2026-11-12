@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
+import { annexureFromSections } from "@/lib/electricity-annexure";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
+import { usageLine, toUsageLineInput, type UsageChargeRow } from "@/lib/booking-usage-line";
 
 export const maxDuration = 30;
 
@@ -55,7 +58,7 @@ export async function POST(
         start_date, end_date, next_billing_date, billing_cycle, location_id, items,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
       ),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, charge_date, booking_charge_kind, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name))
     `)
     .eq("id", id)
     .single();
@@ -72,6 +75,21 @@ export async function POST(
   }
   if (statement.status === "voided") {
     return NextResponse.json({ error: "Statement is voided" }, { status: 400 });
+  }
+  // On hold — something on this statement is being clarified/corrected.
+  // Payment (if any) is already recorded by the time this endpoint runs — the
+  // Razorpay webhook sets payment_status="paid" before firing this call — so
+  // holding invoice issuance here never blocks payment recording. Responds
+  // like the "standby" gate below rather than an error: the webhook's call is
+  // fire-and-forget and only logs failures, and a manual click should read as
+  // "deferred", not "broken".
+  if (statement.held_at) {
+    return NextResponse.json({
+      success: true,
+      held: true,
+      invoiceNumber: null,
+      message: `GST invoice generation is on hold: ${statement.hold_reason}. Release the hold to issue it.`,
+    });
   }
   // Payment must be fully received before a tax invoice can be issued.
   // (The Razorpay webhook always sets payment_status = "paid" before calling
@@ -135,7 +153,7 @@ export async function POST(
   // same data the table below is built from) so the totals box can never
   // drift from what's printed. Falls back to the legacy per-field sum only
   // for statements predating the structured line_items JSONB.
-  const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
+  const usageCharges = (statement.usage_charges || []) as UsageChargeRow[];
   const usageAmount = usageCharges.reduce((s, c) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
@@ -170,16 +188,29 @@ export async function POST(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        lineItems.push({ description: withProrationBreakdown(label || section.label, item), hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label), qty: resolveLineItemQty(item, "gst-invoice"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
+        lineItems.push({ description: withProrationBreakdown(label || section.label, item),
+          workings: item.workings ? String(item.workings) : undefined, hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label), qty: resolveLineItemQty(item, "gst-invoice"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
       }
     }
   } else {
     if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
-    for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+    for (const charge of usageCharges) {
+      const line = usageLine(toUsageLineInput(charge));
+      lineItems.push({ description: line.description, workings: line.workings, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
+    }
   }
+
+  // Customer-facing proof attached at bill-customer time — appended as extra
+  // pages after the PDF is generated below (see mergeSupportingDocuments in
+  // reimbursement-supporting-docs.ts). Mirrors dispatchGstDirect's handling
+  // in send-proforma.ts, the other path that self-generates a GST invoice.
+  const supportingDocs = (statement.statement_type as string) === "reimbursement"
+    ? await fetchSupportingDocuments(adminSupabase, statement.id)
+    : [];
 
   // Generate GST invoice PDF
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber,
     invoiceDate: new Date().toISOString().slice(0, 10),
     isProforma: false,
@@ -190,6 +221,7 @@ export async function POST(
     periodStart: statement.period_start,
     periodEnd: statement.period_end,
     contractNumber: contract.contract_number,
+    poNumber: statement.po_number,
     lineItems,
     subtotal,
     cgst,
@@ -199,10 +231,14 @@ export async function POST(
     isInterstate,
     taxPercentage,
     upiId,
+    supportingDocsCount: supportingDocs.length || undefined,
   };
 
   const doc = generateGstInvoicePDF(invoiceData);
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  let pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  if (supportingDocs.length > 0) {
+    pdfBuffer = await mergeSupportingDocuments(adminSupabase, pdfBuffer, supportingDocs);
+  }
 
   const storagePath = `invoices/${invoiceNumber.replace(/\//g, "-")}.pdf`;
   const { error: uploadErr } = await adminSupabase.storage
@@ -288,15 +324,10 @@ export async function POST(
     })
     .eq("id", id);
 
-  // Update contract.next_billing_date if not already updated
-  if (contract.next_billing_date) {
-    const nextDate = new Date(contract.next_billing_date + "T00:00:00Z");
-    nextDate.setMonth(nextDate.getMonth() + 1);
-    await adminSupabase
-      .from("contracts")
-      .update({ next_billing_date: nextDate.toISOString().slice(0, 10) })
-      .eq("id", contract.id);
-  }
+  // next_billing_date is deliberately NOT touched here — see the same note in
+  // the statement confirm route. The rent generator owns the anchor and derives
+  // it from the period it billed; a cycle-blind +1 month here drifted quarterly
+  // and half-yearly contracts onto the wrong cycle.
 
   if (dbUserId) {
     logAudit(adminSupabase, {

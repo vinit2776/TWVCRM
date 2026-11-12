@@ -71,6 +71,24 @@ export function bucketFor(state: HandoffState | null | undefined, hasDiscrepancy
 /** States that should be visible on the inbox by default (everything except complete). */
 export const INBOX_OPEN_STATES: HandoffState[] = HANDOFF_STATES.filter((s) => s !== "complete") as HandoffState[];
 
+/**
+ * States worth showing on the interactive Tally Inbox worklist itself.
+ * Excludes states that have no available action in the inbox UI — pure
+ * spectate/wait states, not something accounts can act on from this page:
+ *   - `pi_awaiting_payment`: can't issue a GST invoice before payment, and
+ *     can't record the payment from here either. Tracked for follow-up in
+ *     Accounts Receivable instead.
+ *   - `name_check_pending`: set right after a GST invoice upload while the
+ *     bridge/name-check job runs; no manual approve/override action exists
+ *     in the inbox, it resolves on its own once the check completes.
+ * `INBOX_OPEN_STATES` (all non-complete states) is still used as-is for the
+ * digest cron, which is about reminding accounts of pending items, not
+ * about worklist actionability.
+ */
+export const INBOX_ACTIONABLE_STATES: HandoffState[] = INBOX_OPEN_STATES.filter(
+  (s) => s !== "pi_awaiting_payment" && s !== "name_check_pending"
+);
+
 /** Roles permitted to see the inbox. */
 export const INBOX_ROLES = ["accounts", "admin", "office_admin", "manager"] as const;
 export type InboxRole = (typeof INBOX_ROLES)[number];
@@ -81,6 +99,13 @@ export function isInboxRole(role: string | null | undefined): role is InboxRole 
 
 /** Aging threshold beyond which inbox items get escalation flagging. */
 export const AGING_ESCALATE_HOURS = 48;
+
+/** Some leads have "Individual" typed literally into the free-text company
+ *  field (meaning "no company"), not an actual business name — treat that
+ *  the same as blank so the person's real name is used instead. */
+export function isRealCompanyName(v: string | null | undefined): v is string {
+  return !!v && v.trim().toLowerCase() !== "individual";
+}
 
 // -----------------------------------------------------------------------------
 // API response shape — consumed by the inbox-client component.
@@ -95,6 +120,10 @@ export interface InboxLead {
   phone: string | null;
   gst_number: string | null;
   billing_emails?: string[] | null;
+  street?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip_code?: string | null;
 }
 
 export interface InboxContract {
@@ -119,16 +148,155 @@ export interface InboxProposal {
 export interface InboxInvoice {
   id: string;
   invoice_number: string;
+  /** The invoice's own title — often clearer than a free-typed line-item
+   *  description (e.g. "Security Deposit - Add on Seat" vs. "SD - Additional Seat"). */
+  title: string | null;
+  /** Internal-only context for accounts, never sent to the customer. */
+  internal_notes: string | null;
   lead: InboxLead | null;
+}
+
+export interface InboxAggregator {
+  id: string;
+  name: string;
+  primary_email: string | null;
+  primary_phone: string | null;
+  gst_number: string | null;
+  billing_address?: string | null;
+  billing_city?: string | null;
+  billing_state?: string | null;
+  billing_pincode?: string | null;
+}
+
+/** Owner of a per-case Virtual Office statement (prepaid aggregator or direct
+ *  client) — no contract or proposal exists, always gst_direct (no PI). */
+export interface InboxCase {
+  id: string;
+  case_number: string;
+  /** Who this case's invoice actually bills. 'aggregator' means the referral
+   *  partner is the buyer on the invoice, not the end client. Null for
+   *  direct-client cases (they always bill the client). */
+  bill_to: "aggregator" | "client" | null;
+  client_name: string;
+  client_company_name: string | null;
+  client_email: string | null;
+  client_phone: string | null;
+  client_gst_number: string | null;
+  client_address?: string | null;
+  client_city?: string | null;
+  client_state?: string | null;
+  client_pincode?: string | null;
+  aggregator: InboxAggregator | null;
+}
+
+/** Joins address/city/state/pincode into a single display line, skipping blanks. */
+export function formatAddressLine(
+  address: string | null | undefined,
+  city: string | null | undefined,
+  state: string | null | undefined,
+  pincode: string | null | undefined,
+): string | null {
+  const parts = [address, city, state, pincode].map((p) => p?.trim()).filter((p): p is string => !!p);
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+/** Formats a lead's billing address for display — same shape as voBillParty's
+ *  address, so accounts sees one consistent format regardless of whether the
+ *  invoice bills a lead, a case client, or an aggregator. */
+export function leadAddress(lead: InboxLead | null | undefined): string | null {
+  if (!lead) return null;
+  return formatAddressLine(lead.street, lead.city, lead.state, lead.zip_code);
+}
+
+/** The party a Virtual Office statement actually bills.
+ *
+ *  A per-case statement bills the aggregator when the case's bill_to says so,
+ *  and the end client otherwise; a consolidated statement always bills its
+ *  aggregator. Mirrors leadFromVoSource in the dispatch and PDF paths
+ *  (inbox-send, upload-gst-invoice, upload-credit-note, proforma-pdf,
+ *  send-proforma) so the inbox shows the same buyer the invoice will carry. */
+export function voBillParty(source: {
+  case: InboxCase | null;
+  aggregator: InboxAggregator | null;
+}): { name: string; email: string | null; phone: string | null; gstin: string | null; address: string | null } | null {
+  if (source.case) {
+    const billToAggregator = source.case.bill_to === "aggregator" ? source.case.aggregator : null;
+    if (billToAggregator) {
+      return {
+        name: billToAggregator.name,
+        email: billToAggregator.primary_email,
+        phone: billToAggregator.primary_phone,
+        gstin: billToAggregator.gst_number,
+        address: formatAddressLine(
+          billToAggregator.billing_address,
+          billToAggregator.billing_city,
+          billToAggregator.billing_state,
+          billToAggregator.billing_pincode,
+        ),
+      };
+    }
+    return {
+      name: source.case.client_company_name || source.case.client_name,
+      email: source.case.client_email,
+      phone: source.case.client_phone,
+      gstin: source.case.client_gst_number,
+      address: formatAddressLine(
+        source.case.client_address,
+        source.case.client_city,
+        source.case.client_state,
+        source.case.client_pincode,
+      ),
+    };
+  }
+  if (source.aggregator) {
+    return {
+      name: source.aggregator.name,
+      email: source.aggregator.primary_email,
+      phone: source.aggregator.primary_phone,
+      gstin: source.aggregator.gst_number,
+      address: formatAddressLine(
+        source.aggregator.billing_address,
+        source.aggregator.billing_city,
+        source.aggregator.billing_state,
+        source.aggregator.billing_pincode,
+      ),
+    };
+  }
+  return null;
+}
+
+/**
+ * A payment someone reported against this statement that accounts have not
+ * settled yet (query_payment_reports.status = 'reported', thread still open).
+ * Drives the "Payment reported" flag on the inbox row.
+ */
+export interface InboxReportedPayment {
+  /** query_payment_reports.id */
+  id: string;
+  /** The thread to open to verify or reject it. */
+  query_id: string;
+  entity_type: string;
+  entity_id: string;
+  amount: number;
+  paid_on: string;
+  payment_mode: string;
+  payment_reference: string | null;
+  reported_by_name: string | null;
+  created_at: string;
 }
 
 export interface InboxPayment {
   id: string;
   amount: number;
+  /** When the money reached the bank. */
   payment_date: string;
+  /** When the payment was entered into the CRM. */
+  created_at: string;
   payment_mode: string;
   payment_reference: string | null;
+  notes: string | null;
   razorpay_payment_id: string | null;
+  recorded_by_name: string | null;
   // Razorpay settlement (from razorpay_settlement_cache)
   settled: boolean | null;
   settled_at: string | null;
@@ -156,6 +324,21 @@ export interface InboxLineItemBreakdown {
   booking_usage_amount: number;    // ad-hoc booking charges
   period_start: string | null;
   period_end: string | null;
+}
+
+/**
+ * One real, individually-described charge — sourced from whichever of
+ * billing_statements.line_items (structured JSONB) / the usage_charges
+ * table actually has the data, same priority order proforma-pdf uses.
+ * This is what accounts needs to see to know exactly what they're billing,
+ * not just a category total like "Usage charges: ₹648".
+ */
+export interface InboxItemizedCharge {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  amount: number;
+  notes: string | null;
 }
 
 export interface InboxUpload {
@@ -198,6 +381,10 @@ export interface InboxRow {
   statement_id: string;
   statement_number: string | null;
   statement_total_amount: number;
+  /** Customer's own PO number, snapshotted from the contract at statement generation
+   *  time. When set, accounts must put it on the Tally invoice — some customers
+   *  require it for their own invoice processing. */
+  po_number: string | null;
   period_start: string | null;
   period_end: string | null;
   payment_status: string;
@@ -208,16 +395,50 @@ export interface InboxRow {
   is_voided: boolean;
   voided_at: string | null;
   void_reason: string | null;
+  /** Hold — blocks send/GST-issuance only, draft stays editable. Distinct
+   *  from is_voided: a held statement is still live, just paused. */
+  is_held: boolean;
+  hold_reason: string | null;
+  /** Set when accounts recategorized this ad-hoc-invoice statement as a
+   *  security deposit and closed it without a Tally GST invoice — the money
+   *  was credited to the customer's deposit balance instead. See
+   *  src/app/api/billing-statements/[id]/waive-gst/route.ts. */
+  gst_waived_at: string | null;
+  gst_waived_reason: string | null;
   /** True when the proforma was cancelled via the early-GST override. Distinguishes
    *  the override path from the normal proforma_first path at terminal states. */
   pi_was_cancelled: boolean;
+  /** Set once a Tally-issued invoice has been cancelled via the manual
+   *  credit-note upload flow (see upload-credit-note/route.ts). */
+  lifecycle_stage: string | null;
+  tally_credit_note_number: string | null;
+  /** Set when an admin/manager has asked for this GST invoice to be cancelled.
+   *  Accounts must issue a credit note in Tally and upload it; until then the
+   *  row is a credit-note task, not a payment or send task. */
+  cancellation_requested_at: string | null;
+  cancellation_reason: string | null;
+  cancellation_requested_by_name: string | null;
   contract: InboxContract | null;
   proposal: InboxProposal | null;
   invoice: InboxInvoice | null;
+  /** Per-case VO statement (prepaid aggregator / direct client). */
+  case: InboxCase | null;
+  /** Postpaid aggregator consolidated statement (many cases bundled). */
+  aggregator: InboxAggregator | null;
   latest_upload: InboxUpload | null;
   latest_snapshot: InboxSnapshot | null;
   has_discrepancy: boolean;
   discrepancy_reason: string | null;
+  /** Open query thread count for this statement — drives the "Query" button
+   *  badge in the Tally Inbox. See src/lib/queries/registry.ts. */
+  open_query_count: number;
+  /** Payment reports on this statement still waiting for accounts. */
+  reported_payments: InboxReportedPayment[];
+  /** Reimbursement receipts/vendor bills attached at Bill Customer time —
+   *  merged into the GST invoice PDF automatically at upload. See
+   *  src/lib/reimbursement-supporting-docs.ts. Always 0 for non-reimbursement
+   *  statement types. */
+  supporting_documents_count: number;
   /** Present only when the request specified `?include=timeline`. */
   timeline_events?: TimelineEvent[];
 
@@ -228,6 +449,9 @@ export interface InboxRow {
   expected_prefix: string;           // e.g. "SD/A/" or "SD/B/"
   tax: InboxTaxBreakup;
   line_items: InboxLineItemBreakdown;
+  /** Real per-charge breakdown (description/qty/rate/notes) — empty when
+   *  neither structured line_items nor usage_charges rows exist. */
+  itemized_charges: InboxItemizedCharge[];
   payments_received: InboxPayment[]; // empty array if none yet
   total_paid: number;                // sum of payments_received amounts
   /** ISO timestamp of the last time the GST invoice email was successfully sent. */
@@ -274,6 +498,9 @@ export interface BookingInboxAddon {
 export interface BookingInboxRow {
   row_type: "booking";
   task_id: string;
+  /** Open query thread count for this task — drives the "Query" button badge.
+   *  See src/lib/queries/registry.ts. */
+  open_query_count: number;
   booking_id: string;
   booking_number: string | null;
   booking_date: string | null;
@@ -302,6 +529,7 @@ export interface BookingInboxRow {
   lead_id_proof_path: string | null;
   lead_billing_emails: string[] | null;
   customer_gstin: string | null;
+  customer_address: string | null;
   irn_required: boolean;
   expected_series: "SDIPL-REG" | "SDIPL-UNREG";
   expected_prefix: string;
@@ -310,6 +538,8 @@ export interface BookingInboxRow {
   discrepancy_reason: string | null;
   gst_invoice_sent_at: string | null;
   payment_confirmations: BookingPaymentConfirmation[];
+  is_voided: boolean;
+  void_reason: string | null;
 }
 
 export interface InboxStats {
@@ -318,6 +548,11 @@ export interface InboxStats {
   discrepancies: number;
   aging_over_48h: number;
   total_open: number;
+  /** Open items that entered their current state within the last 24h — the
+   *  "new" badge on the accounts dashboard. Measured off state_changed_at
+   *  (same clock as aging_hours), so it means "newly landed in this queue",
+   *  not "record created recently". */
+  new_24h: number;
 }
 
 export interface InboxResponse {
@@ -355,4 +590,10 @@ export interface ExtractResponse {
   raw_text_snippet: string | null;
   /** True iff a tally_voucher_snapshots row matched the extracted number. */
   bridge_match: boolean;
+  /** Whether the statement's Customer PO Number appears in the uploaded PDF's
+   *  extracted text. Null when the statement has no PO number to check, or the
+   *  PDF's text couldn't be parsed at all (e.g. a scanned image). */
+  po_number_found: boolean | null;
+  /** Calendar months (YYYY-MM) the PDF says it bills; empty when it names no period. */
+  invoice_period_months?: string[];
 }

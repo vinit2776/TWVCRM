@@ -5,7 +5,7 @@
  * voucher was issued to, and groups devices by customer, in three tiers:
  *
  *  1. "confirmed" — resolved via an explicit database link:
- *     - contract seat vouchers: note = "{contract_number}_seat{N}"
+ *     - contract seat vouchers: note = "[{location code} | ]{contract_number}_seat{N}"
  *       (src/app/api/contracts/[id]/vouchers/route.ts)
  *     - booking seat vouchers:  note = "booking_{bookingId}_seat{N}"
  *       (src/app/api/bookings/[id]/vouchers/route.ts)
@@ -32,7 +32,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigForLocationId, stripVoucherNotePrefix, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 
 interface UnifiGuestSession {
   mac: string;
@@ -49,8 +50,10 @@ type ParsedNote =
   | { kind: "booking"; bookingId: string; seatNumber: number }
   | null;
 
-function parseVoucherNote(note: string | undefined): ParsedNote {
-  if (!note) return null;
+function parseVoucherNote(rawNote: string | undefined): ParsedNote {
+  if (!rawNote) return null;
+  // Notes now lead with the location code ("PGD | TWV-C-0123_seat1"); older ones don't.
+  const note = stripVoucherNotePrefix(rawNote);
   const bookingMatch = note.match(/^booking_(.+)_seat(\d+)$/);
   if (bookingMatch) {
     return { kind: "booking", bookingId: bookingMatch[1], seatNumber: parseInt(bookingMatch[2], 10) };
@@ -130,11 +133,11 @@ export async function GET(request: NextRequest) {
   const isAdmin = dbUser.role === "admin";
 
   const locationId = request.nextUrl.searchParams.get("location_id");
-  let siteCfg = undefined;
-  if (locationId) {
-    const { data: loc } = await supabase
-      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", locationId).single();
-    if (loc) siteCfg = siteConfigFromLocation(loc);
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = await siteConfigForLocationId(locationId);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
   }
 
   try {
@@ -284,7 +287,7 @@ export async function GET(request: NextRequest) {
         .filter((c) => c.tokens.length > 0);
 
       for (const note of notesNeedingFuzzy) {
-        const normNote = normalizeForFuzzy(note);
+        const normNote = normalizeForFuzzy(stripVoucherNotePrefix(note));
         if (!normNote) continue;
         const noteTokens = new Set(significantTokens(normNote));
         // Full-substring match first (higher confidence), then fall back to
@@ -346,7 +349,7 @@ export async function GET(request: NextRequest) {
         .filter((c) => c.normalized.length >= 3);
 
       for (const note of notesNeedingCabin) {
-        const normNote = normalizeCabin(note);
+        const normNote = normalizeCabin(stripVoucherNotePrefix(note));
         if (!normNote) continue;
         const match = cabinCandidates.find((c) => normNote.includes(c.normalized) || c.normalized.includes(normNote));
         if (match) {

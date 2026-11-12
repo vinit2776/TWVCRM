@@ -1,16 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import { preventEnterSubmit } from "@/lib/utils";
+import { readAttribution } from "@/lib/public-forms/attribution-client";
+import { trackLead } from "@/lib/public-forms/track-lead";
+import { TurnstileWidget } from "@/components/public/turnstile-widget";
 
 export default function EnquirePage() {
   // Form state — only fields shown on this form
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [email, setEmail] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
   const [hpField, setHpField] = useState(""); // honeypot
 
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [reference, setReference] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -37,6 +43,8 @@ export default function EnquirePage() {
           mobile: mobile.trim(),
           email: email.trim() || undefined,
           hp_field: hpField,
+          attribution: readAttribution(),
+          turnstile_token: turnstileToken || undefined,
           source: "google_ads",
         }),
       });
@@ -46,6 +54,8 @@ export default function EnquirePage() {
         setError(json.error || "Something went wrong. Please try again.");
         return;
       }
+      setReference(typeof json.reference === "string" ? json.reference : null);
+      trackLead({ reference: typeof json.reference === "string" ? json.reference : null, source: "google_ads" });
       setSubmitted(true);
     } catch {
       setError("Network error. Please check your connection and try again.");
@@ -79,6 +89,12 @@ export default function EnquirePage() {
             <p className="text-gray-600 mt-2 text-base">
               Our team will contact you within <span className="font-semibold text-gray-800">24 hours</span>.
             </p>
+            {reference && (
+              <p className="mt-4 text-sm text-gray-600">
+                Your reference number is{" "}
+                <span className="font-mono font-semibold text-[#015E65]">{reference}</span>. Quote it when you speak to us.
+              </p>
+            )}
             <p className="text-gray-400 text-sm mt-4">
               We look forward to helping you find the perfect workspace.
             </p>
@@ -102,7 +118,7 @@ export default function EnquirePage() {
               </p>
             </div>
 
-            <form onSubmit={handleSubmit} noValidate>
+            <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} noValidate>
               {/* Honeypot — hidden from real users */}
               <div className="hidden" aria-hidden="true">
                 <input
@@ -163,6 +179,8 @@ export default function EnquirePage() {
                     {error}
                   </p>
                 )}
+
+                <TurnstileWidget onToken={setTurnstileToken} />
 
                 <button
                   type="submit"

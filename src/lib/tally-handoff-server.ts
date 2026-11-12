@@ -69,6 +69,7 @@ export async function setHandoffState(
   statementId: string,
   newState: HandoffState,
   trigger: string,
+  performedBy: string | null = null,
 ): Promise<void> {
   const { data: current } = await supabase
     .from("billing_statements")
@@ -102,13 +103,13 @@ export async function setHandoffState(
 
   // Audit log — drives the StatementTimeline component (PR A of lifecycle
   // visibility). performed_by is null for system-triggered transitions
-  // (webhook, cron, bridge sync); the trigger string identifies which
-  // pathway fired the change.
+  // (webhook, cron, bridge sync) that call this with no actor; the trigger
+  // string identifies which pathway fired the change either way.
   await supabase.from("audit_trail").insert({
     entity_type: "billing_statement",
     entity_id: statementId,
     action: "update",
-    performed_by: null,
+    performed_by: performedBy,
     changes: {
       handoff_state: { old: previousState, new: newState },
       trigger,
@@ -166,7 +167,12 @@ async function notifyAccountsOfHandoffTransition(
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         invoice_number,
         lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company)
-      )
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        case_number, client_name, client_company_name, bill_to,
+        aggregator:aggregators!cases_aggregator_id_fkey(name)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(name)
     `)
     .eq("id", statementId)
     .maybeSingle();
@@ -188,13 +194,26 @@ async function notifyAccountsOfHandoffTransition(
       invoice_number: string | null;
       lead: { first_name: string | null; last_name: string | null; company: string | null } | null;
     } | null;
+    case: {
+      case_number: string;
+      client_name: string;
+      client_company_name: string | null;
+      bill_to: "aggregator" | "client" | null;
+      aggregator: { name: string } | null;
+    } | null;
+    aggregator: { name: string } | null;
   };
 
   const party = statement.contract ?? statement.proposal ?? statement.invoice;
-  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "—";
+  const partyRef =
+    statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number
+    ?? statement.case?.case_number ?? statement.aggregator?.name ?? "—";
   const partyName =
     party?.lead?.company
     || [party?.lead?.first_name, party?.lead?.last_name].filter(Boolean).join(" ")
+    || (statement.case?.bill_to === "aggregator" ? statement.case?.aggregator?.name : undefined)
+    || statement.case?.client_company_name || statement.case?.client_name
+    || statement.aggregator?.name
     || "(unnamed customer)";
 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
@@ -204,7 +223,7 @@ async function notifyAccountsOfHandoffTransition(
     <p>${intimation.body}</p>
     <table style="border-collapse:collapse;margin:12px 0;font-size:14px;">
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Customer</td><td><strong>${escapeHtml(partyName)}</strong></td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:#666;">${statement.contract ? "Contract" : statement.proposal ? "Proposal" : "Invoice"}</td><td>${escapeHtml(partyRef)}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666;">${statement.contract ? "Contract" : statement.proposal ? "Proposal" : statement.invoice ? "Invoice" : statement.case ? "Case" : "Aggregator"}</td><td>${escapeHtml(partyRef)}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Statement</td><td>${escapeHtml(statement.statement_number ?? "—")}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Amount</td><td><strong>${formatCurrency(Number(statement.total_amount))}</strong></td></tr>
     </table>
@@ -244,6 +263,7 @@ export async function handleStatementPaid(
   supabase: SupabaseClient,
   statementId: string,
   trigger: string,
+  performedBy: string | null = null,
 ): Promise<void> {
   const { data: statement } = await supabase
     .from("billing_statements")
@@ -253,7 +273,11 @@ export async function handleStatementPaid(
       total_amount,
       proposal_id,
       invoice_id,
-      contract:contracts!billing_statements_contract_id_fkey(billing_mode)
+      case_id,
+      aggregator_id,
+      contract:contracts!billing_statements_contract_id_fkey(billing_mode),
+      case:cases!billing_statements_case_id_fkey(billing_mode, aggregator:aggregators!cases_aggregator_id_fkey(billing_mode)),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(billing_mode)
     `)
     .eq("id", statementId)
     .maybeSingle();
@@ -270,8 +294,40 @@ export async function handleStatementPaid(
   const billingMode = contract?.billing_mode;
   const proposalId = (statement as unknown as { proposal_id: string | null }).proposal_id;
   const invoiceId = (statement as unknown as { invoice_id: string | null }).invoice_id;
+  const caseId = (statement as unknown as { case_id: string | null }).case_id;
+  const aggregatorId = (statement as unknown as { aggregator_id: string | null }).aggregator_id;
 
   const currentState = (statement as unknown as { handoff_state: string | null }).handoff_state;
+
+  // Virtual Office statements (per-case or aggregator-consolidated).
+  // Aggregator-sourced ones (per-case or postpaid consolidated) honor the
+  // aggregator's own billing_mode, same as contracts. Direct-client cases
+  // have no aggregator to hold a mode, so they carry their own instead.
+  if (caseId || aggregatorId) {
+    const voAggregator = (statement as unknown as {
+      case: { billing_mode: "proforma_first" | "gst_direct" | null; aggregator: { billing_mode: "proforma_first" | "gst_direct" | null } | null } | null;
+      aggregator: { billing_mode: "proforma_first" | "gst_direct" | null } | null;
+    });
+    const voBillingMode = voAggregator.case?.aggregator?.billing_mode ?? voAggregator.case?.billing_mode ?? voAggregator.aggregator?.billing_mode;
+
+    if (voBillingMode === "proforma_first") {
+      if (currentState === "gst_sent_awaiting_payment") {
+        await setHandoffState(supabase, statementId, "complete", trigger, performedBy);
+        return;
+      }
+      await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger, performedBy);
+      return;
+    }
+
+    // gst_direct: the GST invoice was already issued via Tally handoff by
+    // the time payment lands.
+    if (currentState === "gst_sent_awaiting_payment") {
+      await setHandoffState(supabase, statementId, "complete", trigger, performedBy);
+      return;
+    }
+    await setHandoffState(supabase, statementId, "paid_awaiting_receipt_record", trigger, performedBy);
+    return;
+  }
 
   // A statement created from a proposal's first-month PI has no contract yet
   // (and therefore no billing_mode) — it is definitionally a proforma-first
@@ -302,31 +358,63 @@ export async function handleStatementPaid(
   }
 
   // Same reasoning applies to ad-hoc lead invoices (proforma_invoices) — no
-  // contract exists, always proforma-first. No mirror-back needed here: the
-  // /api/invoices/[id]/payment route already updates proforma_invoices itself.
+  // contract exists, always proforma-first. This mirror IS needed here: when
+  // payment is recorded from the lead page (/api/invoices/[id]/payment) that
+  // route already updates proforma_invoices itself, but this function is also
+  // reached from the accounting-side Record Payment route
+  // (billing-statements/[id]/payment, via finalizeBillingPayment) and the
+  // deposit-adjustment approval path — neither of those touch proforma_invoices,
+  // so without this the invoice stays stuck on "sent" even after the linked
+  // statement is correctly paid and its GST invoice issued.
+  if (invoiceId) {
+    const now = new Date().toISOString();
+    const { data: invoiceRow } = await supabase
+      .from("proforma_invoices")
+      .select("status")
+      .eq("id", invoiceId)
+      .maybeSingle();
+    if (invoiceRow && invoiceRow.status !== "paid") {
+      const { data: lastPayment } = await supabase
+        .from("billing_payments")
+        .select("payment_reference")
+        .eq("billing_statement_id", statementId)
+        .order("payment_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      await supabase
+        .from("proforma_invoices")
+        .update({
+          status: "paid",
+          paid_at: now,
+          payment_reference: lastPayment?.payment_reference ?? null,
+        })
+        .eq("id", invoiceId);
+    }
+  }
+
   if (proposalId || invoiceId) {
     if (currentState === "gst_sent_awaiting_payment") {
-      await setHandoffState(supabase, statementId, "complete", trigger);
+      await setHandoffState(supabase, statementId, "complete", trigger, performedBy);
       return;
     }
-    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger);
+    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger, performedBy);
     return;
   }
 
   // If GST invoice was already sent and we're now recording payment (e.g. bank
   // transfer on an Override/PI-cancelled statement), close the loop directly.
   if (currentState === "gst_sent_awaiting_payment") {
-    await setHandoffState(supabase, statementId, "complete", trigger);
+    await setHandoffState(supabase, statementId, "complete", trigger, performedBy);
     return;
   }
 
   if (billingMode === "proforma_first") {
-    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger);
+    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger, performedBy);
     return;
   }
 
   if (billingMode === "gst_direct") {
-    await setHandoffState(supabase, statementId, "paid_awaiting_receipt_record", trigger);
+    await setHandoffState(supabase, statementId, "paid_awaiting_receipt_record", trigger, performedBy);
     return;
   }
 
@@ -359,6 +447,7 @@ export async function handleStatementFinalized(
   statementId: string,
   billingMode: "proforma_first" | "gst_direct" | null | undefined,
   trigger: string,
+  performedBy: string | null = null,
 ): Promise<{ skipLegacyDispatch: boolean }> {
   const v2Enabled = await isHandoffV2Enabled(supabase);
   if (!v2Enabled) {
@@ -366,7 +455,7 @@ export async function handleStatementFinalized(
   }
 
   if (billingMode === "gst_direct") {
-    await setHandoffState(supabase, statementId, "direct_gst_requested", trigger);
+    await setHandoffState(supabase, statementId, "direct_gst_requested", trigger, performedBy);
     return { skipLegacyDispatch: true };
   }
 

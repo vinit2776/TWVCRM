@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -86,6 +87,10 @@ export async function POST(
     .eq("auth_id", user.id)
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { poId: id });
+  if (lockedChain) return lockedChain;
 
   if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json(
@@ -337,6 +342,10 @@ export async function PATCH(
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { poId });
+  if (lockedChain) return lockedChain;
+
   if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
@@ -427,6 +436,10 @@ export async function DELETE(
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { poId });
+  if (lockedChain) return lockedChain;
+
   if (!["admin", "manager"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Only managers and admins can reject deliveries" }, { status: 403 });
   }
@@ -440,7 +453,10 @@ export async function DELETE(
   if (poErr || !po) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
 
   if (!["partially_received", "received"].includes(po.status)) {
-    return NextResponse.json({ error: "Deliveries can only be rejected on partially received or received POs" }, { status: 422 });
+    const hint = ["invoice_received", "invoice_approved"].includes(po.status)
+      ? " This PO has an invoice — an admin must withdraw its bills first (un-approve them if approved)."
+      : "";
+    return NextResponse.json({ error: `Deliveries can only be rejected on partially received or received POs.${hint}` }, { status: 422 });
   }
 
   // Fetch delivery receipt + items (including the stock location/item

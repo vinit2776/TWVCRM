@@ -29,6 +29,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { Lead } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 function LeadCard({
   lead,
@@ -202,6 +203,7 @@ export default function PipelinePage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Pipeline" }} />
       <div>
         <h1 className="text-2xl font-bold">Pipeline</h1>
         <p className="text-sm text-muted-foreground">

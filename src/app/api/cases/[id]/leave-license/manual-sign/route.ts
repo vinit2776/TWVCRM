@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { caseAgreementGateError } from "@/lib/agreement-gate";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { advanceCaseOnAgreementExecuted } from "@/lib/case-status-events";
 
 /**
  * POST: Upload a manually signed stamp-paper PDF and mark the L&L agreement as executed.
@@ -69,12 +72,33 @@ export async function POST(
     return NextResponse.json({ error: "L&L Agreement not found" }, { status: 404 });
   }
 
-  const allowedStatuses = ["client_approved", "signing", "internally_approved", "draft"];
+  {
+    const clauseBlock = await caseAgreementGateError(supabase, caseId, agreementId);
+    if (clauseBlock) return NextResponse.json({ error: clauseBlock }, { status: 409 });
+  }
+
+  // sent_to_client belongs here: it is the state an agreement sits in from the
+  // moment it goes out until the client responds, which is exactly when a
+  // stamp-paper copy comes back signed. Leaving it out made uploading
+  // impossible on the mainstream path — and since uploading is what clears the
+  // DRAFT watermark, the agreement could never leave draft either.
+  const allowedStatuses = [
+    "draft",
+    "internally_approved",
+    "sent_to_client",
+    "client_approved",
+    "signing",
+  ];
   if (!allowedStatuses.includes(agreement.status)) {
     return NextResponse.json(
       { error: `Cannot upload a signed document when agreement is in '${agreement.status}' status` },
       { status: 400 }
     );
+  }
+
+  const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+  if (gateError) {
+    return NextResponse.json({ error: gateError }, { status: 400 });
   }
 
   const adminSupabase = await createAdminClient();
@@ -134,6 +158,8 @@ export async function POST(
       .from("cases")
       .update({ ll_agreement_status: "executed" })
       .eq("id", caseId);
+
+    await advanceCaseOnAgreementExecuted(supabase, caseId);
   }
 
   logAudit(supabase, {

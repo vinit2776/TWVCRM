@@ -1,9 +1,23 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { format, formatDistanceToNow, isAfter, isBefore, isToday, isValid } from "date-fns";
+import type { KeyboardEvent } from "react";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+// Browsers submit a <form> when Enter is pressed in any single-line input,
+// even ones that are just one field among many (e.g. a line-item's quantity
+// box). That silently saves and closes create/edit dialogs before the user
+// meant to submit. Textareas and buttons are left alone — a textarea's Enter
+// never auto-submits, and a focused button (e.g. the real Save button) should
+// still respond to Enter.
+export function preventEnterSubmit(e: KeyboardEvent<HTMLFormElement>) {
+  const target = e.target as HTMLElement;
+  if (e.key === "Enter" && target.tagName !== "TEXTAREA" && target.tagName !== "BUTTON") {
+    e.preventDefault();
+  }
 }
 
 export function formatDate(date: string | Date): string {
@@ -150,6 +164,32 @@ export function formatDuration(seconds: number): string {
 
 export function generateId(): string {
   return crypto.randomUUID();
+}
+
+/**
+ * Derives the real wall-clock duration (in hours) of a booking window from
+ * its start_time/end_time columns (format "HH:MM" or "HH:MM:SS").
+ *
+ * This is intentionally separate from `bookings.duration_hours`, which for
+ * daily-priced spaces stores "1" as a billing quantity (one day unit), not
+ * one hour — that column must never be read as a wall-clock duration.
+ * WiFi voucher validity and customer-facing duration displays should use
+ * this helper instead so a 10-hour day pass doesn't get a 2-hour voucher.
+ */
+export function bookingWindowHours(startTime: string, endTime: string): number {
+  const parse = (t: string): number => {
+    const [h, m, s] = t.split(":").map((n) => Number(n) || 0);
+    return h * 60 + m + (s || 0) / 60;
+  };
+  const startMin = parse(startTime);
+  let endMin = parse(endTime);
+  // Defensive: end-before-start (e.g. bad data, or midnight-crossing that
+  // isn't expected in this domain) — fall back to a full day rather than a
+  // negative or zero duration.
+  if (endMin <= startMin) {
+    endMin = startMin + 24 * 60;
+  }
+  return (endMin - startMin) / 60;
 }
 
 /**

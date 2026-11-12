@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
 import { computeSettlement, type SettlementPaymentStatus } from "@/lib/settlement";
+import { advanceCaseStage } from "@/lib/case-status-events";
+import { completeVoRenewal } from "@/lib/vo-renewal-completion";
 
 /**
  * Shared tail of "a payment landed on a statement": recompute settlement
@@ -23,9 +25,13 @@ export async function finalizeBillingPayment(
     statementTotalAmount: number | string | null;
     previousPaymentStatus: string;
     reason: string; // passed through to handleStatementPaid for its own logging
+    /** The user who recorded this payment, when one exists — surfaced on the
+     *  statement timeline's state-change entries. Omit for system-triggered
+     *  settlement (Razorpay webhook), which has no human actor. */
+    performedBy?: string | null;
   }
 ): Promise<{ paymentStatus: SettlementPaymentStatus; totalPaid: number; balanceDue: number }> {
-  const { statementId, statementTotalAmount, previousPaymentStatus, reason } = params;
+  const { statementId, statementTotalAmount, previousPaymentStatus, reason, performedBy = null } = params;
 
   const { data: allPayments } = await supabase
     .from("billing_payments")
@@ -43,9 +49,30 @@ export async function finalizeBillingPayment(
   }
 
   if (newPaymentStatus === "paid" && previousPaymentStatus !== "paid") {
+    // Every route that settles a payment funnels through here, so this is the
+    // one place a VO case's stage needs to learn about it.
+    const { data: stmt } = await supabase
+      .from("billing_statements")
+      .select("case_id, statement_type")
+      .eq("id", statementId)
+      .maybeSingle();
+    if (stmt?.case_id && stmt.statement_type === "vo_case") {
+      await advanceCaseStage(supabase, stmt.case_id as string, "paid");
+    }
+    if (stmt?.case_id && stmt.statement_type === "vo_renewal") {
+      // A renewal paid any way other than its Razorpay link (bank transfer
+      // recorded by accounts, or a verified Report paid) renews the case
+      // here. Never fails the payment that was just recorded.
+      try {
+        await completeVoRenewal(supabase, { statementId, performedBy, source: "recorded_payment" });
+      } catch (err) {
+        console.error("[billing-payment-settlement] VO renewal completion failed:", err);
+      }
+    }
+
     const v2Enabled = await isHandoffV2Enabled(supabase);
     if (v2Enabled) {
-      await handleStatementPaid(supabase, statementId, reason);
+      await handleStatementPaid(supabase, statementId, reason, performedBy);
     } else {
       try {
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();

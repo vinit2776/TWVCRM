@@ -40,7 +40,8 @@ export async function POST(
     .select(`
       id, statement_number, period_start, period_end, due_date, total_amount,
       payment_status, status, razorpay_payment_link_id, razorpay_payment_link_url,
-      reminder_count, last_reminder_sent_at, voided_at,
+      reminder_count, last_reminder_sent_at, voided_at, cancellation_requested_at,
+      gst_invoice_number, gst_invoice_path, pi_cancelled_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
@@ -59,6 +60,7 @@ export async function POST(
 
   if (error || !statement) return NextResponse.json({ error: "Statement not found" }, { status: 404 });
   if (statement.voided_at) return NextResponse.json({ error: "Cannot send reminder for a voided statement" }, { status: 400 });
+  if (statement.cancellation_requested_at) return NextResponse.json({ error: "A cancellation has been requested for this invoice, so reminders are stopped" }, { status: 400 });
   if (statement.payment_status === "paid") return NextResponse.json({ error: "Statement is already paid" }, { status: 400 });
   if (!["finalized", "exported"].includes(statement.status as string)) {
     return NextResponse.json({ error: "Statement must be finalized before sending a reminder" }, { status: 400 });
@@ -97,6 +99,10 @@ export async function POST(
     triggeredBy: "manual", triggeredByUserId: dbUser.id, ccPools,
   });
 
+  if (result.skipped) {
+    return NextResponse.json({ error: `Reminder not sent: ${result.skipped}` }, { status: 409 });
+  }
+
   logAudit(supabase, {
     entityType: "billing_statement",
     entityId: id,
@@ -117,6 +123,8 @@ export async function POST(
     whatsAppSent: result.whatsAppSent,
     recipient: result.recipient,
     errors: result.errors,
+    // True when the email went without a Pay button: no working link could be secured.
+    linkIssue: (result.linkIssues?.length ?? 0) > 0,
   });
 }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
+import { poIdsCoveringAsset } from "@/lib/procurement/amc-assets";
 
 export async function GET(
   _request: NextRequest,
@@ -29,10 +30,11 @@ export async function GET(
   const cat = Array.isArray(data.category) ? data.category[0] : data.category;
 
   // Check if this asset has an active AMC contract
+  const coveringPoIds = await poIdsCoveringAsset(supabase, data.id);
   const { count } = await supabase
     .from("purchase_orders")
     .select("id", { count: "exact", head: true })
-    .eq("linked_asset_id", data.id)
+    .in("id", coveringPoIds)
     .eq("po_type", "service")
     .in("amc_status", ["active", "expiring"]);
 

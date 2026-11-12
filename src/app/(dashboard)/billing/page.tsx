@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Plus,
   Receipt,
   MoreHorizontal,
@@ -19,11 +21,15 @@ import {
   Send,
   FileCheck,
   Printer,
+  Building2,
   Search,
+  Ban,
+  MinusCircle,
+  PauseCircle,
+  PlayCircle,
+  Loader2,
 } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -43,9 +49,14 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { EditUsageChargeDialog } from "@/components/billing/edit-usage-charge-dialog";
+import { UsageChargeDetailsDialog } from "@/components/billing/usage-charge-details-dialog";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
+import { LogFacilityUsageDialog } from "@/components/accounting/log-facility-usage-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
 const ViewStatementDialog = dynamic(
   () => import("@/components/billing/view-statement-dialog").then(m => ({ default: m.ViewStatementDialog })),
@@ -57,13 +68,17 @@ import { computeSettlement } from "@/lib/settlement";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { toast } from "sonner";
 import { MonthPicker } from "@/components/accounting/month-picker";
+import { UsageBillingBoard, type BoardCharge } from "@/components/billing/usage-billing-board";
+import type { UsageContractGroup } from "@/lib/usage-billing";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
 import { AgingBuckets } from "@/components/accounting/aging-buckets";
 import { ContractAccountingRow } from "@/components/accounting/contract-accounting-row";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 import { BillingPipelineBar } from "@/components/billing/billing-pipeline-bar";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
-import { MonthlyBillingTabs } from "@/components/billing/monthly-billing-tabs";
+import { UnbilledBilledTabs } from "@/components/billing/unbilled-billed-tabs";
+import { usageSourceLabel } from "@/lib/usage-source-label";
 // Per-tab components are dynamic-imported so the JS for tabs the user
 // never opens isn't downloaded. Each loader shows a small skeleton block.
 // SSR off because all four are client-state-driven (filters, dialogs).
@@ -84,7 +99,6 @@ function TabLoading({ label }: { label: string }) {
     </div>
   );
 }
-import { createClient } from "@/lib/supabase/client";
 
 // ── Status maps ──────────────────────────────────────────────────────────────
 
@@ -98,6 +112,31 @@ const USAGE_STATUS_LABELS: Record<string, string> = {
   billed:  "Billed",
   waived:  "Waived",
 };
+const USAGE_SOURCE_COLORS: Record<string, string> = {
+  manual:   "bg-slate-50 text-slate-700 border-slate-300",
+  print:    "bg-blue-50 text-blue-800 border-blue-200",
+  facility: "bg-purple-50 text-purple-800 border-purple-200",
+};
+
+// "Bills in: [month] [status]" tag — which billing cycle a charge belongs to,
+// and whether that cycle has already picked it up. See billingCycleOf() in
+// /api/usage-charges for how this is derived.
+const BILLING_CYCLE_TAG: Record<string, { text: string; className: string }> = {
+  cycle_open:          { text: "cycle still open",      className: "bg-slate-50 text-slate-600 border-slate-200" },
+  ready:               { text: "ready",                 className: "bg-blue-50 text-blue-800 border-blue-200" },
+  overdue:             { text: "⚠ overdue, never billed", className: "bg-red-50 text-red-700 border-red-200" },
+  billed:              { text: "billed",                className: "bg-green-50 text-green-700 border-green-200" },
+  waived:              { text: "waived",                className: "bg-gray-50 text-gray-600 border-gray-200" },
+  supplemental_needed: { text: "supplemental needed",   className: "bg-purple-50 text-purple-700 border-purple-200" },
+};
+
+/** Company name if set, else the contact's full name, else "—" — same
+ *  fallback order unbilled-queue.ts's customerNameOf uses, so a charge's
+ *  customer reads the same way here as it does in the Unbilled queue. */
+function customerNameOf(lead?: { first_name?: string; last_name?: string; company?: string } | null): string {
+  if (!lead) return "—";
+  return lead.company || `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() || "—";
+}
 
 // ── Types — billing ──────────────────────────────────────────────────────────
 
@@ -124,6 +163,24 @@ interface UsageCharge {
   charge_date: string;
   status: string;
   notes?: string;
+  // Present on every row returned by /api/usage-charges — it merges three
+  // tables (ad-hoc charges, print-quota entries, facility entries) into this
+  // shape. "manual" rows are the only ones Edit applies to; billable is only
+  // a meaningful yes/no distinction for print/facility (null = n/a, since a
+  // manual charge is always billable unless waived, which status already shows).
+  source?: "manual" | "print" | "facility";
+  billable?: boolean | null;
+  billing_cycle_status?: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
+  billing_cycle_label?: string;
+  // Manual rows only — non-null excludes this charge from the next Generate
+  // Drafts sweep without changing `status`, which stays "pending" throughout.
+  held_at?: string | null;
+  hold_reason?: string | null;
+  waive_reason?: string | null;
+  waived_at?: string | null;
+  waived_by_name?: string | null;
+  /** Set by "Bill anyway" on a stale charge — see USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS. */
+  reviewed_at?: string | null;
 }
 
 interface BillingStatement {
@@ -316,8 +373,12 @@ interface MonthlySummary {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function BillingPage() {
+function BillingPageInner() {
   const now = new Date();
+  // Read from the router, not window.location: on a client-side navigation
+  // (e.g. the contract page's Invoice customer wizard) the address bar still
+  // holds the previous URL while this first renders.
+  const searchParams = useSearchParams();
 
   // ── Month ─────────────────────────────────────────────────────────────────
   const [year, setYear]   = useState(now.getFullYear());
@@ -335,27 +396,46 @@ export default function BillingPage() {
 
   // ── Tab ───────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(() => {
-    if (typeof window !== "undefined") {
-      const tab = new URLSearchParams(window.location.search).get("tab") ?? "statements";
-      // "contracts" was merged into "statements" — redirect legacy URLs
-      return tab === "contracts" ? "statements" : tab;
-    }
-    return "statements";
+    const tab = searchParams.get("tab") ?? "rentals";
+    // Legacy redirects: "contracts" was merged into "statements" (2026),
+    // which itself later split back into "rentals" / "usage" — a link
+    // built for either era (including the ?tab=statements&type=usage
+    // deep link the billing-run email sends) still lands somewhere sane.
+    if (tab === "contracts") return "rentals";
+    if (tab === "statements") return searchParams.get("type") === "usage" ? "usage" : "rentals";
+    return tab;
   });
 
+  // ?search= seeds the rent and usage search boxes (the contract page's
+  // Invoice customer wizard links here with a contract number).
+  const [initialSearch] = useState(() => searchParams.get("search") ?? "");
+  // ?location_id= preselects the electricity tab's location filter.
+  const [initialLocationId] = useState(() => searchParams.get("location_id") ?? "");
+  // ?open=1 opens the dialog for the thing being invoiced (rent invoice, Capture Bill).
+  // "1" = open the one invoiceable item; any other value is a specific rent queue row id.
+  const [initialOpenParam] = useState(() => searchParams.get("open") ?? "");
+  const initialOpen = initialOpenParam === "1";
+  const initialOpenRowId = initialOpenParam && initialOpenParam !== "1" ? initialOpenParam : "";
+  // ?add_charge=<contract id> opens the Add usage charge dialog for that contract.
+  const [initialAddChargeContractId] = useState(() => searchParams.get("add_charge") ?? "");
+
   // ── Section grouping (Phase 3 finance consolidation) ─────────────────────
-  // Three finance-centric buckets. "contracts" merged into "statements" (Invoicing)
-  // so the full billing workflow — usage entry, finalize, send proforma, record payment —
-  // lives in one unified view under Invoicing > Statements.
+  // Three finance-centric buckets. "contracts" merged into "statements" (Invoicing),
+  // which itself later split into "rentals" and "usage" once usage needed its own
+  // discovery/generate flow instead of sharing one mixed view.
   const SECTION_TABS = {
-    receivables: ["proposals", "usage-charges"],
+    // Order matters here beyond membership: handleSectionChange lands on
+    // index [0] when switching into a section, so the two visible tabs come
+    // first — "proposals" stays reachable by deep link (sectionForTab still
+    // maps it here) but is no longer a landing tab or a visible trigger.
+    receivables: ["usage-charges", "usage", "proposals"],
     collections: ["walkin", "cash", "refunds"],
-    invoicing:   ["statements", "gst", "retained-payments", "electricity"],
+    invoicing:   ["rentals", "gst", "retained-payments", "electricity"],
   } as const;
   type Section = keyof typeof SECTION_TABS;
   const sectionForTab = (tab: string): Section => {
-    // Legacy: "contracts" tab was merged into "statements" under invoicing
-    if (tab === "contracts") return "invoicing";
+    // Legacy: "contracts" and "statements" both live under invoicing now.
+    if (tab === "contracts" || tab === "statements") return "invoicing";
     for (const s of Object.keys(SECTION_TABS) as Section[]) {
       if ((SECTION_TABS[s] as readonly string[]).includes(tab)) return s;
     }
@@ -386,22 +466,249 @@ export default function BillingPage() {
   const [chargesLoading, setChargesLoading]           = useState(true);
   const [chargesPage, setChargesPage]                 = useState(1);
   const [chargesContractFilter, setChargesContractFilter] = useState("");
+  // Unbilled is the working view — always status=pending, no status picker
+  // (there's nothing to choose). History is the reference view for what's
+  // already resolved; chargesStatusFilter there narrows within it
+  // (""=Billed+Waived combined, or a single status) but can never include
+  // pending — that's what makes it "history" rather than a second copy of
+  // Unbilled.
+  const [chargesView, setChargesView]                 = useState<"unbilled" | "history">("unbilled");
   const [chargesStatusFilter, setChargesStatusFilter] = useState("");
   const [chargesDateFrom, setChargesDateFrom]         = useState("");
   const [chargesDateTo, setChargesDateTo]             = useState("");
   const [chargesSearchQuery, setChargesSearchQuery]   = useState("");
-  const [addChargeOpen, setAddChargeOpen]             = useState(false);
+  const [addChargeOpen, setAddChargeOpen]             = useState(!!initialAddChargeContractId);
+  const [addChargeContractId, setAddChargeContractId] = useState<string | undefined>(initialAddChargeContractId || undefined);
   const [editChargeOpen, setEditChargeOpen]           = useState(false);
   const [editingCharge, setEditingCharge]             = useState<UsageCharge | null>(null);
+  const [viewChargeOpen, setViewChargeOpen]           = useState(false);
+  const [viewingCharge, setViewingCharge]             = useState<UsageCharge | null>(null);
   const [printEntryOpen, setPrintEntryOpen]           = useState(false);
+  const [facilityUsageOpen, setFacilityUsageOpen]     = useState(false);
+
+  // ── Per-charge review actions: waive fully, reduce (waive partly), hold ──
+  const [waiveChargeTarget, setWaiveChargeTarget]       = useState<UsageCharge | null>(null);
+  const [waiveChargeReason, setWaiveChargeReason]       = useState("");
+  const [waiveChargeReasonError, setWaiveChargeReasonError] = useState(false);
+  const [waiveChargeSubmitting, setWaiveChargeSubmitting]   = useState(false);
+
+  const [reduceChargeTarget, setReduceChargeTarget]     = useState<UsageCharge | null>(null);
+  const [reduceChargeAmount, setReduceChargeAmount]     = useState("");
+  const [reduceChargeReason, setReduceChargeReason]     = useState("");
+  const [reduceChargeError, setReduceChargeError]       = useState<string | null>(null);
+  const [reduceChargeSubmitting, setReduceChargeSubmitting] = useState(false);
+
+  const [holdChargeTarget, setHoldChargeTarget]         = useState<UsageCharge | null>(null);
+  const [holdChargeReason, setHoldChargeReason]         = useState("");
+  const [holdChargeReasonError, setHoldChargeReasonError]   = useState(false);
+  const [holdChargeSubmitting, setHoldChargeSubmitting]     = useState(false);
+
+  // Manual charges live on usage_charges; print/facility are separate
+  // tables with their own PATCH endpoints — same action verbs, different URL.
+  const usageChargeEndpoint = (charge: UsageCharge) =>
+    charge.source === "print"    ? `/api/accounting/print-usage/${charge.id}` :
+    charge.source === "facility" ? `/api/accounting/facility-usage/${charge.id}` :
+    `/api/usage-charges/${charge.id}`;
+
+  // A pending charge past this many days needs an explicit "Bill anyway"
+  // (or Waive / Hold) before it can reach an invoice — see
+  // USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS's own doc comment.
+  const isChargeStale = (charge: UsageCharge) => {
+    if (charge.reviewed_at) return false;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS);
+    return charge.charge_date < cutoff.toISOString().slice(0, 10);
+  };
+
+  // Replaces the "Bills in: [month] · [cycle state]" tag on the Unbilled
+  // view with a plain age — the cycle-status vocabulary (cycle_open / ready
+  // / overdue / supplemental_needed) is implementation detail now that
+  // generateUsageStatements sweeps anything outstanding regardless of month
+  // (see the usage-billing-engine PR); all that actually matters to someone
+  // reviewing this list is "how long has this been sitting here."
+  const chargeAgeLabel = (charge: UsageCharge): { text: string; className: string } => {
+    const days = Math.floor((Date.now() - new Date(charge.charge_date + "T00:00:00").getTime()) / 86400000);
+    const text = days <= 0 ? "Today" : days === 1 ? "1 day ago" : `${days} days ago`;
+    const className = days > USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS ? "text-red-600 font-medium"
+      : days > 30 ? "text-amber-600"
+      : "text-muted-foreground";
+    return { text, className };
+  };
+
+  const submitWaiveCharge = async () => {
+    if (!waiveChargeTarget) return;
+    if (!waiveChargeReason.trim()) { setWaiveChargeReasonError(true); return; }
+    setWaiveChargeSubmitting(true);
+    try {
+      const body = waiveChargeTarget.source === "print" || waiveChargeTarget.source === "facility"
+        ? { waive: true, waive_reason: waiveChargeReason.trim() }
+        : { status: "waived", waive_reason: waiveChargeReason.trim() };
+      const res = await fetch(usageChargeEndpoint(waiveChargeTarget), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        toast.success("Charge waived");
+        setWaiveChargeTarget(null);
+        setWaiveChargeReason("");
+        setWaiveChargeReasonError(false);
+        refreshCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to waive charge");
+      }
+    } finally {
+      setWaiveChargeSubmitting(false);
+    }
+  };
+
+  const submitReduceCharge = async () => {
+    if (!reduceChargeTarget) return;
+    const newTotal = Number(reduceChargeAmount);
+    if (!reduceChargeAmount || Number.isNaN(newTotal) || newTotal < 0) {
+      setReduceChargeError("Enter a valid amount.");
+      return;
+    }
+    if (newTotal >= reduceChargeTarget.total) {
+      setReduceChargeError(`Enter an amount less than the current total (${formatCurrency(reduceChargeTarget.total)}).`);
+      return;
+    }
+    if (!reduceChargeReason.trim()) {
+      setReduceChargeError("Enter a reason for the reduction.");
+      return;
+    }
+    setReduceChargeSubmitting(true);
+    try {
+      // Field name differs per source: manual keeps Qty x Unit Price = Total
+      // exact (see the CREATE route's own doc comment on why); print/facility
+      // have a single billed amount to override instead.
+      const body: Record<string, unknown> = { reduction_reason: reduceChargeReason.trim() };
+      if (reduceChargeTarget.source === "print") {
+        body.amount = newTotal;
+      } else if (reduceChargeTarget.source === "facility") {
+        body.total_charge = newTotal;
+      } else {
+        body.total = newTotal;
+        body.unit_price = reduceChargeTarget.quantity
+          ? parseFloat((newTotal / reduceChargeTarget.quantity).toFixed(2))
+          : newTotal;
+      }
+      const res = await fetch(usageChargeEndpoint(reduceChargeTarget), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        toast.success("Charge amount reduced");
+        setReduceChargeTarget(null);
+        setReduceChargeAmount("");
+        setReduceChargeReason("");
+        setReduceChargeError(null);
+        refreshCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        setReduceChargeError(err?.error || "Failed to reduce charge");
+      }
+    } finally {
+      setReduceChargeSubmitting(false);
+    }
+  };
+
+  const submitHoldCharge = async () => {
+    if (!holdChargeTarget) return;
+    if (!holdChargeReason.trim()) { setHoldChargeReasonError(true); return; }
+    setHoldChargeSubmitting(true);
+    try {
+      const res = await fetch(usageChargeEndpoint(holdChargeTarget), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hold: true, hold_reason: holdChargeReason.trim() }),
+      });
+      if (res.ok) {
+        toast.success("Charge held — it won't be billed until released");
+        setHoldChargeTarget(null);
+        setHoldChargeReason("");
+        setHoldChargeReasonError(false);
+        refreshCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to hold charge");
+      }
+    } finally {
+      setHoldChargeSubmitting(false);
+    }
+  };
+
+  const releaseChargeHold = async (charge: UsageCharge) => {
+    try {
+      const res = await fetch(usageChargeEndpoint(charge), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hold: false }),
+      });
+      if (res.ok) {
+        toast.success("Hold released");
+        refreshCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to release hold");
+      }
+    } catch {
+      toast.error("Failed to release hold");
+    }
+  };
+
+  const submitReviewCharge = async (charge: UsageCharge) => {
+    try {
+      const res = await fetch(usageChargeEndpoint(charge), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ review: true }),
+      });
+      if (res.ok) {
+        toast.success("Reviewed — it's now included in its month's invoice");
+        refreshCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to mark as reviewed");
+      }
+    } catch {
+      toast.error("Failed to mark as reviewed");
+    }
+  };
+
+  // The grouped board's charges → the UsageCharge shape the existing
+  // waive / reduce / hold / release / review dialogs already work with.
+  const boardToUsageCharge = (c: BoardCharge, g: UsageContractGroup): UsageCharge => ({
+    id: c.id,
+    source: c.source,
+    description: c.description,
+    quantity: c.quantity,
+    unit_price: c.unitPrice,
+    total: c.amount,
+    charge_date: c.date,
+    status: "pending",
+    held_at: c.held ? "held" : null,
+    hold_reason: c.holdReason,
+    reviewed_at: c.reviewed ? "reviewed" : null,
+    contract_id: g.contractId,
+    contract: { id: g.contractId, contract_number: g.contractNumber },
+  } as UsageCharge);
+
+  const openEditManualCharge = async (chargeId: string) => {
+    const res = await fetch(`/api/usage-charges/${chargeId}`);
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.data) { toast.error(json?.error || "Couldn't load the charge"); return; }
+    setEditingCharge(json.data as UsageCharge);
+    setEditChargeOpen(true);
+  };
 
   // ── Billing Statements ────────────────────────────────────────────────────
   const [statements, setStatements]                       = useState<BillingStatement[]>([]);
   const [statementsLoading, setStatementsLoading]         = useState(true);
   const [statementsPage, setStatementsPage]               = useState(1);
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
-  // Filter: 'all' | 'rent' | 'usage'
-  const [stmtTypeFilter, setStmtTypeFilter]               = useState<"all" | "rent" | "usage">("all");
 
   // Manual monthly billing — handled by <ProformaBillingCard /> per-mode. Cards
   // own their own preview/run state; the page only computes the period labels.
@@ -427,40 +734,47 @@ export default function BillingPage() {
     return { label, nearMonthEnd, deadlineLabel, deadlineShifted };
   })();
 
-  // Current-month label (for the Usage Drafts card, which bills the month that just closed)
-  const currentMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth())
-    .toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-
   // Refresh statements + monthly summary after a successful run from any card
   const refreshAfterRun = async () => { await fetchStatements(); await fetchData(); };
 
-  const [viewStatementId, setViewStatementId]             = useState<string | null>(null);
+  // Deep-link support (e.g. the Billing Reconciliation report links straight to
+  // an invoice): ?statement=<id> opens the dialog. A lazy useState initializer
+  // alone only fires on a hard reload — Next's router reuses this page's
+  // already-mounted instance on a client-side <Link> navigation from another
+  // route, so the initializer never re-runs and the dialog silently fails to
+  // open. usePathname() IS reactive across that navigation (its return value
+  // updates on the reused instance), so re-reading the query string whenever
+  // it changes catches the soft-navigation case too.
+  const [viewStatementId, setViewStatementId]             = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search).get("statement");
+    }
+    return null;
+  });
+  const pathname = usePathname();
+  useEffect(() => {
+    const sid = new URLSearchParams(window.location.search).get("statement");
+    if (sid) setViewStatementId(sid);
+  }, [pathname]);
 
   // ── Record Payment dialog (form lives in RecordPaymentDialog) ────────────
   const [recordPaymentDialogOpen, setRecordPaymentDialogOpen]   = useState(false);
   const [recordPaymentStatementId, setRecordPaymentStatementId] = useState<string | null>(null);
   const [recordPaymentBalance, setRecordPaymentBalance]         = useState<number | null>(null);
 
-  // ── Void Statement dialog ────────────────────────────────────────────────
-  const [voidDialogOpen, setVoidDialogOpen]       = useState(false);
-  const [voidStatementId, setVoidStatementId]     = useState<string | null>(null);
-  const [voidReason, setVoidReason]               = useState("");
-  const [voidSubmitting, setVoidSubmitting]       = useState(false);
-
   // ── Contract list for filter dropdowns ───────────────────────────────────
   const [contractFilters, setContractFilters] = useState<ContractFilter[]>([]);
 
 
   // ── Get user role ────────────────────────────────────────────────────────
+  // Via /api/me (server-to-server) rather than a browser→supabase.co query:
+  // when that direct call is blocked, userRole stayed null and silently hid
+  // every role-gated control on this page (Print/Facility usage, Send, …).
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (user) {
-        const { data } = await supabase
-          .from("users").select("role").eq("auth_id", user.id).single();
-        setUserRole(data?.role || "sales_rep");
-      }
-    });
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((j: { role: string | null }) => { setUserRole(j.role || "sales_rep"); })
+      .catch(() => toast.error("Couldn't load your role — some actions may be hidden. Refresh to retry."));
   }, []);
 
   // ── Fetch monthly summary (with AbortController for cleanup) ─────────────
@@ -507,12 +821,25 @@ export default function BillingPage() {
   // ── Fetch usage charges (with AbortController) ──────────────────────────
   const chargesControllerRef = useRef<AbortController | null>(null);
 
+  // The grouped Unbilled board loads its own data; bump this after any charge
+  // mutation so it refetches alongside the History table.
+  const [boardRefreshKey, setBoardRefreshKey] = useState(0);
+  const refreshCharges = useCallback(() => {
+    void fetchChargesRef.current?.();
+    setBoardRefreshKey((k) => k + 1);
+  }, []);
+  const fetchChargesRef = useRef<(() => Promise<void>) | null>(null);
+
   const fetchCharges = useCallback(async (signal?: AbortSignal) => {
     setChargesLoading(true);
     try {
       const params = new URLSearchParams({ page: String(chargesPage), limit: "25" });
       if (chargesContractFilter) params.set("contract_id", chargesContractFilter);
-      if (chargesStatusFilter)   params.set("status", chargesStatusFilter);
+      // Unbilled is always exactly "pending". History is anything but —
+      // narrowed to one status if chosen, otherwise both non-pending
+      // statuses combined (see the comma-separated `status` support in
+      // GET /api/usage-charges).
+      params.set("status", chargesView === "unbilled" ? "pending" : (chargesStatusFilter || "billed,waived"));
       if (chargesDateFrom)       params.set("date_from", chargesDateFrom);
       if (chargesDateTo)         params.set("date_to", chargesDateTo);
       const res = await fetch(`/api/usage-charges?${params}`, { signal });
@@ -528,7 +855,8 @@ export default function BillingPage() {
     } finally {
       if (!signal?.aborted) setChargesLoading(false);
     }
-  }, [chargesPage, chargesContractFilter, chargesStatusFilter, chargesDateFrom, chargesDateTo]);
+  }, [chargesPage, chargesContractFilter, chargesView, chargesStatusFilter, chargesDateFrom, chargesDateTo]);
+  useEffect(() => { fetchChargesRef.current = () => fetchCharges(); }, [fetchCharges]);
 
   // Only fire on the Usage Charges tab — saves a round-trip on first load
   // for users who never open it.
@@ -566,10 +894,11 @@ export default function BillingPage() {
     }
   }, [statementsPage]);
 
-  // Only fire on the Statements tab — saves a round-trip on first load
-  // for users who land on contracts/cash/gst tabs.
+  // Only fire on the Rentals/Usage tabs (the old combined "Statements" tab,
+  // now split in two) — saves a round-trip on first load for users who land
+  // on contracts/cash/gst tabs.
   useEffect(() => {
-    if (activeTab !== "statements") return;
+    if (activeTab !== "rentals" && activeTab !== "usage") return;
     statementsControllerRef.current?.abort();
     const controller = new AbortController();
     statementsControllerRef.current = controller;
@@ -621,50 +950,6 @@ export default function BillingPage() {
     } catch { toast.error("Failed to finalize statement"); }
   };
 
-  const handleVoidStatement = async () => {
-    if (!voidStatementId || !voidReason.trim()) return;
-    setVoidSubmitting(true);
-    try {
-      const res = await fetch(`/api/billing-statements/${voidStatementId}/void`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ void_reason: voidReason.trim() }),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        toast.success(json.message || "Statement voided and replacement draft created");
-        setVoidDialogOpen(false);
-        setVoidStatementId(null);
-        setVoidReason("");
-        fetchStatements();
-        fetchData();
-      } else if (json.issuance_channel === "tally") {
-        // Tally-issued invoice — can't be plain-voided. Route to the CRM-first
-        // cancel: post a credit note in Tally; the statement voids once Tally
-        // confirms the reversal.
-        const cancelRes = await fetch(`/api/billing-statements/${voidStatementId}/cancel-tally`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: voidReason.trim() }),
-        });
-        const cancelJson = await cancelRes.json();
-        if (cancelRes.ok) {
-          toast.success(cancelJson.message || "Credit note queued — invoice will cancel once Tally confirms.");
-          setVoidDialogOpen(false);
-          setVoidStatementId(null);
-          setVoidReason("");
-          fetchStatements();
-          fetchData();
-        } else {
-          toast.error(cancelJson.error || "Failed to queue the Tally credit note");
-        }
-      } else {
-        toast.error(json.error || "Failed to void statement");
-      }
-    } catch { toast.error("Failed to void statement"); }
-    setVoidSubmitting(false);
-  };
-
   const handleSendProforma = async (id: string) => {
     const tid = toast.loading("Generating proforma & payment link…");
     try {
@@ -676,7 +961,11 @@ export default function BillingPage() {
       const json = await res.json();
       if (res.ok) {
         toast.dismiss(tid);
-        if (json.emailedTo) {
+        if (json.handedToAccounts) {
+          toast.success("Handed to accounts — GST invoice will be issued from the Tally Inbox");
+        } else if (json.standby) {
+          toast.warning("Nothing was sent — GST invoicing is on standby.");
+        } else if (json.emailedTo) {
           toast.success(`Proforma sent to ${json.emailedTo}`);
         } else if (json.razorpayLinkUrl) {
           toast.warning("Proforma generated — no email on file. Share the payment link manually with the client.");
@@ -737,7 +1026,9 @@ export default function BillingPage() {
     setChargesSearchQuery("");
   };
 
-  const hasChargesFilters = chargesContractFilter || chargesStatusFilter || chargesDateFrom || chargesDateTo || chargesSearchQuery;
+  // chargesStatusFilter only counts as an active filter in History view —
+  // in Unbilled it's unused (status is implicitly, always "pending").
+  const hasChargesFilters = chargesContractFilter || (chargesView === "history" && chargesStatusFilter) || chargesDateFrom || chargesDateTo || chargesSearchQuery;
 
   // Client-side text search over already-fetched charges
   const filteredCharges = chargesSearchQuery.trim()
@@ -757,12 +1048,27 @@ export default function BillingPage() {
     : charges;
   const isLocked      = summary?.period?.status === "locked";
   const selectedMonth = `${year}-${String(month).padStart(2, "0")}`;
+  // Add-usage dialogs pre-fill to the month picked above, not the real
+  // current date — a charge for a past month you're reviewing otherwise
+  // silently lands in this month. Current month → today; past → its last
+  // day; future → its first day.
+  const defaultChargeDate = (() => {
+    const today = new Date();
+    const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    if (todayYmd.startsWith(selectedMonth)) return todayYmd;
+    if (selectedMonth < todayYmd.slice(0, 7)) {
+      const last = new Date(year, month, 0).getDate();
+      return `${selectedMonth}-${String(last).padStart(2, "0")}`;
+    }
+    return `${selectedMonth}-01`;
+  })();
   const pendingHandover = cashHandovers.filter((c) => c.cash_handover_status === "pending_handover");
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Billing" }} />
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -830,21 +1136,25 @@ export default function BillingPage() {
       )}
 
       {/* ── Section selector (Phase 3) ─────────────────────────────────────
-          Three finance-centric buckets above the tab list so the screen
-          tells finance "what owes me / what came in / what goes out"
-          before forcing them to pick a sub-view.
-            • Pre-invoice — Proposals (awaiting deposit), Usage Charges (queued for next statement)
-            • Collections — Walk-in, Cash Handovers
-            • Invoicing   — GST Invoices, Statements
+          Two working sections — everything else that used to compete for
+          space here (Proposals, GST Invoices, Retained Payments, Electricity,
+          Collections) is hidden as noise, not deleted: each tab's code and
+          content stay reachable by deep link (?tab=...), see sectionForTab
+          and SECTION_TABS above.
+            • Billing for usage  — Usage Charges (capture + grouped billing) + Usage invoices
+              (bill it) — one workflow, split into two steps of the same job.
+            • Billing for rental — Rentals only. No sub-tab bar renders here
+              since there's exactly one thing to show (see the Tabs block
+              below) — GST Invoices/Retained Payments/Electricity/Collections
+              stay mapped to "invoicing" for routing but aren't offered here.
           Renamed from "Receivables" so it no longer collides with the
           accounting-true /accounting/receivables page (invoiced-but-unpaid
           billing statements). This bucket is pre-invoice work-in-progress.
       */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
         {([
-          { key: "receivables", label: "Pre-invoice", hint: "Proposals & charges awaiting invoicing" },
-          { key: "collections", label: "Collections", hint: "Cash that came in" },
-          { key: "invoicing",   label: "Invoicing",   hint: "Billing & statements" },
+          { key: "receivables", label: "Billing for usage", hint: "Usage charges & billing" },
+          { key: "invoicing",   label: "Billing for rental", hint: "Billing & statements" },
         ] as const).map((s) => {
           const isActive = section === s.key;
           return (
@@ -871,43 +1181,38 @@ export default function BillingPage() {
       {section === "invoicing" && pipeline && (
         <BillingPipelineBar
           data={pipeline}
-          onStageClick={() => setActiveTab("statements")}
+          onStageClick={() => setActiveTab("rentals")}
         />
       )}
 
-      {/* Sub-tabs — only the ones inside the active section render. */}
+      {/* Sub-tabs — only the ones inside the active section render. "invoicing"
+          renders no TabsList at all: with GST/Retained Payments/Electricity
+          hidden, Rentals is the only thing left, so a one-item tab bar would
+          just be noise above its own content. */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <div className="overflow-x-auto pb-1">
-          <TabsList className="w-max">
-            {section === "receivables" && (
-              <>
-                <TabsTrigger value="proposals">Proposals</TabsTrigger>
-                <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
-              </>
-            )}
-            {section === "collections" && (
-              <>
-                <TabsTrigger value="walkin">
-                  Walk-in{!summaryLoading && summary ? ` (${summary.walkin_payments.length})` : ""}
-                </TabsTrigger>
-                <TabsTrigger value="cash">
-                  Cash{!summaryLoading ? ` (${pendingHandover.length} pending)` : ""}
-                </TabsTrigger>
-                <TabsTrigger value="refunds">Refunds</TabsTrigger>
-              </>
-            )}
-            {section === "invoicing" && (
-              <>
-                <TabsTrigger value="statements">
-                  Billing{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
-                </TabsTrigger>
-                <TabsTrigger value="gst">GST Invoices</TabsTrigger>
-                <TabsTrigger value="retained-payments">Retained Payments</TabsTrigger>
-                <TabsTrigger value="electricity">Electricity</TabsTrigger>
-              </>
-            )}
-          </TabsList>
-        </div>
+        {section !== "invoicing" && (
+          <div className="overflow-x-auto pb-1">
+            <TabsList className="w-max">
+              {section === "receivables" && (
+                <>
+                  <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
+                  <TabsTrigger value="usage">Usage invoices</TabsTrigger>
+                </>
+              )}
+              {section === "collections" && (
+                <>
+                  <TabsTrigger value="walkin">
+                    Walk-in{!summaryLoading && summary ? ` (${summary.walkin_payments.length})` : ""}
+                  </TabsTrigger>
+                  <TabsTrigger value="cash">
+                    Cash{!summaryLoading ? ` (${pendingHandover.length} pending)` : ""}
+                  </TabsTrigger>
+                  <TabsTrigger value="refunds">Refunds</TabsTrigger>
+                </>
+              )}
+            </TabsList>
+          </div>
+        )}
 
         {/* ── Contracts ─────────────────────────────────────────────────── */}
         <TabsContent value="contracts" className="space-y-3 mt-4">
@@ -1010,7 +1315,24 @@ export default function BillingPage() {
 
         {/* ── Usage Charges ─────────────────────────────────────────────── */}
         <TabsContent value="usage-charges" className="space-y-4 mt-4">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { setChargesView("unbilled"); setChargesStatusFilter(""); setChargesPage(1); }}
+              className={`px-3 py-1.5 rounded-md text-sm font-semibold border transition-all ${chargesView === "unbilled" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
+            >
+              Unbilled
+            </button>
+            <button
+              type="button"
+              onClick={() => { setChargesView("history"); setChargesStatusFilter(""); setChargesPage(1); }}
+              className={`px-3 py-1.5 rounded-md text-sm font-semibold border transition-all ${chargesView === "history" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
+            >
+              Billed &amp; Waived History
+            </button>
+          </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            {chargesView === "history" ? (
             <div className="flex flex-wrap items-center gap-2">
               {/* Free-text search — description, contract#, booking#, customer, status */}
               <div className="relative">
@@ -1043,18 +1365,24 @@ export default function BillingPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Select
-                value={chargesStatusFilter}
-                onValueChange={(val) => { setChargesStatusFilter(val === "all" ? "" : val); setChargesPage(1); }}
-              >
-                <SelectTrigger className="w-[140px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  {Object.entries(USAGE_STATUS_LABELS).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Unbilled is always exactly "pending" — nothing to choose.
+                  History defaults to Billed+Waived combined; this narrows to
+                  just one. Pending is deliberately absent as an option here
+                  — that's what keeps History from becoming a second copy of
+                  Unbilled. */}
+              {chargesView === "history" && (
+                <Select
+                  value={chargesStatusFilter}
+                  onValueChange={(val) => { setChargesStatusFilter(val === "all" ? "" : val); setChargesPage(1); }}
+                >
+                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="Billed + Waived" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Billed + Waived</SelectItem>
+                    <SelectItem value="billed">Billed</SelectItem>
+                    <SelectItem value="waived">Waived</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
               <Input
                 type="date"
                 value={chargesDateFrom}
@@ -1075,16 +1403,49 @@ export default function BillingPage() {
                 </Button>
               )}
             </div>
-            {["admin", "accounts", "manager"].includes(userRole ?? "") && (
-              <Button variant="outline" onClick={() => setPrintEntryOpen(true)}>
-                <Printer className="mr-2 h-4 w-4" />Log Print Usage
-              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Every unbilled charge. Each contract-month is one invoice, sent only when you click Review &amp; send.
+              </p>
             )}
-            <Button onClick={() => setAddChargeOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />Add Charge
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button><Plus className="mr-2 h-4 w-4" />Add usage</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setAddChargeOpen(true)}>
+                  <Receipt className="mr-2 h-4 w-4" />Manual charge
+                </DropdownMenuItem>
+                {["admin", "accounts", "manager"].includes(userRole ?? "") && (
+                  <DropdownMenuItem onClick={() => setPrintEntryOpen(true)}>
+                    <Printer className="mr-2 h-4 w-4" />Print usage
+                  </DropdownMenuItem>
+                )}
+                {["admin", "accounts", "manager"].includes(userRole ?? "") && (
+                  <DropdownMenuItem onClick={() => setFacilityUsageOpen(true)}>
+                    <Building2 className="mr-2 h-4 w-4" />Facility usage
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
 
+          {chargesView === "unbilled" ? (
+            <UsageBillingBoard
+              initialSearch={initialSearch}
+              refreshKey={boardRefreshKey}
+              canSend={["admin", "manager", "accounts"].includes(userRole ?? "")}
+              canWaive={["admin", "manager"].includes(userRole ?? "")}
+              onChanged={refreshCharges}
+              onWaive={(c, g) => { setWaiveChargeTarget(boardToUsageCharge(c, g)); setWaiveChargeReason(""); setWaiveChargeReasonError(false); }}
+              onReduce={(c, g) => { setReduceChargeTarget(boardToUsageCharge(c, g)); setReduceChargeAmount(""); setReduceChargeReason(""); setReduceChargeError(null); }}
+              onHold={(c, g) => { setHoldChargeTarget(boardToUsageCharge(c, g)); setHoldChargeReason(""); setHoldChargeReasonError(false); }}
+              onRelease={(c, g) => void releaseChargeHold(boardToUsageCharge(c, g))}
+              onReview={(c, g) => void submitReviewCharge(boardToUsageCharge(c, g))}
+              onEdit={(c) => void openEditManualCharge(c.id)}
+              onAddCharge={(contractId) => { setAddChargeContractId(contractId); setAddChargeOpen(true); }}
+            />
+          ) : (<>
           {chargesLoading ? (
             <TableSkeleton rows={6} />
           ) : filteredCharges.length === 0 ? (
@@ -1106,7 +1467,9 @@ export default function BillingPage() {
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="px-4 py-3 text-left font-medium">Description</th>
+                    <th className="px-4 py-3 text-left font-medium">Customer</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Reference</th>
+                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Source</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Qty</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Unit Price</th>
                     <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Subtotal</th>
@@ -1122,6 +1485,7 @@ export default function BillingPage() {
                   {filteredCharges.map((charge) => (
                     <tr key={charge.id} className="border-b hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 font-medium max-w-[200px] truncate">{charge.description}</td>
+                      <td className="px-4 py-3 max-w-[160px] truncate" title={customerNameOf(charge.lead)}>{customerNameOf(charge.lead)}</td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
                         {/* Show both contract + booking when present (a posted-
                             to-bill booking has both). Each is clickable —
@@ -1147,6 +1511,11 @@ export default function BillingPage() {
                           )}
                           {!charge.contract?.contract_number && !charge.booking?.booking_number && "—"}
                         </div>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        <Badge variant="outline" className={USAGE_SOURCE_COLORS[charge.source ?? "manual"]}>
+                          {usageSourceLabel(charge.source ?? "manual", !!charge.booking_id, "long")}
+                        </Badge>
                       </td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{charge.quantity}</td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(charge.unit_price)}</td>
@@ -1176,6 +1545,20 @@ export default function BillingPage() {
                         <Badge variant="secondary" className={USAGE_STATUS_COLORS[charge.status] || ""}>
                           {USAGE_STATUS_LABELS[charge.status] || charge.status}
                         </Badge>
+                        {/* Only print/facility rows carry a real billable/non-billable
+                            distinction — a manual charge is always billable unless
+                            waived, which the status badge above already communicates. */}
+                        {charge.billable === false && (
+                          <span className="block text-[11px] text-muted-foreground mt-0.5">Non-billable — within quota</span>
+                        )}
+                        {charge.billing_cycle_status && charge.billing_cycle_label && (
+                          <Badge
+                            variant="outline"
+                            className={`block w-fit mt-1 text-[10px] ${BILLING_CYCLE_TAG[charge.billing_cycle_status]?.className ?? ""}`}
+                          >
+                            Bills in: {charge.billing_cycle_label} · {BILLING_CYCLE_TAG[charge.billing_cycle_status]?.text}
+                          </Badge>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <DropdownMenu>
@@ -1183,17 +1566,14 @@ export default function BillingPage() {
                             <Button variant="ghost" size="sm"><MoreHorizontal className="h-4 w-4" /></Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem><Eye className="mr-2 h-4 w-4" />View Details</DropdownMenuItem>
-                            {charge.status === "pending" && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setEditingCharge(charge);
-                                  setEditChargeOpen(true);
-                                }}
-                              >
-                                <Pencil className="mr-2 h-4 w-4" />Edit
-                              </DropdownMenuItem>
-                            )}
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setViewingCharge(charge);
+                                setViewChargeOpen(true);
+                              }}
+                            >
+                              <Eye className="mr-2 h-4 w-4" />View Details
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>
@@ -1219,35 +1599,166 @@ export default function BillingPage() {
               </div>
             </div>
           )}
+          </>)}
         </TabsContent>
 
         {/* ── Electricity Bills ─────────────────────────────────────────── */}
         <TabsContent value="electricity" className="mt-4">
-          <ElectricityBillsTab />
+          <ElectricityBillsTab initialLocationId={initialLocationId} autoCapture={initialOpen} />
         </TabsContent>
 
-        {/* ── Billing Statements (Merged view: contract accordions + booking-only statements) ── */}
-        <TabsContent value="statements" className="space-y-6 mt-4">
-          {/* ── NEW: Monthly Billing Tabs (Rent | Usage) with month picker ────
-              Focused two-tab workflow per ops feedback. Replaces the stacked
-              rent+usage cards below for the common case. The legacy
-              "Active Contract Billing" view further down is preserved for
-              cross-month / legacy combined statement management. */}
-          <MonthlyBillingTabs year={year} month={month} userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
+        {/* ── Rentals ───────────────────────────────────────────────────── */}
+        <TabsContent value="rentals" className="space-y-6 mt-4">
+          {/* Unbilled | Billed, rent-only — persistent, cross-month view. Not
+              scoped to the page-level MonthPicker above (that still drives
+              the other tabs on this page) — Unbilled computes its own "now",
+              Billed is unscoped. */}
+          <UnbilledBilledTabs type="rent" initialSearch={initialSearch} autoOpen={initialOpen} autoOpenRowId={initialOpenRowId} userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
+        </TabsContent>
 
+        {/* ── Usage ─────────────────────────────────────────────────────── */}
+        <TabsContent value="usage" className="space-y-6 mt-4">
+          {/* Usage invoice statements (all statuses). Unbilled usage is billed from Usage
+              Charges → Unbilled (UsageBillingBoard), grouped by contract and
+              month. */}
+          <UnbilledBilledTabs type="usage" userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
         </TabsContent>
       </Tabs>
 
       {/* ── Dialogs ─────────────────────────────────────────────────────── */}
       <ExportSummaryDialog open={showExport} onOpenChange={setShowExport} year={year} month={month} />
-      <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} />
+      <AddUsageChargeDialog
+        key={addChargeContractId ?? "any"}
+        open={addChargeOpen}
+        onOpenChange={(o) => { setAddChargeOpen(o); if (!o) setAddChargeContractId(undefined); }}
+        onSuccess={refreshCharges}
+        defaultChargeDate={defaultChargeDate}
+        contractId={addChargeContractId}
+      />
       <EditUsageChargeDialog
         open={editChargeOpen}
         onOpenChange={setEditChargeOpen}
-        onSuccess={fetchCharges}
+        onSuccess={refreshCharges}
         charge={editingCharge}
       />
-      <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
+      <UsageChargeDetailsDialog
+        open={viewChargeOpen}
+        onOpenChange={setViewChargeOpen}
+        charge={viewingCharge}
+      />
+      <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={refreshCharges} defaultPeriod={{ year, month }} />
+      <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={refreshCharges} defaultPeriod={{ year, month }} />
+
+      {/* Waive fully */}
+      <Dialog open={!!waiveChargeTarget} onOpenChange={(open) => { if (!open) setWaiveChargeTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Ban className="h-4 w-4" />Waive this charge</DialogTitle>
+            <DialogDescription>
+              {waiveChargeTarget && (
+                <>&ldquo;{waiveChargeTarget.description}&rdquo; ({formatCurrency(waiveChargeTarget.total_with_gst ?? waiveChargeTarget.total)}) will be waived in full — the customer won&rsquo;t be billed for it.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="waive-charge-reason">Reason <span className="text-destructive">*</span></Label>
+            <Textarea
+              id="waive-charge-reason"
+              value={waiveChargeReason}
+              onChange={(e) => { setWaiveChargeReason(e.target.value); if (waiveChargeReasonError) setWaiveChargeReasonError(false); }}
+              placeholder="Why is this being waived?"
+              rows={3}
+              className={waiveChargeReasonError ? "border-destructive" : ""}
+            />
+            {waiveChargeReasonError && <p className="text-xs text-destructive">Enter a reason first.</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWaiveChargeTarget(null)} disabled={waiveChargeSubmitting}>Cancel</Button>
+            <Button onClick={submitWaiveCharge} disabled={waiveChargeSubmitting}>
+              {waiveChargeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Waive
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Waive partly — reduce the amount, keep it as one pending line */}
+      <Dialog open={!!reduceChargeTarget} onOpenChange={(open) => { if (!open) setReduceChargeTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><MinusCircle className="h-4 w-4" />Reduce this charge</DialogTitle>
+            <DialogDescription>
+              {reduceChargeTarget && (
+                <>&ldquo;{reduceChargeTarget.description}&rdquo; is currently {formatCurrency(reduceChargeTarget.total)}. Enter the new (lower) amount — it stays pending and billable at that reduced amount.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="reduce-charge-amount">New amount <span className="text-destructive">*</span></Label>
+              <Input
+                id="reduce-charge-amount"
+                type="number"
+                min="0"
+                value={reduceChargeAmount}
+                onChange={(e) => { setReduceChargeAmount(e.target.value); if (reduceChargeError) setReduceChargeError(null); }}
+                placeholder="0"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="reduce-charge-reason">Reason <span className="text-destructive">*</span></Label>
+              <Textarea
+                id="reduce-charge-reason"
+                value={reduceChargeReason}
+                onChange={(e) => { setReduceChargeReason(e.target.value); if (reduceChargeError) setReduceChargeError(null); }}
+                placeholder="Why is this being reduced?"
+                rows={3}
+              />
+            </div>
+            {reduceChargeError && <p className="text-xs text-destructive">{reduceChargeError}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReduceChargeTarget(null)} disabled={reduceChargeSubmitting}>Cancel</Button>
+            <Button onClick={submitReduceCharge} disabled={reduceChargeSubmitting}>
+              {reduceChargeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Reduce
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Hold the charge's contract — pauses ALL future billing for it */}
+      <Dialog open={!!holdChargeTarget} onOpenChange={(open) => { if (!open) setHoldChargeTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><PauseCircle className="h-4 w-4" />Hold this charge</DialogTitle>
+            <DialogDescription>
+              {holdChargeTarget && (
+                <>&ldquo;{holdChargeTarget.description}&rdquo; won&rsquo;t go on any invoice while held — it stays in the list. Every other charge on <span className="font-mono text-xs text-teal-700">{holdChargeTarget.contract?.contract_number}</span> bills normally. Release the hold whenever it&rsquo;s ready.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="hold-charge-reason">Reason <span className="text-destructive">*</span></Label>
+            <Textarea
+              id="hold-charge-reason"
+              value={holdChargeReason}
+              onChange={(e) => { setHoldChargeReason(e.target.value); if (holdChargeReasonError) setHoldChargeReasonError(false); }}
+              placeholder="Why is this charge being held?"
+              rows={3}
+              className={holdChargeReasonError ? "border-destructive" : ""}
+            />
+            {holdChargeReasonError && <p className="text-xs text-destructive">Enter a reason first.</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHoldChargeTarget(null)} disabled={holdChargeSubmitting}>Cancel</Button>
+            <Button onClick={submitHoldCharge} disabled={holdChargeSubmitting}>
+              {holdChargeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Place Hold
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
 
       <ViewStatementDialog
@@ -1271,51 +1782,14 @@ export default function BillingPage() {
         balanceDue={recordPaymentBalance}
         onSuccess={() => { fetchStatements(); fetchData(); }}
       />
-
-      {/* Void Statement Dialog */}
-      <Dialog open={voidDialogOpen} onOpenChange={setVoidDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <X className="h-5 w-5" />
-              Void & Re-issue Statement
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
-              <p className="font-medium mb-1">This will:</p>
-              <ul className="list-disc pl-4 space-y-0.5 text-xs">
-                <li>Mark the current statement as <strong>voided</strong></li>
-                <li>Un-link all usage charges so they can be re-billed</li>
-                <li>Create a new <strong>draft</strong> statement with the same billing data</li>
-              </ul>
-              <p className="mt-2 text-xs">Blocked if any payments have been recorded against this statement.</p>
-            </div>
-            <div className="space-y-2">
-              <Label>Reason for voiding *</Label>
-              <Textarea
-                value={voidReason}
-                onChange={(e) => setVoidReason(e.target.value)}
-                placeholder="e.g., Wrong charges included, incorrect tax rate, duplicate invoice…"
-                rows={3}
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={() => setVoidDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                className="flex-1"
-                disabled={voidSubmitting || !voidReason.trim()}
-                onClick={handleVoidStatement}
-              >
-                {voidSubmitting ? "Voiding…" : "Void & Create Draft"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
+  );
+}
+
+export default function BillingPage() {
+  return (
+    <Suspense fallback={null}>
+      <BillingPageInner />
+    </Suspense>
   );
 }

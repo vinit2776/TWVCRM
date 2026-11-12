@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, AlertTriangle, Wifi, ThermometerSun, Droplets, Zap, Sparkles, ShieldAlert, HelpCircle } from "lucide-react";
+import { Loader2, AlertTriangle, Check, ChevronDown, Wifi, ThermometerSun, Droplets, Zap, Sparkles, ShieldAlert, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,15 +20,17 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
-import { BUSINESS_HOURS_TIME_SLOTS } from "@/lib/time-slots";
-import { cn } from "@/lib/utils";
+import { BUSINESS_HOURS_TIME_SLOTS, currentTimeSlot } from "@/lib/time-slots";
+import { cn, preventEnterSubmit } from "@/lib/utils";
 import { toast } from "sonner";
 import type { FacilityIssuePriority, FacilityScope } from "@/types";
 
-const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "electrical", "plumbing", "housekeeping", "security", "other", "facility"];
+// Electrical and plumbing are delegated under Facility (their scopes remain for older tickets).
+const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "housekeeping", "security", "other", "facility"];
 
 const SCOPE_ICONS: Record<FacilityScope, typeof Wifi> = {
   it: Wifi, hvac: ThermometerSun, plumbing: Droplets,
@@ -58,7 +60,11 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   // No default — previously this was never sent at all and the server silently
   // defaulted every delegated task to IT regardless of what the task was about.
   const [scope, setScope] = useState<FacilityScope | null>(null);
-  const [assignedTo, setAssignedTo] = useState("");
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
+  // Once the user edits the list themselves, stop auto-filling the department head.
+  const [assigneesTouched, setAssigneesTouched] = useState(false);
+  const [deptHeads, setDeptHeads] = useState<Partial<Record<FacilityScope, string>>>({});
+  const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [dueMode, setDueMode] = useState<"hours" | "datetime">("datetime");
   const [dueHours, setDueHours] = useState("");
   const [dueDate, setDueDate] = useState("");
@@ -79,7 +85,28 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
       .then((r) => (r.ok ? r.json() : { data: [] }))
       .then((j) => setAssignees(j.data ?? []))
       .finally(() => setLoadingAssignees(false));
+    fetch("/api/facility/departments")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((j) => {
+        const heads: Partial<Record<FacilityScope, string>> = {};
+        for (const d of (j.data ?? []) as { scope: FacilityScope; head_user_id: string | null }[]) {
+          if (d.head_user_id) heads[d.scope] = d.head_user_id;
+        }
+        setDeptHeads(heads);
+      });
   }, [open]);
+
+  // Default the assignee to the department's primary in-charge until the user picks their own.
+  useEffect(() => {
+    if (assigneesTouched || !scope) return;
+    const head = deptHeads[scope];
+    setAssigneeIds(head ? [head] : []);
+  }, [scope, deptHeads, assigneesTouched]);
+
+  const toggleAssignee = (id: string) => {
+    setAssigneesTouched(true);
+    setAssigneeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
 
   const resetForm = () => {
     setLocationId(null);
@@ -87,7 +114,8 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
     setDescription("");
     setPriority("medium");
     setScope(null);
-    setAssignedTo("");
+    setAssigneeIds([]);
+    setAssigneesTouched(false);
     setDueMode("datetime");
     setDueHours("");
     setDueDate("");
@@ -112,7 +140,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   const hasValidDueInput = dueMode === "hours"
     ? !!dueHours.trim() && isFinite(Number(dueHours)) && Number(dueHours) > 0
     : !!dueDateTime && !isNaN(new Date(dueDateTime).getTime());
-  const canSubmit = !!locationId && !!title.trim() && !!assignedTo && !!scope && hasValidDueInput;
+  const canSubmit = !!locationId && !!title.trim() && assigneeIds.length > 0 && !!scope && hasValidDueInput;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -134,7 +162,8 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
         title: title.trim(),
         description: description || undefined,
         priority,
-        assigned_to: assignedTo,
+        assigned_to: assigneeIds[0],
+        additional_assignee_ids: assigneeIds.slice(1),
         due_date: resolvedDueDate.toISOString(),
         attachments: photos.map((p) => ({
           file_url: p.file_url, file_path: p.file_path,
@@ -146,8 +175,8 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
     setSubmitting(false);
     const json = await res.json();
     if (res.ok) {
-      const assignee = assignees.find((a) => a.id === assignedTo);
-      toast.success(`Task delegated to ${assignee?.full_name ?? "assignee"}`);
+      const names = assigneeIds.map((id) => assignees.find((a) => a.id === id)?.full_name ?? "assignee");
+      toast.success(`Task delegated to ${names.join(", ")}`);
       resetForm();
       onOpenChange(false);
       onCreated?.();
@@ -159,7 +188,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) resetForm(); onOpenChange(next); }}>
       <DialogContent className="max-w-lg p-0 gap-0 max-h-[92vh] flex flex-col">
-        <form onSubmit={handleSubmit} className="flex flex-col overflow-hidden flex-1">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="flex flex-col overflow-hidden flex-1">
         <DialogHeader className="p-4 pb-3 border-b">
           <DialogTitle>New Task</DialogTitle>
           <DialogDescription>
@@ -192,7 +221,10 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
                       sel ? "bg-[#015E65] text-white" : "bg-muted text-muted-foreground")}>
                       <Icon className="h-3.5 w-3.5" />
                     </div>
-                    {SCOPE_LABEL[s]}
+                    <span className="min-w-0">
+                      <span className="block">{SCOPE_LABEL[s]}</span>
+                      {s === "facility" && <span className="block text-[11px] font-normal text-muted-foreground">Incl. electrical &amp; plumbing</span>}
+                    </span>
                   </button>
                 );
               })}
@@ -221,18 +253,42 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
 
           <div className="space-y-2">
             <Label>Assign To *</Label>
-            <Select value={assignedTo} onValueChange={setAssignedTo}>
-              <SelectTrigger>
-                <SelectValue placeholder={loadingAssignees ? "Loading..." : "Select teammate"} />
-              </SelectTrigger>
-              <SelectContent>
-                {assignees.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.full_name} ({a.role})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={assigneeOpen} onOpenChange={setAssigneeOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="flex min-h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm text-left"
+                >
+                  <span className={cn(assigneeIds.length === 0 && "text-muted-foreground")}>
+                    {assigneeIds.length === 0
+                      ? (loadingAssignees ? "Loading..." : "Select teammates")
+                      : assigneeIds.map((id) => assignees.find((a) => a.id === id)?.full_name ?? "…").join(", ")}
+                  </span>
+                  <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-1 max-h-64 overflow-y-auto">
+                {assignees.map((a) => {
+                  const sel = assigneeIds.includes(a.id);
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => toggleAssignee(a.id)}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-left hover:bg-muted"
+                    >
+                      <Check className={cn("h-4 w-4 shrink-0", sel ? "opacity-100" : "opacity-0")} />
+                      {a.full_name} ({a.role})
+                    </button>
+                  );
+                })}
+              </PopoverContent>
+            </Popover>
+            {assigneeIds.length > 1 && (
+              <p className="text-xs text-muted-foreground">
+                {assignees.find((a) => a.id === assigneeIds[0])?.full_name} is the main assignee; the rest are added as collaborators.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -274,7 +330,11 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
                 <Input
                   type="date"
                   value={dueDate}
-                  onChange={(e) => setDueDate(e.target.value)}
+                  onChange={(e) => {
+                    setDueDate(e.target.value);
+                    // Default the time to now (next slot) so picking a date alone gives a valid due date.
+                    if (e.target.value && !dueTime) setDueTime(currentTimeSlot());
+                  }}
                   className="max-w-[160px]"
                   required
                 />

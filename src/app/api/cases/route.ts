@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createCaseSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { DOCUMENT_CHECKLISTS, COMPLIANCE_CHECKLISTS } from "@/lib/constants";
+import { caseEndDate } from "@/lib/case-workflow";
+import { EXPIRY_RELEVANT_STATUSES } from "@/lib/constants";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -31,11 +33,29 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("cases")
     .select(
-      "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, code), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)",
+      "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, company_name, code), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)",
       { count: "exact" }
     );
 
   if (status) query = query.eq("status", status);
+
+  // ?expiring_within=30 — live agreements whose term ends inside N days,
+  // including ones already past. Restricted to statuses where the agreement
+  // is actually executed: end_date was backfilled for every case from
+  // start_date + tenure_months, so a case still at intake carries a date for
+  // a term that never began and must not be reported as expiring.
+  const expiringWithin = searchParams.get("expiring_within");
+  if (expiringWithin) {
+    const days = Number(expiringWithin);
+    if (Number.isFinite(days) && days >= 0) {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() + days);
+      query = query
+        .in("status", EXPIRY_RELEVANT_STATUSES)
+        .not("end_date", "is", null)
+        .lte("end_date", cutoff.toISOString().slice(0, 10));
+    }
+  }
   if (aggregator_id) query = query.eq("aggregator_id", aggregator_id);
   if (purpose) query = query.eq("purpose", purpose);
   if (location_id) query = query.eq("location_id", location_id);
@@ -56,8 +76,51 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  const caseIds = (data ?? []).map((c) => c.id);
+  let enriched = data ?? [];
+
+  if (caseIds.length > 0) {
+    const [agreementsRes, billingRes] = await Promise.all([
+      supabase
+        .from("case_agreements")
+        .select("case_id, type, status, created_at")
+        .in("case_id", caseIds)
+        .in("type", ["proposal", "leave_license"])
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("billing_statements")
+        .select("case_id, payment_status, created_at")
+        .in("case_id", caseIds)
+        .eq("statement_type", "vo_case")
+        .is("voided_at", null)
+        .order("created_at", { ascending: false }),
+    ]);
+
+    // Rows arrive newest-first, so the first occurrence per case_id (and per
+    // agreement type) is the latest — no need to compare timestamps.
+    const latestProposal = new Map<string, { status: string }>();
+    const latestLlAgreement = new Map<string, { status: string }>();
+    for (const row of agreementsRes.data ?? []) {
+      const target = row.type === "proposal" ? latestProposal : latestLlAgreement;
+      if (!target.has(row.case_id)) target.set(row.case_id, { status: row.status });
+    }
+    const latestBilling = new Map<string, { payment_status: string }>();
+    for (const row of billingRes.data ?? []) {
+      if (!latestBilling.has(row.case_id)) {
+        latestBilling.set(row.case_id, { payment_status: row.payment_status });
+      }
+    }
+
+    enriched = (data ?? []).map((c) => ({
+      ...c,
+      agreement: latestProposal.get(c.id) ?? null,
+      ll_agreement: latestLlAgreement.get(c.id) ?? null,
+      billing_statement: latestBilling.get(c.id) ?? null,
+    }));
+  }
+
   return NextResponse.json({
-    data,
+    data: enriched,
     pagination: {
       page,
       limit,
@@ -119,6 +182,9 @@ export async function POST(request: NextRequest) {
     .insert({
       ...result.data,
       rate,
+      // Without this the case has no expiry, and every renewal stage —
+      // reminder, grace, lapse — silently skips it forever.
+      end_date: caseEndDate(result.data.start_date, result.data.tenure_months),
       status: "intake_received",
       created_by: dbUser?.id,
       assigned_to: result.data.assigned_to || dbUser?.id,
@@ -144,23 +210,10 @@ export async function POST(request: NextRequest) {
       status: "pending" as const,
     }));
 
-    // Prepaid aggregators require an approved Payment Proof before the
-    // Leave & License Agreement can be executed (see agreement/route.ts).
-    const { data: aggregatorRow } = await supabase
-      .from("aggregators")
-      .select("billing_method")
-      .eq("id", result.data.aggregator_id)
-      .single();
-
-    if (aggregatorRow?.billing_method === "prepaid") {
-      docRows.push({
-        case_id: data.id,
-        document_type: "payment_proof",
-        label: "Payment Proof",
-        is_required: true,
-        status: "pending" as const,
-      });
-    }
+    // Prepaid aggregators and direct clients both require a paid VO case
+    // invoice before the Leave & License Agreement can execute — gated on
+    // billing_statements.payment_status (see agreement/route.ts and
+    // src/lib/case-invoicing.ts), not a manually uploaded document.
 
     if (docRows.length > 0) {
       await supabase.from("case_documents").insert(docRows);

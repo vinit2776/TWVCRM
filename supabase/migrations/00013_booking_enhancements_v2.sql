@@ -11,7 +11,7 @@
 -- Recurring Booking Series Table
 -- ==========================================
 CREATE TABLE IF NOT EXISTS recurring_booking_series (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   space_id UUID NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
   location_id UUID NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
   customer_type VARCHAR(20) NOT NULL,
@@ -68,7 +68,7 @@ CREATE POLICY "Authenticated users can delete recurring series"
 -- Booking Waitlist Table
 -- ==========================================
 CREATE TABLE IF NOT EXISTS booking_waitlist (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   space_id UUID NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
   location_id UUID NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
   booking_date DATE NOT NULL,
@@ -125,8 +125,8 @@ ALTER TABLE bookings
   ADD COLUMN IF NOT EXISTS original_booking_date DATE,
   ADD COLUMN IF NOT EXISTS original_start_time TIME,
   ADD COLUMN IF NOT EXISTS original_end_time TIME,
-  ADD COLUMN IF NOT EXISTS feedback_token UUID DEFAULT uuid_generate_v4(),
-  ADD COLUMN IF NOT EXISTS payment_token UUID DEFAULT uuid_generate_v4(),
+  ADD COLUMN IF NOT EXISTS feedback_token UUID DEFAULT extensions.uuid_generate_v4(),
+  ADD COLUMN IF NOT EXISTS payment_token UUID DEFAULT extensions.uuid_generate_v4(),
   ADD COLUMN IF NOT EXISTS no_show_detected_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_bookings_series ON bookings(series_id);

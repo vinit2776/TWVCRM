@@ -11,6 +11,7 @@ import { Download, Loader2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { TN_PT_SLABS } from "@/lib/constants";
 import type { PayrollRun, PayrollSlip } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -100,6 +101,7 @@ export default function PayrollReportsPage() {
 
   return (
     <div className="p-6 space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Payroll Reports" }} />
       {/* Header */}
       <div>
         <h1 className="text-xl font-semibold">Payroll Reports</h1>

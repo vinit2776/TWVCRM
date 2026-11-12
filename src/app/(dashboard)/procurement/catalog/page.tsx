@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -20,17 +20,21 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
   PROCUREMENT_DEPARTMENTS,
+  ITEM_CATALOG_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
-  ITEM_UNITS,
+  ITEM_UNIT_GROUPS,
+  ITEM_UNIT_LABELS,
   ITEM_TYPES,
   ITEM_TYPE_LABELS,
   GST_RATES,
   GST_RATE_LABELS,
 } from "@/lib/constants";
 import { toast } from "sonner";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, apiErrorMessage } from "@/lib/utils";
 import type { ProcurementItem, ProcurementDepartment, ItemUnit, ItemType } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -202,7 +206,7 @@ export default function CatalogPage() {
       fetchItems();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || (editItem ? "Failed to update item" : "Failed to add item"));
+      toast.error(apiErrorMessage(err?.error, editItem ? "Failed to update item" : "Failed to add item"));
     }
     setSaving(false);
   }
@@ -256,7 +260,7 @@ export default function CatalogPage() {
       fetchItems();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to activate item");
+      toast.error(apiErrorMessage(err?.error, "Failed to activate item"));
     }
     setActivating(false);
   }
@@ -290,6 +294,7 @@ export default function CatalogPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Catalog" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -526,7 +531,10 @@ export default function CatalogPage() {
                             {deptItems.map((item) => {
                               const isDuplicate = duplicateNames.has(item.name.trim().toLowerCase());
                               return (
-                                <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/40 cursor-pointer ${isDuplicate ? "bg-amber-50/40" : ""}`} onClick={() => router.push(`/procurement/catalog/${item.id}`)}>
+                                <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/40 cursor-pointer ${isDuplicate ? "bg-amber-50/40" : ""}`} onClick={() => {
+                                  pushTrailEntry({ href: `/procurement/catalog/${item.id}`, label: item.name });
+                                  router.push(`/procurement/catalog/${item.id}`);
+                                }}>
                                   <td className="px-4 py-2.5">
                                     <div className="flex items-center gap-2">
                                       <span className={item.is_active ? "" : "text-muted-foreground line-through"}>
@@ -659,7 +667,7 @@ export default function CatalogPage() {
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {PROCUREMENT_DEPARTMENTS.map((d) => (
+                    {ITEM_CATALOG_DEPARTMENTS.map((d) => (
                       <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
                     ))}
                   </SelectContent>
@@ -673,8 +681,13 @@ export default function CatalogPage() {
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {ITEM_UNITS.map((u) => (
-                      <SelectItem key={u} value={u}>{u}</SelectItem>
+                    {ITEM_UNIT_GROUPS.map((g) => (
+                      <SelectGroup key={g.label}>
+                        <SelectLabel>{g.label}</SelectLabel>
+                        {g.units.map((u) => (
+                          <SelectItem key={u} value={u}>{ITEM_UNIT_LABELS[u]}</SelectItem>
+                        ))}
+                      </SelectGroup>
                     ))}
                   </SelectContent>
                 </Select>

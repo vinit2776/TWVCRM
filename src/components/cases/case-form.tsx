@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,15 +16,18 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createCaseSchema, type CreateCaseInput } from "@/lib/validations";
+import { toast } from "sonner";
 import {
   VO_PURPOSES,
   VO_PURPOSE_LABELS,
   ENTITY_TYPES,
   ENTITY_TYPE_LABELS,
+  CASE_DESIGNATION_OPTIONS,
 } from "@/lib/constants";
 import type { Aggregator, VoCase } from "@/types";
 import { Loader2 } from "lucide-react";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { preventEnterSubmit } from "@/lib/utils";
 
 interface CaseFormProps {
   caseData?: VoCase;
@@ -34,7 +37,11 @@ interface CaseFormProps {
 
 export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
   const [submitting, setSubmitting] = useState(false);
-  const [aggregators, setAggregators] = useState<{ id: string; name: string; code: string }[]>([]);
+  const [aggregators, setAggregators] = useState<{ id: string; name: string; company_name?: string; code: string }[]>([]);
+  const [customDesignation, setCustomDesignation] = useState(
+    () => !!caseData?.represented_by_designation &&
+      !(CASE_DESIGNATION_OPTIONS as readonly string[]).includes(caseData.represented_by_designation)
+  );
 
   useEffect(() => {
     fetch("/api/aggregators?limit=100&status=active")
@@ -52,6 +59,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
   } = useForm<CreateCaseInput>({
     resolver: zodResolver(createCaseSchema),
     defaultValues: {
+      case_source: caseData?.case_source || "aggregator",
       aggregator_id: caseData?.aggregator_id || "",
       purpose: caseData?.purpose || "gst_registration",
       client_name: caseData?.client_name || "",
@@ -63,11 +71,13 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
       client_email: caseData?.client_email || "",
       client_phone: caseData?.client_phone || "",
       client_address: caseData?.client_address || "",
-      client_city: caseData?.client_city || "",
-      client_state: caseData?.client_state || "",
-      client_pincode: caseData?.client_pincode || "",
+      represented_by_name: caseData?.represented_by_name || "",
+      represented_by_designation: caseData?.represented_by_designation || "",
+      represented_by_id_type: caseData?.represented_by_id_type || "pan",
+      represented_by_id_number: caseData?.represented_by_id_number || "",
       rate: caseData?.rate || undefined,
       tenure_months: caseData?.tenure_months || 12,
+      renewal_escalation_percentage: caseData?.renewal_escalation_percentage ?? 0,
       start_date: caseData?.start_date || "",
       security_deposit: caseData?.security_deposit || 0,
       location_id: caseData?.location_id || "",
@@ -76,7 +86,10 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
     },
   });
 
+  const caseSource = watch("case_source");
   const entityType = watch("client_entity_type");
+  const representedByDesignation = watch("represented_by_designation");
+  const representedByIdType = watch("represented_by_id_type");
   const purpose = watch("purpose");
   const startDate = watch("start_date");
   const tenureMonths = watch("tenure_months");
@@ -91,6 +104,18 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
     return d.toISOString().split("T")[0];
   })();
 
+  // Only some fields print their error inline, so a failure on any other
+  // field would make Save do nothing with no message anywhere.
+  const onInvalid = (formErrors: FieldErrors<CreateCaseInput>) => {
+    const [field, error] = Object.entries(formErrors)[0] ?? [];
+    const message = (error as { message?: string } | undefined)?.message;
+    toast.error(
+      field
+        ? `Could not save — ${field.replace(/_/g, " ")}: ${message ?? "invalid value"}`
+        : "Could not save — please check the form for errors.",
+    );
+  };
+
   const onFormSubmit = async (data: CreateCaseInput) => {
     setSubmitting(true);
     try {
@@ -103,7 +128,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
+    <form onSubmit={handleSubmit(onFormSubmit, onInvalid)} onKeyDown={preventEnterSubmit} className="space-y-6">
       {/* Aggregator + Purpose */}
       <Card>
         <CardHeader>
@@ -112,26 +137,50 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Aggregator *</Label>
+              <Label>Referral Source *</Label>
               <Select
-                value={watch("aggregator_id")}
-                onValueChange={(val) => setValue("aggregator_id", val)}
+                value={caseSource}
+                onValueChange={(val) => {
+                  setValue("case_source", val as CreateCaseInput["case_source"]);
+                  if (val === "direct") {
+                    setValue("aggregator_id", "");
+                    setValue("aggregator_contact_id", "");
+                  }
+                }}
+                disabled={!!caseData}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select aggregator" />
+                  <SelectValue placeholder="Select source" />
                 </SelectTrigger>
                 <SelectContent>
-                  {aggregators.map((agg) => (
-                    <SelectItem key={agg.id} value={agg.id}>
-                      {agg.name} ({agg.code})
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="aggregator">Aggregator</SelectItem>
+                  <SelectItem value="direct">Direct Client</SelectItem>
                 </SelectContent>
               </Select>
-              {errors.aggregator_id && (
-                <p className="text-sm text-red-500">{errors.aggregator_id.message}</p>
-              )}
             </div>
+            {caseSource === "aggregator" && (
+              <div className="space-y-2">
+                <Label>Aggregator *</Label>
+                <Select
+                  value={watch("aggregator_id")}
+                  onValueChange={(val) => setValue("aggregator_id", val)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select aggregator" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {aggregators.map((agg) => (
+                      <SelectItem key={agg.id} value={agg.id}>
+                        {agg.company_name || agg.name} ({agg.code})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.aggregator_id && (
+                  <p className="text-sm text-red-500">{errors.aggregator_id.message}</p>
+                )}
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Purpose *</Label>
               <Select
@@ -208,7 +257,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
               <Input {...register("client_phone")} />
             </div>
             <div className="space-y-2">
-              <Label>PAN Number</Label>
+              <Label>Company / Entity PAN Number</Label>
               <Input {...register("client_pan_number")} placeholder="XXXXX1234X" />
             </div>
             <div className="space-y-2">
@@ -221,6 +270,80 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
                 <Input {...register("client_cin_number")} />
               </div>
             )}
+            <div className="space-y-2">
+              <Label>Represented By</Label>
+              <Input {...register("represented_by_name")} placeholder="Name of authorized signatory" />
+            </div>
+            <div className="space-y-2">
+              <Label>Designation</Label>
+              <Select
+                value={customDesignation ? "other" : representedByDesignation || ""}
+                onValueChange={(val) => {
+                  if (val === "other") {
+                    setCustomDesignation(true);
+                    setValue("represented_by_designation", "");
+                  } else {
+                    setCustomDesignation(false);
+                    setValue("represented_by_designation", val);
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select designation" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CASE_DESIGNATION_OPTIONS.map((d) => (
+                    <SelectItem key={d} value={d}>
+                      {d}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+              {customDesignation && (
+                <Input
+                  className="mt-2"
+                  placeholder="Enter designation"
+                  {...register("represented_by_designation")}
+                />
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Representative ID Type</Label>
+              <Select
+                value={representedByIdType || "pan"}
+                onValueChange={(val) => {
+                  setValue("represented_by_id_type", val as CreateCaseInput["represented_by_id_type"]);
+                  setValue("represented_by_id_number", "");
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pan">PAN</SelectItem>
+                  <SelectItem value="aadhaar">Aadhaar</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>
+                {representedByIdType === "aadhaar" ? "Representative Aadhaar" : "Representative PAN"}
+              </Label>
+              <Input
+                {...register("represented_by_id_number")}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setValue(
+                    "represented_by_id_number",
+                    representedByIdType === "aadhaar" ? val.replace(/\D/g, "") : val.toUpperCase()
+                  );
+                }}
+                placeholder={representedByIdType === "aadhaar" ? "12-digit Aadhaar number" : "e.g. ABCDE1234F"}
+                maxLength={representedByIdType === "aadhaar" ? 12 : 10}
+                inputMode={representedByIdType === "aadhaar" ? "numeric" : "text"}
+              />
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -231,23 +354,16 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
           <CardTitle className="text-base">Client Address</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="sm:col-span-2 space-y-2">
-              <Label>Address</Label>
-              <Textarea {...register("client_address")} rows={2} />
-            </div>
-            <div className="space-y-2">
-              <Label>City</Label>
-              <Input {...register("client_city")} />
-            </div>
-            <div className="space-y-2">
-              <Label>State</Label>
-              <Input {...register("client_state")} />
-            </div>
-            <div className="space-y-2">
-              <Label>Pincode</Label>
-              <Input {...register("client_pincode")} />
-            </div>
+          <div className="space-y-2">
+            <Label>Address</Label>
+            <Textarea
+              {...register("client_address")}
+              rows={3}
+              placeholder="Full address, including city, state and pincode"
+            />
+            <p className="text-xs text-muted-foreground">
+              Used as-is in the proposal and agreement.
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -260,9 +376,17 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Monthly Rate (INR)</Label>
-              <Input type="number" {...register("rate", { valueAsNumber: true })} placeholder="Auto-fills from rate card if blank" />
-              <p className="text-xs text-muted-foreground">Leave blank to use aggregator rate card</p>
+              <Label>Monthly Rate (INR) {caseSource === "direct" && "*"}</Label>
+              <Input
+                type="number"
+                {...register("rate", { valueAsNumber: true })}
+                placeholder={caseSource === "direct" ? "Required — no rate card for direct clients" : "Auto-fills from rate card if blank"}
+              />
+              {caseSource === "aggregator" ? (
+                <p className="text-xs text-muted-foreground">Leave blank to use aggregator rate card</p>
+              ) : (
+                errors.rate && <p className="text-sm text-red-500">{errors.rate.message}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Tenure (months)</Label>
@@ -278,6 +402,23 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
               <p className="text-xs text-muted-foreground">Auto-calculated from start date + tenure</p>
             </div>
             <div className="space-y-2">
+              <Label>Renewal escalation (%)</Label>
+              <Input
+                type="number"
+                step="0.5"
+                min="0"
+                max="100"
+                {...register("renewal_escalation_percentage", { valueAsNumber: true })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Applied to the fee on renewal and written into the agreement&apos;s renewal
+                clause. Leave at 0 to renew at the same rate.
+              </p>
+              {errors.renewal_escalation_percentage && (
+                <p className="text-sm text-red-500">{errors.renewal_escalation_percentage.message}</p>
+              )}
+            </div>
+            <div className="space-y-2">
               <Label>Security Deposit (INR)</Label>
               <Input type="number" {...register("security_deposit", { valueAsNumber: true })} />
             </div>
@@ -290,8 +431,11 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
         <CardHeader>
           <CardTitle className="text-base">Notes</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-2">
           <Textarea {...register("notes")} rows={3} placeholder="Additional notes..." />
+          <p className="text-xs text-muted-foreground">
+            Internal only — never shown to the client or printed on the proposal/agreement.
+          </p>
         </CardContent>
       </Card>
 

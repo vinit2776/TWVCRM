@@ -39,6 +39,8 @@ import {
   XCircle,
 } from "lucide-react";
 import Link from "next/link";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -506,6 +508,7 @@ export default function EmployeesPage() {
 
   return (
     <div className="p-6 space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Employees" }} />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -599,7 +602,13 @@ export default function EmployeesPage() {
                       {emp.is_crm_user ? (
                         <span className="font-medium">{emp.full_name}</span>
                       ) : (
-                        <Link href={`/admin/employees/${emp.id}`} className="font-medium hover:underline">
+                        <Link
+                          href={`/admin/employees/${emp.id}`}
+                          className="font-medium hover:underline"
+                          onClick={() => {
+                            pushTrailEntry({ href: `/admin/employees/${emp.id}`, label: emp.full_name });
+                          }}
+                        >
                           {emp.full_name}
                         </Link>
                       )}

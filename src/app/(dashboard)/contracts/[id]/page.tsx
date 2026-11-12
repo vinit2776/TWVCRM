@@ -24,16 +24,27 @@ import {
   Copy,
   Check,
   Pencil,
+  Stamp,
+  CalendarPlus,
+  Scale,
+  Minus,
+  Plus,
+  Link2,
+  Receipt,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import { ContractMembersAccessSection } from "@/components/contracts/contract-members-access-section";
+import { ContractPeopleAccessSection } from "@/components/contracts/contract-people-access-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractAddonsSection } from "@/components/contracts/contract-addons-section";
@@ -41,15 +52,21 @@ import { ContractRatePhasesSection } from "@/components/contracts/contract-rate-
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractElectricityTab } from "@/components/contracts/contract-electricity-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
+import { EscalationApprovalActions } from "@/components/contracts/escalation-approval-actions";
 import { ContractMoratoriumSection } from "@/components/contracts/contract-moratorium-section";
 import { ContractDepositSection } from "@/components/contracts/contract-deposit-section";
+import { partialDepositState, partialDepositWarning } from "@/lib/deposit-activation";
 import { ContractDepositAdjustmentsSection } from "@/components/contracts/contract-deposit-adjustments-section";
 import { ContractDepositTopupsSection } from "@/components/contracts/contract-deposit-topups-section";
 import { ContractInvoicesSection } from "@/components/contracts/contract-invoices-section";
+import { ContractAttributedInvoicesSection } from "@/components/contracts/contract-attributed-invoices-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import { SpecialClauseCard, SpecialClauseBadge } from "@/components/contracts/special-clause-card";
+import { specialClauseGate } from "@/lib/special-clause/gate";
+import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
 import {
   Dialog,
   DialogContent,
@@ -60,21 +77,37 @@ import {
 } from "@/components/ui/dialog";
 import {
   CONTRACT_STATUS_LABELS,
+  contractDisplayStatus,
   CONTRACT_STATUS_COLORS,
   CONTRACT_QUOTA_LOCKED_STATUSES,
   CONTRACT_QUOTA_ROLES,
   BILLING_CYCLE_LABELS,
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
+  ACTIVATION_UNBLOCKING_PURPOSE,
+  ADHOC_ATTRIBUTION_PURPOSE_LABELS,
+  CONTRACT_PRE_ACTIVATION_STATUSES,
+  canWithdrawContract,
 } from "@/lib/constants";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
+import { JourneyPanel } from "@/components/journey/journey-panel";
 import {
   ContractRenewalDialog,
   DeclineRenewalDialog,
+  CancelRenewalDialog,
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
+import { StartExitDialog } from "@/components/contracts/exit/start-exit-dialog";
+import { ExitCard } from "@/components/contracts/exit/exit-card";
+import { useExit } from "@/components/contracts/exit/use-exit";
+import { EXIT_START_ROLES } from "@/lib/contract-exit";
+import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
+import { ContractPricingSplitDialog } from "@/components/contracts/contract-pricing-split-dialog";
+import { InvoiceCustomerWizard } from "@/components/contracts/invoice-customer-wizard";
+import { canUseInvoiceWizard } from "@/lib/invoice-wizard-availability";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
 import { ContractSpaceManager, validateSpaceAllocation } from "@/components/contracts/contract-space-manager";
 import { toast } from "sonner";
@@ -82,7 +115,11 @@ import { toast } from "sonner";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
+import { ContractAutoRenewalCard } from "@/components/contracts/contract-auto-renewal-card";
 import { ContractProrataSection } from "@/components/contracts/contract-prorata-section";
+import { QueryButton } from "@/components/queries/query-button";
+import { useLeegalityEnabled } from "@/hooks/use-leegality-enabled";
+import { commitmentDifferences } from "@/lib/contract-commitment";
 import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
@@ -94,18 +131,66 @@ export default function ContractDetailPage({
   const router = useRouter();
   const [contract, setContract] = useState<Contract | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editingPoNumber, setEditingPoNumber] = useState(false);
+  const [poNumberValue, setPoNumberValue] = useState("");
+  const [savingPoNumber, setSavingPoNumber] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [terminateOpen, setTerminateOpen] = useState(false);
+  const [startExitOpen, setStartExitOpen] = useState(false);
+  const { view: exitView, reload: reloadExit } = useExit(id);
   const [terminating, setTerminating] = useState(false);
   const [terminationReason, setTerminationReason] = useState("");
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
+  const [stampingSignSeal, setStampingSignSeal] = useState(false);
+  const [stampConfirmOpen, setStampConfirmOpen] = useState(false);
+  const [stampPreviewLoading, setStampPreviewLoading] = useState(false);
+  const [stampPreviewUrl, setStampPreviewUrl] = useState<string | null>(null);
+  const [stampPreviewPdfBase64, setStampPreviewPdfBase64] = useState<string | null>(null);
+  const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
+  const [cancelStampOpen, setCancelStampOpen] = useState(false);
+  const [cancellingStamp, setCancellingStamp] = useState(false);
+  const [stampError, setStampError] = useState<string | null>(null);
+  const [cancelSigningOpen, setCancelSigningOpen] = useState(false);
+  const [cancellingSigning, setCancellingSigning] = useState(false);
+  const [signCancelError, setSignCancelError] = useState<string | null>(null);
+  // "generate" regenerates the agreement fresh (stamp-sign-seal); "existing"
+  // overlays the stamp onto an already-uploaded signed document instead —
+  // same preview dialog, different source PDF and commit endpoint.
+  const [stampMode, setStampMode] = useState<"generate" | "existing">("generate");
+  const [stampExistingPreviewLoading, setStampExistingPreviewLoading] = useState(false);
+  // An arbitrary uploaded PDF has no known layout, so neither the page nor
+  // the position within it is reliable (a trailing KYC/enclosure table can
+  // push the signature block off the last page, and a fixed corner anchor
+  // can land on top of unrelated content) — cache the source bytes so the
+  // admin can pick the page and click exactly where the stamp should go,
+  // rendered from a pristine copy each time so nothing stacks.
+  const [stampExistingSourceBytes, setStampExistingSourceBytes] = useState<Uint8Array | null>(null);
+  const [stampExistingOriginalUrl, setStampExistingOriginalUrl] = useState<string | null>(null);
+  const [stampExistingPageCount, setStampExistingPageCount] = useState(0);
+  const [stampExistingTargetPage, setStampExistingTargetPage] = useState(1);
+  const [stampExistingRendering, setStampExistingRendering] = useState(false);
+  // Rendered raster of the current page (pdfjs-dist) for click-to-place, and
+  // the normalized (0..1) point the admin clicked — null until they click,
+  // which gates "Confirm & save" so nothing saves at a default guessed spot.
+  const [stampExistingPageImageUrl, setStampExistingPageImageUrl] = useState<string | null>(null);
+  const [stampExistingPageImageLoading, setStampExistingPageImageLoading] = useState(false);
+  const [stampExistingClickRatio, setStampExistingClickRatio] = useState<{ x: number; y: number } | null>(null);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  // Manual toggle for the agreement PDF's DRAFT watermark (Download PDF +
+  // Email). Ticked by default; unticking always removes the watermark.
+  const [includeDraftWatermark, setIncludeDraftWatermark] = useState(true);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
   const [copiedLessor, setCopiedLessor] = useState(false);
   const [copiedLessee, setCopiedLessee] = useState(false);
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
+  const [extendDialogOpen, setExtendDialogOpen] = useState(false);
+  const [pricingSplitOpen, setPricingSplitOpen] = useState(false);
+  const [invoiceWizardOpen, setInvoiceWizardOpen] = useState(false);
+  const [addonOpenSignal, setAddonOpenSignal] = useState(0);
+  const [depositOpenSignal, setDepositOpenSignal] = useState(0);
   const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
+  const [cancelRenewalDialogOpen, setCancelRenewalDialogOpen] = useState(false);
   const [editTermsDialogOpen, setEditTermsDialogOpen] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [renewalDraft, setRenewalDraft] = useState<any>(null);
@@ -119,17 +204,151 @@ export default function ContractDetailPage({
 
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  // Bumped when the People & Access panel changes something so the voucher and
+  // door-access detail sections below it reload their own data.
+  const [accessVersion, setAccessVersion] = useState(0);
+  // Special clause not yet approved: nothing leaves the building, previews are watermarked.
+  const clauseGate = specialClauseGate(contract?.special_clause_status);
+  const { enabled: leegalityEnabled } = useLeegalityEnabled();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
+  // Ad-hoc invoices (proforma_invoices) attributed/attributable to this
+  // contract, plus the proposal's own pro-rata billing statement amount —
+  // both feed the activation-gate hint's "link an ad-hoc invoice instead"
+  // affordance below. Refreshed by the same onAttributionChanged hook the
+  // Ad-hoc Invoices card already calls, so linking from either place updates
+  // this too.
+  const [prorataAttribution, setProrataAttribution] = useState<{
+    attributed: Array<{ id: string; invoice_number: string; status: string; total_amount: number; attribution_purpose: string | null }>;
+    candidates: Array<{ id: string; invoice_number: string; status: string; total_amount: number }>;
+    expectedAmount: number | null;
+  }>({ attributed: [], candidates: [], expectedAmount: null });
+  const [linkingInvoiceId, setLinkingInvoiceId] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
   const [showOverride, setShowOverride] = useState(false);
+
+  // Customer's already-collected deposit that could cover this contract's
+  // security deposit at activation (see /api/contracts/[id]/apply-pooled-deposit).
+  // Only fetched while the deposit leg of the activation gate is the blocker.
+  const [poolDeposit, setPoolDeposit] = useState<{ applicable: number; required: number; available: number; unverified: { amount: number; contract_numbers: string[] } } | null>(null);
+  const [applyingPool, setApplyingPool] = useState(false);
+  const poolDepositApplied = Number(contract?.deposit_pool_applied_amount || 0);
+  const canApplyPooledDeposit = ["admin", "manager", "sales_rep"].includes(userRole ?? "");
+  // Deposit taken in parts: how much of the required amount is in, shown while the proposal's deposit is still pending.
+  const [depositParts, setDepositParts] = useState<{ paid: number; required: number; balance: number } | null>(null);
+  const partsProposalId: string | null = linkedProposal?.deposit_payment_status === "pending" ? linkedProposal.id : null;
+  useEffect(() => {
+    if (!partsProposalId) { setDepositParts(null); return; }
+    let cancelled = false;
+    fetch(`/api/proposals/${partsProposalId}/deposit-instalments`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json?.data) return;
+        const pos = json.data.position;
+        setDepositParts(pos.paid > 0 ? { paid: pos.paid, required: pos.required, balance: pos.balance } : null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [partsProposalId]);
+  // More than half of a deposit collected in parts is in: the contract may activate with a pending-balance warning.
+  const depositPartialOk = !!depositParts && partialDepositState(depositParts.required, depositParts.paid).allowsActivation;
+  const depositGateBlocked =
+    contract?.status === "accepted" &&
+    !contract.deposit_carried_from &&
+    !!contract.proposal_id &&
+    !!linkedProposal &&
+    Number(linkedProposal.security_deposit_months || 0) > 0 &&
+    !(depositPartialOk && !(linkedProposal.deposit_claimed_by_contract_id && linkedProposal.deposit_claimed_by_contract_id !== contract.id)) &&
+    (linkedProposal.deposit_payment_status !== "paid" ||
+      (!!linkedProposal.deposit_claimed_by_contract_id && linkedProposal.deposit_claimed_by_contract_id !== contract.id));
+  useEffect(() => {
+    if (!depositGateBlocked || !canApplyPooledDeposit) { setPoolDeposit(null); return; }
+    let cancelled = false;
+    fetch(`/api/contracts/${id}/apply-pooled-deposit`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        setPoolDeposit(json.data
+          ? {
+              applicable: json.data.applicable,
+              required: json.data.required,
+              available: json.data.available,
+              unverified: json.data.unverified ?? { amount: 0, contract_numbers: [] },
+            }
+          : null);
+      })
+      .catch(() => { if (!cancelled) setPoolDeposit(null); });
+    return () => { cancelled = true; };
+  }, [depositGateBlocked, canApplyPooledDeposit, id, poolDepositApplied]);
+
+  // After a partial apply, later top-ups join the customer's pool rather than
+  // this contract, so "still to collect" is read from the pool's shortfall.
+  const [poolShortfall, setPoolShortfall] = useState<number | null>(null);
+  useEffect(() => {
+    if (poolDepositApplied <= 0 || !contract?.lead_id) { setPoolShortfall(null); return; }
+    let cancelled = false;
+    fetch(`/api/leads/${contract.lead_id}/deposit-summary`)
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setPoolShortfall(j.data?.total_shortfall ?? null); })
+      .catch(() => { if (!cancelled) setPoolShortfall(null); });
+    return () => { cancelled = true; };
+  }, [poolDepositApplied, contract?.lead_id]);
+  const poolUncovered = contract
+    ? Math.max(0, Number(contract.security_deposit_amount || 0) - poolDepositApplied)
+    : 0;
+  const poolStillToCollect = poolShortfall === null ? poolUncovered : Math.min(poolUncovered, poolShortfall);
+
+  const handleApplyPooledDeposit = async () => {
+    setApplyingPool(true);
+    try {
+      const res = await fetch(`/api/contracts/${id}/apply-pooled-deposit`, { method: "POST" });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        const d = json?.data;
+        toast.success(
+          d?.shortfall > 0
+            ? `Applied ${formatCurrency(d.applied_amount)} — ${formatCurrency(d.shortfall)} of the deposit is still to be collected`
+            : `Applied ${formatCurrency(d?.applied_amount ?? 0)} of the customer's deposit`
+        );
+        fetchContract(false);
+      } else {
+        toast.error(json?.error || "Failed to apply deposit");
+      }
+    } catch {
+      toast.error("Failed to apply deposit");
+    } finally {
+      setApplyingPool(false);
+    }
+  };
   const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
   const [spaceWarningOpen, setSpaceWarningOpen] = useState(false);
-  const [pendingActivateArgs, setPendingActivateArgs] = useState<{ overrideReason?: string } | null>(null);
+  const [pendingActivateArgs, setPendingActivateArgs] = useState<{ overrideReason?: string; ackPartial?: boolean } | null>(null);
+  const [partialDepositOpen, setPartialDepositOpen] = useState(false);
 
   // Assigned spaces
   const [spaceAllocations, setSpaceAllocations] = useState<ContractSpaceAllocation[]>([]);
+
+  // A pending escalation request can exist without the contract's own status
+  // flag being set, so look the request up directly instead of trusting the flag.
+  const [pendingEscalationId, setPendingEscalationId] = useState<string | null>(null);
+  const [escalationRefresh, setEscalationRefresh] = useState(0);
+  useEffect(() => {
+    if (!contract?.is_renewal) { setPendingEscalationId(null); return; }
+    let cancelled = false;
+    fetch(`/api/approval-requests?status=pending&entity_type=contract&entity_id=${contract.id}&limit=10`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled) return;
+        const req = (json?.data ?? []).find((x: { approval_type: string }) =>
+          ["escalation_reduction", "escalation_waiver"].includes(x.approval_type));
+        setPendingEscalationId(req?.id ?? null);
+      })
+      .catch(() => { if (!cancelled) setPendingEscalationId(null); });
+    return () => { cancelled = true; };
+  }, [contract?.id, contract?.is_renewal, escalationRefresh]);
+  const escalationApprovalStatus = contract?.escalation_approval_status ?? (pendingEscalationId ? "pending" : null);
+  const escalationApprovalId = contract?.escalation_approval_id ?? pendingEscalationId;
 
   const handleSpaceAllocationsChange = useCallback((allocs: ContractSpaceAllocation[]) => {
     setSpaceAllocations(allocs);
@@ -150,12 +369,18 @@ export default function ContractDetailPage({
       const proposalId = json.data?.proposal_id;
       const hasRenewalDraft = ["renewal_in_progress", "renewed"].includes(json.data?.status);
 
-      const [proposalResult, renewalResult] = await Promise.allSettled([
+      const [proposalResult, renewalResult, attributionResult, prorataStatementResult] = await Promise.allSettled([
         proposalId
           ? fetch(`/api/proposals/${proposalId}`).then(r => r.json())
           : Promise.resolve(null),
         hasRenewalDraft
           ? fetch(`/api/contracts?parent_contract_id=${id}&is_renewal=true&limit=1`).then(r => r.json())
+          : Promise.resolve(null),
+        proposalId
+          ? fetch(`/api/contracts/${id}/attributed-invoices`).then(r => r.json())
+          : Promise.resolve(null),
+        proposalId
+          ? fetch(`/api/billing-statements?proposal_id=${proposalId}&limit=1`).then(r => r.json())
           : Promise.resolve(null),
       ]);
 
@@ -163,6 +388,18 @@ export default function ContractDetailPage({
         setLinkedProposal(
           proposalResult.status === "fulfilled" ? (proposalResult.value?.data || null) : null
         );
+
+        const attribution = attributionResult.status === "fulfilled" ? attributionResult.value?.data : null;
+        const prorataStatement = prorataStatementResult.status === "fulfilled"
+          ? (prorataStatementResult.value?.data || [])[0]
+          : null;
+        setProrataAttribution({
+          attributed: attribution?.attributed || [],
+          candidates: attribution?.candidates || [],
+          expectedAmount: prorataStatement?.total_amount ?? null,
+        });
+      } else {
+        setProrataAttribution({ attributed: [], candidates: [], expectedAmount: null });
       }
 
       if (hasRenewalDraft) {
@@ -179,27 +416,79 @@ export default function ContractDetailPage({
     fetchContract(true);
   }, [fetchContract]);
 
+  /** Links a candidate ad-hoc invoice as the pro-rata/first invoice from the
+   *  blocked-activation hint, mirroring the "Attribute an invoice" dialog
+   *  further down the page — same endpoint, same role gate (admin/accounts). */
+  const handleLinkProrataInvoice = async (invoiceId: string) => {
+    setLinkingInvoiceId(invoiceId);
+    try {
+      const res = await fetch(`/api/invoices/${invoiceId}/attribution`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contract_id: id, purpose: ACTIVATION_UNBLOCKING_PURPOSE }),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success("Invoice linked as the pro-rata / first invoice");
+        await fetchContract(false);
+      } else {
+        toast.error(json?.error || "Failed to link invoice");
+      }
+    } catch {
+      toast.error("Failed to link invoice");
+    } finally {
+      setLinkingInvoiceId(null);
+    }
+  };
+
   /** Wraps activation to check space allocation first */
-  const attemptActivation = (overrideReason?: string) => {
+  const attemptActivation = (overrideReason?: string, ackPartial = false) => {
+    // The deposit is only part-paid (over half): the person activating must see and accept that.
+    if (depositPartialOk && !overrideReason && !ackPartial) {
+      setPendingActivateArgs({ overrideReason });
+      setPartialDepositOpen(true);
+      return;
+    }
     const validation = validateSpaceAllocation(spaceAllocations, contract?.seats ?? 1);
     if (validation.isUnderAllocated) {
       // Show warning but still allow activation
-      setPendingActivateArgs({ overrideReason });
+      setPendingActivateArgs({ overrideReason, ackPartial });
       setSpaceWarningOpen(true);
       return;
     }
-    handleStatusUpdate("active", overrideReason);
+    handleStatusUpdate("active", overrideReason, ackPartial ? { acknowledge_partial_deposit: true } : undefined);
   };
 
   const confirmActivationWithSpaceWarning = () => {
     setSpaceWarningOpen(false);
-    handleStatusUpdate("active", pendingActivateArgs?.overrideReason);
+    handleStatusUpdate(
+      "active",
+      pendingActivateArgs?.overrideReason,
+      pendingActivateArgs?.ackPartial ? { acknowledge_partial_deposit: true } : undefined,
+    );
     setPendingActivateArgs(null);
   };
 
-  const handleStatusUpdate = async (newStatus: string, paymentOverrideReason?: string) => {
+  const confirmPartialDepositActivation = () => {
+    setPartialDepositOpen(false);
+    attemptActivation(pendingActivateArgs?.overrideReason, true);
+  };
+
+  // Withdraw = terminating a contract that never reached activation. Same
+  // dialog as Terminate, with warnings for loose ends withdrawing won't tidy up.
+  const isWithdrawal =
+    !!contract && (CONTRACT_PRE_ACTIVATION_STATUSES as readonly string[]).includes(contract.status);
+  const withdrawMoneyReceived = [
+    linkedProposal?.deposit_payment_status === "paid" && "security deposit",
+    linkedProposal?.payment_status === "paid" && "pro-rata",
+  ].filter(Boolean).join(" and ");
+  const withdrawSigningPending =
+    !!contract?.leegality_document_id &&
+    !["COMPLETED", "EXPIRED", "CANCELLED"].includes(contract.leegality_status || "");
+
+  const handleStatusUpdate = async (newStatus: string, paymentOverrideReason?: string, extra?: Record<string, unknown>) => {
     setStatusUpdating(true);
-    const payload: Record<string, unknown> = { status: newStatus };
+    const payload: Record<string, unknown> = { status: newStatus, ...extra };
     if (paymentOverrideReason) payload.payment_override_reason = paymentOverrideReason;
 
     const res = await fetch(`/api/contracts/${id}`, {
@@ -220,7 +509,7 @@ export default function ContractDetailPage({
 
   const handleTerminate = async () => {
     if (!terminationReason.trim()) {
-      toast.error("Please provide a termination reason");
+      toast.error(isWithdrawal ? "Please provide a reason for withdrawing" : "Please provide a termination reason");
       return;
     }
     setTerminating(true);
@@ -233,35 +522,82 @@ export default function ContractDetailPage({
       }),
     });
     if (res.ok) {
-      toast.success("Contract terminated");
+      toast.success(isWithdrawal ? "Contract withdrawn" : "Contract terminated");
       setTerminateOpen(false);
       setTerminationReason("");
       fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to terminate contract");
+      toast.error(err?.error || (isWithdrawal ? "Failed to withdraw contract" : "Failed to terminate contract"));
     }
     setTerminating(false);
   };
 
+  const handleSavePoNumber = async () => {
+    setSavingPoNumber(true);
+    const res = await fetch(`/api/contracts/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ po_number: poNumberValue.trim() || null }),
+    });
+    setSavingPoNumber(false);
+    if (res.ok) {
+      toast.success(poNumberValue.trim() ? "Customer PO number saved" : "Customer PO number cleared");
+      setEditingPoNumber(false);
+      fetchContract(false);
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to save");
+    }
+  };
+
   const handleDownloadPDF = async () => {
     if (!contract) return;
+    // Once stamped, the signed_document is the document of record — serve that
+    // instead of silently regenerating a fresh, unstamped PDF from live data.
+    if (contract.signed_document?.id) {
+      await handleViewSignedDoc();
+      return;
+    }
     const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
-      contract.location || undefined
+      contract.location || undefined,
+      { watermarkDraft: includeDraftWatermark || clauseGate.blocked }
     );
     doc.save(`${contract.contract_number}.pdf`);
+    if (await recordSignatureCopyIfClean()) fetchContract(false);
   };
 
-  const handleGeneratePDFBase64 = async (): Promise<string> => {
+  // A clean copy (downloaded or emailed) before start_date is confirmed can go
+  // out for physical signature — snapshot the printed date so the page can
+  // flag drift later. Returns true when a snapshot was recorded.
+  const recordSignatureCopyIfClean = async (): Promise<boolean> => {
+    if (!contract || includeDraftWatermark || contract.start_date_confirmed || !contract.start_date) {
+      return false;
+    }
+    const res = await fetch(`/api/contracts/${id}/mark-signature-copy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ signatureStartDate: contract.start_date }),
+    });
+    return res.ok;
+  };
+
+  const handleEmailSent = async () => {
+    await recordSignatureCopyIfClean();
+    fetchContract();
+  };
+
+  const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string; watermarkDraft?: boolean }): Promise<string> => {
     if (!contract) return "";
     const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
-      contract.location || undefined
+      contract.location || undefined,
+      options
     );
     const arrayBuffer = doc.output("arraybuffer");
     const bytes = new Uint8Array(arrayBuffer);
@@ -272,13 +608,14 @@ export default function ContractDetailPage({
     return btoa(binary);
   };
 
+  // Email dialog calls onGeneratePDF() with no arguments — thread the
+  // watermark toggle through as a closure instead of a call-site option, so
+  // handleGeneratePDFBase64 stays generic for the stamp/e-sign call sites
+  // (which never honor the manual toggle — see the watermarkDraft option's
+  // doc comment in generateMembershipAgreementPDF).
+  const handleGeneratePDFForEmail = () => handleGeneratePDFBase64({ watermarkDraft: includeDraftWatermark || clauseGate.blocked });
+
   const handleOpenEmailDialog = () => {
-    if (contract?.is_renewal && contract?.parent_contract_id) {
-      const confirmed = window.confirm(
-        "This is a renewal contract — both the Membership Agreement and the Addendum will be sent to the customer. Continue?"
-      );
-      if (!confirmed) return;
-    }
     setEmailDialogOpen(true);
   };
 
@@ -359,6 +696,295 @@ export default function ContractDetailPage({
     }
   };
 
+  const closeStampPreview = () => {
+    setStampConfirmOpen(false);
+    if (stampPreviewUrl) URL.revokeObjectURL(stampPreviewUrl);
+    if (stampExistingOriginalUrl) URL.revokeObjectURL(stampExistingOriginalUrl);
+    setStampPreviewUrl(null);
+    setStampPreviewPdfBase64(null);
+    setStampPreviewRef(null);
+    setStampError(null);
+    setStampExistingSourceBytes(null);
+    setStampExistingOriginalUrl(null);
+    setStampExistingPageCount(0);
+    setStampExistingTargetPage(1);
+    setStampExistingPageImageUrl(null);
+    setStampExistingClickRatio(null);
+  };
+
+  const handleOpenStampPreview = async () => {
+    if (!contract) return;
+    setStampMode("generate");
+    setStampPreviewLoading(true);
+    setStampError(null);
+    try {
+      const { generateStampReference } = await import("@/lib/company-stamp");
+      const stampRef = generateStampReference();
+      const pdfBase64 = await handleGeneratePDFBase64({ applyCompanyStamp: true, stampRef });
+      const bytes = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      setStampPreviewUrl(blobUrl);
+      setStampPreviewPdfBase64(pdfBase64);
+      setStampPreviewRef(stampRef);
+      // Just open the confirmation dialog — don't auto-open a new tab here.
+      // Auto-opening stole focus to the PDF tab before the user ever saw the
+      // dialog's own "Open preview PDF" button; let them choose when to look.
+      setStampConfirmOpen(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate preview");
+    } finally {
+      setStampPreviewLoading(false);
+    }
+  };
+
+  // Bytes → base64 without Buffer (browser context). Chunked to stay well
+  // under the string-arg limits some engines impose on String.fromCharCode.
+  const bytesToBase64 = (bytes: Uint8Array): string => {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  };
+
+  // pdfjs-dist needs a worker script; loading it from jsdelivr (pinned to
+  // the exact installed version) sidesteps bundler-specific worker-asset
+  // wiring for Next.js/Turbopack, which isn't set up in this project.
+  const getPdfJs = async () => {
+    const pdfjsLib = await import("pdfjs-dist");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+    return pdfjsLib;
+  };
+
+  // Rasterizes one page of `sourceBytes` for the click-to-place picker.
+  // Passes a copy to pdfjs — it can transfer/detach the buffer it's given,
+  // and the same bytes get reloaded by pdf-lib afterward to draw the stamp.
+  const renderStampExistingPageImage = async (sourceBytes: Uint8Array, pageNumber: number) => {
+    setStampExistingPageImageLoading(true);
+    try {
+      const pdfjsLib = await getPdfJs();
+      const pdf = await pdfjsLib.getDocument({ data: sourceBytes.slice() }).promise;
+      const page = await pdf.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas rendering isn't supported in this browser");
+      await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+      setStampExistingPageImageUrl(canvas.toDataURL("image/png"));
+    } finally {
+      setStampExistingPageImageLoading(false);
+    }
+  };
+
+  // Draws TWV's signature + seal centered on the admin's clicked point
+  // (normalized 0..1 within the page) onto one page of a pristine copy of
+  // `sourceBytes` (an arbitrary uploaded PDF — layout unknown to us), and
+  // pushes the result into the shared preview dialog state. Re-loading from
+  // the cached original each call means re-clicking never stacks stamps.
+  const renderExistingStampPreview = async (
+    sourceBytes: Uint8Array,
+    pageNumber: number,
+    stampRef: string,
+    xRatio: number,
+    yRatio: number
+  ) => {
+    const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+    const { COMPANY_SIGNATURE_BASE64 } = await import("@/lib/signature-data");
+    const { COMPANY_SEAL_BASE64 } = await import("@/lib/seal-data");
+
+    const pdfDoc = await PDFDocument.load(sourceBytes);
+    const pages = pdfDoc.getPages();
+    const targetIndex = Math.min(Math.max(pageNumber, 1), pages.length) - 1;
+    const targetPage = pages[targetIndex];
+    const { width, height } = targetPage.getSize();
+
+    const dataUriToBytes = (dataUri: string) =>
+      Uint8Array.from(atob(dataUri.split(",")[1]), (c) => c.charCodeAt(0));
+
+    const sigImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SIGNATURE_BASE64));
+    const sealImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SEAL_BASE64));
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    const sealSize = 44;
+    const sigH = 26;
+    const sigW = sigH * (sigImage.width / sigImage.height);
+    const gap = 6;
+    const clusterWidth = sigW + gap + sealSize;
+    const clusterHeight = Math.max(sigH, sealSize);
+    const margin = 4;
+
+    // PDF origin is bottom-left; the click ratio is measured from the
+    // top-left of the rendered image, so the y-axis flips here.
+    const clickX = xRatio * width;
+    const clickY = height - yRatio * height;
+
+    const clusterLeft = Math.min(Math.max(clickX - clusterWidth / 2, margin), width - clusterWidth - margin);
+    const clusterBottom = Math.min(
+      Math.max(clickY - clusterHeight / 2, margin + 12),
+      height - clusterHeight - margin
+    );
+
+    const sigX = clusterLeft;
+    const sigY = clusterBottom + (clusterHeight - sigH) / 2;
+    const sealX = sigX + sigW + gap;
+    const sealY = clusterBottom + (clusterHeight - sealSize) / 2;
+
+    targetPage.drawImage(sigImage, { x: sigX, y: sigY, width: sigW, height: sigH });
+    targetPage.drawImage(sealImage, { x: sealX, y: sealY, width: sealSize, height: sealSize });
+    targetPage.drawText(`TWV Ref: ${stampRef}`, {
+      x: sigX,
+      y: clusterBottom - 9,
+      size: 5.5,
+      font,
+      color: rgb(0.5, 0.5, 0.5),
+    });
+
+    const stampedBytes = await pdfDoc.save();
+    const pdfBase64 = bytesToBase64(stampedBytes);
+    const blobUrl = URL.createObjectURL(new Blob([new Uint8Array(stampedBytes)], { type: "application/pdf" }));
+
+    setStampPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return blobUrl;
+    });
+    setStampPreviewPdfBase64(pdfBase64);
+  };
+
+  // Overlays TWV's signature + seal directly onto the document already
+  // uploaded as signed_document (e.g. a customer-signed scan), instead of
+  // regenerating the agreement from scratch — preserves the customer's
+  // actual signature, unlike handleOpenStampPreview above. An arbitrary
+  // upload has no known layout (a trailing enclosure/KYC table can push the
+  // real signature block off the last page, or share a page with unrelated
+  // content), so the admin picks the page and clicks exactly where the
+  // stamp should sit rather than trusting a guessed corner.
+  const handleOpenStampExistingPreview = async () => {
+    if (!contract?.signed_document?.id) return;
+    setStampMode("existing");
+    setStampExistingPreviewLoading(true);
+    setStampError(null);
+    try {
+      const viewRes = await fetch(`/api/documents/${contract.signed_document.id}/view`);
+      if (!viewRes.ok) throw new Error("Failed to get the uploaded document's URL");
+      const { signedUrl } = await viewRes.json();
+      const fileRes = await fetch(signedUrl);
+      if (!fileRes.ok) throw new Error("Failed to download the uploaded document");
+      const fileBytes = new Uint8Array(await fileRes.arrayBuffer());
+
+      const { PDFDocument } = await import("pdf-lib");
+      const { generateStampReference } = await import("@/lib/company-stamp");
+
+      const probeDoc = await PDFDocument.load(fileBytes);
+      const pageCount = probeDoc.getPageCount();
+      const defaultPage = pageCount;
+      const stampRef = generateStampReference();
+
+      setStampExistingSourceBytes(fileBytes);
+      setStampExistingOriginalUrl(URL.createObjectURL(new Blob([new Uint8Array(fileBytes)], { type: "application/pdf" })));
+      setStampExistingPageCount(pageCount);
+      setStampExistingTargetPage(defaultPage);
+      setStampExistingClickRatio(null);
+      setStampPreviewRef(stampRef);
+      setStampPreviewUrl(null);
+      setStampPreviewPdfBase64(null);
+
+      await renderStampExistingPageImage(fileBytes, defaultPage);
+      setStampConfirmOpen(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate preview");
+    } finally {
+      setStampExistingPreviewLoading(false);
+    }
+  };
+
+  const handleStampExistingPageChange = async (pageNumber: number) => {
+    if (!stampExistingSourceBytes) return;
+    const clamped = Math.min(Math.max(pageNumber, 1), stampExistingPageCount || 1);
+    setStampExistingTargetPage(clamped);
+    // Force a fresh click on the new page — a point that made sense on the
+    // old page has no relation to this one.
+    setStampExistingClickRatio(null);
+    setStampPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setStampPreviewPdfBase64(null);
+    try {
+      await renderStampExistingPageImage(stampExistingSourceBytes, clamped);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to render that page");
+    }
+  };
+
+  const handleStampExistingImageClick = async (e: React.MouseEvent<HTMLImageElement>) => {
+    if (!stampExistingSourceBytes || !stampPreviewRef) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const xRatio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+    const yRatio = Math.min(Math.max((e.clientY - rect.top) / rect.height, 0), 1);
+    setStampExistingClickRatio({ x: xRatio, y: yRatio });
+    setStampExistingRendering(true);
+    try {
+      await renderExistingStampPreview(stampExistingSourceBytes, stampExistingTargetPage, stampPreviewRef, xRatio, yRatio);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update preview");
+    } finally {
+      setStampExistingRendering(false);
+    }
+  };
+
+  const handleStampSignSeal = async () => {
+    if (!contract || !stampPreviewPdfBase64 || !stampPreviewRef) return;
+    setStampingSignSeal(true);
+    setStampError(null);
+    try {
+      const endpoint =
+        stampMode === "existing"
+          ? `/api/contracts/${id}/stamp-existing-document`
+          : `/api/contracts/${id}/stamp-sign-seal`;
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: stampPreviewPdfBase64, stampRef: stampPreviewRef }),
+      });
+      if (res.ok) {
+        toast.success(`Contract stamped with company sign & seal (${stampPreviewRef})`);
+        closeStampPreview();
+        fetchContract(false);
+      } else {
+        const err = await res.json().catch(() => null);
+        setStampError(err?.error || "Failed to stamp contract");
+      }
+    } catch (e) {
+      setStampError(e instanceof Error ? e.message : "Failed to stamp contract");
+    } finally {
+      setStampingSignSeal(false);
+    }
+  };
+
+  const handleCancelStamp = async () => {
+    if (!contract) return;
+    setCancellingStamp(true);
+    setStampError(null);
+    try {
+      const res = await fetch(`/api/contracts/${id}/cancel-stamp`, { method: "POST" });
+      if (res.ok) {
+        toast.success("Sign & seal stamp cancelled — the plain agreement is available again");
+        setCancelStampOpen(false);
+        fetchContract(false);
+      } else {
+        const err = await res.json().catch(() => null);
+        setStampError(err?.error || "Failed to cancel the stamp");
+      }
+    } catch (e) {
+      setStampError(e instanceof Error ? e.message : "Failed to cancel the stamp");
+    } finally {
+      setCancellingStamp(false);
+    }
+  };
+
   const handleViewSignedDoc = async () => {
     if (!contract?.signed_document?.id) return;
     try {
@@ -428,6 +1054,31 @@ export default function ContractDetailPage({
     setCheckingSigningStatus(false);
   };
 
+  const handleCancelSigning = async () => {
+    if (!contract) return;
+    setCancellingSigning(true);
+    setSignCancelError(null);
+    try {
+      const res = await fetch(`/api/contracts/${id}/sign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" }),
+      });
+      if (res.ok) {
+        toast.success("E-signing request cancelled — the customer's signing link no longer works");
+        setCancelSigningOpen(false);
+        fetchContract(false);
+      } else {
+        const err = await res.json().catch(() => null);
+        setSignCancelError(err?.error || "Failed to cancel the e-signing request");
+      }
+    } catch (e) {
+      setSignCancelError(e instanceof Error ? e.message : "Failed to cancel the e-signing request");
+    } finally {
+      setCancellingSigning(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -453,22 +1104,52 @@ export default function ContractDetailPage({
     );
   }
 
-  const securityDeposit = (contract.security_deposit_months ?? 3) * (contract.subtotal ?? contract.total_amount);
+  // Prefer the contract's own snapshotted amount (populated at activation —
+  // a negotiated deposit can differ from the months × rate formula) and
+  // fall back to the formula only pre-activation, when nothing's snapshotted yet.
+  const securityDeposit = contract.security_deposit_amount
+    ? contract.security_deposit_amount
+    : (contract.security_deposit_months ?? 3) * (contract.subtotal ?? contract.total_amount);
 
   return (
     <div className="space-y-6">
+      {/* Deposit still pending: shown to everyone who opens the contract until the last part is paid */}
+      {depositParts && depositParts.balance > 0 && contract.status !== "draft" && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" data-testid="contract-deposit-pending-banner">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div>
+            <p className="font-semibold">Security deposit pending</p>
+            <p className="text-xs">
+              {partialDepositWarning(partialDepositState(depositParts.required, depositParts.paid))}
+              {linkedProposal && (
+                <> <Link href={`/proposals/${linkedProposal.id}`} className="font-medium underline">Collect the next part on the proposal</Link>.</>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+        {/* shrink-0 + nowrap: the wide action-button group beside this must
+            wrap onto more rows, not squeeze the contract number into a
+            one-word-per-line column. */}
+        <div className="flex items-center gap-3 shrink-0">
           <Button variant="ghost" size="icon" onClick={() => router.push("/contracts")}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold font-mono">{contract.contract_number}</h1>
-              <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contract.status]}>
-                {CONTRACT_STATUS_LABELS[contract.status]}
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-bold font-mono whitespace-nowrap">{contract.contract_number}</h1>
+              <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(contract)]}>
+                {CONTRACT_STATUS_LABELS[contractDisplayStatus(contract)]}
               </Badge>
+              <SpecialClauseBadge status={contract.special_clause_status} />
+              {contract.signed_document && (
+                <Badge className="bg-green-100 text-green-700 border-green-200">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> Signed
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground">
               {contract.title}
@@ -476,14 +1157,21 @@ export default function ContractDetailPage({
                 <span className="ml-2 inline-flex items-center gap-1 text-xs bg-muted px-1.5 py-0.5 rounded">{contract.location.name}</span>
               )}
             </p>
+            <div className="mt-2">
+              <QueryButton entityType="contract" entityId={contract.id} />
+            </div>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-1 min-w-0 flex-wrap gap-2 sm:justify-end">
           {/* Status-based action buttons */}
           {/* Send for e-Signing — available on any pre-terminal status while signing hasn't started */}
           {!contract.leegality_document_id &&
             !["rejected", "terminated", "completed"].includes(contract.status) && (
-              <Button onClick={handleInitiateSigning} disabled={initiatingSigning}>
+              <Button
+                onClick={handleInitiateSigning}
+                disabled={initiatingSigning || !leegalityEnabled || clauseGate.blocked}
+                title={clauseGate.reason ?? (leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing. Use company stamp or upload a manually signed document instead.")}
+              >
                 {initiatingSigning ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
@@ -493,10 +1181,65 @@ export default function ContractDetailPage({
               </Button>
             )}
 
-          {contract.status === "draft" && (
-            <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating}>
+          {/* Manual/offline alternative to e-Signing — admin applies TWV's own
+              stamp instead of routing the lessor side through Leegality. */}
+          {!contract.signed_document && userRole === "admin" && (
+            <Button
+              variant="outline"
+              onClick={handleOpenStampPreview}
+              disabled={stampPreviewLoading || uploadingSignedDoc || clauseGate.blocked}
+              title={clauseGate.reason ?? undefined}
+            >
+              {stampPreviewLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Stamp className="mr-2 h-4 w-4" />
+              )}
+              Stamp with company seal
+            </Button>
+          )}
+
+          {/* Stamp an already-uploaded signed document (e.g. a customer-signed
+              scan) instead of regenerating the agreement — preserves the
+              customer's actual signature. Only offered while that document
+              hasn't already been through either stamp flow. */}
+          {contract.signed_document && !contract.stamp_reference && userRole === "admin" && (
+            <Button
+              variant="outline"
+              onClick={handleOpenStampExistingPreview}
+              disabled={stampExistingPreviewLoading}
+            >
+              {stampExistingPreviewLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Stamp className="mr-2 h-4 w-4" />
+              )}
+              Stamp uploaded document
+            </Button>
+          )}
+
+          {contract.signed_document && contract.stamp_reference && userRole === "admin" && (
+            <Button variant="outline" onClick={() => { setStampError(null); setCancelStampOpen(true); }}>
+              <XCircle className="mr-2 h-4 w-4" />
+              Cancel sign & seal
+            </Button>
+          )}
+
+          {contract.status === "draft" && !contract.signed_document && (
+            <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating || clauseGate.blocked} title={clauseGate.reason ?? undefined}>
               <Send className="mr-2 h-4 w-4" />
               Send Agreement
+            </Button>
+          )}
+          {/* A draft with a signed agreement already attached (e.g. uploaded
+              off-band before Send Agreement was ever clicked) has no other
+              path forward — Send Agreement only shows while signed_document
+              is unset. Let an admin or manager jump straight to Accepted so
+              Activate becomes reachable. */}
+          {contract.status === "draft" && contract.signed_document && ["admin", "manager"].includes(userRole ?? "") && (
+            <Button variant="outline" onClick={() => handleStatusUpdate("accepted")} disabled={statusUpdating}>
+              {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              Mark Accepted (Signed)
             </Button>
           )}
           {contract.status === "sent" && (
@@ -528,13 +1271,61 @@ export default function ContractDetailPage({
             </>
           )}
           {contract.status === "accepted" && (() => {
-            const proposalPaid = !linkedProposal || linkedProposal.payment_status === "paid";
+            // Mirrors the server-side hard gate in /api/contracts/[id] (PATCH, status=active):
+            // renewals (deposit_carried_from set) skip the proposal requirement entirely;
+            // everything else must have a linked, paid proposal — an absent proposal_id is
+            // not "nothing to check", it's a blocker.
+            const isRenewal = !!contract.deposit_carried_from;
+            const proposalMissing = !isRenewal && !contract.proposal_id;
+            // A paid ad-hoc invoice attributed as the pro-rata/first invoice
+            // satisfies this the same way proposal.payment_status does — see
+            // the identical OR in /api/contracts/[id]'s PATCH handler. Without
+            // this, linking one from the "Ad-hoc Invoices" card below (or the
+            // hint here) would never actually unblock the Activate button.
+            const paidProrataInvoice = prorataAttribution.attributed.find(
+              (inv) => inv.attribution_purpose === ACTIVATION_UNBLOCKING_PURPOSE && inv.status === "paid"
+            );
+            const linkedUnpaidProrataInvoice = prorataAttribution.attributed.find(
+              (inv) => inv.attribution_purpose === ACTIVATION_UNBLOCKING_PURPOSE && inv.status !== "paid"
+            );
+            // A paid invoice already attributed to this contract under another purpose
+            // (e.g. "Monthly rent") doesn't satisfy the gate — say so, otherwise the
+            // block reads as "nothing was paid" while the payment is sitting right there.
+            const paidInvoiceTaggedElsewhere = prorataAttribution.attributed.find(
+              (inv) => inv.status === "paid"
+                && inv.attribution_purpose !== ACTIVATION_UNBLOCKING_PURPOSE
+                && inv.attribution_purpose !== "security_deposit"
+            );
+            const proposalPaid = isRenewal
+              || (!!contract.proposal_id && (linkedProposal?.payment_status === "paid" || !!paidProrataInvoice));
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
-            const depositPaid = !linkedProposal || !depositRequired || linkedProposal.deposit_payment_status === "paid";
+            // A proposal's collected deposit belongs to whichever contract first
+            // claims it at activation (see contracts/[id]/route.ts) — if a
+            // different contract already claimed it, this proposal's "paid"
+            // status doesn't cover this contract too.
+            const depositClaimedByOther = !!linkedProposal?.deposit_claimed_by_contract_id
+              && linkedProposal.deposit_claimed_by_contract_id !== contract.id;
+            const depositPaid = isRenewal || !depositRequired || poolDepositApplied > 0
+              || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther)
+              || (depositPartialOk && !depositClaimedByOther);
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
-            const prorataRequired = !!(contract.is_renewal && contract.prorata_payment_status === "pending");
-            const canActivate = proposalPaid && depositPaid && kycComplete && !prorataRequired;
+            // A mid-month renewal can't activate until its pro-rata invoice is
+            // sent (or admin-waived) — nothing else bills the partial first
+            // month. The server enforces the same rule; this just explains it.
+            const prorataBlocking = !!contract.renewal_prorata_blocking;
+            const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete && !prorataBlocking;
             const hasDeferred = kycStatus.deferred > 0;
+
+            // Closest-amount-first so the invoice that most plausibly *is* the
+            // pro-rata payment (just raised as an ad-hoc invoice instead of
+            // through the proposal) surfaces before unrelated charges.
+            const expectedAmount = prorataAttribution.expectedAmount;
+            const prorataCandidates = expectedAmount == null
+              ? prorataAttribution.candidates
+              : [...prorataAttribution.candidates].sort(
+                  (a, b) => Math.abs(a.total_amount - expectedAmount) - Math.abs(b.total_amount - expectedAmount)
+                );
+            const canLinkInvoice = ["admin", "accounts"].includes(userRole ?? "");
 
             return canActivate ? (
               <Button
@@ -555,9 +1346,98 @@ export default function ContractDetailPage({
                   </Button>
                   <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                     <p className="font-semibold mb-1">Cannot activate until:</p>
-                    {!proposalPaid && <p>• Proposal payment collected</p>}
-                    {!depositPaid && <p>• Security deposit collected</p>}
-                    {prorataRequired && <p>• Pro-rata payment (partial first month) — send PI from the Pro-Rata section below</p>}
+                    {prorataBlocking && <p>• The pro-rata invoice for the balance of the start month is sent (see the Pro-Rata card) — or waived by an admin</p>}
+                    {proposalMissing && <p>• A proposal is linked to this contract</p>}
+                    {!proposalMissing && !proposalPaid && (
+                      <div>
+                        <p>• Proposal payment collected</p>
+                        {!linkedUnpaidProrataInvoice && paidInvoiceTaggedElsewhere && (
+                          <p className="mt-1 pl-3 text-amber-800">
+                            <span className="font-mono">{paidInvoiceTaggedElsewhere.invoice_number}</span>
+                            {" "}({formatCurrency(paidInvoiceTaggedElsewhere.total_amount)}) is paid but tagged{" "}
+                            <strong>{(paidInvoiceTaggedElsewhere.attribution_purpose
+                              && (ADHOC_ATTRIBUTION_PURPOSE_LABELS as Record<string, string>)[paidInvoiceTaggedElsewhere.attribution_purpose])
+                              || "another purpose"}</strong>.
+                            {" "}If it was the first invoice, change it to &quot;Pro-rata / first invoice&quot; under Ad-hoc Invoices below.
+                          </p>
+                        )}
+                        {linkedUnpaidProrataInvoice ? (
+                          <p className="mt-1 pl-3 text-amber-800">
+                            Linked ad-hoc invoice <span className="font-mono">{linkedUnpaidProrataInvoice.invoice_number}</span>
+                            {" "}({formatCurrency(linkedUnpaidProrataInvoice.total_amount)}) is <strong>{linkedUnpaidProrataInvoice.status}</strong> —
+                            {" "}will unlock activation once it&apos;s marked paid.
+                          </p>
+                        ) : canLinkInvoice && prorataCandidates.length > 0 ? (
+                          <div className="mt-1.5 pl-3 space-y-1 border-l-2 border-amber-200">
+                            <p className="text-amber-800">Or link an ad-hoc invoice already raised for this customer:</p>
+                            {prorataCandidates.slice(0, 3).map((inv) => {
+                              const isLikelyMatch = expectedAmount != null && Math.abs(inv.total_amount - expectedAmount) < 1;
+                              return (
+                                <div key={inv.id} className="flex items-center gap-2">
+                                  <Link2 className="h-3 w-3 shrink-0 text-amber-600" />
+                                  <span className="font-mono">{inv.invoice_number}</span>
+                                  <span>{formatCurrency(inv.total_amount)}</span>
+                                  <Badge variant="outline" className="text-[10px] py-0">{inv.status}</Badge>
+                                  {isLikelyMatch && (
+                                    <Badge variant="outline" className="text-[10px] py-0 border-emerald-300 text-emerald-700 bg-emerald-50">
+                                      Likely match
+                                    </Badge>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-5 px-1.5 text-[11px] text-amber-800 hover:text-amber-900"
+                                    disabled={linkingInvoiceId === inv.id}
+                                    onClick={() => handleLinkProrataInvoice(inv.id)}
+                                  >
+                                    {linkingInvoiceId === inv.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Link"}
+                                  </Button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : !canLinkInvoice && prorataCandidates.length > 0 ? (
+                          <p className="mt-1 pl-3 text-amber-700">
+                            {prorataCandidates.length} ad-hoc invoice{prorataCandidates.length === 1 ? "" : "s"} for this customer could cover this —
+                            {" "}ask an admin or accounts teammate to link one below.
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+                    {!proposalMissing && !depositPaid && (
+                      <div>
+                        <p>
+                          • {depositClaimedByOther
+                            ? "Security deposit — already claimed by another contract activated from this same proposal. Collect a separate deposit for this contract, or apply the customer's available deposit."
+                            : "Security deposit collected"}
+                        </p>
+                        {canApplyPooledDeposit && poolDeposit && poolDeposit.applicable > 0 && (
+                          <div className="mt-1.5 pl-3 border-l-2 border-amber-200 flex flex-wrap items-center gap-2">
+                            <span className="text-amber-800">
+                              Customer has {formatCurrency(poolDeposit.available)} of deposit already collected —
+                              {" "}covers {formatCurrency(poolDeposit.applicable)} of the {formatCurrency(poolDeposit.required)} required
+                              {poolDeposit.applicable < poolDeposit.required ? " (the rest must still be collected)" : ""}.
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 px-2 text-[11px] border-amber-400 text-amber-800 hover:bg-amber-100"
+                              disabled={applyingPool}
+                              onClick={handleApplyPooledDeposit}
+                            >
+                              {applyingPool ? <Loader2 className="h-3 w-3 animate-spin" /> : `Apply ${formatCurrency(poolDeposit.applicable)}`}
+                            </Button>
+                            {poolDeposit.unverified.amount > 0 && (
+                              <p className="basis-full text-red-700 font-medium">
+                                ⚠ {formatCurrency(poolDeposit.unverified.amount)} of this has no payment evidence on file
+                                {poolDeposit.unverified.contract_numbers.length > 0 && ` (${poolDeposit.unverified.contract_numbers.join(", ")})`}
+                                {" "}— it was imported as &ldquo;assumed received&rdquo; or marked paid without an amount. Confirm it reached the bank before applying.
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {!kycComplete && (
                       <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
                     )}
@@ -599,15 +1479,41 @@ export default function ContractDetailPage({
               </div>
             );
           })()}
-          {contract.status === "active" && ["admin", "manager"].includes(userRole ?? "") && (
-            <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
-              <XCircle className="mr-2 h-4 w-4" />
-              Terminate
+          {canUseInvoiceWizard(contractDisplayStatus(contract), userRole) && (
+            <Button onClick={() => setInvoiceWizardOpen(true)}>
+              <Receipt className="mr-2 h-4 w-4" />
+              Invoice wizard
             </Button>
           )}
-          {/* Email button for sent/viewed/accepted/rejected */}
-          {["sent", "viewed", "accepted", "rejected"].includes(contract.status) && (
-            <Button variant="outline" onClick={() => setEmailDialogOpen(true)}>
+          {/* Exit replaces one-click Terminate for live contracts: notice, inspection
+              and settlement happen on the exit page, and completing it terminates. */}
+          {["active", "renewal_in_progress"].includes(contract.status) && (EXIT_START_ROLES as readonly string[]).includes(userRole ?? "") && (
+            exitView ? (
+              <Button asChild variant="outline">
+                <Link href={`/contracts/${contract.id}/exit`}>
+                  <XCircle className="mr-2 h-4 w-4" />
+                  Open exit
+                </Link>
+              </Button>
+            ) : (
+              <Button variant="destructive" onClick={() => setStartExitOpen(true)}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Start exit
+              </Button>
+            )
+          )}
+          {canWithdrawContract(contract, userRole) && (
+            <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setTerminateOpen(true)}>
+              <XCircle className="mr-2 h-4 w-4" />
+              Withdraw
+            </Button>
+          )}
+          {/* Email button for sent/viewed/accepted/rejected — hidden once stamped,
+              since the email dialog always sends a freshly generated (unstamped)
+              PDF and re-sending that as if it were still under review would be
+              misleading once a signed copy exists. */}
+          {["sent", "viewed", "accepted", "rejected"].includes(contract.status) && !contract.signed_document && (
+            <Button variant="outline" onClick={() => setEmailDialogOpen(true)} disabled={clauseGate.blocked} title={clauseGate.reason ?? undefined}>
               <Mail className="mr-2 h-4 w-4" />
               Email
             </Button>
@@ -616,6 +1522,15 @@ export default function ContractDetailPage({
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
+          {["admin", "manager", "sales_rep"].includes(userRole ?? "") && (
+            <label className="flex items-center gap-1.5 text-xs border rounded-md px-2.5 select-none text-muted-foreground cursor-pointer">
+              <Checkbox
+                checked={includeDraftWatermark}
+                onCheckedChange={(v) => setIncludeDraftWatermark(v === true)}
+              />
+              Include DRAFT watermark
+            </label>
+          )}
           {contract.is_renewal && contract.parent_contract_id && (
             <Button
               variant="outline"
@@ -636,9 +1551,24 @@ export default function ContractDetailPage({
         </div>
       </div>
 
+      {/* What is gating the agreement: a special clause that is not yet approved. */}
+      {clauseGate.blocked && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+          <Lock className="mt-0.5 h-4 w-4 text-amber-700 shrink-0" />
+          <div className="flex-1 text-sm text-amber-900">
+            <span className="font-medium">Sending is blocked.</span> {clauseGate.reason} Previews and downloads are watermarked DRAFT until then.
+          </div>
+        </div>
+      )}
+
+
       {/* Contract Chain Strip — shows history when contract is part of a renewal chain */}
       {contract.lead_id && (
         <ContractChainStrip contractId={contract.id} leadId={contract.lead_id} />
+      )}
+
+      {contract.lead_id && (
+        <JourneyPanel leadId={contract.lead_id} contractId={contract.id} />
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -652,6 +1582,26 @@ export default function ContractDetailPage({
               onSuccess={() => fetchContract(false)}
             />
           )}
+
+          {/* Stale signature-copy warning — the start date changed since a
+              watermark-free copy went out for physical signature, so that
+              copy no longer matches and needs to be re-sent. */}
+          {contract.signature_copy_generated_at &&
+            contract.signature_copy_start_date !== contract.start_date && (
+              <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                <div className="flex-1 text-sm text-amber-800">
+                  <span className="font-medium">Start date changed since a signature copy was sent</span>
+                  <span className="mx-1">—</span>
+                  the copy sent for signature had start date{" "}
+                  {contract.signature_copy_start_date
+                    ? formatDate(contract.signature_copy_start_date)
+                    : "unknown"}
+                  , it&apos;s now {formatDate(contract.start_date)}. Send an updated copy for
+                  signature.
+                </div>
+              </div>
+            )}
 
           {/* Renewal Chain Banner — visible on renewal contracts */}
           {contract.is_renewal && contract.parent_contract_id && (
@@ -671,9 +1621,15 @@ export default function ContractDetailPage({
                 </Link>
               </div>
               {contract.deposit_carried_from && (
-                <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
-                  Deposit carried over
-                </Badge>
+                Number(contract.deposit_shortfall || 0) > 0 ? (
+                  <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
+                    Deposit shortfall: {formatCurrency(Number(contract.deposit_shortfall || 0))}
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
+                    Deposit pooled
+                  </Badge>
+                )
               )}
               {contract.escalation_waived && (
                 <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
@@ -733,10 +1689,25 @@ export default function ContractDetailPage({
                     )}
                   </>
                 )}
-                {contract.proposal && (
+                {contract.is_renewal && contract.parent_contract_id ? (
+                  <div>
+                    <p className="text-muted-foreground text-xs">Parent Contract</p>
+                    <Link
+                      href={`/contracts/${contract.parent_contract_id}`}
+                      className="text-primary hover:underline font-medium font-mono text-xs"
+                    >
+                      {contract.parent_contract?.contract_number ?? "View parent contract"}
+                    </Link>
+                  </div>
+                ) : contract.proposal && (
                   <div>
                     <p className="text-muted-foreground text-xs">Proposal</p>
-                    <p className="font-mono text-xs">{contract.proposal.proposal_number}</p>
+                    <Link
+                      href={`/proposals/${contract.proposal.id}`}
+                      className="text-primary hover:underline font-medium font-mono text-xs"
+                    >
+                      {contract.proposal.proposal_number}
+                    </Link>
                   </div>
                 )}
               </div>
@@ -755,9 +1726,76 @@ export default function ContractDetailPage({
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Security Deposit</p>
-                  <p className="font-medium">{(contract.security_deposit_months ?? 3) === 0 ? "Waived" : formatCurrency(securityDeposit)}</p>
-                  {contract.deposit_carried_from && (
-                    <p className="text-[10px] text-green-600 mt-0.5">✓ Carried from parent</p>
+                  {(contract.security_deposit_months ?? 3) === 0 ? (
+                    <>
+                      <p className="font-medium">Waived</p>
+                      {linkedProposal?.deposit_waiver_verified_by_user?.full_name && (
+                        <Link
+                          href={`/proposals/${linkedProposal.id}#deposit-waiver-gate`}
+                          className="text-[10px] text-green-600 mt-0.5 hover:underline block"
+                        >
+                          ✓ Waived off by {linkedProposal.deposit_waiver_verified_by_user.full_name}
+                        </Link>
+                      )}
+                    </>
+                  ) : contract.deposit_carried_from ? (
+                    <>
+                      <p className="font-medium">{formatCurrency(securityDeposit)}</p>
+                      <p className="text-[10px] text-green-600 mt-0.5">✓ Pooled with customer</p>
+                    </>
+                  ) : (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status) ? (
+                    // Post-activation: the contract owns its own deposit snapshot now
+                    // (see contracts/[id]/route.ts) — no proposal dependency, so this
+                    // works for legacy/no-proposal contracts too.
+                    contract.deposit_payment_status === "paid" ? (
+                      <>
+                        <p className="font-medium">
+                          {formatCurrency(Number(contract.deposit_payment_amount || contract.security_deposit_amount || securityDeposit))}
+                        </p>
+                        <p className="text-[10px] text-green-600 mt-0.5">✓ Received</p>
+                      </>
+                    ) : poolDepositApplied > 0 ? (
+                      <>
+                        <p className="font-medium">{formatCurrency(securityDeposit)}</p>
+                        {poolStillToCollect > 0.01 ? (
+                          <p className="text-[10px] text-amber-600 mt-0.5">
+                            Pending — {formatCurrency(poolStillToCollect)} still to collect
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-green-600 mt-0.5">✓ Covered by customer&apos;s pooled deposit</p>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-medium">{formatCurrency(securityDeposit)}</p>
+                        <p className="text-[10px] text-amber-600 mt-0.5">Pending</p>
+                      </>
+                    )
+                  ) : linkedProposal?.deposit_payment_status === "paid"
+                    && !(linkedProposal.deposit_claimed_by_contract_id && linkedProposal.deposit_claimed_by_contract_id !== contract.id) ? (
+                    <Link href={`/proposals/${linkedProposal.id}#security-deposit`} className="block hover:underline">
+                      <p className="font-medium">
+                        {formatCurrency(Number(linkedProposal.deposit_payment_amount || linkedProposal.security_deposit_amount || securityDeposit))}
+                      </p>
+                      <p className="text-[10px] text-green-600 mt-0.5">✓ Received — view payment details</p>
+                    </Link>
+                  ) : (
+                    <>
+                      <p className="font-medium">
+                        {formatCurrency(Number(linkedProposal?.security_deposit_amount || securityDeposit))}
+                      </p>
+                      <p className="text-[10px] text-amber-600 mt-0.5">Pending</p>
+                      {depositParts && linkedProposal && (
+                        <Link href={`/proposals/${linkedProposal.id}#security-deposit`} className="block text-[10px] text-amber-700 underline mt-0.5">
+                          Partly paid: {formatCurrency(depositParts.paid)} of {formatCurrency(depositParts.required)} received · {formatCurrency(depositParts.balance)} still to collect
+                        </Link>
+                      )}
+                    </>
+                  )}
+                  {poolDepositApplied > 0 && (
+                    <p className="text-[10px] text-green-600 mt-0.5">
+                      ✓ {formatCurrency(poolDepositApplied)} applied from customer&apos;s pooled deposit
+                    </p>
                   )}
                   {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
                     <p className="text-[10px] text-amber-600 mt-0.5">
@@ -774,12 +1812,15 @@ export default function ContractDetailPage({
           </Card>
 
           {/* Recurring Add-ons */}
+          <div id="section-addons" className="scroll-mt-4">
           <ContractAddonsSection
             contractId={id}
             contractStartDate={contract.start_date}
             contractEndDate={contract.end_date}
             taxPercentage={contract.tax_percentage ?? 18}
+            openAddSignal={addonOpenSignal}
           />
+          </div>
 
           {/* Tiered Rate Schedule — only editable pre-activation, mirrors the
               API's own lock gate (same statuses as quota locking). */}
@@ -796,21 +1837,29 @@ export default function ContractDetailPage({
             onPhasesUpdated={() => fetchContract(false)}
           />
 
-          {/* Security Deposit Snapshot */}
-          {linkedProposal && (
+          {/* Security Deposit Snapshot — renders pre-activation off the linked
+              proposal, or post-activation off the contract's own snapshot
+              even when no proposal is (or ever was) linked. */}
+          {(linkedProposal || (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) && (
             <ContractDepositSection
               proposal={linkedProposal}
+              contract={contract}
               depositCarriedFrom={contract.deposit_carried_from}
+              leadId={contract.lead_id || undefined}
+              depositShortfall={contract.deposit_shortfall}
             />
           )}
 
           {/* Deposit Top-ups — collect additional deposit, incl. renewal-escalation shortfall */}
+          <div id="section-deposit-topups" className="scroll-mt-4">
           <ContractDepositTopupsSection
             contractId={id}
             currentUserRole={userRole ?? ""}
             depositShortfall={contract.deposit_shortfall}
             onShortfallCollected={() => fetchContract(false)}
+            openCollectSignal={depositOpenSignal}
           />
+          </div>
 
           {/* Deposit Adjustments — pending approvals + history */}
           <ContractDepositAdjustmentsSection
@@ -824,6 +1873,24 @@ export default function ContractDetailPage({
             contractId={id}
             billingMode={contract.billing_mode}
             contractStatus={contract.status}
+            proposalId={contract.proposal_id}
+            proposalNumber={contract.proposal?.proposal_number}
+            prorataPaymentStatus={contract.proposal?.payment_status}
+            prorataPaymentReceivedAt={contract.proposal?.payment_received_at}
+            billingCycle={contract.billing_cycle}
+            nextBillingDate={contract.next_billing_date}
+            startDate={contract.start_date}
+            endDate={contract.end_date}
+            createdAt={contract.created_at}
+            activatedAt={contract.activated_at}
+            terminatedAt={contract.terminated_at}
+          />
+
+          {/* Ad-hoc lead invoices attributed to this contract */}
+          <ContractAttributedInvoicesSection
+            contractId={id}
+            currentUserRole={userRole ?? ""}
+            onAttributionChanged={() => fetchContract(false)}
           />
 
           {/* Agreement Details Card */}
@@ -874,6 +1941,33 @@ export default function ContractDetailPage({
                   <p className="text-muted-foreground text-xs">Notice Period</p>
                   <p>{contract.notice_period_months || 2} months</p>
                 </div>
+                {contract.commitment_override_reason && (
+                  <div className="sm:col-span-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                    <p className="font-medium">
+                      Terms overridden from {contract.proposal?.proposal_number ?? "the proposal"}
+                      {contract.proposal && contract.proposal.tenure_months != null && contract.proposal.lock_in_months != null && contract.proposal.notice_period_months != null && (() => {
+                        const diffs = commitmentDifferences(
+                          {
+                            tenure_months: contract.proposal.tenure_months,
+                            lock_in_months: contract.proposal.lock_in_months,
+                            notice_period_months: contract.proposal.notice_period_months,
+                          },
+                          {
+                            tenure_months: contract.tenure_months,
+                            lock_in_months: contract.lock_in_months ?? contract.proposal.lock_in_months,
+                            notice_period_months: contract.notice_period_months ?? contract.proposal.notice_period_months,
+                          }
+                        );
+                        return diffs.length > 0 ? `: ${diffs.join(", ")}` : null;
+                      })()}
+                    </p>
+                    <p className="mt-1">&ldquo;{contract.commitment_override_reason}&rdquo;</p>
+                    <p className="mt-1 text-amber-800/80">
+                      {contract.commitment_overridden_by_user?.full_name ?? "Admin"}
+                      {contract.commitment_overridden_at && ` · ${formatDate(contract.commitment_overridden_at)}`}
+                    </p>
+                  </div>
+                )}
                 {contract.agreement_date && (
                   <div>
                     <p className="text-muted-foreground text-xs">Agreement Date</p>
@@ -910,6 +2004,24 @@ export default function ContractDetailPage({
             onKycStatusChange={handleKycStatusChange}
           />
 
+          <SpecialClauseCard
+            subject={{ kind: "contract", id }}
+            status={contract.special_clause_status}
+            locked={!!contract.signed_document || !!contract.leegality_document_id}
+            userRole={userRole}
+            facts={{
+              "Customer": contract.lead?.company || "",
+              "Location": contract.location?.name || "",
+              "Monthly rent (before tax)": contract.subtotal != null ? formatCurrency(Number(contract.subtotal)) : "",
+              "Term (months)": String(contract.tenure_months ?? ""),
+              "Lock-in (months)": String(contract.lock_in_months ?? ""),
+              "Notice period (months)": String(contract.notice_period_months ?? ""),
+              "Security deposit (months)": String(contract.security_deposit_months ?? ""),
+              "Workspace": contract.workspace_description || "",
+            }}
+            onChanged={() => fetchContract(false)}
+          />
+
           {/* Line Items Table */}
           <Card>
             <CardHeader>
@@ -924,6 +2036,9 @@ export default function ContractDetailPage({
                       <th className="px-4 py-3 text-right font-medium">Qty</th>
                       <th className="px-4 py-3 text-right font-medium">Unit Price</th>
                       <th className="px-4 py-3 text-right font-medium">Total</th>
+                      {contract.items.some((i) => i.escalates !== undefined) && (
+                        <th className="px-4 py-3 text-right font-medium">On renewal</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -933,6 +2048,11 @@ export default function ContractDetailPage({
                         <td className="px-4 py-3 text-right">{item.quantity}</td>
                         <td className="px-4 py-3 text-right">{formatCurrency(item.unit_price)}</td>
                         <td className="px-4 py-3 text-right font-medium">{formatCurrency(item.total)}</td>
+                        {contract.items.some((i) => i.escalates !== undefined) && (
+                          <td className="px-4 py-3 text-right text-xs text-muted-foreground">
+                            {item.escalates === false ? "Stays fixed" : "Escalates"}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -940,6 +2060,17 @@ export default function ContractDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Agreement document history — old executed versions stay
+              visible/downloadable after a reupload (e.g. customer name
+              change or a change-of-law redocumentation). */}
+          <AgreementDocumentHistory
+            listUrl={`/api/contracts/${id}/agreement-versions`}
+            reuploadUrl={`/api/contracts/${id}/reupload-agreement`}
+            canManage={["admin", "manager", "sales_rep"].includes(userRole ?? "")}
+            hasExistingDocument={!!contract.signed_document}
+            onChanged={fetchContract}
+          />
 
           {/* Terms & Conditions */}
           {contract.terms_and_conditions && (
@@ -956,12 +2087,23 @@ export default function ContractDetailPage({
           {/* Contract Contacts — each contract can have its own set of
               contact persons (finance, occupant, signatory, etc.) */}
           <ContractContactsPanel
+            key={`contacts-${accessVersion}`}
             contractId={id}
             leadId={contract.lead_id || undefined}
           />
 
+          {/* People & Access: the one place people are added and access is tracked.
+              The voucher and door-access sections below stay as per-person detail. */}
+          <ContractPeopleAccessSection
+            contractId={id}
+            contractStatus={contract.status}
+            signedDocumentId={contract.signed_document_id}
+            onChanged={() => setAccessVersion((v) => v + 1)}
+          />
+
           {/* Vouchers Section */}
           <ContractVouchersSection
+            key={`vouchers-${accessVersion}`}
             contractId={id}
             seats={contract.seats}
             contractStatus={contract.status}
@@ -977,19 +2119,25 @@ export default function ContractDetailPage({
 
           {/* Members & Access Control (lifecycle steps shown inline per member) */}
           <ContractMembersAccessSection
+            key={`members-${accessVersion}`}
             contractId={id}
             seats={contract.seats}
             contractStatus={contract.status}
+            allowAdd={false}
           />
 
           {/* ── Quota sections ──────────────────────────────────────────────
                Active (and beyond) contracts: only admin can edit.
                Draft/Sent/Accepted: admin, manager, accounts can edit.
-               Terminated/Expired/Rejected: hidden (no edits needed). */}
-          {contract.status !== "terminated" && contract.status !== "expired" && contract.status !== "rejected" && (() => {
+               Terminated/Expired/Rejected: still shown (read-only) so
+               negotiated rates/quotas remain visible for reference — e.g.
+               to log a backdated booking against the rate that was in
+               effect, or for accounting to look up historical terms. */}
+          {(() => {
+            const isTerminal = ["terminated", "expired", "rejected"].includes(contract.status);
             const isLocked = (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status);
             const hasQuotaRole = (CONTRACT_QUOTA_ROLES as readonly string[]).includes(userRole || "");
-            const canEdit = hasQuotaRole && (["admin", "manager"].includes(userRole || "") || !isLocked);
+            const canEdit = !isTerminal && hasQuotaRole && (["admin", "manager"].includes(userRole || "") || !isLocked);
             const quotaReadOnly = !canEdit;
             return (
               <>
@@ -1050,6 +2198,54 @@ export default function ContractDetailPage({
 
         {/* Sidebar */}
         <div className="space-y-4">
+          {/* Escalation approval status — on any renewal, whatever its status */}
+          {contract.is_renewal && escalationApprovalStatus && (
+            <div className={`rounded-md border px-3 py-2 text-xs space-y-1 ${
+              escalationApprovalStatus === "pending"
+                ? "border-purple-200 bg-purple-50 text-purple-800"
+                : escalationApprovalStatus === "approved"
+                  ? "border-green-200 bg-green-50 text-green-800"
+                  : "border-red-200 bg-red-50 text-red-800"
+            }`}>
+              <p className="font-semibold flex items-center gap-1">
+                {escalationApprovalStatus === "pending" && "⏳ Escalation Approval Pending"}
+                {escalationApprovalStatus === "approved" && "✓ Escalation Approved"}
+                {escalationApprovalStatus === "rejected" && "✗ Escalation Rejected"}
+              </p>
+              <p>
+                {escalationApprovalStatus === "pending" && "The reduced/waived escalation rate is awaiting admin approval. The contract cannot be activated until approved."}
+                {escalationApprovalStatus === "approved" && "The negotiated escalation rate has been approved by admin."}
+                {escalationApprovalStatus === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
+              </p>
+              {escalationApprovalStatus !== "pending" && contract.escalation_decision?.acted_at && (
+                <p className="opacity-80">
+                  {escalationApprovalStatus === "approved" ? "Approved" : "Rejected"}
+                  {contract.escalation_decision.acted_by_name ? ` by ${contract.escalation_decision.acted_by_name}` : ""}
+                  {` on ${formatDateTime(contract.escalation_decision.acted_at)}`}
+                </p>
+              )}
+              {escalationApprovalStatus === "pending" &&
+                escalationApprovalId &&
+                ["admin", "manager"].includes(userRole ?? "") && (
+                  <EscalationApprovalActions
+                    approvalId={escalationApprovalId}
+                    onActed={() => { setEscalationRefresh((n) => n + 1); fetchContract(false); }}
+                  />
+                )}
+            </div>
+          )}
+
+          {["active", "renewal_in_progress"].includes(contract.status) && (
+            <ContractAutoRenewalCard
+              contractId={contract.id}
+              contractNumber={contract.contract_number}
+              endDate={contract.end_date}
+              userRole={userRole}
+              onStartExit={() => setStartExitOpen(true)}
+              exitInProgress={!!exitView}
+            />
+          )}
+
           {/* Renewal Card — pinned to top of sidebar for active/expired/renewal_in_progress/renewed contracts */}
           {["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) && (
             <Card>
@@ -1081,30 +2277,8 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
-                {/* Escalation approval status — on renewal drafts */}
-                {contract.is_renewal && contract.escalation_approval_status && (
-                  <div className={`rounded-md border px-3 py-2 text-xs space-y-1 ${
-                    contract.escalation_approval_status === "pending"
-                      ? "border-purple-200 bg-purple-50 text-purple-800"
-                      : contract.escalation_approval_status === "approved"
-                        ? "border-green-200 bg-green-50 text-green-800"
-                        : "border-red-200 bg-red-50 text-red-800"
-                  }`}>
-                    <p className="font-semibold flex items-center gap-1">
-                      {contract.escalation_approval_status === "pending" && "⏳ Escalation Approval Pending"}
-                      {contract.escalation_approval_status === "approved" && "✓ Escalation Approved"}
-                      {contract.escalation_approval_status === "rejected" && "✗ Escalation Rejected"}
-                    </p>
-                    <p>
-                      {contract.escalation_approval_status === "pending" && "The reduced/waived escalation rate is awaiting admin approval. The contract cannot be activated until approved."}
-                      {contract.escalation_approval_status === "approved" && "The negotiated escalation rate has been approved by admin."}
-                      {contract.escalation_approval_status === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
-                    </p>
-                  </div>
-                )}
-
                 {/* Escalation waiver — admin only, on renewal drafts */}
-                {contract.is_renewal && contract.status === "draft" && !contract.escalation_approval_status && (
+                {contract.is_renewal && contract.status === "draft" && !escalationApprovalStatus && (
                   <EscalationWaiverSection
                     contractId={contract.id}
                     escalationWaived={contract.escalation_waived || false}
@@ -1129,7 +2303,7 @@ export default function ContractDetailPage({
                 {contract.deposit_carried_from && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground text-xs">Deposit</span>
-                    <span className="text-xs text-green-700">Carried from parent</span>
+                    <span className="text-xs text-green-700">Pooled with customer</span>
                   </div>
                 )}
                 {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
@@ -1149,27 +2323,99 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
+                {/* Extension usage — visible whenever this contract has ever been extended */}
+                {(contract.days_extended || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Extended</span>
+                    <span className="text-xs">{contract.days_extended} / 60 days</span>
+                  </div>
+                )}
+
+                {contract.status === "active" && userRole === "admin" && (
+                  <Button size="sm" variant="outline" className="w-full" onClick={() => setPricingSplitOpen(true)}>
+                    <Scale className="mr-1.5 h-3.5 w-3.5" />
+                    Edit pricing split
+                  </Button>
+                )}
+
                 {/* Action buttons — only for active/expired, not already renewed or declined */}
-                {/* Role gate: admin, manager, sales_rep can renew/decline */}
-                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
-                  <div className="flex gap-2 pt-1">
-                    <Button
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => setRenewDialogOpen(true)}
-                    >
-                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                      Renew
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => setDeclineDialogOpen(true)}
-                    >
-                      <XCircle className="mr-1.5 h-3.5 w-3.5" />
-                      Decline
-                    </Button>
+                {/* Role gate: admin, manager, sales_rep can renew/decline/extend */}
+                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (() => {
+                  // Renewal window: only opens up within 45 days of expiry — an
+                  // "expired" contract is already past that window by definition.
+                  // Mirrors the hard gate in POST /api/contracts/[id]/renew.
+                  const daysUntilExpiry = contract.end_date
+                    ? Math.ceil((new Date(contract.end_date + "T00:00:00Z").getTime() - Date.now()) / 86_400_000)
+                    : null;
+                  const renewalWindowOpen = contract.status === "expired" || (daysUntilExpiry !== null && daysUntilExpiry <= 45);
+
+                  return (
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <span>Not sure which to use?</span>
+                      <InfoTooltip
+                        text="Extend pushes the current end date forward by up to 60 days total, with no change to rate or terms — use it for a short gap (e.g. paperwork running a few days late). Renew creates a new contract term with its own tenure, escalation, and deposit — use it when the member is signing on for a fresh period."
+                        side="top"
+                      />
+                    </div>
+                    {!renewalWindowOpen && (
+                      <p className="text-[10px] text-muted-foreground">
+                        Renew unlocks 45 days before expiry
+                        {contract.end_date && ` (from ${formatDate(new Date(new Date(contract.end_date + "T00:00:00Z").getTime() - 45 * 86_400_000).toISOString().slice(0, 10))})`}.
+                      </p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        className="flex-1"
+                        disabled={!renewalWindowOpen}
+                        title={!renewalWindowOpen ? "Renewal opens 45 days before expiry" : undefined}
+                        onClick={() => setRenewDialogOpen(true)}
+                      >
+                        <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                        Renew
+                      </Button>
+                      {contract.status === "active" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => setExtendDialogOpen(true)}
+                        >
+                          <CalendarPlus className="mr-1.5 h-3.5 w-3.5" />
+                          Extend
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => setDeclineDialogOpen(true)}
+                      >
+                        <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                        Decline
+                      </Button>
+                    </div>
+                  </div>
+                  );
+                })()}
+
+                {/* The renewal's term has started but the contract isn't live.
+                    Until it is activated the run cannot bill it, so this
+                    (ended) contract gets charged for the new term instead —
+                    right customer and amount, wrong contract. */}
+                {contract.status === "renewal_in_progress" && renewalDraft?.start_date &&
+                  renewalDraft.status !== "active" &&
+                  renewalDraft.start_date <= new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10) && (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 space-y-1">
+                    <p className="font-semibold">
+                      ⚠️ {renewalDraft.contract_number} started {formatDate(renewalDraft.start_date)} but isn&apos;t active
+                    </p>
+                    <p>
+                      Until it&apos;s activated, month-end billing charges <strong>this</strong> contract
+                      for the renewal period — even though its term ended {formatDate(contract.end_date)}.
+                      Activate the renewal before the next billing run.
+                    </p>
                   </div>
                 )}
 
@@ -1186,6 +2432,17 @@ export default function ContractDetailPage({
                         Open Renewal Draft — {renewalDraft.contract_number}
                         <span className="text-amber-600">→</span>
                       </Link>
+                    )}
+                    {renewalDraft?.status === "draft" && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setCancelRenewalDialogOpen(true)}
+                      >
+                        <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                        Cancel Renewal
+                      </Button>
                     )}
                   </div>
                 )}
@@ -1210,6 +2467,8 @@ export default function ContractDetailPage({
             </Card>
           )}
 
+          <ExitCard contractId={contract.id} view={exitView} />
+
           {/* Contract Details Card */}
           <Card>
             <CardHeader>
@@ -1226,9 +2485,16 @@ export default function ContractDetailPage({
                 <span>{contract.tenure_months} months</span>
               </div>
               <Separator />
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Start Date</span>
-                <span>{formatDate(contract.start_date)}</span>
+                <span className="flex items-center gap-2">
+                  {formatDate(contract.start_date)}
+                  {contract.start_date_confirmed === false && (
+                    <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
+                      Pending pro-rata payment
+                    </Badge>
+                  )}
+                </span>
               </div>
               <Separator />
               <div className="flex justify-between">
@@ -1268,13 +2534,56 @@ export default function ContractDetailPage({
                   </div>
                 </>
               )}
+              <Separator />
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-muted-foreground shrink-0">Customer PO Number</span>
+                {editingPoNumber ? (
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      value={poNumberValue}
+                      onChange={(e) => setPoNumberValue(e.target.value)}
+                      placeholder="e.g. 4500218763"
+                      className="h-7 text-sm w-32"
+                      autoFocus
+                      onKeyDown={(e) => e.key === "Enter" && handleSavePoNumber()}
+                    />
+                    <Button size="sm" className="h-7 text-xs px-2" onClick={handleSavePoNumber} disabled={savingPoNumber}>
+                      {savingPoNumber ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs px-2"
+                      onClick={() => setEditingPoNumber(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    {contract.po_number ? (
+                      <Badge variant="secondary" className="font-mono">{contract.po_number}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">Not set</span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-1.5"
+                      onClick={() => { setPoNumberValue(contract.po_number || ""); setEditingPoNumber(true); }}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                  </span>
+                )}
+              </div>
             </CardContent>
           </Card>
 
           {/* Contract Lifecycle */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Agreement Journey</CardTitle>
+              <CardTitle className="text-base">Agreement history</CardTitle>
             </CardHeader>
             <CardContent>
               <ContractLifecycle contract={contract} />
@@ -1487,6 +2796,21 @@ export default function ContractDetailPage({
                   </Button>
                 )}
 
+                {/* Withdraws the request from Leegality outright — the customer's
+                    signing link stops working. Only offered while something is
+                    actually live to cancel. */}
+                {!["COMPLETED", "EXPIRED", "CANCELLED"].includes(contract.leegality_status || "") && userRole === "admin" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full text-destructive hover:text-destructive"
+                    onClick={() => { setSignCancelError(null); setCancelSigningOpen(true); }}
+                  >
+                    <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                    Cancel e-Signing Request
+                  </Button>
+                )}
+
                 {/* Re-initiate option if expired/cancelled */}
                 {(contract.leegality_status === "EXPIRED" || contract.leegality_status === "CANCELLED") && (
                   <Button
@@ -1494,7 +2818,8 @@ export default function ContractDetailPage({
                     variant="outline"
                     className="w-full"
                     onClick={handleInitiateSigning}
-                    disabled={initiatingSigning}
+                    disabled={initiatingSigning || !leegalityEnabled || clauseGate.blocked}
+                    title={clauseGate.reason ?? (leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing.")}
                   >
                     {initiatingSigning ? (
                       <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1585,7 +2910,7 @@ export default function ContractDetailPage({
                 <>
                   <Separator />
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Terminated</span>
+                    <span className="text-muted-foreground">{contract.activated_at ? "Terminated" : "Withdrawn"}</span>
                     <span>{formatDate(contract.terminated_at)}</span>
                   </div>
                 </>
@@ -1594,7 +2919,7 @@ export default function ContractDetailPage({
                 <>
                   <Separator />
                   <div>
-                    <span className="text-muted-foreground block mb-1">Termination Reason</span>
+                    <span className="text-muted-foreground block mb-1">{contract.activated_at ? "Termination Reason" : "Withdrawal Reason"}</span>
                     <span>{contract.termination_reason}</span>
                   </div>
                 </>
@@ -1684,6 +3009,32 @@ export default function ContractDetailPage({
         </DialogContent>
       </Dialog>
 
+      {/* Part-paid deposit: confirm activating with the balance still pending */}
+      <Dialog open={partialDepositOpen} onOpenChange={setPartialDepositOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              Activate with the deposit pending?
+            </DialogTitle>
+            <DialogDescription>
+              More than half of the deposit is in, so this contract can start now. The rest must still be collected.
+            </DialogDescription>
+          </DialogHeader>
+          {depositParts && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+              {partialDepositWarning(partialDepositState(depositParts.required, depositParts.paid))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPartialDepositOpen(false)}>Go Back</Button>
+            <Button className="bg-amber-600 hover:bg-amber-700 text-white" onClick={confirmPartialDepositActivation}>
+              Activate anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Space Under-Allocation Warning Dialog */}
       <Dialog open={spaceWarningOpen} onOpenChange={setSpaceWarningOpen}>
         <DialogContent>
@@ -1730,24 +3081,58 @@ export default function ContractDetailPage({
       </Dialog>
 
       {/* Terminate Dialog */}
+      <StartExitDialog
+        contractId={contract.id}
+        contractNumber={contract.contract_number}
+        endDate={contract.end_date ?? null}
+        lockInMonths={contract.lock_in_months}
+        noticePeriodMonths={contract.notice_period_months}
+        open={startExitOpen}
+        onOpenChange={setStartExitOpen}
+        onStarted={() => { reloadExit(); fetchContract(false); }}
+      />
+
       <Dialog open={terminateOpen} onOpenChange={setTerminateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Terminate Contract</DialogTitle>
+            <DialogTitle>{isWithdrawal ? "Withdraw Contract" : "Terminate Contract"}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to terminate contract {contract.contract_number}?
-              This action cannot be undone.
+              {isWithdrawal
+                ? `Withdraw ${contract.contract_number}? It was never activated — withdrawing closes it so it no longer sits pending. This cannot be undone.`
+                : `Are you sure you want to terminate contract ${contract.contract_number}? This action cannot be undone.`}
             </DialogDescription>
           </DialogHeader>
+          {isWithdrawal && (withdrawMoneyReceived || withdrawSigningPending) && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 space-y-1.5">
+              {withdrawMoneyReceived && (
+                <p className="flex gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    The customer has already paid the {withdrawMoneyReceived} on the proposal.
+                    Withdrawing does not refund it — arrange the refund or adjustment with accounts.
+                  </span>
+                </p>
+              )}
+              {withdrawSigningPending && (
+                <p className="flex gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    The e-signing link is still open for the customer. Cancel it in the Leegality
+                    section below so they can&apos;t sign a withdrawn contract.
+                  </span>
+                </p>
+              )}
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="termination-reason">
-              Termination Reason <span className="text-destructive">*</span>
+              {isWithdrawal ? "Reason for withdrawing" : "Termination Reason"} <span className="text-destructive">*</span>
             </Label>
             <Textarea
               id="termination-reason"
               value={terminationReason}
               onChange={(e) => setTerminationReason(e.target.value)}
-              placeholder="Please provide a reason for termination..."
+              placeholder={isWithdrawal ? "e.g. Customer did not proceed, or superseded by a newer contract..." : "Please provide a reason for termination..."}
               rows={3}
             />
           </div>
@@ -1763,10 +3148,227 @@ export default function ContractDetailPage({
               {terminating ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Terminating...
+                  {isWithdrawal ? "Withdrawing..." : "Terminating..."}
                 </>
               ) : (
-                "Terminate"
+                isWithdrawal ? "Withdraw" : "Terminate"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stampConfirmOpen} onOpenChange={(open) => { if (!open) closeStampPreview(); }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>
+              {stampMode === "existing"
+                ? "Preview: stamp uploaded document"
+                : "Preview: stamp with company seal"}
+            </DialogTitle>
+            <DialogDescription>
+              {stampMode === "existing" ? (
+                <>
+                  Click the page below where TWV&apos;s signature and seal should go on the
+                  document already uploaded for {contract.contract_number} — the
+                  customer&apos;s original signature is preserved, ref {stampPreviewRef}. This
+                  does not go through Leegality. You can cancel it afterward from
+                  &quot;Cancel sign &amp; seal&quot; if needed.
+                </>
+              ) : (
+                <>
+                  This is exactly what will be saved as the signed contract for{" "}
+                  {contract.contract_number} — TWV&apos;s signature and seal applied, ref{" "}
+                  {stampPreviewRef}. Review it before confirming. This does not go through
+                  Leegality. You can cancel it afterward from &quot;Cancel sign &amp; seal&quot;
+                  if needed.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+          {stampMode === "existing" && stampExistingPageCount > 0 && (
+            <div className="rounded-md border bg-amber-50 border-amber-200 p-4 space-y-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm text-amber-900">Page</span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-7 w-7"
+                  disabled={stampExistingRendering || stampExistingPageImageLoading || stampExistingTargetPage <= 1}
+                  onClick={() => handleStampExistingPageChange(stampExistingTargetPage - 1)}
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </Button>
+                <Input
+                  type="number"
+                  min={1}
+                  max={stampExistingPageCount}
+                  value={stampExistingTargetPage}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (!isNaN(n)) handleStampExistingPageChange(n);
+                  }}
+                  disabled={stampExistingRendering || stampExistingPageImageLoading}
+                  className="h-7 w-14 text-center px-1"
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-7 w-7"
+                  disabled={
+                    stampExistingRendering ||
+                    stampExistingPageImageLoading ||
+                    stampExistingTargetPage >= stampExistingPageCount
+                  }
+                  onClick={() => handleStampExistingPageChange(stampExistingTargetPage + 1)}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+                <span className="text-sm text-amber-900">of {stampExistingPageCount}</span>
+                {(stampExistingRendering || stampExistingPageImageLoading) && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-900" />
+                )}
+                {stampExistingOriginalUrl && (
+                  <Button asChild variant="outline" size="sm" className="ml-auto">
+                    <a href={stampExistingOriginalUrl} target="_blank" rel="noopener noreferrer">
+                      <Eye className="mr-1.5 h-3.5 w-3.5" />
+                      Open original full PDF
+                    </a>
+                  </Button>
+                )}
+              </div>
+              {stampExistingPageImageUrl && (
+                <div className="relative inline-block max-w-full rounded border bg-white">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- data: URL raster of an uploaded PDF page, not an optimizable asset */}
+                  <img
+                    src={stampExistingPageImageUrl}
+                    alt={`Page ${stampExistingTargetPage} of the uploaded document`}
+                    className="w-full h-auto rounded cursor-crosshair select-none"
+                    onClick={handleStampExistingImageClick}
+                  />
+                  {stampExistingClickRatio && (
+                    <div
+                      className="absolute w-4 h-4 rounded-full border-2 border-red-500 bg-red-500/30 pointer-events-none"
+                      style={{
+                        left: `${stampExistingClickRatio.x * 100}%`,
+                        top: `${stampExistingClickRatio.y * 100}%`,
+                        transform: "translate(-50%, -50%)",
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+              <p className="text-sm text-amber-900">
+                {stampExistingClickRatio
+                  ? "Click again anywhere to move the stamp — the marker shows its current spot."
+                  : "Click on the page above where the stamp should go."}
+              </p>
+            </div>
+          )}
+          {stampPreviewUrl && (
+            <div className="rounded-md border bg-muted/30 p-4 flex items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                Review the exact PDF before confirming.
+              </p>
+              <Button asChild variant="outline" size="sm" className="shrink-0">
+                <a href={stampPreviewUrl} target="_blank" rel="noopener noreferrer">
+                  <Eye className="mr-1.5 h-3.5 w-3.5" />
+                  Open preview PDF
+                </a>
+              </Button>
+            </div>
+          )}
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeStampPreview}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleStampSignSeal}
+              disabled={stampingSignSeal || (stampMode === "existing" && !stampPreviewPdfBase64)}
+            >
+              {stampingSignSeal ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Stamping...
+                </>
+              ) : (
+                "Confirm & save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cancelStampOpen} onOpenChange={(open) => { setCancelStampOpen(open); if (!open) setStampError(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel sign & seal?</DialogTitle>
+            <DialogDescription>
+              This removes the stamped signed document from {contract.contract_number} and
+              restores the plain agreement — Download PDF, Send Agreement, and Email become
+              available again. You can re-stamp it afterward if needed.
+            </DialogDescription>
+          </DialogHeader>
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCancelStampOpen(false); setStampError(null); }}>
+              Keep it
+            </Button>
+            <Button variant="destructive" onClick={handleCancelStamp} disabled={cancellingStamp}>
+              {cancellingStamp ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                "Cancel sign & seal"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cancelSigningOpen} onOpenChange={(open) => { setCancelSigningOpen(open); if (!open) setSignCancelError(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel e-signing request?</DialogTitle>
+            <DialogDescription>
+              This withdraws the request from Leegality for {contract.contract_number} —
+              the customer&apos;s signing link (already emailed to them) stops working
+              immediately, and any signature collected so far is discarded. Use company
+              stamp or upload a manually signed document to proceed afterward.
+            </DialogDescription>
+          </DialogHeader>
+          {signCancelError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {signCancelError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCancelSigningOpen(false); setSignCancelError(null); }}>
+              Keep it
+            </Button>
+            <Button variant="destructive" onClick={handleCancelSigning} disabled={cancellingSigning}>
+              {cancellingSigning ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                "Cancel e-signing request"
               )}
             </Button>
           </DialogFooter>
@@ -1781,8 +3383,9 @@ export default function ContractDetailPage({
         documentId={id}
         documentNumber={contract.contract_number}
         leadEmail={contract.lead?.email}
-        onGeneratePDF={handleGeneratePDFBase64}
-        onSuccess={fetchContract}
+        contractIsRenewal={!!(contract.is_renewal && contract.parent_contract_id)}
+        onGeneratePDF={handleGeneratePDFForEmail}
+        onSuccess={handleEmailSent}
       />
 
       {/* Renewal Dialog */}
@@ -1794,11 +3397,51 @@ export default function ContractDetailPage({
         onSuccess={() => fetchContract(false)}
       />
 
+      {/* Invoice Wizard */}
+      <InvoiceCustomerWizard
+        open={invoiceWizardOpen}
+        onOpenChange={setInvoiceWizardOpen}
+        contractId={contract.id}
+        contractNumber={contract.contract_number}
+        leadId={contract.lead_id}
+        userRole={userRole}
+        contractStatus={contractDisplayStatus(contract)}
+        depositShortfall={contract.deposit_shortfall}
+        locationId={contract.location_id}
+        onOpenAddon={() => setAddonOpenSignal((n) => n + 1)}
+        onOpenDeposit={() => setDepositOpenSignal((n) => n + 1)}
+        customerName={contract.lead ? (contract.lead.company || `${contract.lead.first_name} ${contract.lead.last_name}`) : null}
+      />
+
+      <ContractPricingSplitDialog
+        open={pricingSplitOpen}
+        onOpenChange={setPricingSplitOpen}
+        contract={contract}
+        onSuccess={() => fetchContract(false)}
+      />
+
+      {/* Extend Dialog */}
+      <ContractExtendDialog
+        open={extendDialogOpen}
+        onOpenChange={setExtendDialogOpen}
+        contract={contract}
+        onSuccess={() => fetchContract(false)}
+      />
+
       {/* Decline Renewal Dialog */}
       <DeclineRenewalDialog
         open={declineDialogOpen}
         onOpenChange={setDeclineDialogOpen}
         contract={contract}
+        onSuccess={() => fetchContract(false)}
+      />
+
+      {/* Cancel Renewal Dialog */}
+      <CancelRenewalDialog
+        open={cancelRenewalDialogOpen}
+        onOpenChange={setCancelRenewalDialogOpen}
+        contract={contract}
+        renewalDraft={renewalDraft}
         onSuccess={() => fetchContract(false)}
       />
 

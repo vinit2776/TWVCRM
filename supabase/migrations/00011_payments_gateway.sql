@@ -9,7 +9,7 @@
 -- App Settings Table
 -- ==========================================
 CREATE TABLE IF NOT EXISTS app_settings (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   key VARCHAR(100) UNIQUE NOT NULL,
   value TEXT NOT NULL DEFAULT '',
   is_encrypted BOOLEAN DEFAULT false,
@@ -50,7 +50,7 @@ ON CONFLICT (key) DO NOTHING;
 -- Booking Payments Table (multi-payment per booking)
 -- ==========================================
 CREATE TABLE IF NOT EXISTS booking_payments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   booking_id UUID NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
   amount DECIMAL(12,2) NOT NULL CHECK (amount > 0),
   payment_mode VARCHAR(50) NOT NULL,

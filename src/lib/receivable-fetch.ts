@@ -10,6 +10,8 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { depositIsChaseable } from "@/lib/receivables";
+import { loadPartReceivableState } from "@/lib/deposit-instalment-server";
+import { invoiceParty } from "@/lib/invoice-party";
 
 export type DunnableKind = "deposit" | "topup" | "adhoc_invoice";
 
@@ -23,6 +25,8 @@ export interface DunnableRow {
   amount: number;
   due_date: string | null;
   payment_link_url: string | null;
+  /** Razorpay link id, so the reminder can check the link is still live. */
+  payment_link_id: string | null;
   followup_enabled: boolean;
   reminder_count: number;
   last_reminder_sent_at: string | null;
@@ -44,7 +48,9 @@ export async function fetchDunnableReceivables(
       .from("proposals")
       .select(`
         id, proposal_number, status, security_deposit_amount, deposit_credit_amount,
-        deposit_due_date, deposit_razorpay_link_url,
+        deposit_exception_amount,
+        deposit_due_date, deposit_razorpay_link_url, deposit_razorpay_link_id,
+        deposit_link_cancelled_at,
         deposit_reminder_count, deposit_last_reminder_sent_at,
         lead:leads!proposals_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
       `)
@@ -52,11 +58,20 @@ export async function fetchDunnableReceivables(
       .gt("security_deposit_amount", 0);
     if (only) q = q.eq("id", only.id);
     const { data } = await q;
+    // A deposit collected in parts is not on the automatic ladder: every reminder
+    // names the whole deposit and the proposal's single link. Parts are followed
+    // up from the proposal (and show on the Receivables screen).
+    const inParts = await loadPartReceivableState(admin, (data || []).map((d) => d.id as string));
 
     for (const d of data || []) {
-      // Never chase a deposit on a proposal the customer hasn't accepted.
-      if (!depositIsChaseable(d.status as string)) continue;
-      const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);
+      if (inParts.has(d.id as string)) continue;
+      // Accepted, or asked for concretely with a payment link that is still live.
+      if (!depositIsChaseable({
+        status: d.status as string,
+        deposit_razorpay_link_id: d.deposit_razorpay_link_id as string | null,
+        deposit_link_cancelled_at: d.deposit_link_cancelled_at as string | null,
+      })) continue;
+      const owed = Number(d.security_deposit_amount || 0) + Number(d.deposit_exception_amount || 0) - Number(d.deposit_credit_amount || 0);
       if (owed <= 0) continue;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = d.lead as any;
@@ -65,6 +80,7 @@ export async function fetchDunnableReceivables(
         email: lead?.email ?? null, phone: lead?.mobile || lead?.phone || null,
         amount: owed, due_date: d.deposit_due_date,
         payment_link_url: d.deposit_razorpay_link_url,
+        payment_link_id: d.deposit_razorpay_link_id,
         followup_enabled: true,
         reminder_count: d.deposit_reminder_count || 0,
         last_reminder_sent_at: d.deposit_last_reminder_sent_at,
@@ -76,7 +92,7 @@ export async function fetchDunnableReceivables(
     let q = admin
       .from("deposit_topups")
       .select(`
-        id, amount, due_date, razorpay_payment_link_url, reminder_count, last_reminder_sent_at,
+        id, amount, due_date, razorpay_payment_link_url, razorpay_payment_link_id, reminder_count, last_reminder_sent_at,
         contract:contracts!deposit_topups_contract_id_fkey(
           contract_number,
           lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
@@ -95,6 +111,7 @@ export async function fetchDunnableReceivables(
         phone: contract?.lead?.mobile || contract?.lead?.phone || null,
         amount: Number(t.amount || 0), due_date: t.due_date,
         payment_link_url: t.razorpay_payment_link_url,
+        payment_link_id: t.razorpay_payment_link_id,
         followup_enabled: true,
         reminder_count: t.reminder_count || 0,
         last_reminder_sent_at: t.last_reminder_sent_at,
@@ -103,12 +120,23 @@ export async function fetchDunnableReceivables(
   }
 
   if (want("adhoc_invoice")) {
+    // Can be raised against a lead OR a Virtual Office case (migration
+    // 00532) — a case has no lead, so without this join a case-billed
+    // invoice resolved to party_name "Customer" with no email/phone, and
+    // the reminder route below rejects with 422 for having neither. Same
+    // fix as fetchOtherReceivables() in the AR route, applied here so the
+    // "Remind" button and the daily cron stop silently skipping these.
     let q = admin
       .from("proforma_invoices")
       .select(`
-        id, invoice_number, total_amount, due_date, razorpay_link_url,
+        id, invoice_number, total_amount, due_date, razorpay_link_url, razorpay_link_id,
         followup_enabled, reminder_count, last_reminder_sent_at,
-        lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
+        lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company, email, phone, mobile),
+        case:cases!proforma_invoices_case_id_fkey(
+          id, case_number, client_name, client_company_name, client_email, client_phone,
+          client_gst_number, aggregator_id, bill_to,
+          aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone, gst_number)
+        )
       `)
       .not("status", "in", "(paid,cancelled)");
     if (only) q = q.eq("id", only.id);
@@ -117,11 +145,17 @@ export async function fetchDunnableReceivables(
     for (const inv of data || []) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = inv.lead as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const caseRow = inv.case as any;
+      const invParty = !lead && caseRow ? invoiceParty({ case: caseRow }) : null;
       out.push({
-        kind: "adhoc_invoice", id: inv.id, reference: inv.invoice_number, party_name: party(lead),
-        email: lead?.email ?? null, phone: lead?.mobile || lead?.phone || null,
+        kind: "adhoc_invoice", id: inv.id, reference: inv.invoice_number,
+        party_name: lead ? party(lead) : (invParty?.name || "Customer"),
+        email: lead?.email ?? invParty?.email ?? null,
+        phone: lead?.mobile || lead?.phone || invParty?.phone || null,
         amount: Number(inv.total_amount || 0), due_date: inv.due_date,
         payment_link_url: inv.razorpay_link_url,
+        payment_link_id: inv.razorpay_link_id,
         followup_enabled: inv.followup_enabled !== false,
         reminder_count: inv.reminder_count || 0,
         last_reminder_sent_at: inv.last_reminder_sent_at,

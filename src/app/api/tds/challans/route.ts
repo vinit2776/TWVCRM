@@ -43,6 +43,8 @@ export async function GET(req: NextRequest) {
     `)
     .order("deposit_date", { ascending: false });
 
+  // A voided challan was entered in error and its entries are pending again.
+  query = query.is("voided_at", null);
   if (year) query = query.eq("period_year", Number(year));
   if (month) query = query.eq("period_month", Number(month));
 
@@ -108,7 +110,8 @@ export async function POST(req: NextRequest) {
   const { error: updateError } = await supabase
     .from("vendor_bill_tds")
     .update({ status: "deposited", challan_id: challan.id })
-    .in("id", d.tds_entry_ids);
+    .in("id", d.tds_entry_ids)
+    .is("reversed_at", null);
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });

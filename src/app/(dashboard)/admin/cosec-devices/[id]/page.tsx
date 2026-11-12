@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import dynamic from "next/dynamic";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const CosecDeviceChart = dynamic(
   () => import("@/components/admin/cosec-device-chart"),
@@ -645,6 +646,10 @@ export default function CosecDeviceDetailPage() {
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
+      <PageBreadcrumb
+        current={{ label: `${device.device_code} — ${device.label}` }}
+        fallbackParent={{ href: "/admin/cosec-devices", label: "Cosec Devices" }}
+      />
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-start gap-3">

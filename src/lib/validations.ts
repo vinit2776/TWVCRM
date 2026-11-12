@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ACCOUNTING_HEADS } from "@/lib/constants";
+import { PROPOSAL_MAX_NOTICE_MONTHS, PROPOSAL_MAX_TENURE_MONTHS, validateCommitmentTerms } from "@/lib/proposal-terms";
 
 export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; details: Record<string, string[] | undefined> } {
   const fieldErrors = error.flatten().fieldErrors as Record<string, string[] | undefined>;
@@ -8,6 +9,12 @@ export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; deta
     .join("; ") || "Invalid request";
   return { error: message, details: fieldErrors };
 }
+
+// The first location (migration 00006) has the hand-written id
+// 00000000-0000-0000-0000-000000000001, which .uuid() rejects because it
+// carries no RFC version digit. Location ids are checked for shape only, so
+// records at that location can still be saved.
+const locationId = z.guid("Invalid location ID");
 
 // ==========================================
 // Lead Validations
@@ -38,6 +45,9 @@ export const createLeadSchema = z.object({
     "meta_ads",
     "google_ads",
     "direct_walkin",
+    "whatsapp",
+    "website",
+    "inbound_call",
     "referral",
     "cold_call",
     "aggregator",
@@ -60,7 +70,7 @@ export const createLeadSchema = z.object({
     .optional(),
   seat_capacity: z.number().int().positive().optional(),
   preferred_location: z.string().optional(),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   pan_number: z.string().optional(),
   gst_number: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, "Invalid GST number format (e.g. 33AAAAA0000A1Z5)").optional().or(z.literal("")).transform(v => v || undefined),
   working_hours: z.string().optional(),
@@ -107,7 +117,7 @@ export const importLeadSchema = z.object({
     "proposal_sent", "negotiating", "won", "lost", "junk",
   ]).default("new"),
   source: z.enum([
-    "meta_ads", "google_ads", "direct_walkin", "referral", "cold_call", "aggregator",
+    "meta_ads", "google_ads", "direct_walkin", "whatsapp", "website", "inbound_call", "referral", "cold_call", "aggregator",
   ]).default("meta_ads"),
   industry: z.string().optional(),
   no_of_employees: z.number().int().positive().optional(),
@@ -164,8 +174,18 @@ export const createActivitySchema = z.object({
   meeting_location: z.string().optional(),
   meeting_start_at: z.string().optional(),
   meeting_end_at: z.string().optional(),
+  /** Who will host the tour; reminded 2 hours before, along with whoever booked it. */
+  tour_host_id: z.string().uuid().optional(),
   follow_up_date: z.string().optional(),
   follow_up_notes: z.string().optional(),
+  /** Set by the one-tap actions: this contact deals with the follow-ups already open on the lead,
+   *  so they are marked done and the new next step (if any) is the only one left. Never stored. */
+  closes_open_follow_ups: z.boolean().optional(),
+}).refine((v) => !v.follow_up_date || !!v.follow_up_notes?.trim(), {
+  // The Follow-ups due list shows this as the "next action"; without it the person
+  // picking the lead up has to open every lead to find out what the follow-up is for.
+  message: "Add a follow-up note saying what needs to happen",
+  path: ["follow_up_notes"],
 });
 
 export type CreateActivityInput = z.infer<typeof createActivitySchema>;
@@ -199,11 +219,13 @@ export const lineItemSchema = z.object({
   unit: z.string().optional(),
   unit_price: z.number().min(0, "Price must be non-negative"),
   total: z.number(),
+  // Absent = escalates (legacy lines). false = fixed, e.g. maintenance.
+  escalates: z.boolean().optional(),
 });
 
-export const createProposalSchema = z.object({
+const proposalBaseSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   title: z.string().min(1, "Title is required"),
   description: z.string().optional(),
   items: z.array(lineItemSchema).min(1, "At least one line item is required"),
@@ -225,9 +247,20 @@ export const createProposalSchema = z.object({
   })).optional(),
   security_deposit_months: z.number().min(0).max(6).optional(),
   security_deposit_amount: z.number().min(0).optional(),
+  tenure_months: z.number().int().min(1).max(PROPOSAL_MAX_TENURE_MONTHS),
+  lock_in_months: z.number().int().min(1).max(PROPOSAL_MAX_TENURE_MONTHS),
+  notice_period_months: z.number().int().min(0).max(PROPOSAL_MAX_NOTICE_MONTHS),
 });
 
-export const updateProposalSchema = createProposalSchema.partial();
+export const createProposalSchema = proposalBaseSchema.superRefine((d, ctx) => {
+  const error = validateCommitmentTerms(d);
+  if (error) ctx.addIssue({ code: "custom", message: error, path: ["lock_in_months"] });
+});
+
+// Cross-field commitment rules are re-checked in PATCH /api/proposals/[id]
+// against the merged (stored + incoming) values, since a partial body alone
+// can't be validated.
+export const updateProposalSchema = proposalBaseSchema.partial();
 
 export type CreateProposalInput = z.input<typeof createProposalSchema>;
 
@@ -236,17 +269,33 @@ export type CreateProposalInput = z.input<typeof createProposalSchema>;
 // ==========================================
 export const createInvoiceSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID").optional(),
+  // An ad-hoc invoice raised against a Virtual Office case instead of a lead.
+  // The buyer is then resolved from the case's billing route — see
+  // invoiceParty() in src/lib/invoice-party.ts.
+  case_id: z.string().uuid("Invalid case ID").optional(),
+  /** Bill the end client directly on a case that is billed to an aggregator. */
+  bill_client_override: z.boolean().optional(),
   proposal_id: z.string().uuid().optional(),
+  // Which live contract this invoice belongs on. Optional: one live contract
+  // attaches by itself, several must be chosen (see decideAttachment()).
+  contract_id: z.string().uuid().optional(),
   title: z.string().min(1, "Title is required"),
   // Security deposits are never billed through an ad-hoc invoice — they go
   // through the proposal deposit link instead (GST-exempt, tracked against
   // the deposit ledger). Enforced server-side in the POST handler.
-  primary_head: z.enum(ACCOUNTING_HEADS, { message: "Select what this invoice is for" }),
+  // Null means the creator picked "I don't know" — accounts follows up and
+  // fills in the real head later (see PATCH /api/invoices/[id]).
+  primary_head: z.enum(ACCOUNTING_HEADS, { message: "Select what this invoice is for" }).nullable(),
   items: z.array(lineItemSchema).min(1, "At least one line item is required"),
   tax_percentage: z.number().min(0).max(100),
   discount_percentage: z.number().min(0).max(100),
   due_date: z.string().optional(),
+  // Customer-facing — printed on the invoice PDF/email.
   notes: z.string().optional(),
+  // Internal-only — for accounts; never printed on the PDF or sent to the customer.
+  internal_notes: z
+    .string()
+    .min(10, "Add more context so accounts can book this correctly"),
 });
 
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
@@ -257,7 +306,7 @@ export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 export const createContractSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
   proposal_id: z.string().uuid("A linked accepted proposal is required"),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   tenure_months: z.number().int().positive("Tenure must be positive"),
   start_date: z.string().min(1, "Start date is required"),
@@ -275,7 +324,7 @@ export const createContractSchema = z.object({
   security_deposit_months: z.number().min(0).default(3.0),
   escalation_percentage: z.number().min(0).max(100).default(10.0),
   notice_period_months: z.number().min(0).default(2.0),
-  lock_in_months: z.number().min(1).max(18).optional().nullable(),
+  lock_in_months: z.number().min(1).max(PROPOSAL_MAX_TENURE_MONTHS).optional().nullable(),
   member_signatory_name: z.string().min(1, "Signatory name is required"),
   member_signatory_designation: z.string().min(1, "Signatory designation is required"),
   member_signatory_pan: z.string().optional(),
@@ -286,6 +335,27 @@ export const createContractSchema = z.object({
   notes: z.string().optional(),
   // Lead data to save back
   pan_number: z.string().optional(),
+  // Customer's own PO number for this contract, when they require one on every invoice
+  po_number: z.string().optional(),
+  // Admin-only: set when term / lock-in / notice deliberately differ from the
+  // linked proposal. Enforced by resolveContractCommitment.
+  commitment_override_reason: z.string().optional(),
+  // Optional customer-specific clause drafted + AI-vetted in the create dialog.
+  // Stored as a pending (or, for managers/admins, approved) revision after the
+  // contract row exists; see src/lib/special-clause/service.ts.
+  special_clause: z.object({
+    intent: z.string().trim().min(10).max(1500),
+    reason: z.string().trim().min(10).max(1500),
+    clause_text: z.string().trim().min(20).max(4000),
+    review_token: z.string().min(10),
+    report: z.object({
+      restated_intent: z.string(),
+      kept: z.array(z.string()),
+      added: z.array(z.string()),
+      topics_checked: z.array(z.string()),
+      rounds: z.number(),
+    }),
+  }).optional(),
 }).refine(
   (d) => !d.end_date || d.end_date >= d.start_date,
   { message: "End date must be on or after the start date", path: ["end_date"] }
@@ -346,7 +416,7 @@ const operatingDaySchema = z.object({
 
 export const createSpaceSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  location_id: z.string().uuid("Invalid location ID"),
+  location_id: locationId,
   capacity: z.number().int().positive("Capacity must be positive"),
   pricing_model: z.enum(["hourly", "daily"]).default("hourly"),
   // Hourly rate: required for hourly-priced spaces, can be 0 for daily-priced.
@@ -406,6 +476,12 @@ export const createBookingSchema = z.object({
   num_attendees: z.number().int().positive().optional(),
   // Number of day-pass seats — for daily-priced spaces; quantity × day_rate = total
   num_seats: z.number().int().min(1).optional(),
+  // Substitute allocation: attribute this booking's hour-based quota to a
+  // different contract_facilities row than the one auto-matched by room
+  // name — e.g. a cabin standing in for an occupied conference room. See
+  // migration 00553. Gated server-side to BOOKING_FACILITY_OVERRIDE_ROLES.
+  contract_facility_id_override: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  facility_override_reason: z.string().trim().max(500).optional().or(z.literal("")).transform(v => v || undefined),
 }).refine(data => {
   if (data.customer_type === "contract_holder" && !data.contract_id) return false;
   return true;
@@ -417,7 +493,11 @@ export const createBookingSchema = z.object({
 .refine(data => {
   if (data.customer_type === "guest" && !data.contract_id) return false;
   return true;
-}, { message: "Contract ID required for guest bookings", path: ["contract_id"] });
+}, { message: "Contract ID required for guest bookings", path: ["contract_id"] })
+.refine(data => {
+  if (data.contract_facility_id_override && !data.facility_override_reason) return false;
+  return true;
+}, { message: "A reason is required when overriding the facility quota", path: ["facility_override_reason"] });
 
 export type CreateBookingInput = z.input<typeof createBookingSchema>;
 
@@ -571,9 +651,15 @@ export type CreateTicketNoteInput = z.infer<typeof createTicketNoteSchema>;
 // ==========================================
 // Aggregator Validations
 // ==========================================
-export const createAggregatorSchema = z.object({
+// Base shape with NO .default() modifiers — z.object(...).partial() still
+// applies .default() to any field omitted from the input (a documented Zod
+// behavior), which silently resets that field in the DB on every partial
+// PATCH that doesn't mention it. Confirmed live: a PATCH with only
+// { billing_mode } was resetting billing_method back to 'postpaid'. Defaults
+// belong only on createAggregatorSchema, for genuinely-new records.
+const aggregatorFieldsSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  company_name: z.string().optional(),
+  company_name: z.string().min(1, "Company name is required"),
   gst_number: z.string().max(20).optional(),
   pan_number: z.string().max(15).optional(),
   email_domain: z.string().optional(),
@@ -583,13 +669,18 @@ export const createAggregatorSchema = z.object({
   billing_city: z.string().optional(),
   billing_state: z.string().optional(),
   billing_pincode: z.string().optional(),
-  same_state_as_twv: z.boolean().default(false),
-  commission_percentage: z.number().min(0).max(100).default(0),
-  default_rate_card: z.record(z.string(), z.number()).default({}),
-  billing_method: z.enum(["postpaid", "prepaid"]).default("postpaid"),
-  credit_limit: z.number().min(0).optional(),
+  same_state_as_twv: z.boolean(),
+  commission_percentage: z.number().min(0).max(100),
+  default_rate_card: z.record(z.string(), z.number()),
+  billing_method: z.enum(["postpaid", "prepaid"]),
+  billing_mode: z.enum(["proforma_first", "gst_direct"]),
+  // .nullish(), not .optional(): the column is nullable and null is the
+  // stored value for "no limit". .optional() accepts only undefined, so an
+  // aggregator loaded straight from the DB failed its own edit form — see
+  // the defaultValues note in aggregator-form.tsx.
+  credit_limit: z.number().min(0).nullish(),
   notes: z.string().optional(),
-  tags: z.array(z.string()).default([]),
+  tags: z.array(z.string()),
   contacts: z.array(z.object({
     name: z.string().min(1, "Contact name is required"),
     email: z.string().email().optional().or(z.literal("")),
@@ -599,19 +690,45 @@ export const createAggregatorSchema = z.object({
   })).optional(),
 });
 
-export const updateAggregatorSchema = createAggregatorSchema.partial();
+export const createAggregatorSchema = aggregatorFieldsSchema.extend({
+  same_state_as_twv: z.boolean().default(false),
+  commission_percentage: z.number().min(0).max(100).default(0),
+  default_rate_card: z.record(z.string(), z.number()).default({}),
+  billing_method: z.enum(["postpaid", "prepaid"]).default("postpaid"),
+  billing_mode: z.enum(["proforma_first", "gst_direct"]).default("gst_direct"),
+  tags: z.array(z.string()).default([]),
+});
+
+// .partial() alone isn't enough for company_name: it allows the KEY to be
+// omitted or `undefined`, but a blank text input still submits "" (a defined
+// value), which still fails the base schema's .min(1) — silently blocking
+// saves on any legacy aggregator with no company name on file. Override it
+// to explicitly accept "" on update, since re-requiring it retroactively
+// was never the intent (see fix/aggregator-edit-company-name-validation).
+export const updateAggregatorSchema = aggregatorFieldsSchema.partial().extend({
+  company_name: z.string().optional().or(z.literal("")),
+});
 export type CreateAggregatorInput = z.input<typeof createAggregatorSchema>;
 export type UpdateAggregatorInput = z.input<typeof updateAggregatorSchema>;
 
 // ==========================================
 // Case (Virtual Office) Validations
 // ==========================================
-export const createCaseSchema = z.object({
-  aggregator_id: z.string().uuid("Invalid aggregator ID"),
+// No .default() modifiers here — z.object(...).partial() still applies
+// .default() to any field omitted from the input (confirmed live: a PATCH
+// with only { bill_to } was silently resetting case_source, tenure_months,
+// security_deposit, and tags back to their defaults). Defaults belong only
+// on createCaseSchema, for genuinely-new records; see the identical fix on
+// aggregatorFieldsSchema above.
+const caseFieldsSchema = z.object({
+  // Direct clients (no referral aggregator) have aggregator_id omitted —
+  // enforced by the refine() below, not by this field alone.
+  case_source: z.enum(["aggregator", "direct"]),
+  aggregator_id: z.string().uuid("Invalid aggregator ID").optional().or(z.literal("")).transform(v => v || undefined),
   aggregator_contact_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   purpose: z.enum(["gst_registration", "mca_registration", "branch_office", "mail_handling", "business_address"]),
-  is_renewal: z.boolean().default(false),
+  is_renewal: z.boolean(),
   parent_case_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   client_name: z.string().min(1, "Client name is required"),
   client_entity_type: z.enum(["individual", "proprietorship", "partnership", "llp", "pvt_ltd", "public_ltd", "trust", "society", "huf", "other"]),
@@ -625,16 +742,51 @@ export const createCaseSchema = z.object({
   client_city: z.string().optional(),
   client_state: z.string().optional(),
   client_pincode: z.string().optional(),
+  represented_by_name: z.string().optional(),
+  represented_by_designation: z.string().optional(),
+  represented_by_id_type: z.enum(["pan", "aadhaar"]).optional(),
+  represented_by_id_number: z.string().optional(),
   rate: z.number().positive("Rate must be positive").optional(),
-  tenure_months: z.number().int().positive().default(12),
+  tenure_months: z.number().int().positive(),
   start_date: z.string().optional(),
-  security_deposit: z.number().min(0).default(0),
+  // Agreed increase applied to the license fee on renewal. Rendered into the
+  // agreement's renewal clause and applied by renewalRate(); 0 renews flat.
+  renewal_escalation_percentage: z.number().min(0).max(100).optional(),
+  security_deposit: z.number().min(0),
   notes: z.string().optional(),
-  tags: z.array(z.string()).default([]),
+  tags: z.array(z.string()),
   assigned_to: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  // Prepaid-aggregator cases only: who the per-case invoice bills. Set
+  // explicitly per case (varies case to case) — no create-time default.
+  bill_to: z.enum(["aggregator", "client"]).optional(),
+  // Direct-client cases only (no aggregator to hold a mode) — mirrors
+  // aggregators.billing_mode.
+  billing_mode: z.enum(["proforma_first", "gst_direct"]).optional(),
 });
 
-export const updateCaseSchema = createCaseSchema.partial();
+export const createCaseSchema = caseFieldsSchema
+  .extend({
+    case_source: z.enum(["aggregator", "direct"]).default("aggregator"),
+    is_renewal: z.boolean().default(false),
+    tenure_months: z.number().int().positive().default(12),
+    security_deposit: z.number().min(0).default(0),
+    tags: z.array(z.string()).default([]),
+    billing_mode: z.enum(["proforma_first", "gst_direct"]).default("proforma_first"),
+  })
+  .refine((data) => data.case_source !== "aggregator" || !!data.aggregator_id, {
+    message: "aggregator_id is required for aggregator-referred cases",
+    path: ["aggregator_id"],
+  })
+  .refine((data) => data.case_source !== "direct" || !!data.aggregator_id === false, {
+    message: "Direct-client cases must not have an aggregator_id",
+    path: ["aggregator_id"],
+  })
+  .refine((data) => data.case_source !== "direct" || data.rate !== undefined, {
+    message: "Rate must be entered manually for direct-client cases (no rate card to pull from)",
+    path: ["rate"],
+  });
+
+export const updateCaseSchema = caseFieldsSchema.partial();
 export type CreateCaseInput = z.input<typeof createCaseSchema>;
 export type UpdateCaseInput = z.input<typeof updateCaseSchema>;
 

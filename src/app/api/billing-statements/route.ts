@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { renewalChainContractIds } from "@/lib/renewal-chain";
 import { createClient } from "@/lib/supabase/server";
 import { generateBillingStatementSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
 const SELECT_FIELDS =
-  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
+  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), on_behalf:contracts!billing_statements_billed_on_behalf_of_contract_id_fkey(id, contract_number), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -17,8 +18,19 @@ export async function GET(request: NextRequest) {
   const contractId    = searchParams.get("contract_id");
   const bookingId     = searchParams.get("booking_id");
   const leadId        = searchParams.get("lead_id");
+  const caseId        = searchParams.get("case_id");
+  const aggregatorId  = searchParams.get("aggregator_id");
+  const proposalId    = searchParams.get("proposal_id");
   const status        = searchParams.get("status");
-  const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined'
+  const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined' | 'vo_case' | ... — comma-separated for an IN filter, e.g. "rent,combined"
+  // Widen a contract_id filter to the whole renewal chain. A renewal's opening
+  // months are often billed on its parent while it awaits activation, so
+  // "everything billed for this contract" is a chain question, not a row one.
+  const includeChain  = searchParams.get("include_chain") === "1";
+  // Free-text search (Billing → Billed): statement / GST invoice number,
+  // contract number, or customer name. Characters that are syntax inside a
+  // PostgREST or() filter are stripped so user text can't alter the filter.
+  const search = (searchParams.get("search") || "").replace(/[,()*%\\:"']/g, " ").trim().slice(0, 60);
 
   const offset = (page - 1) * limit;
 
@@ -26,11 +38,42 @@ export async function GET(request: NextRequest) {
     .from("billing_statements")
     .select(SELECT_FIELDS, { count: "exact" });
 
-  if (contractId)    query = query.eq("contract_id", contractId);
+  if (contractId) {
+    if (includeChain) {
+      query = query.in("contract_id", await renewalChainContractIds(supabase, contractId));
+    } else {
+      query = query.eq("contract_id", contractId);
+    }
+  }
   if (bookingId)     query = query.eq("booking_id", bookingId);
   if (leadId)        query = query.eq("lead_id", leadId);
+  if (caseId)        query = query.eq("case_id", caseId);
+  if (aggregatorId)  query = query.eq("aggregator_id", aggregatorId);
+  if (proposalId)    query = query.eq("proposal_id", proposalId);
   if (status)        query = query.eq("status", status);
-  if (statementType) query = query.eq("statement_type", statementType);
+  if (statementType) {
+    const types = statementType.split(",").map((t) => t.trim()).filter(Boolean);
+    query = types.length > 1 ? query.in("statement_type", types) : query.eq("statement_type", types[0]);
+  }
+  if (search) {
+    const like = `%${search}%`;
+    // Contract number and customer name live on other tables — resolve them to
+    // ids first (capped), then OR them with the statement's own number fields.
+    const [{ data: contractHits }, { data: leadHits }] = await Promise.all([
+      supabase.from("contracts").select("id").ilike("contract_number", like).limit(200),
+      supabase.from("leads").select("id").or(`company.ilike.${like},first_name.ilike.${like},last_name.ilike.${like}`).limit(200),
+    ]);
+    const contractIds = (contractHits ?? []).map((c) => c.id as string);
+    const leadIds = (leadHits ?? []).map((l) => l.id as string);
+    const ors = [`statement_number.ilike.${like}`, `gst_invoice_number.ilike.${like}`];
+    if (contractIds.length) {
+      ors.push(`contract_id.in.(${contractIds.join(",")})`);
+      // Rent raised on a parent for a renewal's period is found by the renewal's number too.
+      ors.push(`billed_on_behalf_of_contract_id.in.(${contractIds.join(",")})`);
+    }
+    if (leadIds.length) ors.push(`lead_id.in.(${leadIds.join(",")})`);
+    query = query.or(ors.join(","));
+  }
 
   query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
 
@@ -121,7 +164,10 @@ export async function POST(request: NextRequest) {
       .from("billing_statements")
       .select("id, statement_number, status")
       .eq("period_start", result.data.period_start)
-      .neq("status", "voided");
+      // Voided and discarded rows aren't live coverage — either would
+      // otherwise block an operator from re-creating the statement they
+      // just threw away.
+      .not("status", "in", "(voided,discarded)");
 
     if (result.data.contract_id) {
       dupQuery = dupQuery.eq("contract_id", result.data.contract_id);

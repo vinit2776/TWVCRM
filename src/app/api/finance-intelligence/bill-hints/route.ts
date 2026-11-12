@@ -1,3 +1,4 @@
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
@@ -221,12 +222,12 @@ export async function POST(request: NextRequest) {
   ) {
     const poValue = Number(poData.total_ordered_amount);
     if (poValue > 0) {
-      // Sum all existing approved/pending bills for this PO (exclude rejected)
+      // Sum all existing approved/pending bills for this PO (exclude rejected/withdrawn)
       const { data: existingBills } = await supabase
         .from("vendor_bills")
         .select("total_amount")
         .eq("po_id", input.po_id)
-        .not("approval_status", "eq", "rejected");
+        .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
 
       const consumed = (existingBills ?? []).reduce(
         (s, b) => s + Number(b.total_amount), 0,

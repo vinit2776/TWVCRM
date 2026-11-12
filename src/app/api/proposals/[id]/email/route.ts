@@ -98,6 +98,13 @@ export async function POST(
     );
   }
 
+  if (proposal.status === "superseded") {
+    return NextResponse.json(
+      { error: "This proposal has been replaced by a newer revision. Send the revision instead." },
+      { status: 409 }
+    );
+  }
+
   // Get sender info
   const { data: sender } = await supabase
     .from("users")

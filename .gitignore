@@ -64,3 +64,4 @@ scripts/backup/logs/
 # Local Tally export samples (may contain customer data — never commit)
 /tally-daybook-sample.xml
 *-tally-sample.xml
+.env*

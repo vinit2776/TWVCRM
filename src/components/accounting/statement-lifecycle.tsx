@@ -107,6 +107,7 @@ function useLifecycle(statementId: string | null, presetRow?: InboxRow | null) {
 function badgeClass(row: InboxRow | null | undefined): string {
   if (!row) return "bg-muted text-muted-foreground border-border";
   if (row.is_voided) return "bg-red-50 text-red-900 border-red-200";
+  if (row.is_held) return "bg-amber-50 text-amber-900 border-amber-200";
   if (row.has_discrepancy) return "bg-red-50 text-red-900 border-red-200";
   if (row.handoff_state === "complete") return "bg-green-50 text-green-900 border-green-200";
   switch (row.bucket) {
@@ -123,18 +124,22 @@ function badgeClass(row: InboxRow | null | undefined): string {
   }
 }
 
-function badgeLabel(row: InboxRow | null | undefined, fallbackStatus?: string): string {
+/** Label for a statement with no Tally handoff row, from its own status. */
+export function statusFallbackLabel(fallbackStatus?: string): string {
+  if (fallbackStatus === "sent") return "Emailed, Awaiting Payment";
+  if (fallbackStatus === "finalized") return "Finalized";
+  if (fallbackStatus === "exported") return "Exported";
+  if (fallbackStatus === "voided") return "Voided";
+  return "Draft";
+}
+
+export function badgeLabel(row: InboxRow | null | undefined, fallbackStatus?: string): string {
   if (row?.is_voided) return "Voided";
+  if (row?.is_held) return "On Hold";
   if (row?.has_discrepancy) return "Discrepancy";
   // When there's no handoff_state (PI First statements never get one until
   // payment is captured), fall back to the statement's own status field.
-  if (!row?.handoff_state) {
-    if (fallbackStatus === "sent") return "Emailed, Awaiting Payment";
-    if (fallbackStatus === "finalized") return "Finalized";
-    if (fallbackStatus === "exported") return "Exported";
-    if (fallbackStatus === "voided") return "Voided";
-    return "Draft";
-  }
+  if (!row?.handoff_state) return statusFallbackLabel(fallbackStatus);
   return HANDOFF_STATE_LABELS[row.handoff_state];
 }
 
@@ -172,7 +177,7 @@ export function StatementLifecycleBadge({
   return (
     <span
       className={`inline-block ${compact ? "text-[11px] px-1.5 py-0.5" : "text-xs px-2 py-0.5"} rounded-full border ${badgeClass(row)} ${className}`}
-      title={row?.void_reason ?? row?.discrepancy_reason ?? badgeLabel(row, fallbackStatus)}
+      title={row?.void_reason ?? row?.hold_reason ?? row?.discrepancy_reason ?? badgeLabel(row, fallbackStatus)}
     >
       {badgeLabel(row, fallbackStatus)}
     </span>
@@ -257,6 +262,8 @@ export function StatementQuickActions({
 export interface StatementLifecyclePanelProps {
   statementId: string;
   row?: InboxRow | null;
+  /** The statement's own status, used when there is no Tally handoff row yet. */
+  fallbackStatus?: string;
 }
 
 /**
@@ -264,7 +271,7 @@ export interface StatementLifecyclePanelProps {
  * Shows the badge, a one-line state description, and the quick-action row.
  * Pulls timeline events on demand if the user opens the timeline component.
  */
-export function StatementLifecyclePanel({ statementId, row: presetRow }: StatementLifecyclePanelProps) {
+export function StatementLifecyclePanel({ statementId, row: presetRow, fallbackStatus }: StatementLifecyclePanelProps) {
   const { row, loading, error, refresh } = useLifecycle(statementId, presetRow);
 
   const summary = useMemo(() => {
@@ -275,9 +282,13 @@ export function StatementLifecyclePanel({ statementId, row: presetRow }: Stateme
     if (row.has_discrepancy) {
       return row.discrepancy_reason ?? "Discrepancy between Tally and CRM";
     }
-    if (!row.handoff_state) return "Draft statement (no Tally handoff)";
+    if (!row.handoff_state) {
+      return fallbackStatus && fallbackStatus !== "draft"
+        ? `${statusFallbackLabel(fallbackStatus)} (no Tally handoff yet)`
+        : "Draft statement (no Tally handoff)";
+    }
     return HANDOFF_STATE_LABELS[row.handoff_state];
-  }, [row]);
+  }, [row, fallbackStatus]);
 
   if (error) {
     return (
@@ -292,7 +303,7 @@ export function StatementLifecyclePanel({ statementId, row: presetRow }: Stateme
 
   return (
     <div className="rounded border bg-muted/30 px-3 py-2 flex items-center gap-2 flex-wrap">
-      <StatementLifecycleBadge statementId={statementId} row={row} compact />
+      <StatementLifecycleBadge statementId={statementId} row={row} compact fallbackStatus={fallbackStatus} />
       <span className="text-xs text-muted-foreground flex-1 min-w-0 truncate">
         {loading && !row ? "Loading lifecycle…" : summary}
       </span>

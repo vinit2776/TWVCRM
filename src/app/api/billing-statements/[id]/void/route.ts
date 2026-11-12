@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 /**
@@ -12,6 +12,12 @@ import { logAudit } from "@/lib/audit";
  *   • Admin only
  *   • Blocked if any payments have been recorded against the statement
  *   • Statement must be finalized or exported (not draft or already voided)
+ *
+ * Side effects:
+ *   • Cancels the proforma's Razorpay payment link, if one was issued —
+ *     otherwise a client holding the emailed link could still pay a voided
+ *     invoice. Best-effort; the payments webhook refuses to record against a
+ *     voided statement as the second line of defence.
  */
 export async function POST(
   request: NextRequest,
@@ -117,6 +123,39 @@ export async function POST(
     return NextResponse.json({ error: voidErr.message }, { status: 500 });
   }
 
+  // 1b. Cancel the Razorpay payment link that went out with the proforma.
+  //     Without this the client keeps a live, payable link for an invoice we
+  //     have just cancelled. Best-effort — a link that is already paid,
+  //     expired or cancelled fails here and that is not fatal (the void has
+  //     already been committed, and the webhook guard covers the rest).
+  //     razorpay_payment_link_id is deliberately left on the row so a stray
+  //     webhook can still be traced back to this statement.
+  const linkId = statement.razorpay_payment_link_id as string | null;
+  if (linkId) {
+    try {
+      const adminSupabase = createAdminClient();
+      const { data: rzpSettings } = await adminSupabase
+        .from("app_settings")
+        .select("key, value")
+        .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
+      const rzp: Record<string, string> = {};
+      (rzpSettings || []).forEach((s: { key: string; value: string }) => { rzp[s.key] = s.value; });
+
+      if (rzp.razorpay_enabled === "true" && rzp.razorpay_key_id && rzp.razorpay_key_secret) {
+        const auth = Buffer.from(`${rzp.razorpay_key_id}:${rzp.razorpay_key_secret}`).toString("base64");
+        const cancelRes = await fetch(
+          `https://api.razorpay.com/v1/payment_links/${linkId}/cancel`,
+          { method: "POST", headers: { Authorization: `Basic ${auth}` } }
+        );
+        if (!cancelRes.ok) {
+          console.warn("[statement void] Razorpay link cancel failed (non-fatal):", await cancelRes.text());
+        }
+      }
+    } catch (e) {
+      console.warn("[statement void] Razorpay cancel error (non-fatal):", e);
+    }
+  }
+
   // 2a. Un-link usage charges from the voided statement so they can be
   //     re-billed on the replacement draft
   await supabase
@@ -141,39 +180,73 @@ export async function POST(
     .update({ billing_statement_id: null, is_billed: false })
     .eq("billing_statement_id", id);
 
-  // 3. Create a fresh draft copy (carries over the billing-relevant data
-  //    but strips out all finalization artifacts)
-  const { data: newStatement, error: insertErr } = await supabase
-    .from("billing_statements")
-    .insert({
-      contract_id: statement.contract_id,
-      booking_id: statement.booking_id,
-      lead_id: statement.lead_id,
-      statement_type: statement.statement_type,
-      period_start: statement.period_start,
-      period_end: statement.period_end,
-      accounting_period_id: statement.accounting_period_id,
-      fixed_amount: statement.fixed_amount,
-      usage_amount: statement.usage_amount,
-      service_usage_amount: statement.service_usage_amount,
-      booking_usage_amount: statement.booking_usage_amount,
-      subtotal: statement.subtotal,
-      tax_percentage: statement.tax_percentage,
-      tax_amount: statement.tax_amount,
-      total_amount: statement.total_amount,
-      line_items: statement.line_items,
-      prepaid_month: statement.prepaid_month,
-      prepaid_year: statement.prepaid_year,
-      status: "draft",
-      notes: `Re-issued from voided ${statement.statement_number || statement.gst_invoice_number || id.slice(0, 8)}.\nOriginal void reason: ${voidReason}`,
-      created_by: dbUser.id,
-      voided_statement_id: id, // back-reference to the voided original
-    })
-    .select("*")
-    .single();
+  // 2d. Un-link facility usage records — they carry their own
+  //     billing_statement_id since 00563; left linked, a voided statement's
+  //     facility overage would never bill again.
+  await supabase
+    .from("facility_usage_records")
+    .update({ billing_statement_id: null })
+    .eq("billing_statement_id", id);
 
-  if (insertErr) {
-    return NextResponse.json({ error: insertErr.message }, { status: 500 });
+  // 3. Create a fresh draft copy (carries over the billing-relevant data
+  //    but strips out all finalization artifacts) — but only for
+  //    contract/booking/lead-sourced statements. case_id/aggregator_id-owned
+  //    statements (vo_case, vo_renewal, vo_aggregator_consolidated) have no
+  //    "draft, then re-issue" concept: their generators (case-invoicing.ts,
+  //    vo-renewal.ts, aggregator-invoicing.ts) create statements directly in
+  //    a finalized state and already permit regeneration once voided_at is
+  //    set, so leaving a leftover draft row here would (a) violate
+  //    billing_statements_source_check, since none of contract_id/booking_id/
+  //    lead_id are ever set on those statements, and (b) if case_id/
+  //    aggregator_id were copied instead, poison the generators' own
+  //    "does an active statement already exist" dedupe check (which only
+  //    looks at voided_at, not status).
+  const hasReissuableOwner = Boolean(
+    statement.contract_id || statement.booking_id || statement.lead_id
+  );
+
+  let newStatement: { id: string; statement_number?: string | null } | null = null;
+
+  if (hasReissuableOwner) {
+    const { data: inserted, error: insertErr } = await supabase
+      .from("billing_statements")
+      .insert({
+        contract_id: statement.contract_id,
+        booking_id: statement.booking_id,
+        lead_id: statement.lead_id,
+        statement_type: statement.statement_type,
+        period_start: statement.period_start,
+        period_end: statement.period_end,
+        accounting_period_id: statement.accounting_period_id,
+        fixed_amount: statement.fixed_amount,
+        usage_amount: statement.usage_amount,
+        service_usage_amount: statement.service_usage_amount,
+        booking_usage_amount: statement.booking_usage_amount,
+        subtotal: statement.subtotal,
+        tax_percentage: statement.tax_percentage,
+        tax_amount: statement.tax_amount,
+        total_amount: statement.total_amount,
+        line_items: statement.line_items,
+        prepaid_month: statement.prepaid_month,
+        prepaid_year: statement.prepaid_year,
+        // Keep the renewal attribution (00508): rent billed on a parent for a
+        // renewal's period stays that renewal's on the re-issued copy too —
+        // dropping it made the copy read as the parent's own rent.
+        billed_on_behalf_of_contract_id: statement.billed_on_behalf_of_contract_id ?? null,
+        status: "draft",
+        // Parsed by view-statement-dialog to show the reason collapsed — keep the shape.
+        notes: `Replaces voided ${statement.statement_number || statement.gst_invoice_number || id.slice(0, 8)}.\nVoid reason: ${voidReason}`,
+        created_by: dbUser.id,
+        voided_statement_id: id, // back-reference to the voided original
+      })
+      .select("*")
+      .single();
+
+    if (insertErr) {
+      return NextResponse.json({ error: insertErr.message }, { status: 500 });
+    }
+
+    newStatement = inserted;
   }
 
   // 4. Audit both operations
@@ -188,20 +261,24 @@ export async function POST(
     },
   });
 
-  logAudit(supabase, {
-    entityType: "billing_statement",
-    entityId: newStatement.id,
-    action: "create",
-    performedBy: dbUser.id,
-    changes: {
-      reissued_from: { old: null, new: id },
-      status: { old: null, new: "draft" },
-    },
-  });
+  if (newStatement) {
+    logAudit(supabase, {
+      entityType: "billing_statement",
+      entityId: newStatement.id,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: {
+        reissued_from: { old: null, new: id },
+        status: { old: null, new: "draft" },
+      },
+    });
+  }
 
   return NextResponse.json({
     voided_statement_id: id,
     new_statement: newStatement,
-    message: `Statement voided. New draft ${newStatement.statement_number || newStatement.id.slice(0, 8)} created.`,
+    message: newStatement
+      ? `Statement voided. New draft ${newStatement.statement_number || newStatement.id.slice(0, 8)} created.`
+      : "Statement voided. Generate a new invoice for this case/aggregator when ready.",
   });
 }

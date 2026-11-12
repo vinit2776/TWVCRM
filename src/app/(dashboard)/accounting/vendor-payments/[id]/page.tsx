@@ -1,5 +1,7 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
+import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { use, useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
@@ -8,7 +10,7 @@ import {
   ArrowLeft, FileText, Truck, ClipboardList, Package,
   ExternalLink, CheckCircle, AlertCircle, Clock, ChevronDown,
   ChevronUp, Send, CreditCard, Building2, ShieldCheck, Info,
-  PauseCircle, PlayCircle, BookOpen, Loader2,
+  PauseCircle, PlayCircle, BookOpen, Loader2, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +38,11 @@ import {
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
+import { VendorBillDocuments } from "@/components/procurement/vendor-bill-documents";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { QueryButton } from "@/components/queries/query-button";
+import type { VendorBillDocument } from "@/types";
+import { BillEditedBadge } from "@/components/procurement/bill-edited-badge";
 
 // ── GST slab validator ────────────────────────────────────────────────────────
 
@@ -74,6 +81,7 @@ type AuditRow = {
 type ChainData = {
   bill: {
     id: string; bill_number: string; invoice_number: string | null;
+    edit_count?: number | null; last_edited_at?: string | null; last_edit_summary?: string | null;
     invoice_date: string; due_date: string | null; total_amount: number;
     amount_paid: number; payment_status: string; approval_status: string;
     payment_mode: string | null; payment_reference: string | null; payment_date: string | null;
@@ -104,6 +112,7 @@ type ChainData = {
     creator: { id: string; full_name: string } | null;
     approver: { id: string; full_name: string } | null;
     vendor_id: string; po_id: string | null;
+    vendor_bill_documents?: VendorBillDocument[];
     electricity_bill?: {
       bill_month: number;
       bill_year: number;
@@ -126,6 +135,8 @@ type ChainData = {
       notes: string | null;
       partial_reason: string | null;
       petty_cash_book_id: string | null;
+      reversed_at?: string | null;
+      reversal_reason?: string | null;
       recorder: { id: string; full_name: string } | null;
     }>;
   };
@@ -302,6 +313,7 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
 
 export default function VendorPaymentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { chain: cycle, locked, reload: reloadChain } = useChainState({ billId: id });
   const router = useRouter();
 
   const { user } = useCurrentUser();
@@ -394,6 +406,12 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [holdNotes, setHoldNotes] = useState("");
   const [releaseNotes, setReleaseNotes] = useState("");
   const [holdLoading, setHoldLoading] = useState(false);
+
+  // Correct approved amount state
+  const [correctAmountDialog, setCorrectAmountDialog] = useState(false);
+  const [correctedAmount, setCorrectedAmount] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [correctingAmount, setCorrectingAmount] = useState(false);
 
   const fetchChain = useCallback(async () => {
     setLoading(true);
@@ -492,6 +510,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const isOnHold = bill?.payment_hold_status === "on_hold";
   const canHoldPayment = (userRole === "accounts" || userRole === "admin" || userRole === "office_admin") && !isFullyPaid;
   const canReleaseHold = (userRole === "admin" || userRole === "manager") && isOnHold;
+  const canCorrectAmount = userRole === "admin" && bill?.approval_status === "approved" && !isFullyPaid;
 
   const HOLD_REASON_LABELS: Record<string, string> = {
     wrong_scan: "Wrong or unclear invoice scan",
@@ -743,6 +762,29 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     }
   }
 
+  async function handleCorrectAmount() {
+    const amt = parseFloat(correctedAmount);
+    if (!amt || amt <= 0) { toast.error("Enter a valid corrected amount"); return; }
+    if (!correctionReason.trim()) { toast.error("Add a reason for the correction"); return; }
+    setCorrectingAmount(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "correct_approved_amount", total_amount: amt, reason: correctionReason.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || "Failed to correct amount"); return; }
+      toast.success("Approved amount corrected");
+      setCorrectAmountDialog(false);
+      setCorrectedAmount("");
+      setCorrectionReason("");
+      await fetchChain();
+    } finally {
+      setCorrectingAmount(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-6 space-y-4">
@@ -761,6 +803,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: bill.bill_number }}
+        fallbackParent={{ href: "/accounting", label: "Acc Payables" }}
+      />
 
       {/* Partial-approval banner — top of page so Accounts knows the ceiling
           + the reason BEFORE they open the payment dialog. */}
@@ -869,6 +915,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold">{bill.bill_number}</h1>
+            <BillEditedBadge editCount={bill.edit_count} editedAt={bill.last_edited_at} summary={bill.last_edit_summary} />
             <Badge className="bg-green-100 text-green-800 border-0">Approved</Badge>
             <Badge className={`${PAYMENT_STATUS_COLORS[bill.payment_status]} border-0`}>
               {bill.payment_status === "unpaid" ? "Unpaid" : bill.payment_status === "partially_paid" ? "Partially Paid" : "Paid"}
@@ -886,6 +933,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           <p className="text-sm text-muted-foreground mt-0.5">
             {vendor?.name} · Invoice {bill.invoice_number ?? "—"} · {formatDate(bill.invoice_date)}
           </p>
+          <div className="mt-2">
+            <QueryButton entityType="vendor_bill" entityId={bill.id} />
+          </div>
         </div>
         <div className="text-right shrink-0 space-y-1">
           <p className="text-2xl font-bold">{formatCurrency(billBaseAmount + billGstAmount)}</p>
@@ -898,6 +948,16 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               Record Payment
             </Button>
           )}
+          <BillCorrectMenu
+            billId={bill.id}
+            billNumber={bill.bill_number}
+            approvalStatus={bill.approval_status}
+            payments={chain?.bill.vendor_bill_payments ?? []}
+            chequeSigned={!!bill.cheque_signed_at}
+            locked={locked}
+            isAdmin={userRole === "admin"}
+            onDone={() => { fetchChain(); reloadChain(); }}
+          />
           {!isFullyPaid && canHoldPayment && !isOnHold && (
             <Button size="sm" variant="outline" onClick={() => setHoldDialog(true)} className="gap-1.5 border-orange-300 text-orange-700 hover:bg-orange-50">
               <PauseCircle className="h-3.5 w-3.5" />
@@ -910,8 +970,21 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               Release Hold
             </Button>
           )}
+          {canCorrectAmount && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => { setCorrectedAmount(String(billBaseAmount)); setCorrectAmountDialog(true); }}
+              className="gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Correct Amount
+            </Button>
+          )}
         </div>
       </div>
+
+      <ChainLockBanner chain={cycle} ref={{ billId: id }} isAdmin={userRole === "admin"} onChanged={() => { fetchChain(); reloadChain(); }} />
 
       {/* Payment Hold Banner */}
       {isOnHold && (
@@ -939,7 +1012,23 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               {bill.payment_hold_reason === "wrong_scan" && <li>Request the vendor to re-submit a clear invoice scan via procurement</li>}
               {bill.payment_hold_reason === "wrong_bank_details" && <li>Verify and update vendor bank details in the vendor profile, then release</li>}
               {bill.payment_hold_reason === "bank_rejected" && <li>Contact the bank, confirm correct account details, then release for retry</li>}
-              {bill.payment_hold_reason === "amount_mismatch" && <li>Review the approved amount vs. invoice — correct via approval if needed</li>}
+              {bill.payment_hold_reason === "amount_mismatch" && (
+                <li>
+                  Review the approved amount vs. invoice
+                  {canCorrectAmount && (
+                    <>
+                      {" — "}
+                      <button
+                        type="button"
+                        onClick={() => { setCorrectedAmount(String(billBaseAmount)); setCorrectAmountDialog(true); }}
+                        className="underline font-medium hover:text-orange-950"
+                      >
+                        Correct Amount
+                      </button>
+                    </>
+                  )}
+                </li>
+              )}
               {bill.payment_hold_reason === "duplicate_suspected" && <li>Cross-check payment history and bill records before releasing</li>}
               {bill.payment_hold_reason === "pending_docs" && <li>Ensure all required supporting documents are uploaded before releasing</li>}
               {(!bill.payment_hold_reason || bill.payment_hold_reason === "other") && <li>Investigate the stated issue and release once resolved</li>}
@@ -1284,6 +1373,29 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               )}
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Supporting Documents — everything attached to the bill, including
+          anything added after approval (e.g. a debit note or corrected
+          invoice the vendor sent later). Accounts refers to this before
+          paying, so it needs the full list, not just the original invoice
+          shown above in the Document Chain trail. */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            Supporting Documents
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <VendorBillDocuments
+            billId={bill.id}
+            approvalStatus={bill.approval_status}
+            approvedAt={bill.approved_at}
+            documents={bill.vendor_bill_documents ?? []}
+            onChanged={fetchChain}
+          />
         </CardContent>
       </Card>
 
@@ -2095,10 +2207,15 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 {(chain.bill.vendor_bill_payments ?? [])
                   .sort((a, b) => new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime())
                   .map((pmt, idx) => (
-                    <tr key={pmt.id} className={`border-b last:border-0 ${idx % 2 === 0 ? "" : "bg-muted/20"}`}>
+                    <tr key={pmt.id} className={`border-b last:border-0 ${idx % 2 === 0 ? "" : "bg-muted/20"} ${pmt.reversed_at ? "opacity-60" : ""}`}>
                       <td className="px-4 py-2.5 text-xs">{formatDate(pmt.payment_date)}</td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-green-700">
+                      <td className={`px-4 py-2.5 text-right font-semibold ${pmt.reversed_at ? "text-muted-foreground line-through" : "text-green-700"}`}>
                         {formatCurrency(pmt.amount)}
+                        {pmt.reversed_at && (
+                          <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-medium">
+                            Reversed
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground hidden sm:table-cell capitalize">
                         {pmt.payment_mode.replace(/_/g, " ")}
@@ -2118,7 +2235,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                             {PARTIAL_PAYMENT_REASON_LABELS[pmt.partial_reason] ?? pmt.partial_reason}
                           </span>
                         )}
-                        {pmt.notes ?? (pmt.partial_reason ? "" : "—")}
+                        {pmt.reversed_at
+                          ? `Reversed: ${pmt.reversal_reason ?? "—"}`
+                          : (pmt.notes ?? (pmt.partial_reason ? "" : "—"))}
                       </td>
                     </tr>
                   ))}
@@ -2327,6 +2446,63 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             >
               <PlayCircle className="h-4 w-4" />
               {holdLoading ? "Releasing…" : "Release Hold"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Correct Approved Amount Dialog */}
+      <Dialog open={correctAmountDialog} onOpenChange={setCorrectAmountDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-4 w-4 text-blue-600" />
+              Correct Approved Amount
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground">
+              Use this when the recorded amount doesn&apos;t match the vendor&apos;s invoice. This re-approves the bill in full at the corrected amount.
+            </p>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="rounded-lg bg-muted p-3 text-sm space-y-1">
+              <p className="text-xs text-muted-foreground font-medium">Current approved amount (base, pre-GST)</p>
+              <p className="font-medium">{formatCurrency(billBaseAmount)}</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Corrected amount (base, pre-GST) *</Label>
+              <Input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={correctedAmount}
+                onChange={(e) => setCorrectedAmount(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reason for correction *</Label>
+              <Input
+                value={correctionReason}
+                onChange={(e) => setCorrectionReason(e.target.value)}
+                placeholder="e.g. Invoice shows ₹18,300, not ₹19,300 — data entry error"
+                maxLength={500}
+              />
+            </div>
+            {Number(bill?.amount_paid ?? 0) > 0 && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                ₹{Number(bill?.amount_paid ?? 0).toLocaleString("en-IN")} has already been paid on this bill — the corrected amount must cover it.
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCorrectAmountDialog(false)} disabled={correctingAmount}>Cancel</Button>
+            <Button
+              onClick={handleCorrectAmount}
+              disabled={correctingAmount || !correctedAmount || !correctionReason.trim()}
+              className="gap-2 bg-blue-600 hover:bg-blue-700"
+            >
+              <Pencil className="h-4 w-4" />
+              {correctingAmount ? "Saving…" : "Save Corrected Amount"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -22,6 +22,7 @@ import { ContractFacilitiesSection } from "@/components/contracts/contract-facil
 import {
   CONTRACT_STATUSES,
   CONTRACT_STATUS_LABELS,
+  contractDisplayStatus,
   CONTRACT_STATUS_COLORS,
   CONTRACT_QUOTA_LOCKED_STATUSES,
   CONTRACT_QUOTA_ROLES,
@@ -29,6 +30,8 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { Contract } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 type ContractWithQuotaCount = Contract & {
   lead?: { id: string; first_name: string; last_name: string; company?: string };
@@ -54,6 +57,16 @@ export default function ContractsPage() {
   const [shortfallFilter, setShortfallFilter] = useState(false);
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [selectedContract, setSelectedContract] = useState<ContractWithQuotaCount | null>(null);
+  // Accepted/active contracts with no signed agreement attached. Best-effort:
+  // if it fails the list simply shows no flags.
+  const [unsignedIds, setUnsignedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    fetch("/api/contracts/unsigned")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((json) => setUnsignedIds(new Set<string>(json.data || [])))
+      .catch(() => {});
+  }, []);
 
   const fetchContracts = useCallback(async () => {
     setLoading(true);
@@ -142,6 +155,7 @@ export default function ContractsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Contracts" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Contracts</h1>
@@ -156,6 +170,9 @@ export default function ContractsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/contracts/auto-renewals">Auto-renewals</Link>
+          </Button>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -172,7 +189,15 @@ export default function ContractsPage() {
             <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Statuses</SelectItem>
-              {CONTRACT_STATUSES.map((s) => <SelectItem key={s} value={s}>{CONTRACT_STATUS_LABELS[s]}</SelectItem>)}
+              {CONTRACT_STATUSES.flatMap((s) =>
+                s === "terminated"
+                  // Withdrawn is stored as terminated (never activated); list the two apart.
+                  ? [
+                      <SelectItem key={s} value="terminated_only">{CONTRACT_STATUS_LABELS[s]}</SelectItem>,
+                      <SelectItem key="withdrawn" value="withdrawn">{CONTRACT_STATUS_LABELS.withdrawn}</SelectItem>,
+                    ]
+                  : [<SelectItem key={s} value={s}>{CONTRACT_STATUS_LABELS[s]}</SelectItem>],
+              )}
             </SelectContent>
           </Select>
           <div className="w-[180px]">
@@ -254,7 +279,10 @@ export default function ContractsPage() {
                 <tr
                   key={c.id}
                   className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                  onClick={() => router.push(`/contracts/${c.id}`)}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/contracts/${c.id}`, label: c.contract_number });
+                    router.push(`/contracts/${c.id}`);
+                  }}
                 >
                   <td className="px-4 py-3 font-mono text-xs">{c.contract_number}</td>
                   <td className="px-4 py-3 hidden md:table-cell">
@@ -275,9 +303,17 @@ export default function ContractsPage() {
                   <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{c.location?.name || "—"}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
-                      <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
-                        {CONTRACT_STATUS_LABELS[c.status]}
+                      <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(c)]}>
+                        {CONTRACT_STATUS_LABELS[contractDisplayStatus(c)]}
                       </Badge>
+                      {unsignedIds.has(c.id) && (
+                        <span
+                          title="No signed agreement attached. WiFi vouchers stay blocked until one is."
+                          className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"
+                        >
+                          Unsigned
+                        </span>
+                      )}
                       {c.is_renewal && (
                         <span title={`Renewal V${c.renewal_sequence || 2}`}>
                           <RefreshCw className="h-3 w-3 text-blue-500" />

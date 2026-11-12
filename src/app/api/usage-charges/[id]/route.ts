@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
-import { CHARGE_ALLOWED_ROLES } from "@/lib/constants";
+import { CHARGE_ALLOWED_ROLES, CHARGE_HOLD_ALLOWED_ROLES } from "@/lib/constants";
 
 export async function GET(
   _request: NextRequest,
@@ -78,6 +78,23 @@ export async function PATCH(
     allowedFields.total_with_gst = parseFloat((newTotal + newGstAmount).toFixed(2));
   }
 
+  // Partial waiver: a pending charge's amount reduced (not zeroed — that's
+  // the full-waive path above) rather than left at its original value.
+  // Needs the same "why" accountability as a full waive, so it's required
+  // and recorded both in notes (visible on the row) and the audit trail —
+  // there's no dedicated reduced_reason column, keeping this change free of
+  // a new migration.
+  let reductionReason: string | undefined;
+  if (allowedFields.total !== undefined && Number(allowedFields.total) < Number(oldCharge.total ?? 0)) {
+    reductionReason = (body.reduction_reason as string | undefined)?.trim();
+    if (!reductionReason) {
+      return NextResponse.json({ error: "A reason is required when reducing a charge's amount" }, { status: 400 });
+    }
+    const noteLine = `Reduced from ₹${oldCharge.total} to ₹${allowedFields.total} — ${reductionReason}`;
+    const existingNotes = allowedFields.notes !== undefined ? String(allowedFields.notes) : (oldCharge.notes ?? "");
+    allowedFields.notes = existingNotes ? `${existingNotes}\n${noteLine}` : noteLine;
+  }
+
   // Waive: only admin/manager can waive
   if (body.status === "waived") {
     if (!dbUser || !["admin", "manager"].includes(dbUser.role)) {
@@ -87,8 +104,57 @@ export async function PATCH(
     allowedFields.waived_by = dbUser.id;
     allowedFields.waived_at = new Date().toISOString();
     allowedFields.waive_reason = body.waive_reason || null;
+    // Snapshot the amounts before zeroing so a breakdown can still show
+    // "₹X — waived by Y" (the zeroing below is otherwise lossy).
+    allowedFields.original_unit_price     = Number(oldCharge.unit_price ?? 0);
+    allowedFields.original_total          = Number(oldCharge.total ?? 0);
+    allowedFields.original_gst_amount     = Number(oldCharge.gst_amount ?? 0);
+    allowedFields.original_total_with_gst = Number(oldCharge.total_with_gst ?? 0);
+    // Every other writer of status:"waived" in this codebase (free-quota
+    // bookings, free-quota facility charges, cancelled-booking waivers)
+    // zeroes the amount fields — displays like the Billing page's Usage
+    // Charges table read `total` directly without checking status, so a
+    // non-zero total on a "waived" row reads as still being charged.
+    allowedFields.unit_price = 0;
+    allowedFields.total = 0;
+    allowedFields.gst_amount = 0;
+    allowedFields.total_with_gst = 0;
   } else if (body.status !== undefined) {
     allowedFields.status = body.status;
+  }
+
+  // Hold / release: pauses (or resumes) just this charge's eligibility for
+  // the next Generate Drafts sweep — status stays "pending" throughout,
+  // unlike waive above. See usage_charges.held_at's own doc comment
+  // (00558_usage_charge_hold.sql) for how this differs from waiving.
+  if (body.hold === true) {
+    if (!dbUser || !CHARGE_HOLD_ALLOWED_ROLES.includes(dbUser.role)) {
+      return NextResponse.json({ error: "Only admin and managers can hold charges" }, { status: 403 });
+    }
+    const holdReason = (body.hold_reason as string | undefined)?.trim();
+    if (!holdReason) {
+      return NextResponse.json({ error: "A reason is required when placing a hold" }, { status: 400 });
+    }
+    allowedFields.held_at = new Date().toISOString();
+    allowedFields.held_by = dbUser.id;
+    allowedFields.hold_reason = holdReason;
+  } else if (body.hold === false) {
+    if (!dbUser || !CHARGE_HOLD_ALLOWED_ROLES.includes(dbUser.role)) {
+      return NextResponse.json({ error: "Only admin and managers can release a hold" }, { status: 403 });
+    }
+    allowedFields.held_at = null;
+    allowedFields.held_by = null;
+    allowedFields.hold_reason = null;
+  }
+
+  // "Bill anyway" — a stale charge (see USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS
+  // in src/lib/constants.ts) is excluded from generateUsageStatements'
+  // automatic sweep until someone explicitly acknowledges it should still be
+  // charged. Any role that can edit charges may do this — it's a lighter
+  // action than Hold/Waive, just "yes, I looked at this."
+  if (body.review === true) {
+    allowedFields.reviewed_at = new Date().toISOString();
+    allowedFields.reviewed_by = dbUser?.id ?? null;
   }
 
   // Settle: mark as settled in a booking
@@ -112,12 +178,14 @@ export async function PATCH(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   if (dbUser?.id && oldCharge) {
+    const changes = diffChanges(oldCharge as Record<string, unknown>, allowedFields);
+    if (reductionReason) changes.reduction_reason = { old: null, new: reductionReason };
     logAudit(supabase, {
       entityType: "usage_charge",
       entityId: id,
       action: "update",
       performedBy: dbUser.id,
-      changes: diffChanges(oldCharge as Record<string, unknown>, allowedFields),
+      changes,
     });
   }
 

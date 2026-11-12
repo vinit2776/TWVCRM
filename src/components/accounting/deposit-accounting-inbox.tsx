@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { DEPOSIT_TOPUP_CATEGORY_LABELS, type DepositInboxRow } from "@/types";
+import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 
 interface Props {
   currentUserRole: string;
@@ -37,6 +39,9 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Separate from `expanded` so opening a query thread doesn't collapse the
+  // verification details someone is reading while they type the question.
+  const [queryOpen, setQueryOpen] = useState<string | null>(null);
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedSearch(search), 250);
@@ -120,12 +125,15 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                         <span className="font-medium text-sm truncate">{row.party_name}</span>
                         <Badge
                           variant="outline"
-                          className={row.kind === "deposit"
-                            ? "text-xs border-violet-300 bg-violet-50 text-violet-700"
-                            : "text-xs border-purple-300 bg-purple-50 text-purple-700"}
+                          className={row.kind === "topup"
+                            ? "text-xs border-purple-300 bg-purple-50 text-purple-700"
+                            : "text-xs border-violet-300 bg-violet-50 text-violet-700"}
                         >
-                          {row.kind === "deposit" ? "Security deposit" : "Top-up"}
+                          {row.kind === "deposit" ? "Security deposit" : row.kind === "part" ? `Deposit · Part ${row.part_seq} of ${row.parts_known}` : "Top-up"}
                         </Badge>
+                        {row.kind === "part" && row.is_final && (
+                          <Badge variant="outline" className="text-xs border-green-300 bg-green-50 text-green-700">Final · deposit complete</Badge>
+                        )}
                         {row.category && (
                           <Badge variant="outline" className="text-xs">
                             {DEPOSIT_TOPUP_CATEGORY_LABELS[row.category]}
@@ -146,6 +154,11 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                           <span className="text-amber-600">date not on file</span>
                         )}
                       </span>
+                      {row.internal_note && (
+                        <span className="block text-xs text-muted-foreground mt-0.5 italic truncate" title={row.internal_note}>
+                          {row.internal_note}
+                        </span>
+                      )}
                       {subTab === "closed" && row.accounted_at && (
                         <span className="block text-[11px] text-green-700 mt-0.5">
                           Accounted by {row.accounted_by_name || "—"} on {formatDate(row.accounted_at)}
@@ -158,12 +171,23 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                       <span className={row.amount == null ? "block text-xs text-amber-600 italic" : "block font-semibold text-sm"}>
                         {amountLabel(row.amount)}
                       </span>
-                      {row.amount == null && row.expected_amount != null && (
+                      {row.kind === "part" && row.expected_amount != null && (
+                        <span className="block text-[11px] text-muted-foreground">
+                          received now · {formatCurrency(row.received_to_date ?? 0)} of {formatCurrency(row.expected_amount)}
+                        </span>
+                      )}
+                      {row.kind !== "part" && row.amount == null && row.expected_amount != null && (
                         <span className="block text-[11px] text-muted-foreground">
                           expected {formatCurrency(row.expected_amount)}
                         </span>
                       )}
                     </span>
+                    <InboxQueryButton
+                      open={queryOpen === key}
+                      openCount={row.open_query_count ?? 0}
+                      onToggle={() => setQueryOpen(queryOpen === key ? null : key)}
+                      title={`Raise or answer a question about this ${row.kind === "topup" ? "top-up" : "deposit"}`}
+                    />
                     {subTab === "open" ? (
                       <Button size="sm" variant="outline" className="gap-1.5 h-8" onClick={() => setUploadTarget(row)}>
                         <Upload className="h-3.5 w-3.5" /> Upload Receipt
@@ -191,6 +215,16 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                   </div>
                 </div>
                 {isOpen && <VerificationPanel row={row} />}
+                {queryOpen === key && (
+                  <div className="border-t px-3 py-2.5">
+                    <QueryThreadPanel
+                      // A deposit row is a proposal; a top-up is its own table.
+                      entityType={row.kind === "topup" ? "deposit_topup" : "proposal_deposit"}
+                      entityId={row.kind === "part" ? (row.proposal_id as string) : row.id}
+                      onChanged={() => load(subTab, debouncedSearch)}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}
@@ -235,9 +269,37 @@ function VerificationPanel({ row }: { row: DepositInboxRow }) {
   return (
     <div className="border-t bg-muted/30 px-3 py-3">
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Field label="Amount received" value={row.amount == null ? notOnFile : formatCurrency(row.amount)} />
+        <Field label={row.kind === "part" ? `Received now (Part ${row.part_seq})` : "Amount received"} value={row.amount == null ? notOnFile : formatCurrency(row.amount)} />
         {row.expected_amount != null && (
-          <Field label="Deposit required" value={formatCurrency(row.expected_amount)} />
+          <Field label={row.kind === "part" ? "Total deposit expected" : "Deposit required"} value={formatCurrency(row.expected_amount)} />
+        )}
+        {row.kind === "part" && (
+          <>
+            <Field label="Received to date" value={formatCurrency(row.received_to_date ?? 0)} />
+            <Field label="Balance after this part" value={row.is_final ? "Nil — deposit complete" : formatCurrency(row.balance_after ?? 0)} />
+          </>
+        )}
+        {row.credit_amount != null && (
+          <Field
+            label="Credit applied"
+            value={
+              <>
+                − {formatCurrency(row.credit_amount)}
+                {row.credit_reason && <span className="block text-muted-foreground italic mt-0.5">{row.credit_reason}</span>}
+              </>
+            }
+          />
+        )}
+        {row.exception_amount != null && (
+          <Field
+            label="Exception"
+            value={
+              <>
+                {row.exception_amount > 0 ? "+" : "−"} {formatCurrency(Math.abs(row.exception_amount))}
+                {row.exception_reason && <span className="block text-muted-foreground italic mt-0.5">{row.exception_reason}</span>}
+              </>
+            }
+          />
         )}
         <Field label="Payment date" value={row.paid_at ? formatDate(row.paid_at) : notOnFile} />
         <Field label="Mode" value={row.payment_medium || notOnFile} />

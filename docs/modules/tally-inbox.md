@@ -221,7 +221,7 @@ NULL → direct_gst_requested
            (handleStatementFinalized in billing.ts)
 
 NULL → direct_gst_requested
-  trigger: admin/manager calls POST /convert-to-gst-early
+  trigger: admin/manager/sales_rep calls POST /convert-to-gst-early
            (overrides PI, cancels Razorpay link)
 
 payment captured (proforma_first) → pi_paid_awaiting_gst
@@ -276,6 +276,17 @@ gst_sent → complete
 | `name_check_pending`, `ready_to_send`, `gst_sent`, `gst_sent_awaiting_payment`, `pi_awaiting_payment` | `in_flight` | All open |
 | `complete` | `complete` | Closed |
 
+### "To verify" tab (payment reports)
+
+Not a bucket and not backed by `billing_statements`. It lists open Queries threads of kind `payment_reported` — payments someone reported out of system that accounts have not yet settled — so accounts see them from the screen they already work in. It sits right after **Payments**, and is shown only to roles that can settle a report (`canReviewPaymentReport`: `admin`, `accounts`).
+
+- Data: `GET /api/queries?tab=open&kind=payment_reported` (the same feed as the Payment reports filter on `/queries`). `GET /api/queries?stats=true` carries the count as `to_verify`, which also drives the Tally Inbox sidebar badge.
+- Clicking a row opens a drawer that embeds the ordinary `QueryThreadPanel`, so verify / "Not found yet" / "No such payment" run through `PaymentReportCard` and the existing Record Payment dialog. Nothing in the inbox records a payment itself.
+- A report leaves the tab when verified or rejected; "Not found yet" keeps it listed. Full history stays on `/queries` and the AR page.
+- Each row carries a **waiting** chip (since the report was raised; red past `needed_by`) and a **last checked** chip. "Not found yet" is recorded as its own `payment_not_found` timeline event (migration 00593), and the chip reads the newest one, so a reply or nudge never counts as a check. Reports answered before 00593 show "not checked yet".
+- **Reported-payment flag on statement rows.** A statement row with an open payment report (matched by the thread's entity, or by the invoice the reporter named) shows an amber "Payment reported · ₹X · mode" chip next to Query. It comes from `reported_payments` on the inbox feed and opens the same drawer. When exactly one payment already recorded on the invoice matches the report to the rupee (cash plus TDS), the drawer offers **Accept and link this payment**; otherwise it lists the recorded payments to link, and "Verify and record" is refused by the overpayment gate if the invoice is already paid. A payment can be linked to only one verified report.
+- The daily inbox digest email (`/api/cron/inbox-digest`) gains a "Payments to verify" block, and now also sends when there are no open inbox items but reports are pending.
+
 ---
 
 ## Three Billing Flows
@@ -291,7 +302,7 @@ Steps visible in the lifecycle tracker:
 
 ### Flow 2: Override / PI-cancelled
 
-Admin/manager calls `convert-to-gst-early`. This:
+Admin/manager/sales_rep calls `convert-to-gst-early`. This:
 - Cancels existing Razorpay payment link via Razorpay API
 - Sets `pi_cancelled_at`, `pi_cancelled_by`, `pi_override_reason`
 - Clears `razorpay_payment_link_id`, `razorpay_payment_link_url`

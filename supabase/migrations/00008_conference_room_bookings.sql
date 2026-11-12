@@ -8,7 +8,7 @@ ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'floor_manager';
 
 -- 2. Create spaces table
 CREATE TABLE spaces (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   name VARCHAR(255) NOT NULL,
   location_id UUID NOT NULL REFERENCES locations(id) ON DELETE RESTRICT,
   capacity INTEGER NOT NULL DEFAULT 1,
@@ -41,7 +41,7 @@ CREATE TRIGGER update_spaces_updated_at
 
 -- 3. Create space_facilities table
 CREATE TABLE space_facilities (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   space_id UUID NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
   is_complimentary BOOLEAN DEFAULT true,
@@ -68,7 +68,7 @@ CREATE TYPE booking_payment_status AS ENUM (
 
 -- 5. Create bookings table
 CREATE TABLE bookings (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   booking_number VARCHAR(50) UNIQUE,
   space_id UUID NOT NULL REFERENCES spaces(id) ON DELETE RESTRICT,
   location_id UUID NOT NULL REFERENCES locations(id) ON DELETE RESTRICT,
@@ -132,7 +132,7 @@ CREATE TRIGGER bookings_number
 
 -- 7. Create booking_facilities junction table
 CREATE TABLE booking_facilities (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   booking_id UUID NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
   facility_name VARCHAR(255) NOT NULL,
   is_complimentary BOOLEAN DEFAULT true,

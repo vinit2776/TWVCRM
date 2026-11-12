@@ -27,6 +27,8 @@
 
 import { ArrowRight, AlertCircle, CheckCircle2, Clock } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
+import { amountLeftToCollect, bookingPaymentTolerance, checkInPaymentState } from "@/lib/booking-payment-rules";
+import { closeOutDecision } from "@/lib/process-registry";
 import type { Booking, BookingPayment } from "@/types";
 import type { CompRequestData } from "@/components/bookings/booking-lifecycle-timeline";
 
@@ -169,9 +171,10 @@ function computeNextHint(b: Booking, payments: BookingPayment[], compRequest?: C
     const paidSoFar = payments
       .filter((p) => p.status === "verified")
       .reduce((s, p) => s + Number(p.amount), 0);
-    const settled = SETTLED.has(b.payment_status) || paidSoFar + 0.01 >= grandTotal;
+    const settled =
+      SETTLED.has(b.payment_status) || paidSoFar + bookingPaymentTolerance(grandTotal) >= grandTotal;
     if (!settled) {
-      const balance = grandTotal - paidSoFar;
+      const balance = amountLeftToCollect(grandTotal, payments);
       return {
         label: `Collect ${formatCurrency(balance)} balance`,
         detail: "Customer has checked out but payment is still due",
@@ -213,15 +216,38 @@ function computeNextHint(b: Booking, payments: BookingPayment[], compRequest?: C
 
   // confirmed → either collect payment or check in
   if (status === "confirmed") {
+    // From an earlier day: Check In is gone, Close out is the way to finish it.
+    if (closeOutDecision(b, new Date()).allowed) {
+      return {
+        label: "Close out this booking",
+        detail: "It was booked for an earlier day. Close out completes it as booked and records why.",
+        tone: "amber",
+        target: "actions",
+      };
+    }
+
     const SETTLED = new Set(["paid", "waived", "posted_to_bill", "prepaid"]);
     const grandTotal = Number(b.total_amount_with_gst) || Number(b.total_amount);
     const paidSoFar = payments
       .filter((p) => p.status === "verified")
       .reduce((s, p) => s + Number(p.amount), 0);
-    const settled = SETTLED.has(b.payment_status) || paidSoFar + 0.01 >= grandTotal;
+    const settled =
+      SETTLED.has(b.payment_status) || paidSoFar + bookingPaymentTolerance(grandTotal) >= grandTotal;
+
+    // Mirrors the server's check-in gate: a full UPI payment staff have
+    // attached proof to is enough to let the customer in while accounts verify.
+    const cover = checkInPaymentState(grandTotal, payments);
+    if (!settled && b.customer_type === "walk_in" && cover.covered) {
+      return {
+        label: "Check the customer in",
+        detail: "Paid by UPI, waiting for accounts to verify — the GST invoice follows once it is verified",
+        tone: "blue",
+        target: "actions",
+      };
+    }
 
     if (!settled) {
-      const balance = grandTotal - paidSoFar;
+      const balance = amountLeftToCollect(grandTotal, payments);
       const isWalkIn = b.customer_type === "walk_in";
       return {
         label: `Collect ${formatCurrency(balance)}`,

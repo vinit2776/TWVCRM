@@ -5,34 +5,19 @@ import { unstable_batchedUpdates } from "react-dom";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+import {
+  ENQUIRY_SELECT,
+  toEnquiryItem,
+  type EnquiryItem,
+  type RawEnquiryRow,
+  type ResolutionOutcome,
+} from "@/lib/enquiries";
 
-const FORM_TAGS = ["google-ads-form", "meta-ads-form", "walkin-form"];
 const LS_KEY_WA = "twv_last_seen_wa_inbound";
-const SOURCE_LABEL: Record<string, string> = {
-  "google-ads-form":  "Google Ads",
-  "meta-ads-form":    "Meta Ads",
-  "walkin-form":      "Walk-in",
-};
 
 const RESOLVED_GRACE_MS = 10 * 60 * 1000;
 
-export type ResolutionOutcome = "converted" | "not_interested" | "no_response";
-
-export interface EnquiryItem {
-  leadId: string;
-  name: string;
-  mobile: string | null;
-  source: string;
-  sourceTag: string;
-  attentionResetAt: string;
-  createdAt: string;
-  isReEnquiry: boolean;
-  claimedBy: string | null;
-  claimedAt: string | null;
-  claimerName: string | null;
-  resolvedAt: string | null;
-  resolutionOutcome: ResolutionOutcome | null;
-}
+export type { ResolutionOutcome, EnquiryItem };
 
 export interface WhatsAppInboundItem {
   id: string;
@@ -77,48 +62,19 @@ function playChime() {
   } catch { /* ignore */ }
 }
 
-type RawLeadRow = {
-  id: string; first_name: string; last_name: string; mobile: string | null;
-  tags: string[] | null; created_at: string; attention_reset_at: string | null;
-  claimed_by: string | null; claimed_at: string | null;
-  resolved_at: string | null; resolution_outcome: ResolutionOutcome | null;
-  claimer?: { id: string; full_name: string } | null;
-};
-
-function toItem(row: RawLeadRow): EnquiryItem | null {
-  const matchingTag = (row.tags ?? []).find((t) => FORM_TAGS.includes(t));
-  if (!matchingTag) return null;
-  const attentionResetAt = row.attention_reset_at ?? row.created_at;
-  return {
-    leadId: row.id,
-    name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() || "Unknown",
-    mobile: row.mobile,
-    source: SOURCE_LABEL[matchingTag] ?? matchingTag,
-    sourceTag: matchingTag,
-    attentionResetAt,
-    createdAt: row.created_at,
-    isReEnquiry: new Date(attentionResetAt).getTime() - new Date(row.created_at).getTime() > 1000,
-    claimedBy: row.claimed_by,
-    claimedAt: row.claimed_at,
-    claimerName: row.claimer?.full_name ?? null,
-    resolvedAt: row.resolved_at,
-    resolutionOutcome: row.resolution_outcome,
-  };
-}
-
-const SELECT_COLS =
-  "id, first_name, last_name, mobile, tags, created_at, attention_reset_at, " +
-  "claimed_by, claimed_at, resolved_at, resolution_outcome, " +
-  "claimer:users!leads_claimed_by_fkey(id, full_name)";
-
 export function useEnquiryNotificationsCore() {
   const router = useRouter();
   const [rawItems, setItems]                    = useState<EnquiryItem[]>([]);
   const [alertQueue, setAlertQueue]             = useState<EnquiryAlert[]>([]);
   const [waInboundCount, setWaInboundCount]     = useState(0);
   const [waInboundItems, setWaInboundItems]     = useState<WhatsAppInboundItem[]>([]);
+  // Bumped after every successful claim/release/resolve so views that keep their own copy
+  // of the enquiry record (the Leads page tracker) know to refetch.
+  const [actionVersion, setActionVersion]       = useState(0);
 
   const graceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Lets actions outside the subscription effect (Undo) reload the open enquiries.
+  const reloadRef = useRef<(() => Promise<void>) | null>(null);
 
   const items = [...rawItems].sort((a, b) => {
     const aResolved = a.resolvedAt ? 1 : 0;
@@ -130,19 +86,19 @@ export function useEnquiryNotificationsCore() {
   const activeCount   = items.filter((i) => !i.resolvedAt).length;
   const unclaimedCount = items.filter((i) => !i.resolvedAt && !i.claimedBy).length;
 
-  const scheduleGraceRemoval = useCallback((leadId: string) => {
-    const existing = graceTimersRef.current.get(leadId);
+  const scheduleGraceRemoval = useCallback((enquiryId: string) => {
+    const existing = graceTimersRef.current.get(enquiryId);
     if (existing) clearTimeout(existing);
     const t = setTimeout(() => {
-      setItems((prev) => prev.filter((i) => i.leadId !== leadId));
-      graceTimersRef.current.delete(leadId);
+      setItems((prev) => prev.filter((i) => i.enquiryId !== enquiryId));
+      graceTimersRef.current.delete(enquiryId);
     }, RESOLVED_GRACE_MS);
-    graceTimersRef.current.set(leadId, t);
+    graceTimersRef.current.set(enquiryId, t);
   }, []);
 
-  const cancelGraceRemoval = useCallback((leadId: string) => {
-    const t = graceTimersRef.current.get(leadId);
-    if (t) { clearTimeout(t); graceTimersRef.current.delete(leadId); }
+  const cancelGraceRemoval = useCallback((enquiryId: string) => {
+    const t = graceTimersRef.current.get(enquiryId);
+    if (t) { clearTimeout(t); graceTimersRef.current.delete(enquiryId); }
   }, []);
 
   const dismissAlert = useCallback((alertId: string) => {
@@ -156,8 +112,8 @@ export function useEnquiryNotificationsCore() {
     setWaInboundCount(0);
   }, []);
 
-  const claim = useCallback(async (leadId: string) => {
-    const res = await fetch(`/api/leads/${leadId}/claim`, {
+  const claim = useCallback(async (enquiryId: string) => {
+    const res = await fetch(`/api/enquiries/${enquiryId}/claim`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ claimed: true }),
@@ -165,16 +121,17 @@ export function useEnquiryNotificationsCore() {
     if (!res.ok) { toast.error("Could not claim enquiry"); return; }
     setItems((prev) =>
       prev.map((i) =>
-        i.leadId === leadId
+        i.enquiryId === enquiryId
           ? { ...i, claimedAt: new Date().toISOString(), claimedBy: "self", claimerName: "You" }
           : i
       )
     );
+    setActionVersion((v) => v + 1);
     toast.success("Marked as on-it");
   }, []);
 
-  const unclaim = useCallback(async (leadId: string) => {
-    const res = await fetch(`/api/leads/${leadId}/claim`, {
+  const unclaim = useCallback(async (enquiryId: string) => {
+    const res = await fetch(`/api/enquiries/${enquiryId}/claim`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ claimed: false }),
@@ -182,14 +139,15 @@ export function useEnquiryNotificationsCore() {
     if (!res.ok) { toast.error("Could not release claim"); return; }
     setItems((prev) =>
       prev.map((i) =>
-        i.leadId === leadId ? { ...i, claimedAt: null, claimedBy: null, claimerName: null } : i
+        i.enquiryId === enquiryId ? { ...i, claimedAt: null, claimedBy: null, claimerName: null } : i
       )
     );
+    setActionVersion((v) => v + 1);
   }, []);
 
   const resolve = useCallback(
-    async (leadId: string, outcome: ResolutionOutcome) => {
-      const res = await fetch(`/api/leads/${leadId}/resolve`, {
+    async (enquiryId: string, outcome: ResolutionOutcome) => {
+      const res = await fetch(`/api/enquiries/${enquiryId}/resolve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ outcome }),
@@ -197,15 +155,51 @@ export function useEnquiryNotificationsCore() {
       if (!res.ok) { toast.error("Could not resolve enquiry"); return; }
       setItems((prev) =>
         prev.map((i) =>
-          i.leadId === leadId
+          i.enquiryId === enquiryId
             ? { ...i, resolvedAt: new Date().toISOString(), resolutionOutcome: outcome }
             : i
         )
       );
-      scheduleGraceRemoval(leadId);
+      scheduleGraceRemoval(enquiryId);
+      setActionVersion((v) => v + 1);
       toast.success("Marked resolved");
     },
     [scheduleGraceRemoval]
+  );
+
+  // The number behind this enquiry is not a prospect: label it, and every open WhatsApp enquiry
+  // from it leaves the queue (restorable from Spam). The toast carries a one-tap Undo.
+  const markNotALead = useCallback(
+    async (enquiryId: string, label: string, name?: string) => {
+      const res = await fetch(`/api/enquiries/${enquiryId}/not-a-lead`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, name: name || undefined }),
+      });
+      if (!res.ok) { toast.error((await res.json().catch(() => null))?.error ?? "Could not label this number"); return; }
+      const done = (await res.json()) as { stashed_ids: string[]; previous: unknown; lead_junked: boolean };
+      const gone = new Set(done.stashed_ids);
+      setItems((prev) => prev.filter((i) => !gone.has(i.enquiryId)));
+      setActionVersion((v) => v + 1);
+      toast.success("Number labelled. Its messages will no longer open enquiries.", {
+        duration: 15_000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            const undo = await fetch(`/api/enquiries/${enquiryId}/not-a-lead`, {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ stashed_ids: done.stashed_ids, previous: done.previous, lead_junked: done.lead_junked }),
+            });
+            if (!undo.ok) { toast.error((await undo.json().catch(() => null))?.error ?? "Could not undo"); return; }
+            await reloadRef.current?.();
+            setActionVersion((v) => v + 1);
+            toast.success("Undone. The number and its enquiries are back.");
+          },
+        },
+      });
+    },
+    []
   );
 
   useEffect(() => {
@@ -222,11 +216,10 @@ export function useEnquiryNotificationsCore() {
 
       const [{ data: leadRows }, { data: inboundMessages, count: inboundCount }] = await Promise.all([
         supabase
-          .from("leads")
-          .select(SELECT_COLS)
+          .from("lead_enquiries")
+          .select(ENQUIRY_SELECT)
           .is("resolved_at", null)
-          .overlaps("tags", FORM_TAGS)
-          .order("attention_reset_at", { ascending: false, nullsFirst: false })
+          .order("received_at", { ascending: false })
           .limit(50),
         supabase
           .from("whatsapp_messages")
@@ -239,7 +232,7 @@ export function useEnquiryNotificationsCore() {
       ]);
 
       const mapped = (leadRows ?? [])
-        .map((r) => toItem(r as unknown as RawLeadRow))
+        .map((r) => toEnquiryItem(r as unknown as RawEnquiryRow))
         .filter((i): i is EnquiryItem => i !== null);
 
       setItems(mapped);
@@ -255,6 +248,7 @@ export function useEnquiryNotificationsCore() {
       );
     }
 
+    reloadRef.current = loadInitialData;
     loadInitialData().catch((err) => {
       console.error("[useEnquiryNotifications] loadInitialData failed:", err);
     });
@@ -270,64 +264,61 @@ export function useEnquiryNotificationsCore() {
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    async function fetchOne(leadId: string): Promise<EnquiryItem | null> {
-      const { data } = await supabase.from("leads").select(SELECT_COLS).eq("id", leadId).single();
+    async function fetchOne(enquiryId: string): Promise<EnquiryItem | null> {
+      const { data } = await supabase
+        .from("lead_enquiries")
+        .select(ENQUIRY_SELECT)
+        .eq("id", enquiryId)
+        .single();
       if (!data) return null;
-      return toItem(data as unknown as RawLeadRow);
+      return toEnquiryItem(data as unknown as RawEnquiryRow);
     }
 
     const channel = supabase
       .channel("enquiry-alerts")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "leads" }, async (payload) => {
-        const lead = payload.new as { id: string; tags: string[] };
-        if (!lead.tags?.some((t) => FORM_TAGS.includes(t))) return;
-        const item = await fetchOne(lead.id);
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "lead_enquiries" }, async (payload) => {
+        const row = payload.new as { id: string };
+        const item = await fetchOne(row.id);
         if (!item) return;
-        const alertId = `lead-${lead.id}-${Date.now()}`;
+        const alertId = `enquiry-${item.enquiryId}-${Date.now()}`;
         unstable_batchedUpdates(() => {
           setItems((prev) =>
-            prev.some((i) => i.leadId === item.leadId) ? prev : [item, ...prev].slice(0, 50)
+            prev.some((i) => i.enquiryId === item.enquiryId) ? prev : [item, ...prev].slice(0, 50)
           );
           setAlertQueue((prev) => [
             ...prev,
-            { alertId, type: "lead", leadId: item.leadId, name: item.name, source: item.source },
+            {
+              alertId,
+              type: item.isReEnquiry ? "activity" : "lead",
+              leadId: item.leadId,
+              name: item.name,
+              source: item.source,
+            },
           ]);
         });
         playChime();
-        toast.success(`New enquiry — ${item.name} via ${item.source}`, {
-          duration: 6000,
-          action: { label: "View Lead", onClick: () => router.push(`/leads/${item.leadId}`) },
-        });
+        if (item.isReEnquiry) {
+          toast(`Re-enquiry ${item.reference} — ${item.name} is enquiring again`, {
+            duration: 6000,
+            action: { label: "View Lead", onClick: () => router.push(`/leads/${item.leadId}`) },
+          });
+        } else {
+          toast.success(`New enquiry ${item.reference} — ${item.name} via ${item.source}`, {
+            duration: 6000,
+            action: { label: "View Lead", onClick: () => router.push(`/leads/${item.leadId}`) },
+          });
+        }
       })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "leads" }, async (payload) => {
-        const lead = payload.new as { id: string; tags: string[] };
-        if (!lead.tags?.some((t) => FORM_TAGS.includes(t))) return;
-        const item = await fetchOne(lead.id);
-        if (!item) { setItems((prev) => prev.filter((i) => i.leadId !== lead.id)); return; }
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "lead_enquiries" }, async (payload) => {
+        const row = payload.new as { id: string };
+        const item = await fetchOne(row.id);
+        if (!item) { setItems((prev) => prev.filter((i) => i.enquiryId !== row.id)); return; }
         setItems((prev) => {
-          const existing = prev.find((i) => i.leadId === item.leadId);
-          if (existing?.resolvedAt && !item.resolvedAt) cancelGraceRemoval(item.leadId);
-          if (!existing?.resolvedAt && item.resolvedAt) scheduleGraceRemoval(item.leadId);
-          if (existing) return prev.map((i) => (i.leadId === item.leadId ? item : i));
-          return [item, ...prev].slice(0, 50);
-        });
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "activities" }, async (payload) => {
-        const act = payload.new as { id: string; lead_id: string; subject: string };
-        if (!act.subject?.startsWith("Re-enquiry via")) return;
-        const item = await fetchOne(act.lead_id);
-        const name = item?.name ?? "Existing lead";
-        const sourceMatch = act.subject.match(/Re-enquiry via (.+?) form/);
-        const sourceLabel = sourceMatch?.[1] ?? "Form";
-        const alertId = `activity-${act.id}-${Date.now()}`;
-        setAlertQueue((prev) => [
-          ...prev,
-          { alertId, type: "activity", leadId: act.lead_id, name, source: sourceLabel },
-        ]);
-        playChime();
-        toast(`Re-enquiry — ${name} is enquiring again`, {
-          duration: 6000,
-          action: { label: "View Lead", onClick: () => router.push(`/leads/${act.lead_id}`) },
+          const existing = prev.find((i) => i.enquiryId === item.enquiryId);
+          if (existing?.resolvedAt && !item.resolvedAt) cancelGraceRemoval(item.enquiryId);
+          if (!existing?.resolvedAt && item.resolvedAt) scheduleGraceRemoval(item.enquiryId);
+          if (existing) return prev.map((i) => (i.enquiryId === item.enquiryId ? item : i));
+          return item.resolvedAt ? prev : [item, ...prev].slice(0, 50);
         });
       })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "whatsapp_messages", filter: "direction=eq.inbound" }, (payload) => {
@@ -369,7 +360,7 @@ export function useEnquiryNotificationsCore() {
   return {
     items, activeCount, unclaimedCount,
     totalCount: activeCount + waInboundCount,
-    claim, unclaim, resolve,
+    claim, unclaim, resolve, markNotALead, actionVersion,
     alertQueue, dismissAlert, dismissAllAlerts,
     waInboundCount, waInboundItems, markWhatsAppSeen,
   };

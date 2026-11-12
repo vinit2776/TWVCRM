@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createReminderEvent, rescheduleReminderEvent } from "@/lib/google-calendar";
 import { istLocalToUtcIso } from "@/lib/utils";
+import { autoUpdateLeadStatus } from "@/lib/auto-status";
+import { logAudit } from "@/lib/audit";
+import { followUpClosedRows } from "@/lib/follow-up-closed-note";
 
 export async function PATCH(
   request: NextRequest,
@@ -19,12 +22,19 @@ export async function PATCH(
   }
 
   const body = await request.json();
-  const { action, follow_up_date: rawFollowUpDate } = body as {
-    action: "close" | "reschedule";
+  const {
+    action,
+    follow_up_date: rawFollowUpDate,
+    follow_up_notes: rawFollowUpNotes,
+    note: rawNote,
+  } = body as {
+    action: "close" | "reschedule" | "complete_tour";
     follow_up_date?: string;
+    follow_up_notes?: string;
+    note?: string;
   };
 
-  if (!action || !["close", "reschedule"].includes(action)) {
+  if (!action || !["close", "reschedule", "complete_tour"].includes(action)) {
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }
 
@@ -33,6 +43,72 @@ export async function PATCH(
       { error: "follow_up_date is required for reschedule" },
       { status: 400 }
     );
+  }
+
+  // A rescheduled follow-up must say what it is for. A note sent with the request replaces
+  // the old one; without one, the follow-up must already carry a note (so rescheduling an
+  // old note-less follow-up is what forces someone to fill it in).
+  const newFollowUpNotes =
+    action === "reschedule" && typeof rawFollowUpNotes === "string" ? rawFollowUpNotes.trim() : "";
+  if (action === "reschedule" && !newFollowUpNotes) {
+    const { data: current } = await supabase
+      .from("activities")
+      .select("follow_up_notes")
+      .eq("id", id)
+      .single();
+    if (!current?.follow_up_notes?.trim()) {
+      return NextResponse.json(
+        { error: "Add a follow-up note saying what needs to happen" },
+        { status: 400 }
+      );
+    }
+  }
+
+  // Mark an existing "Tour" activity as completed in place — appends the
+  // optional note to its description and backdates meeting_end_at so
+  // autoUpdateLeadStatus advances the lead to tour_completed. Keeps the
+  // outcome tied to the same activity record instead of logging a new one.
+  if (action === "complete_tour") {
+    const { data: existing, error: fetchError } = await supabase
+      .from("activities")
+      .select("type, lead_id, description")
+      .eq("id", id)
+      .single();
+
+    if (fetchError || !existing) {
+      return NextResponse.json({ error: "Activity not found" }, { status: 404 });
+    }
+    if (existing.type !== "tour") {
+      return NextResponse.json(
+        { error: "Only tour activities can be marked completed" },
+        { status: 400 }
+      );
+    }
+
+    const now = new Date().toISOString();
+    const note = typeof rawNote === "string" ? rawNote.trim() : "";
+    const description = note
+      ? existing.description
+        ? `${existing.description}\n\nTour completed: ${note}`
+        : `Tour completed: ${note}`
+      : existing.description;
+
+    const { data, error } = await supabase
+      .from("activities")
+      .update({ meeting_end_at: now, description, updated_at: now })
+      .eq("id", id)
+      .select(
+        "*, creator:users!activities_created_by_fkey(*), follow_up_actor:users!activities_follow_up_actioned_by_fkey(*)"
+      )
+      .single();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    await autoUpdateLeadStatus(supabase, existing.lead_id, "tour", { meetingEndAt: now });
+
+    return NextResponse.json({ data });
   }
 
   // toDatetimeLocalValue()/<input type="datetime-local"> send a naive
@@ -49,6 +125,12 @@ export async function PATCH(
 
   const now = new Date().toISOString();
 
+  const { data: before } = await supabase
+    .from("activities")
+    .select("follow_up_date, is_follow_up_done")
+    .eq("id", id)
+    .maybeSingle();
+
   const updatePayload =
     action === "close"
       ? {
@@ -59,6 +141,7 @@ export async function PATCH(
         }
       : {
           follow_up_date,
+          ...(newFollowUpNotes ? { follow_up_notes: newFollowUpNotes } : {}),
           is_follow_up_done: false,
           follow_up_actioned_by: dbUser?.id ?? null,
           follow_up_actioned_at: now,
@@ -80,6 +163,28 @@ export async function PATCH(
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  if (action === "close") {
+    const { error: noteError } = await supabase.from("activities").insert(
+      followUpClosedRows({
+        leadId: data.lead_id,
+        closed: [{ follow_up_date: data.follow_up_date, follow_up_notes: data.follow_up_notes, subject: data.subject }],
+        createdBy: dbUser?.id,
+      })
+    );
+    if (noteError) console.error("follow-up closed note failed", noteError.code, noteError.message);
+  }
+
+  logAudit(supabase, {
+    entityType: "lead",
+    entityId: data.lead_id,
+    action: "update",
+    performedBy: dbUser?.id ?? null,
+    changes:
+      action === "close"
+        ? { follow_up_done: { old: before?.is_follow_up_done ?? false, new: true } }
+        : { follow_up_date: { old: before?.follow_up_date ?? null, new: data.follow_up_date } },
+  });
 
   if (action === "reschedule" && dbUser?.email && data.follow_up_date) {
     const { data: lead } = await supabase

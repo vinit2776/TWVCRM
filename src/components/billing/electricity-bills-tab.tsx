@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Plus, Zap, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { LandlordInvoiceField, gstRateFromInvoice, useDuplicateWarning, useLandlordInvoice } from "@/components/electricity/landlord-invoice";
+import type { ExtractedInvoice, SuggestionField } from "@/lib/procurement/invoice-check";
 import {
   Dialog,
   DialogContent,
@@ -218,12 +220,13 @@ function BillPreview({
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-export function ElectricityBillsTab() {
+/** `initialLocationId` preselects the location filter, e.g. from the contract page's Invoice wizard. */
+export function ElectricityBillsTab({ initialLocationId, autoCapture }: { initialLocationId?: string; autoCapture?: boolean }) {
   const { user } = useCurrentUser();
   const canCapture = user?.role === "admin" || user?.role === "manager" || user?.role === "accounts";
 
   const now = new Date();
-  const [filterLocationId, setFilterLocationId] = useState<string>("all");
+  const [filterLocationId, setFilterLocationId] = useState<string>(initialLocationId || "all");
   const [filterMonth, setFilterMonth] = useState(now.getMonth() + 1);
   const [filterYear, setFilterYear] = useState(now.getFullYear());
   const [locations, setLocations] = useState<LocationOption[]>([]);
@@ -238,6 +241,19 @@ export function ElectricityBillsTab() {
   const [formLandlordBillNumber, setFormLandlordBillNumber] = useState("");
   const [formLandlordBillDate, setFormLandlordBillDate] = useState("");
   const [formLines, setFormLines] = useState<FormLine[]>(defaultLines);
+  // GST printed on the landlord's invoice; sent with the bill so the payable matches it.
+  const [invoiceGstRate, setInvoiceGstRate] = useState<number | null>(null);
+  const [landlordVendor, setLandlordVendor] = useState<{ id: string; name: string } | null>(null);
+  const onInvoiceRead = useCallback((extracted: ExtractedInvoice) => {
+    // Take the number and date off the invoice when they have not been typed yet.
+    setFormLandlordBillNumber((n) => n || extracted.invoiceNumber || "");
+    setFormLandlordBillDate((d) => d || extracted.invoiceDate || "");
+    const rate = gstRateFromInvoice(extracted);
+    setInvoiceGstRate(rate);
+    if (rate !== null) toast.message(`The invoice shows GST — it will be saved at ${rate}%.`);
+  }, []);
+  const invoice = useLandlordInvoice(onInvoiceRead);
+  const duplicateWarning = useDuplicateWarning(formLocationId, formLandlordBillNumber);
   const [formConfig, setFormConfig] = useState<Record<string, unknown> | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -271,11 +287,11 @@ export function ElectricityBillsTab() {
 
   // ── Fetch config when form location changes ─────────────────────────────────
   useEffect(() => {
-    if (!formLocationId) { setFormConfig(null); return; }
+    if (!formLocationId) { setFormConfig(null); setLandlordVendor(null); return; }
     setConfigLoading(true);
     fetch(`/api/locations/${formLocationId}/electricity-config`)
       .then((r) => r.json())
-      .then((j) => setFormConfig(j.data))
+      .then((j) => { setFormConfig(j.data); setLandlordVendor(j.landlord_vendor ?? null); })
       .catch(() => setFormConfig(null))
       .finally(() => setConfigLoading(false));
   }, [formLocationId]);
@@ -289,8 +305,19 @@ export function ElectricityBillsTab() {
     setFormLandlordBillDate("");
     setFormLines(defaultLines());
     setLineKey(3);
+    invoice.clear();
+    setInvoiceGstRate(null);
     setDialogOpen(true);
   };
+
+  // Invoice wizard hand-off: open Capture Bill once the location list is ready.
+  const autoCapturedRef = useRef(false);
+  useEffect(() => {
+    if (!autoCapture || autoCapturedRef.current || !canCapture || locations.length === 0) return;
+    autoCapturedRef.current = true;
+    openDialog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCapture, canCapture, locations]);
 
   const addLine = () => {
     setFormLines((prev) => [
@@ -305,9 +332,28 @@ export function ElectricityBillsTab() {
   const updateLine = (key: number, patch: Partial<FormLine>) =>
     setFormLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
 
+  const enteredForCheck = {
+    invoiceNumber: formLandlordBillNumber,
+    invoiceDate: formLandlordBillDate,
+    vendorName: landlordVendor?.name ?? null,
+    amount:
+      formLines.reduce(
+        (sum, l) => sum + (l.line_type === "other" ? parseFloat(l.amount) || 0 : (parseFloat(l.units) || 0) * (parseFloat(l.rate) || 0)),
+        0,
+      ) || null,
+    gstAmount: null,
+  };
+  const applyInvoiceSuggestion = (field: SuggestionField, value: string) => {
+    if (field === "invoiceNumber") setFormLandlordBillNumber(value);
+    else if (field === "invoiceDate") setFormLandlordBillDate(value);
+    else toast.message("The amount is built from the line items — adjust the units or rates to match the invoice.");
+  };
+
   // ── Submit ──────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (!formLocationId) { toast.error("Select a location"); return; }
+    if (!invoice.file) { toast.error("Upload the landlord's invoice first — it is used to check what you entered"); return; }
+    { const blocked = invoice.blockedReason(enteredForCheck, duplicateWarning); if (blocked) { toast.error(blocked); return; } }
 
     const apiLines = formLines.map((l, i) => ({
       line_type: l.line_type,
@@ -320,6 +366,8 @@ export function ElectricityBillsTab() {
     }));
 
     setSubmitting(true);
+    const invoiceFileUrl = await invoice.upload();
+    if (!invoiceFileUrl) { setSubmitting(false); return; }
     const res = await fetch("/api/electricity-bills", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -329,6 +377,9 @@ export function ElectricityBillsTab() {
         bill_year: formYear,
         landlord_bill_number: formLandlordBillNumber || null,
         landlord_bill_date: formLandlordBillDate || null,
+        ...(invoiceGstRate !== null ? { landlord_gst_applicable: true, landlord_gst_rate: invoiceGstRate } : {}),
+        invoice_file_url: invoiceFileUrl,
+        invoice_check: invoice.recordFor(enteredForCheck),
         lines: apiLines,
       }),
     });
@@ -534,11 +585,18 @@ export function ElectricityBillsTab() {
                 </div>
               )
             )}
+            {Boolean(formConfig?.enabled) && (
+              landlordVendor ? (
+                <p className="text-xs text-muted-foreground">Payable to (landlord): <span className="font-medium text-foreground">{landlordVendor.name}</span></p>
+              ) : (
+                <p className="text-xs text-amber-700">No landlord vendor is set for this location — saving will not create a payable in Acc Payables.</p>
+              )
+            )}
 
             {/* Landlord reference */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Landlord Bill No. <span className="text-muted-foreground">(optional)</span></Label>
+                <Label>Landlord Bill No. <span className="text-red-500">*</span></Label>
                 <Input
                   value={formLandlordBillNumber}
                   onChange={(e) => setFormLandlordBillNumber(e.target.value)}
@@ -656,6 +714,8 @@ export function ElectricityBillsTab() {
                 ))}
               </div>
             </div>
+
+            <LandlordInvoiceField invoice={invoice} duplicate={duplicateWarning} entered={enteredForCheck} onApply={applyInvoiceSuggestion} />
 
             {/* Live preview */}
             <BillPreview lines={formLines} config={formConfig} />

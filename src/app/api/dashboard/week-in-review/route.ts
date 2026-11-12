@@ -83,7 +83,7 @@ export async function GET() {
     // Billing: vendor bills approved in last 7 days
     admin.from("vendor_bills").select("*", { count: "exact", head: true }).eq("approval_status", "approved").gte("updated_at", sevenDaysAgo),
     // Billing: vendor payments made in last 7 days
-    admin.from("vendor_bill_payments").select("amount").gte("created_at", sevenDaysAgo),
+    admin.from("vendor_bill_payments").select("amount").is("reversed_at", null).gte("created_at", sevenDaysAgo),
     // Procurement: PRs raised in last 7 days
     admin.from("purchase_requests").select("*", { count: "exact", head: true }).gte("created_at", sevenDaysAgo),
     // Procurement: POs created in last 7 days

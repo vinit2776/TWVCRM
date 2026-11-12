@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { PROPOSAL_MAX_TENURE_MONTHS } from "@/lib/proposal-terms";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,10 +22,15 @@ import {
 import { Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { BILLING_CYCLES, BILLING_CYCLE_LABELS, KYC_DOCUMENTS, ENTITY_TYPE_LABELS } from "@/lib/constants";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { SpaceAllocationSelector } from "@/components/spaces/space-allocation-selector";
 import type { Proposal, Lead } from "@/types";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { useProposalCommitmentLock } from "@/components/contracts/use-proposal-commitment-lock";
+import { ProposalCommitmentPanel } from "@/components/contracts/proposal-commitment-panel";
+import { SpecialClauseComposer, type VettedClause } from "@/components/contracts/special-clause-composer";
+import { canApproveSpecialClause, canAuthorSpecialClause } from "@/lib/special-clause/gate";
 
 interface CreateContractDialogProps {
   open: boolean;
@@ -91,6 +97,11 @@ export function CreateContractDialog({
 
   // Notes
   const [notes, setNotes] = useState("");
+  // Customer's own PO number, when they require one on every invoice for this contract
+  const [poNumber, setPoNumber] = useState("");
+  // Optional customer-specific clause: drafted + AI-vetted here, approved by a manager/admin.
+  const [specialClauseOpen, setSpecialClauseOpen] = useState(false);
+  const [specialClause, setSpecialClause] = useState<VettedClause | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Space allocation
@@ -163,9 +174,11 @@ export function CreateContractDialog({
       if (selectedProposal.location_id) {
         setLocationId(selectedProposal.location_id);
       }
-      // Prefill start date from occupation date (set during GST invoice)
-      if (selectedProposal.occupation_start_date) {
-        setStartDate(selectedProposal.occupation_start_date);
+      // Prefill start date from when the pro-rata invoice was actually paid;
+      // fall back to the occupation date (set during GST invoice) if the
+      // pro-rata payment hasn't been recorded yet for some reason.
+      if (selectedProposal.prorata_paid_date || selectedProposal.occupation_start_date) {
+        setStartDate(selectedProposal.prorata_paid_date || selectedProposal.occupation_start_date || "");
       }
       // Prefill security deposit months from proposal
       if (selectedProposal.security_deposit_months) {
@@ -192,6 +205,17 @@ export function CreateContractDialog({
       }
     }
   }, [selectedProposal]);
+
+  const { user: currentUser } = useCurrentUser();
+  const commitmentLock = useProposalCommitmentLock({
+    selectedProposal,
+    startDate,
+    setTenureMonths,
+    setLockInMonths,
+    setNoticePeriodMonths,
+    setEndDate,
+  });
+  const { termsLocked } = commitmentLock;
 
   // Actual contract length, derived from the start + end dates. The end date
   // is authoritative; tenure (months) is computed for the agreement / display.
@@ -240,13 +264,14 @@ export function CreateContractDialog({
     }
   }, [startDate, endDate, tenureMonths]);
 
-  // Keep lock-in / notice period within the actual contract length.
+  // Keep lock-in / notice period within the actual contract length. Skipped
+  // while locked to the proposal, whose values are already consistent.
   useEffect(() => {
-    if (derivedTenureMonths > 0) {
+    if (derivedTenureMonths > 0 && !termsLocked) {
       setLockInMonths((prev) => Math.min(prev, derivedTenureMonths));
       setNoticePeriodMonths((prev) => Math.min(prev, Math.max(3, derivedTenureMonths)));
     }
-  }, [derivedTenureMonths]);
+  }, [derivedTenureMonths, termsLocked]);
 
   // Quick-fill dropdown: picking a whole-month tenure sets the end date.
   const handleTenureChange = (val: string) => {
@@ -260,8 +285,12 @@ export function CreateContractDialog({
     }
   };
 
+  // Option lists below always include the current value — Radix Select's hidden
+  // native <select> otherwise pushes a fallback ("") back through onValueChange
+  // whenever the value isn't an option, which parses to NaN.
   const handleLockInChange = (val: string) => {
     const l = parseInt(val);
+    if (Number.isNaN(l)) return;
     setLockInMonths(l);
     const newMax = Math.max(3, derivedTenureMonths - l);
     if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
@@ -271,6 +300,8 @@ export function CreateContractDialog({
   const missingAddress = !street.trim() && !city.trim();
 
   const resetForm = () => {
+    setSpecialClauseOpen(false);
+    setSpecialClause(null);
     setSelectedProposalId("");
     setCompany("");
     setPanNumber("");
@@ -344,6 +375,14 @@ export function CreateContractDialog({
       toast.error("Seats must be a positive number");
       return;
     }
+    if (commitmentLock.submitError) {
+      toast.error(commitmentLock.submitError);
+      return;
+    }
+    if (specialClauseOpen && !specialClause) {
+      toast.error("Draft and review the special clause, or remove it, before creating the contract");
+      return;
+    }
     if (!signatoryName.trim()) {
       toast.error("Member signatory name is required");
       return;
@@ -391,6 +430,7 @@ export function CreateContractDialog({
       escalation_percentage: escalationPercentage,
       notice_period_months: noticePeriodMonths,
       lock_in_months: lockInMonths,
+      commitment_override_reason: commitmentLock.overrideReasonForRequest,
       member_signatory_name: signatoryName.trim(),
       member_signatory_designation: signatoryDesignation.trim(),
       member_signatory_pan: signatoryPan.trim() || undefined,
@@ -398,6 +438,8 @@ export function CreateContractDialog({
       agreement_date: agreementDate,
       notes: notes.trim() || undefined,
       pan_number: panNumber.trim() || undefined,
+      po_number: poNumber.trim() || undefined,
+      special_clause: specialClauseOpen ? specialClause ?? undefined : undefined,
     };
 
     const res = await fetch("/api/contracts", {
@@ -415,6 +457,9 @@ export function CreateContractDialog({
 
     const contractJson = await res.json();
     const newContractId: string = contractJson.data?.id;
+    if (contractJson.special_clause_error) {
+      toast.error(`Contract created, but the special clause wasn't saved: ${contractJson.special_clause_error}. Add it from the contract page.`);
+    }
 
     // Create space allocations if any units were selected
     if (newContractId && selectedSpaceUnitIds.length > 0) {
@@ -433,7 +478,11 @@ export function CreateContractDialog({
     }
 
     setSubmitting(false);
-    toast.success("Membership Agreement created successfully");
+    toast.success(
+      contractJson.special_clause_status === "pending_approval"
+        ? "Agreement created. The special clause is waiting for manager approval before it can be sent."
+        : "Membership Agreement created successfully",
+    );
     resetForm();
     onOpenChange(false);
     onSuccess();
@@ -463,7 +512,7 @@ export function CreateContractDialog({
         <DialogHeader>
           <DialogTitle>Create Membership Agreement</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           {/* Section 1: Linked Proposal (mandatory) */}
           <div className="space-y-3">
             <Label className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -503,7 +552,7 @@ export function CreateContractDialog({
                     </p>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
                       <span className="text-muted-foreground">Monthly fee</span>
-                      <span className="font-medium tabular-nums">{formatCurrency(selectedProposal.total_amount)}</span>
+                      <span className="font-medium tabular-nums">{formatCurrency(selectedProposal.subtotal ?? selectedProposal.total_amount)}</span>
                       {selectedProposal.tax_percentage > 0 && (
                         <>
                           <span className="text-muted-foreground">GST ({selectedProposal.tax_percentage}%)</span>
@@ -516,6 +565,8 @@ export function CreateContractDialog({
                           <span className="font-medium tabular-nums text-green-700">−{formatCurrency(selectedProposal.discount_amount)}</span>
                         </>
                       )}
+                      <span className="text-muted-foreground pt-1 border-t border-[#015E65]/10 font-semibold">Total</span>
+                      <span className="font-semibold tabular-nums pt-1 border-t border-[#015E65]/10">{formatCurrency(selectedProposal.total_amount)}</span>
                     </div>
                     {proposalComplimentaryItems.length > 0 && (
                       <div className="pt-1 border-t border-[#015E65]/10 space-y-1">
@@ -717,6 +768,17 @@ export function CreateContractDialog({
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {selectedProposal?.prorata_paid_date
+                    ? "The pro-rata invoice is already paid — this date will be locked to it on activation."
+                    : "Placeholder until the proposal's pro-rata invoice is paid. It will be locked to that invoice's occupation date when the contract is activated."}
+                </p>
+                {selectedProposal?.prorata_paid_date && startDate !== selectedProposal.prorata_paid_date && (
+                  <p className="text-xs text-amber-600 flex items-start gap-1">
+                    <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                    Differs from the pro-rata invoice payment date ({new Date(selectedProposal.prorata_paid_date + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}).
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>
@@ -727,6 +789,7 @@ export function CreateContractDialog({
                   value={endDate}
                   min={startDate || undefined}
                   onChange={(e) => setEndDate(e.target.value)}
+                  disabled={termsLocked}
                 />
                 {durationLabel && (
                   <p className="text-xs text-muted-foreground">
@@ -736,12 +799,12 @@ export function CreateContractDialog({
               </div>
               <div className="space-y-2">
                 <Label>Tenure (quick-fill)</Label>
-                <Select value={String(tenureMonths)} onValueChange={handleTenureChange}>
+                <Select value={String(tenureMonths)} onValueChange={handleTenureChange} disabled={termsLocked}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 18 }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: PROPOSAL_MAX_TENURE_MONTHS }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>
@@ -749,19 +812,19 @@ export function CreateContractDialog({
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Sets the end date. Edit the end date for an exact period.
+                  {termsLocked ? "Set by the linked proposal." : "Sets the end date. Edit the end date for an exact period."}
                 </p>
               </div>
               <div className="space-y-2">
                 <Label>
                   Lock-in Period <span className="text-destructive">*</span>
                 </Label>
-                <Select value={String(lockInMonths)} onValueChange={handleLockInChange}>
+                <Select value={String(lockInMonths)} onValueChange={handleLockInChange} disabled={termsLocked}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, lockInMonths, 1), PROPOSAL_MAX_TENURE_MONTHS) }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>
@@ -773,18 +836,32 @@ export function CreateContractDialog({
                 <Label>
                   Notice Period <span className="text-destructive">*</span>
                 </Label>
-                <Select value={String(noticePeriodMonths)} onValueChange={(v) => setNoticePeriodMonths(parseInt(v))}>
+                <Select
+                  value={String(noticePeriodMonths)}
+                  onValueChange={(v) => { const n = parseInt(v); if (!Number.isNaN(n)) setNoticePeriodMonths(n); }}
+                  disabled={termsLocked}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: maxNoticePeriod + 1 }, (_, i) => i).map((m) => (
+                    {Array.from({ length: Math.max(maxNoticePeriod, noticePeriodMonths) + 1 }, (_, i) => i).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m === 0 ? "None (0 months)" : `${m} month${m !== 1 ? "s" : ""}`}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="sm:col-span-3">
+                <ProposalCommitmentPanel
+                  proposal={selectedProposal}
+                  agreedTerms={commitmentLock.agreedTerms}
+                  overrideReason={commitmentLock.overrideReason}
+                  onOverrideReasonChange={commitmentLock.setOverrideReason}
+                  onTermsRecorded={commitmentLock.recordTerms}
+                  userRole={currentUser?.role}
+                />
               </div>
               <div className="space-y-2">
                 <Label>Security Deposit (x Monthly Fee)</Label>
@@ -936,6 +1013,60 @@ export function CreateContractDialog({
           </div>
 
           {/* Section 6: Notes */}
+          <div className="space-y-2">
+            <Label>Customer PO Number</Label>
+            <Input
+              value={poNumber}
+              onChange={(e) => setPoNumber(e.target.value)}
+              placeholder="Ask the customer if they issue an annual PO — leave blank if not"
+            />
+            <p className="text-xs text-muted-foreground">
+              Printed on every Proforma and GST invoice for this contract. Optional — only some customers require this.
+            </p>
+          </div>
+
+          {canAuthorSpecialClause(currentUser?.role) && (
+            <div className="rounded-md border bg-muted/20">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-left"
+                onClick={() => {
+                  if (specialClauseOpen) setSpecialClause(null);
+                  setSpecialClauseOpen((o) => !o);
+                }}
+              >
+                <span>
+                  Special clause for this contract only
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">optional</span>
+                </span>
+                <span className="text-xs font-normal text-[#015E65]">{specialClauseOpen ? "Remove" : "+ Add"}</span>
+              </button>
+              {specialClauseOpen && (
+                <div className="space-y-3 border-t px-4 py-3">
+                  <p className="text-xs text-muted-foreground">
+                    Printed in this agreement as Clause 37. It never applies to other contracts.
+                    {canApproveSpecialClause(currentUser?.role)
+                      ? " As a manager/admin, it's approved when you create the contract."
+                      : " A manager or admin must approve it before the agreement can be sent."}
+                  </p>
+                  <SpecialClauseComposer
+                    facts={{
+                      "Customer": company,
+                      "Monthly rent (before tax)": selectedProposal ? formatCurrency(Number(selectedProposal.subtotal ?? 0)) : "",
+                      "Term (months)": String(tenureMonths),
+                      "Lock-in (months)": String(lockInMonths),
+                      "Notice period (months)": String(noticePeriodMonths),
+                      "Security deposit (months)": String(securityDepositMonths),
+                      "Workspace": workspaceDescription,
+                    }}
+                    onChange={setSpecialClause}
+                    selfApproves={canApproveSpecialClause(currentUser?.role)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label>Internal Notes</Label>
             <Textarea

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface VendorEmailGap {
   vendor_id: string;
@@ -96,6 +97,7 @@ export default function VendorEmailAuditPage() {
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
+      <PageBreadcrumb resetTo={{ label: "Vendor Email Audit" }} />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/accounting" className="text-muted-foreground hover:text-foreground">

@@ -15,6 +15,7 @@ import { Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useLocations } from "@/hooks/use-locations";
 import { DEFAULT_FACILITIES } from "@/lib/constants";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { Space, SpaceOperatingHours, SpacePricingModel } from "@/types";
 
 interface CosecDevice { id: string; label: string; device_ip: string; }
@@ -233,7 +234,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
           <DialogTitle>{isEdit ? "Edit Space" : "Add Space"}</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           {/* Basic Info */}
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">

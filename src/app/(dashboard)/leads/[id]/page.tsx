@@ -22,7 +22,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
 import { StatusBadge, RatingBadge } from "@/components/shared/status-badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { useLead } from "@/hooks/use-leads";
@@ -47,6 +46,7 @@ import {
 } from "@/components/ui/dialog";
 import { LeadTimeline } from "@/components/activities/lead-timeline";
 import { ActivityForm } from "@/components/activities/activity-form";
+import { MarkLostDialog } from "@/components/leads/mark-lost-dialog";
 import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
 import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
@@ -57,10 +57,21 @@ const LeadBillingSnippet = dynamic(
   () => import("@/components/leads/lead-billing-snippet").then((m) => m.LeadBillingSnippet),
   { ssr: false }
 );
+const LeadDepositSummary = dynamic(
+  () => import("@/components/leads/lead-deposit-summary").then((m) => m.LeadDepositSummary),
+  { ssr: false }
+);
+// Admin-only Value tab: loaded on demand so other roles never download it.
+const LeadValueTab = dynamic(
+  () => import("@/components/leads/value/lead-value-tab").then((m) => m.LeadValueTab),
+  { ssr: false }
+);
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
-import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
+import { JourneyPanel } from "@/components/journey/journey-panel";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
+import { LeadEnquiriesCard } from "@/components/leads/lead-enquiries-card";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export default function LeadDetailPage({
   params,
@@ -70,12 +81,17 @@ export default function LeadDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") ?? "overview";
+  // The Value tab is admin-only and loads its own data. A link to it opens Overview first and
+  // switches to Value once the signed-in user is known to be an admin (below); anyone else stays on Overview.
+  const requestedTab = searchParams.get("tab") ?? "overview";
+  const initialTab = requestedTab === "value" ? "overview" : requestedTab;
+  const [tab, setTab] = useState(initialTab);
   const highlightActivityId = searchParams.get("highlight") ?? undefined;
   const { data: lead, loading, refetch: refetchLead } = useLead(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [activityFormOpen, setActivityFormOpen] = useState(false);
+  const [markLostOpen, setMarkLostOpen] = useState(false);
   // Billing emails inline editor
   const [billingEmailInput, setBillingEmailInput] = useState("");
   const [billingEmailError, setBillingEmailError] = useState<string | null>(null);
@@ -85,10 +101,18 @@ export default function LeadDetailPage({
   const [printEntryOpen, setPrintEntryOpen] = useState(false);
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  // Honour ?tab=value (the Customer Value portfolio links here) once we know the user is an admin.
+  useEffect(() => {
+    if (requestedTab === "value" && userRole === "admin") setTab("value");
+  }, [requestedTab, userRole]);
 
   const handleActivitySuccess = useCallback(() => {
     setActivityRefreshKey((k) => k + 1);
-  }, []);
+    // Logging an activity can auto-advance lead status (e.g. tour_scheduled
+    // -> tour_completed) — refetch so the status pill and Customer journey panel
+    // reflect it without a manual page reload.
+    refetchLead();
+  }, [refetchLead]);
 
   const openActivityForm = useCallback((type: "call" | "meeting" | "note" | "tour") => {
     setActivityDefaultType(type);
@@ -180,6 +204,10 @@ export default function LeadDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: `${lead.first_name} ${lead.last_name}` }}
+        fallbackParent={{ href: "/leads", label: "Leads" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -226,7 +254,9 @@ export default function LeadDetailPage({
         </div>
       </div>
 
-      <Tabs defaultValue={initialTab}>
+      <JourneyPanel leadId={lead.id} />
+
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="activities">Activities</TabsTrigger>
@@ -234,6 +264,7 @@ export default function LeadDetailPage({
           <TabsTrigger value="contracts">Contracts</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="feedback">Feedback</TabsTrigger>
+          {userRole === "admin" && <TabsTrigger value="value">Value</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-4">
@@ -300,6 +331,15 @@ export default function LeadDetailPage({
             >
               📝 <span className="ml-1.5 hidden sm:inline">Add Note</span>
             </Button>
+            {!["lost", "won"].includes(lead.status) && (
+              <Button
+                variant="outline"
+                className="flex-1 justify-center text-destructive hover:text-destructive"
+                onClick={() => setMarkLostOpen(true)}
+              >
+                ❌ <span className="ml-1.5 hidden sm:inline">Mark Lost</span>
+              </Button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -425,6 +465,9 @@ export default function LeadDetailPage({
 
               {/* Contacts — multiple contact points per lead */}
               <LeadContactsPanel leadId={lead.id} />
+
+              {/* Public-form enquiries and their reference numbers */}
+              <LeadEnquiriesCard leadId={lead.id} />
 
               {/* KYC Document Requirements Preview */}
               {lead.entity_type && (
@@ -559,15 +602,17 @@ export default function LeadDetailPage({
 
             {/* Sidebar */}
             <div className="space-y-4">
-              {/* Lead Journey — visual lifecycle stepper */}
+              {/* Progress lives in the Customer journey panel at the top of the page. */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Lead Journey</CardTitle>
+                  <CardTitle className="text-base">Lead record</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <LeadLifecycle lead={lead} />
-                  <Separator className="my-3" />
                   <div className="space-y-1 text-xs text-muted-foreground">
+                    <div className="flex justify-between">
+                      <span>Enquiry received</span>
+                      <span>{formatDate(lead.created_at)}</span>
+                    </div>
                     <div className="flex justify-between">
                       <span>Last updated</span>
                       <span>{formatDate(lead.updated_at)}</span>
@@ -603,6 +648,15 @@ export default function LeadDetailPage({
                   >
                     📝 <span className="ml-2">Add Note</span>
                   </Button>
+                  {!["lost", "won"].includes(lead.status) && (
+                    <Button
+                      variant="outline"
+                      className="justify-start w-full text-destructive hover:text-destructive"
+                      onClick={() => setMarkLostOpen(true)}
+                    >
+                      ❌ <span className="ml-2">Mark as Lost</span>
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
 
@@ -683,6 +737,7 @@ export default function LeadDetailPage({
               line graph shows monthly revenue trend. Auto-hides
               gracefully when there are no payments. */}
           <LeadBillingSnippet leadId={id} />
+          <LeadDepositSummary leadId={id} currentUserRole={userRole ?? undefined} />
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
@@ -698,6 +753,7 @@ export default function LeadDetailPage({
                 leadId={id}
                 lead={lead}
                 highlightId={highlightActivityId}
+                onLeadRefresh={refetchLead}
               />
             </CardContent>
           </Card>
@@ -719,6 +775,12 @@ export default function LeadDetailPage({
         <TabsContent value="feedback" className="mt-4">
           <LeadFeedbacksTab leadId={id} />
         </TabsContent>
+
+        {userRole === "admin" && (
+          <TabsContent value="value" className="mt-4">
+            <LeadValueTab leadId={id} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Activity Form — kept outside tabs so Quick Log buttons on the
@@ -729,6 +791,18 @@ export default function LeadDetailPage({
         onOpenChange={setActivityFormOpen}
         onSuccess={handleActivitySuccess}
         defaultType={activityDefaultType}
+      />
+
+      {/* Mark Lost Dialog — same Quick Log tier as Log Call/Meeting/Note,
+          so a lead can be marked lost without going through the edit form. */}
+      <MarkLostDialog
+        leadId={id}
+        open={markLostOpen}
+        onOpenChange={setMarkLostOpen}
+        onSuccess={() => {
+          handleActivitySuccess();
+          refetchLead();
+        }}
       />
 
       {/* Print Usage Dialog — scoped to this lead's active contracts.

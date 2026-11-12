@@ -4,8 +4,8 @@
 // `changes` blob like `{ approval_status: { old: "pending", new: "approved" }}`.
 // Rendered raw, the timeline reads as 10 identical "Updated Invoice" rows.
 // This helper inspects the changes blob and returns a specific label + tone
-// for the most common state transitions, falling back to the generic
-// "Updated" so unknown shapes still render.
+// for the most common state transitions, falling back to a plain "Edited"
+// so unknown shapes still render.
 
 export type AuditChange = { old: unknown; new: unknown };
 export type AuditChanges = Record<string, AuditChange>;
@@ -17,6 +17,14 @@ export type AuditSummary = {
   tone: "blue" | "green" | "red" | "amber" | "purple" | "grey" | "teal";
   /** Optional one-line detail rendered under the label (UTRs, amounts, reasons). */
   detail?: string;
+  /**
+   * "milestone" = a step in the life of the request/order/invoice, always shown.
+   * "edit" = a field-level change, collapsed into runs by the transaction history.
+   * Defaults to "milestone" when omitted so existing rules keep their weight.
+   */
+  kind?: "milestone" | "edit";
+  /** Worth drawing the eye to (money changed, something was rolled back). */
+  flag?: boolean;
 };
 
 const INR = (v: unknown) =>
@@ -28,7 +36,45 @@ const has = (c: AuditChanges, key: string) => Object.prototype.hasOwnProperty.ca
 const went = (c: AuditChanges, key: string, from: unknown, to: unknown) =>
   has(c, key) && c[key].old === from && c[key].new === to;
 
+function summarizeContract(c: AuditChanges, action: string): AuditSummary | null {
+  if (action === "contract_extended" && has(c, "days_added")) {
+    const daysAdded = c.days_added.new as number;
+    const newEndDate = (c.end_date?.new as string | null) ?? null;
+    const reason = (c.reason?.new as string | null) ?? null;
+    return {
+      label: `Extended by ${daysAdded} day${daysAdded === 1 ? "" : "s"}`,
+      tone: "blue",
+      detail: [newEndDate ? `now expires ${newEndDate}` : null, reason].filter(Boolean).join(" · ") || undefined,
+    };
+  }
+  if (action === "rent_month_waived" && has(c, "waived_month")) {
+    return {
+      label: `Rent billing waived for ${String(c.waived_month.new).slice(0, 7)}`,
+      tone: "amber",
+      detail: (c.reason?.new as string | null) ?? undefined,
+    };
+  }
+  if (action === "rent_month_waiver_revoked" && has(c, "waived_month")) {
+    return { label: `Rent waiver undone for ${String(c.waived_month.old).slice(0, 7)}`, tone: "grey" };
+  }
+  return null;
+}
+
 function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | null {
+  // ── Admin rollbacks (src/lib/procurement/admin-rollback.ts) ────────────
+  if (action === "rollback") {
+    const kind = (c.rollback_kind?.new as string | null) ?? "";
+    const reason = (c.rollback_reason?.new as string | null) ?? "";
+    const label =
+      kind === "payment_reversed" ? `Payment of ${INR(c.amount_reversed?.new)} reversed`
+      : kind === "approval_reversed" ? "Approval reversed"
+      : kind === "bill_withdrawn" ? "Bill withdrawn"
+      : kind === "cheque_unsigned" ? "Cheque signature removed"
+      : kind === "chain_reopened" ? "Closed cycle reopened"
+      : "Rolled back";
+    return { label, tone: "red", flag: true, detail: reason ? `reason: ${reason}` : undefined };
+  }
+
   // ── Approval flow ──────────────────────────────────────────────────────
   if (went(c, "approval_status", "pending", "approved")) {
     const partial =
@@ -51,6 +97,17 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
   }
   if (went(c, "approval_status", "rejected", "pending")) {
     return { label: "Resubmitted for approval", tone: "blue" };
+  }
+
+  // ── Approved amount corrected (post-approval mismatch fix) ─────────────
+  if (has(c, "total_amount") && c.total_amount.new !== c.total_amount.old && has(c, "amount_correction_reason")) {
+    const reason = (c.amount_correction_reason?.new as string | null) ?? "";
+    return {
+      label: "Approved amount corrected",
+      tone: "amber",
+      flag: true,
+      detail: `${INR(c.total_amount.old)} → ${INR(c.total_amount.new)}${reason ? ` · ${reason}` : ""}`,
+    };
   }
 
   // ── Payment recorded (real money moved) ────────────────────────────────
@@ -102,6 +159,7 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
     return {
       label: "GST amount set",
       tone: "grey",
+      kind: "edit",
       detail: INR(c.gst_amount.new),
     };
   }
@@ -112,6 +170,7 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
     return {
       label: "Payment batch rescheduled",
       tone: "grey",
+      kind: "edit",
       detail: newDate ? `New batch: ${String(newDate)}` : undefined,
     };
   }
@@ -130,6 +189,7 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
     return {
       label: "Due date updated",
       tone: "grey",
+      kind: "edit",
       detail: `${String(c.due_date.old ?? "—")} → ${String(c.due_date.new ?? "—")}`,
     };
   }
@@ -139,6 +199,24 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
 }
 
 function summarizePurchaseOrder(c: AuditChanges, action: string): AuditSummary | null {
+  // ── Admin rollbacks (src/lib/procurement/admin-rollback.ts) ────────────
+  if (action === "rollback") {
+    const kind = (c.rollback_kind?.new as string | null) ?? "";
+    const reason = (c.rollback_reason?.new as string | null) ?? "";
+    const label =
+      kind === "order_reversed" ? "Order reversed — back to pending"
+      : kind === "received_reversed" ? "Received status reversed"
+      : kind === "cancel_restored" ? "Cancellation reversed — PO restored"
+      : kind === "partial_cancel_restored" ? "Partial cancellation reversed — PO restored"
+      : kind === "advance_reopened" ? "Advance approval re-opened"
+      : kind === "advance_reversed" ? "Advance payment reversed"
+      : kind === "amc_reinstated" ? "AMC termination reversed — contract reinstated"
+      : kind === "chain_reopened" ? "Closed cycle reopened"
+      : kind === "amc_visit_voided" ? `Visit voided${typeof c.amc_event_voided?.new === "string" ? ` — ${c.amc_event_voided.new}` : ""}`
+      : "Rolled back";
+    return { label, tone: "red", flag: true, detail: reason ? `reason: ${reason}` : undefined };
+  }
+
   // ── Advance released by Finance (the headline for BILL-2606-069 case) ──
   if (went(c, "advance_status", "pending", "processed")) {
     const ref = (c.advance_payment_reference?.new as string | null) ?? null;
@@ -173,11 +251,30 @@ function summarizePurchaseOrder(c: AuditChanges, action: string): AuditSummary |
   if (has(c, "status") && c.status.new === "cancelled") {
     return { label: "PO cancelled", tone: "red" };
   }
+  if (has(c, "status") && c.status.new === "ordered" && c.status.old !== "ordered") {
+    return { label: "Order placed with vendor", tone: "blue" };
+  }
+  if (has(c, "status") && c.status.new === "partially_received") {
+    return { label: "Goods partly received", tone: "teal" };
+  }
+  if (has(c, "status") && c.status.new === "received") {
+    return { label: "Goods received", tone: "teal" };
+  }
   if (action === "create") return { label: "PO raised", tone: "blue" };
   return null;
 }
 
 function summarizePurchaseRequest(c: AuditChanges, action: string): AuditSummary | null {
+  if (action === "rollback") {
+    const kind = (c.rollback_kind?.new as string | null) ?? "";
+    const reason = (c.rollback_reason?.new as string | null) ?? "";
+    const label =
+      kind === "chain_reopened" ? "Closed cycle reopened"
+      : kind === "approval_revoked" ? "Approval revoked — back to submitted"
+      : kind === "mr_reopened" ? "Cancelled MR reopened"
+      : "Rolled back";
+    return { label, tone: "red", flag: true, detail: reason ? `reason: ${reason}` : undefined };
+  }
   if (went(c, "status", "draft", "submitted")) return { label: "Submitted for approval", tone: "blue" };
   if (went(c, "status", "submitted", "approved")) return { label: "Material request approved", tone: "green" };
   if (went(c, "status", "submitted", "rejected")) return { label: "Material request rejected", tone: "red" };
@@ -192,12 +289,61 @@ const GENERIC_BY_ACTION: Record<string, AuditSummary> = {
   approved:   { label: "Approved", tone: "green" },
   rejected:   { label: "Rejected", tone: "red" },
   login:      { label: "Logged in", tone: "grey" },
+  cheque_signed:  { label: "Cheque signed", tone: "green" },
+  query_raised:   { label: "Query raised", tone: "amber" },
+  query_resolved: { label: "Query resolved", tone: "green" },
+  query_reopened: { label: "Query reopened", tone: "amber" },
+  payment_reported:        { label: "Payment reported", tone: "blue" },
+  payment_report_verified: { label: "Payment report verified", tone: "green" },
+  payment_report_rejected: { label: "Payment report rejected", tone: "red" },
+  payment_report_withdrawn: { label: "Payment report withdrawn", tone: "grey" },
 };
+
+const MONEY_KEYS = ["total_amount", "total_ordered_amount", "grand_total", "estimated_total", "amount"];
+const ITEM_KEYS = ["line_items", "item_count", "items", "quantity", "qty", "rate", "unit_price", "unit_rate"];
+const DOC_KEYS = ["invoice_file_url", "invoice_file_path", "quotation_id", "quotation_file_url", "selected_quotation_id", "document_url"];
+
+const anyKey = (c: AuditChanges, keys: string[]) => keys.find((k) => has(c, k));
+const arrow = (ch: AuditChange, fmt: (v: unknown) => string) => `${fmt(ch.old)} → ${fmt(ch.new)}`;
+const plain = (v: unknown) => (v == null || v === "" ? "—" : String(v));
+
+/**
+ * Field-level edits on a request, order or invoice. Returns an "edit"-kind
+ * summary so the history can fold runs of them together; money changes are
+ * flagged. Always returns something — the plain "Edited" fallback.
+ */
+function summarizeFieldEdit(c: AuditChanges): AuditSummary {
+  const money = anyKey(c, MONEY_KEYS);
+  if (money && c[money].new !== c[money].old) {
+    return { label: "Amount changed", tone: "amber", kind: "edit", flag: true, detail: arrow(c[money], INR) };
+  }
+  if (has(c, "vendor_id") && c.vendor_id.new !== c.vendor_id.old) {
+    return { label: "Vendor changed", tone: "grey", kind: "edit" };
+  }
+  const items = anyKey(c, ITEM_KEYS);
+  if (items) {
+    // Item edits often log only a count ("2 item(s)" both sides) — say nothing rather than a non-change.
+    const same = plain(c[items].old) === plain(c[items].new);
+    return { label: "Items changed", tone: "grey", kind: "edit", detail: same ? undefined : arrow(c[items], plain) };
+  }
+  const doc = anyKey(c, DOC_KEYS);
+  if (doc && c[doc].new != null && c[doc].new !== c[doc].old) {
+    return { label: c[doc].old == null ? "Document added" : "Document replaced", tone: "grey", kind: "edit" };
+  }
+  for (const k of ["expected_delivery_date", "delivery_date", "required_by", "needed_by"]) {
+    if (has(c, k)) return { label: "Delivery date set", tone: "grey", kind: "edit", detail: arrow(c[k], plain) };
+  }
+  if (has(c, "invoice_number") || has(c, "bill_number")) {
+    const k = has(c, "invoice_number") ? "invoice_number" : "bill_number";
+    return { label: "Invoice number changed", tone: "grey", kind: "edit", detail: arrow(c[k], plain) };
+  }
+  return { label: "Edited", tone: "grey", kind: "edit" };
+}
 
 /**
  * Best-effort transform from a raw audit_trail row to a human-friendly
- * label + tone + detail. When no rule matches the fallback is a generic
- * "Updated [entity]" — same as today.
+ * label + tone + detail. When no rule matches the fallback is a field-level
+ * edit label, ending in a plain "Edited".
  */
 export function summarizeAuditEvent(row: {
   entity_type: string;
@@ -207,13 +353,14 @@ export function summarizeAuditEvent(row: {
   const changes = row.changes ?? {};
   let specific: AuditSummary | null = null;
 
-  if (row.entity_type === "vendor_bill") specific = summarizeVendorBill(changes, row.action);
+  if (row.entity_type === "contract") specific = summarizeContract(changes, row.action);
+  else if (row.entity_type === "vendor_bill") specific = summarizeVendorBill(changes, row.action);
   else if (row.entity_type === "purchase_order") specific = summarizePurchaseOrder(changes, row.action);
   else if (row.entity_type === "purchase_request") specific = summarizePurchaseRequest(changes, row.action);
 
   if (specific) return specific;
   if (GENERIC_BY_ACTION[row.action]) return GENERIC_BY_ACTION[row.action];
-  return { label: "Updated", tone: "grey" };
+  return summarizeFieldEdit(changes);
 }
 
 /** Tailwind class mapping for the dot/badge tone. */
@@ -236,3 +383,8 @@ export const AUDIT_TONE_TEXT: Record<AuditSummary["tone"], string> = {
   grey:   "text-foreground",
   teal:   "text-teal-700",
 };
+
+/** Keys that are bookkeeping, not something a person changed. */
+export function isInternalAuditKey(key: string): boolean {
+  return ["updated_at", "updated_by", "created_at", "_actor_label", "last_edited_at", "last_edited_by"].includes(key);
+}

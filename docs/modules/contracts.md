@@ -38,7 +38,7 @@ Both `/contracts` and `/contracts/[id]` are `"use client"` components.
 
 ### Core Components (`src/components/contracts/`)
 - `create-contract-dialog.tsx` — modal to create contract from an accepted proposal
-- `contract-lifecycle.tsx` — visual journey stepper (Agreement Journey sidebar card)
+- `contract-lifecycle.tsx` — history timeline of dates, actors and reasons (Agreement history sidebar card). What to do next lives in the Customer journey panel (`src/components/journey/`)
 - `contract-chain-strip.tsx` — horizontal strip showing parent/child renewal chain
 - `contract-renewal-dialog.tsx` — renewal creation dialog + `DeclineRenewalDialog` + `EscalationWaiverSection`
 - `contract-space-manager.tsx` — seat/unit allocation UI + `validateSpaceAllocation()` helper
@@ -412,7 +412,7 @@ Changed via PATCH with `billing_mode` field. Toggled in the `ContractInvoicesSec
 - Financials (items, subtotal, tax, discount) are always sourced from the linked proposal.
 
 ### Billing Statements (`src/lib/billing.ts`)
-- `generateMonthlyStatements(adminClient, { contractId })` is called on activation to generate the current month's first statement immediately (idempotent — skips if one already exists for the month).
+- Activation raises **no** invoice. It calls `unbilledMonths()` and, if any month is already past its billing run with no rent statement, records them on the audit trail as `unbilled_months_at_activation`. The same check drives the amber banner on the contract's Invoices card. Billing itself is left to the month-end rent run or the per-contract "Bill next cycle" action — activation must never send a customer a back-dated invoice as a side effect.
 - The monthly cron also calls this for all active contracts.
 
 ### Leads
@@ -537,7 +537,7 @@ Per-contract overrides in `contract_electricity_config` table. The `ContractElec
 | `NEXT_PUBLIC_APP_URL` / `VERCEL_URL` | `[id]/route.ts` — renewal auto-issue vouchers internal fetch |
 | `CRON_SECRET` | Contract expiry cron (`Authorization: Bearer <secret>`) |
 | `RESEND_API_KEY` | Voucher revocation and renewal transition emails |
-| UniFi config: `UNIFI_API_URL`, `UNIFI_USERNAME`, `UNIFI_PASSWORD`, `UNIFI_CONSOLE_ID` | `src/lib/unifi.ts` — voucher API for UniFi locations |
+| UniFi config: `UNIFI_API_URL`, `UNIFI_USERNAME`, `UNIFI_PASSWORD` (the console id comes from the location, never an env var) | `src/lib/unifi.ts` — voucher API for UniFi locations |
 | COSEC device config stored in `cosec_devices` table | `src/lib/cosec.ts` |
 | `locations.unifi_site_id` (DB column) | Determines if a location uses UniFi voucher mode |
 | `locations.wifi_voucher_mode` ('repository' or 'unifi_api') | Also checked via `isUnifiLocation()` |

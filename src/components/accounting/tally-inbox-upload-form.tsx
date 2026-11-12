@@ -13,8 +13,11 @@
 
 import { useMemo, useState } from "react";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
-import type { InboxRow, ExtractResponse, AutofillSource } from "@/lib/tally-handoff";
+import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
+import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
+import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
+import { isRealCompanyName, leadAddress, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
+import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
 
 interface Props {
   row: InboxRow;
@@ -22,13 +25,39 @@ interface Props {
   onCancel: () => void;
 }
 
+// billing_statements.statement_type has more values than the narrow
+// InboxLineItemBreakdown type declares (see types/index.ts) — switch on the
+// raw string so real values like "electricity"/"reimbursement" still get a
+// readable label instead of falling through to "Rent" or nothing at all.
+function usageLineLabel(statementType: string | null): string {
+  switch (statementType) {
+    case "electricity": return "Electricity charges";
+    case "reimbursement": return "Reimbursement charges";
+    case "usage": return "Usage charges";
+    default: return "Usage charges";
+  }
+}
+
+function formatMonthLabel(ym: string): string {
+  return new Date(`${ym}-01T00:00:00Z`).toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
+}
+
 export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
-  const lead = row.contract?.lead;
-  const customerHasGstin = !!lead?.gst_number;
+  const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
+  // Virtual Office statements have no lead — the buyer is the case's bill_to
+  // party (the aggregator, for partner-billed cases) or the statement's own
+  // aggregator. Reading only the lead left accounts typing "(unnamed)" into
+  // Tally against a B-series number while the row itself said IRN required.
+  const voParty = voBillParty(row);
+  const customerGstin = lead?.gst_number || voParty?.gstin || null;
+  const customerHasGstin = !!customerGstin;
+  const customerAddress = leadAddress(lead ?? null) || voParty?.address || null;
   const expectedSeries = customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG";
   const expectedPrefix = customerHasGstin ? "SD/A/" : "SD/B/";
   const partyName =
-    lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "(unnamed)";
+    (lead && isRealCompanyName(lead.company) ? lead.company : null)
+    || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ")
+    || voParty?.name || "(unnamed)";
 
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [irn, setIrn] = useState("");
@@ -36,6 +65,9 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [invoiceAmount, setInvoiceAmount] = useState(String(row.statement_total_amount));
   const [partyNameOnInvoice, setPartyNameOnInvoice] = useState("");
   const [nameOverride, setNameOverride] = useState(false);
+  const [dateOverride, setDateOverride] = useState(false);
+  const [invoicePeriodMonths, setInvoicePeriodMonths] = useState<string[]>([]);
+  const [periodOverride, setPeriodOverride] = useState(false);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -45,11 +77,15 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [autofillSource, setAutofillSource] = useState<AutofillSource | null>(null);
   const [bridgeMatched, setBridgeMatched] = useState(false);
   const [autofilledFields, setAutofilledFields] = useState<Set<string>>(new Set());
+  // Null = not checked yet (no PO number expected, or PDF text couldn't be
+  // read at all). Only meaningful once autofillSource is set.
+  const [poNumberFound, setPoNumberFound] = useState<boolean | null>(null);
 
   async function runAutofill(file: File) {
     setExtracting(true);
     setAutofillSource(null);
     setBridgeMatched(false);
+    setPoNumberFound(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -63,6 +99,9 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         return;
       }
       const data = (await res.json()) as ExtractResponse;
+      setPoNumberFound(data.po_number_found);
+      setInvoicePeriodMonths(data.invoice_period_months ?? []);
+      setPeriodOverride(false);
       const filled = new Set<string>();
       if (data.fields.invoice_number) {
         setInvoiceNumber(data.fields.invoice_number);
@@ -123,8 +162,17 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
     }
     if (!pdfFile) errors.push("Invoice PDF is required.");
     if (nameMismatch && !nameOverride) errors.push("Party name mismatch — tick 'Proceed anyway' below to override.");
+    if (isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end) && !dateOverride) {
+      errors.push("Invoice date is outside the billing period — confirm it below.");
+    }
+    if (invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end) && !periodOverride) {
+      errors.push("The period on the invoice does not match this statement — confirm it below.");
+    }
     return errors;
-  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride]);
+  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end]);
+
+  const dateOffPeriod = isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end);
+  const periodMismatch = invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end);
 
   const canSubmit = validation.length === 0 && !submitting;
 
@@ -176,6 +224,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           autofill_source: autofillSource ?? "manual",
           qr_payload: null,
           nic_signature_verified: false,
+          acknowledge_off_period_date: dateOffPeriod && dateOverride,
+          acknowledge_period_mismatch: periodMismatch && periodOverride,
         }),
       );
 
@@ -204,17 +254,37 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border-t bg-muted/30 p-4 space-y-3">
+    <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="border-t bg-muted/30 p-4 space-y-3">
       <div className="text-sm">
         <div className="font-medium">Upload Tally GST invoice</div>
         <div className="text-xs text-muted-foreground mt-0.5">
           Customer: <span className="font-medium">{partyName}</span>
-          {lead?.gst_number ? ` · GSTIN ${lead.gst_number}` : " · (no GSTIN on file)"}
+          {customerGstin ? ` · GSTIN ${customerGstin}` : " · (no GSTIN on file)"}
           {" · Expected series: "}
           <span className="font-mono">{expectedSeries}</span>
           {row.irn_required && <span className="ml-2 text-blue-900">· IRN required</span>}
         </div>
+        <div className="text-xs text-muted-foreground mt-0.5">
+          {customerAddress ? (
+            <>Address: {customerAddress}</>
+          ) : (
+            <span className="text-amber-700">No address on file — check with the customer before raising the invoice.</span>
+          )}
+        </div>
       </div>
+
+      {row.po_number && (
+        <div className="rounded border border-violet-300 bg-violet-50 px-3 py-2 text-sm text-violet-900 flex items-start gap-2">
+          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" aria-hidden />
+          <span>
+            <span className="font-semibold">Customer PO Number: </span>
+            <span className="font-mono">{row.po_number}</span>
+            <span className="block text-xs text-violet-800 mt-0.5">
+              This customer requires their PO number on the invoice — put it on the Tally invoice before issuing.
+            </span>
+          </span>
+        </div>
+      )}
 
       {/* Issuance context: everything accounts needs to re-create the invoice in Tally. */}
       <div className="rounded border bg-background p-3 text-xs space-y-2">
@@ -229,6 +299,25 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
             <span className="font-mono">{row.contract?.contract_number ?? "—"}</span>
             {row.contract?.title && <span className="text-muted-foreground"> · {row.contract.title}</span>}
           </div>
+          {row.invoice && (
+            // Ad-hoc invoices have no contract, so the line-item description
+            // is often shorthand a person typed (e.g. "SD - Additional Seat").
+            // The invoice's own title is usually clearer — surface it here
+            // instead of silently discarding it.
+            <div className="md:col-span-2 bg-secondary rounded px-2 py-1 -mx-1">
+              <span className="text-muted-foreground">Invoice: </span>
+              <span className="font-mono">{row.invoice.invoice_number}</span>
+              {row.invoice.title && <span className="text-muted-foreground"> · {row.invoice.title}</span>}
+            </div>
+          )}
+          {row.invoice?.internal_notes && (
+            <div className="md:col-span-2 rounded border border-amber-200 bg-amber-50 text-amber-900 px-2.5 py-2 text-sm leading-snug">
+              <div className="text-[0.65rem] font-semibold uppercase tracking-wide opacity-80 mb-0.5">
+                Internal note (accounts only)
+              </div>
+              {row.invoice.internal_notes}
+            </div>
+          )}
           {row.period_start && row.period_end && (
             <div className="md:col-span-2">
               <span className="text-muted-foreground">Period: </span>
@@ -252,17 +341,76 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
 
         {/* Line items */}
         <div className="border-t pt-2">
-          <div className="text-muted-foreground mb-1">Line items</div>
+          <div className="flex items-baseline justify-between gap-2 mb-1">
+            <div className="text-muted-foreground">Line items</div>
+            {/* Reimbursement statements must have a receipt/vendor bill attached
+                (enforced at Bill Customer time) — surfaced here so accounts can
+                cross-check it against the Tally amount before uploading. It's
+                merged into the invoice PDF automatically at upload; nothing to
+                do here beyond looking. */}
+            {(row.line_items.statement_type as string) === "reimbursement" && row.supporting_documents_count > 0 && (
+              <ReimbursementSupportingDocuments
+                statementId={row.statement_id}
+                count={row.supporting_documents_count}
+                triggerClassName="flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+              />
+            )}
+            {/* When the buyer is the aggregator, nothing else on this row says
+                which referred client the fee is for. Statements created before
+                the description carried it have only this. */}
+            {row.case && row.case.bill_to === "aggregator" && (
+              <div className="text-muted-foreground truncate">
+                For:{" "}
+                <span className="text-foreground font-medium">
+                  {row.case.client_company_name || row.case.client_name}
+                </span>
+                <span className="font-mono"> · {row.case.case_number}</span>
+              </div>
+            )}
+          </div>
           <table className="w-full">
             <tbody>
-              {row.line_items.fixed_amount > 0 && (
-                <tr><td>Rent</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.fixed_amount)}</td></tr>
-              )}
-              {row.line_items.service_usage_amount > 0 && (
-                <tr><td>Service usage (print, electricity, etc.)</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.service_usage_amount)}</td></tr>
-              )}
-              {row.line_items.booking_usage_amount > 0 && (
-                <tr><td>Booking charges</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.booking_usage_amount)}</td></tr>
+              {row.itemized_charges.length > 0 ? (
+                // Real per-charge detail — same source proforma-pdf builds from
+                // (structured line_items, falling back to usage_charges rows).
+                row.itemized_charges.map((c, i) => (
+                  <tr key={i}>
+                    <td className="py-0.5 align-top">
+                      <div>
+                        {c.description}
+                        {c.quantity !== 1 && (
+                          <span className="text-muted-foreground"> · {c.quantity} × {formatCurrency(c.unit_price)}</span>
+                        )}
+                      </div>
+                      {c.notes && <div className="text-muted-foreground italic">{c.notes}</div>}
+                    </td>
+                    <td className="py-0.5 text-right tabular-nums align-top">{formatCurrency(c.amount)}</td>
+                  </tr>
+                ))
+              ) : (
+                <>
+                  {row.line_items.fixed_amount > 0 && (
+                    <tr><td>Rent</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.fixed_amount)}</td></tr>
+                  )}
+                  {row.line_items.service_usage_amount > 0 && (
+                    <tr><td>Service usage (print, electricity, etc.)</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.service_usage_amount)}</td></tr>
+                  )}
+                  {row.line_items.booking_usage_amount > 0 && (
+                    <tr><td>Booking charges</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.booking_usage_amount)}</td></tr>
+                  )}
+                  {/* Some statement types only ever populate the coarse usage_amount
+                      total with no per-charge detail anywhere — without this fallback
+                      the table renders with zero rows and accounts has no idea what
+                      they're actually billing. */}
+                  {row.line_items.service_usage_amount === 0
+                    && row.line_items.booking_usage_amount === 0
+                    && row.line_items.usage_amount > 0 && (
+                    <tr>
+                      <td>{usageLineLabel(row.line_items.statement_type)}</td>
+                      <td className="text-right tabular-nums">{formatCurrency(row.line_items.usage_amount)}</td>
+                    </tr>
+                  )}
+                </>
               )}
               <tr className="border-t">
                 <td className="pt-1 text-muted-foreground">Subtotal</td>
@@ -349,6 +497,26 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         </div>
       )}
 
+      {/* PO number verification — only meaningful once a PDF was read (autofillSource
+          set) and the statement actually has a PO number to check for. */}
+      {row.po_number && autofillSource && autofillSource !== "manual" && poNumberFound !== null && (
+        <div
+          className={`text-xs rounded border p-2 flex items-start gap-1.5 ${
+            poNumberFound
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-amber-50 border-amber-200 text-amber-900"
+          }`}
+        >
+          <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" aria-hidden />
+          <span>
+            {poNumberFound
+              ? <>PO number <span className="font-mono">{row.po_number}</span> found on the uploaded invoice.</>
+              : <>PO number <span className="font-mono">{row.po_number}</span> was NOT found on the uploaded invoice — double-check it&apos;s printed on the Tally invoice before sending.</>
+            }
+          </span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <label className="text-xs">
           <span className="block mb-1 text-muted-foreground">
@@ -391,7 +559,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           <input
             type="date"
             value={invoiceDate}
-            onChange={(e) => setInvoiceDate(e.target.value)}
+            onChange={(e) => { setInvoiceDate(e.target.value); setDateOverride(false); }}
             className="w-full rounded border px-2 py-1.5 text-sm"
           />
         </label>
@@ -409,6 +577,43 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           />
         </label>
       </div>
+
+      {periodMismatch && (
+        <div className="rounded border border-red-300 bg-red-50 p-2.5 text-xs text-red-900 space-y-2">
+          <p>
+            <strong>This invoice looks like it is for a different period.</strong> The PDF says it bills{" "}
+            {invoicePeriodMonths.map(formatMonthLabel).join(", ")}, but this statement covers{" "}
+            {formatDate(row.period_start ?? "")} → {formatDate(row.period_end ?? "")}. Check you picked the
+            right Tally voucher for this customer and month.
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={periodOverride}
+              onChange={(e) => setPeriodOverride(e.target.checked)}
+            />
+            <span>The period is correct — proceed anyway</span>
+          </label>
+        </div>
+      )}
+
+      {dateOffPeriod && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 space-y-2">
+          <p>
+            <strong>Invoice date does not fit the billing period.</strong> This invoice is dated{" "}
+            {formatDate(invoiceDate)} but covers {formatDate(row.period_start ?? "")} → {formatDate(row.period_end ?? "")}.
+            Check the date on the Tally voucher before sending — it decides the GST month.
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={dateOverride}
+              onChange={(e) => setDateOverride(e.target.checked)}
+            />
+            <span>The invoice date is correct — proceed anyway</span>
+          </label>
+        </div>
+      )}
 
       {/* Party name check — compare Tally invoice name against CRM record */}
       <label className="block text-xs">

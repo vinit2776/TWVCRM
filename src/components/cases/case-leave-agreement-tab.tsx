@@ -1,23 +1,28 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { useLeegalityEnabled } from "@/hooks/use-leegality-enabled";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
+import { StampUploadedDocument } from "@/components/cases/stamp-uploaded-document";
 import {
   FileText,
   Send,
-  CheckCircle,
   PenTool,
   Loader2,
   ExternalLink,
@@ -30,10 +35,12 @@ import {
   CheckCircle2,
   XCircle,
   Activity,
+  Stamp,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
 import type { CaseAgreement } from "@/types";
+import { ADDRESS_STALE_REASON, agreementAddressGate, agreementAddressIsStale } from "@/lib/agreement-address-gate";
 
 interface LeegalityHealth {
   environment: string;
@@ -48,10 +55,33 @@ interface LeegalityHealth {
 
 interface CaseLeaveAgreementTabProps {
   caseId: string;
+  /** From the case's special clause: when blocked, nothing may leave the building. */
+  clauseGate?: { blocked: boolean; reason: string | null };
+  /** The case's current client address, to warn when the agreement's copy is out of date. */
+  caseAddress?: string | null;
 }
 
-export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
+export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, caseAddress }: CaseLeaveAgreementTabProps) {
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
+  const { enabled: leegalityEnabled } = useLeegalityEnabled();
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
+  // A draft with no client address (or no pincode) may exist, but must not go out.
+  const addressGate = agreement
+    ? agreementAddressGate(((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined)
+    : { blocked: false, reason: null };
+  const addressStale = !!agreement && agreementAddressIsStale(
+    caseAddress,
+    ((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined,
+  );
+  // The case address moved on after this was generated: until it is regenerated,
+  // Regenerate is the only action offered. A signed one never gets here, because
+  // changing the address resets it to a draft first.
+  const needsRegenerate = addressStale && !["executed", "signing"].includes(agreement?.status ?? "");
+  const clauseGate = clauseGateFromCase?.blocked
+    ? clauseGateFromCase
+    : needsRegenerate ? { blocked: true, reason: ADDRESS_STALE_REASON } : addressGate;
+  const clauseBlocked = clauseGate.blocked;
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -64,6 +94,14 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const [healthLoading, setHealthLoading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [stampingSignSeal, setStampingSignSeal] = useState(false);
+  const [stampConfirmOpen, setStampConfirmOpen] = useState(false);
+  const [stampPreviewLoading, setStampPreviewLoading] = useState(false);
+  const [stampPreviewUrl, setStampPreviewUrl] = useState<string | null>(null);
+  const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
+  const [cancelStampOpen, setCancelStampOpen] = useState(false);
+  const [cancellingStamp, setCancellingStamp] = useState(false);
+  const [stampError, setStampError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAgreement = useCallback(async () => {
@@ -108,23 +146,13 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
+  // Served through the API rather than a signed storage URL so an unstamped
+  // agreement is watermarked DRAFT on the way out — see
+  // /api/cases/[id]/leave-license/pdf.
   const handleViewPdf = async () => {
-    if (pdfUrl) {
-      window.open(pdfUrl, "_blank");
-      return;
-    }
     setViewing(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.pdf_url) {
-          window.open(json.pdf_url, "_blank");
-          setPdfUrl(json.pdf_url);
-        } else {
-          toast.error("No PDF available for this agreement");
-        }
-      }
+      window.open(`/api/cases/${caseId}/leave-license/pdf${watermarkQuery}`, "_blank");
     } finally {
       setViewing(false);
     }
@@ -171,6 +199,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
       const endDate = new Date(startDate);
       endDate.setMonth(endDate.getMonth() + tenureMonths);
+      endDate.setDate(endDate.getDate() - 1);
 
       const fmtCurrency = (amt: number) =>
         "Rs. " +
@@ -245,7 +274,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
         const err = await res.json();
         throw new Error(err.error || "Failed to regenerate agreement");
       }
-      toast.success("Agreement regenerated from case data");
+      toast.success("Agreement regenerated with the current address. Next: send it to the customer or upload the signed copy.");
       fetchAgreement();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Regeneration failed");
@@ -254,27 +283,100 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
-  const handleAction = async (action: string) => {
-    if (!agreement) return;
-    setActing(true);
+  // ── Draft watermark ────────────────────────────────────────────────────
+  // One decision governs View, Download and Send so the three cannot disagree.
+  // Whether it can be unticked is computed server-side from the billing route
+  // and whether the case has been paid — never chosen here.
+  const [watermarkOn, setWatermarkOn] = useState(true);
+  const [watermarkPolicy, setWatermarkPolicy] = useState<{
+    route: "prepaid" | "postpaid" | "direct";
+    forced: boolean;
+    settled: boolean;
+    reason: string;
+    aggregatorName: string | null;
+  } | null>(null);
+
+  const loadWatermarkPolicy = useCallback(async () => {
+    const res = await fetch(`/api/cases/${caseId}/leave-license/watermark-policy`);
+    if (!res.ok) return;
+    const json = await res.json().catch(() => null);
+    if (!json?.data) return;
+    setWatermarkPolicy(json.data);
+    // Always re-tick when the policy reloads: a lock that has just come into
+    // force must not leave a stale unticked box behind it.
+    if (json.data.forced) setWatermarkOn(true);
+  }, [caseId]);
+
+  useEffect(() => { loadWatermarkPolicy(); }, [loadWatermarkPolicy]);
+
+  /** Suffix for the PDF routes; the server still re-decides. */
+  const watermarkQuery = watermarkOn ? "" : "?watermark=0";
+
+  // ── Send to customer ───────────────────────────────────────────────────
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendPreviewLoading, setSendPreviewLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendCc, setSendCc] = useState("");
+  const [sendPreview, setSendPreview] = useState<{
+    to: string | null;
+    toName: string;
+    toKind: "aggregator" | "client";
+    onBehalfOf: string | null;
+    subject: string;
+    html: string;
+    blocked: string | null;
+    attachmentName: string | null;
+    isDraft: boolean;
+    hasPdf: boolean;
+    watermark?: {
+      forced: boolean;
+      settled: boolean;
+      reason: string;
+      route: "prepaid" | "postpaid" | "direct";
+    };
+  } | null>(null);
+
+  const openSendDialog = async () => {
+    setSendPreviewLoading(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, agreement_id: agreement.id }),
-      });
+      const res = await fetch(`/api/cases/${caseId}/leave-license/send`);
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Action failed");
+        toast.error(json?.error || "Could not build the preview");
+        return;
       }
-      toast.success(`Agreement ${action.replace(/_/g, " ")}`);
-      fetchAgreement();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Action failed");
+      setSendPreview(json.data);
+      setSendCc("");
+      setSendOpen(true);
     } finally {
-      setActing(false);
+      setSendPreviewLoading(false);
     }
   };
+
+  const handleSendToCustomer = async () => {
+    setSending(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cc: sendCc, watermark: watermarkOn }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(json?.error || "Send failed");
+        return;
+      }
+      toast.success(`Agreement sent to ${json.data.to}`);
+      setSendOpen(false);
+      fetchAgreement();
+      loadWatermarkPolicy();
+    } catch {
+      toast.error("Send failed");
+    } finally {
+      setSending(false);
+    }
+  };
+
 
   const handleInitiateSigning = async () => {
     setActing(true);
@@ -345,22 +447,22 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       return;
     }
 
-    // Re-fetch a fresh signed URL
     setViewing(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license`);
-      const json = await res.json();
-      const url = json.pdf_url;
-      if (!url) {
-        toast.error("PDF not found — regenerate the agreement first");
+      const res = await fetch(`/api/cases/${caseId}/leave-license/pdf${watermarkQuery}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.error || "PDF not found — regenerate the agreement first");
         return;
       }
-      // Trigger browser download
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `leave-license-${caseId}.pdf`;
       a.rel = "noopener";
       a.click();
+      URL.revokeObjectURL(url);
     } catch {
       toast.error("Download failed");
     } finally {
@@ -401,7 +503,114 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
+  const closeStampPreview = () => {
+    setStampConfirmOpen(false);
+    if (stampPreviewUrl) URL.revokeObjectURL(stampPreviewUrl);
+    setStampPreviewUrl(null);
+    setStampPreviewRef(null);
+    setStampError(null);
+  };
+
+  const handleOpenStampPreview = async () => {
+    if (!agreement) return;
+    setStampPreviewLoading(true);
+    setStampError(null);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/preview-stamp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreement_id: agreement.id }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to generate preview");
+      }
+      const { pdfBase64, stampRef } = await res.json();
+      const bytes = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      setStampPreviewUrl(blobUrl);
+      setStampPreviewRef(stampRef);
+      // Just open the confirmation dialog — don't auto-open a new tab here.
+      // Auto-opening stole focus to the PDF tab before the user ever saw the
+      // dialog's own "Open preview PDF" button; let them choose when to look.
+      setStampConfirmOpen(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to generate preview");
+    } finally {
+      setStampPreviewLoading(false);
+    }
+  };
+
+  const handleStampSignSeal = async () => {
+    if (!agreement || !stampPreviewRef) return;
+    setStampingSignSeal(true);
+    setStampError(null);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/stamp-sign-seal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreement_id: agreement.id, stampRef: stampPreviewRef }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to stamp agreement");
+      }
+      const { data } = await res.json().catch(() => ({ data: null }));
+      toast.success(
+        data?.stamp_reference
+          ? `Agreement stamped with company sign & seal (${data.stamp_reference})`
+          : "Agreement stamped with company sign & seal"
+      );
+      closeStampPreview();
+      fetchAgreement();
+    } catch (err) {
+      setStampError(err instanceof Error ? err.message : "Failed to stamp agreement");
+    } finally {
+      setStampingSignSeal(false);
+    }
+  };
+
+  const handleCancelStamp = async () => {
+    if (!agreement) return;
+    setCancellingStamp(true);
+    setStampError(null);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/cancel-stamp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreement_id: agreement.id }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to cancel the stamp");
+      }
+      const { data: cancelled } = await res.json().catch(() => ({ data: null }));
+      toast.success(
+        cancelled?.status === "executed"
+          ? "Sign & seal stamp cancelled — the uploaded signed copy is the current document again"
+          : "Sign & seal stamp cancelled — the agreement is editable again"
+      );
+      setCancelStampOpen(false);
+      fetchAgreement();
+    } catch (err) {
+      setStampError(err instanceof Error ? err.message : "Failed to cancel the stamp");
+    } finally {
+      setCancellingStamp(false);
+    }
+  };
+
   const isEditable = agreement?.status === "draft" || agreement?.status === "internally_approved";
+  const canStampSignSeal =
+    userRole === "admin" &&
+    !!agreement &&
+    !agreement.signed_document_id &&
+    ["draft", "internally_approved", "sent_to_client", "client_approved", "signing"].includes(
+      agreement.status
+    );
+
+  // "Upload Signed Document" keeps the customer's copy in generated_document_id;
+  // signed_document_id is only set by the stamp routes.
+  const uploadedCopyId = agreement?.signed_document_id ?? agreement?.generated_document_id ?? null;
 
   if (loading) {
     return <div className="text-center py-8 text-muted-foreground">Loading agreement...</div>;
@@ -425,8 +634,10 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
   const vars = (agreement.variables || {}) as Record<string, unknown>;
 
+  // Mirrors allowedStatuses in the manual-sign route — keep the two in step.
   const canUploadManualSign = agreement &&
-    ["client_approved", "signing", "internally_approved", "draft"].includes(agreement.status) &&
+    ["draft", "internally_approved", "sent_to_client", "client_approved", "signing"]
+      .includes(agreement.status) &&
     agreement.status !== "executed";
 
   return (
@@ -494,6 +705,39 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* The address itself can't go out (missing, no pincode, unprintable letters): say so
+              on the page, with the fix, rather than only in a tooltip on a disabled button. */}
+          {!needsRegenerate && addressGate.blocked && !["executed", "signing"].includes(agreement.status) && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{addressGate.reason}</span>
+            </div>
+          )}
+          {needsRegenerate && (
+            <div className="flex flex-col gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  The case address has changed since this agreement was generated. <strong>Step 1:</strong> regenerate
+                  it to pick up the new address. <strong>Step 2:</strong> send it to the customer or upload the signed copy. The other
+                  actions stay locked until step 1 is done.
+                </span>
+              </div>
+              <Button size="sm" className="shrink-0" onClick={handleRegenerate} disabled={generating}>
+                {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Regenerate agreement
+              </Button>
+            </div>
+          )}
+          {!!agreement && !!(agreement.variables as Record<string, unknown> | null)?.address_reset_at && agreement.status !== "executed" && (
+            <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                The client address was changed after this agreement was signed. This agreement has been reset and
+                must be signed again. The previous signed version is kept in the documents.
+              </span>
+            </div>
+          )}
           {/* Agreement Info Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
             <div>
@@ -562,6 +806,46 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             </div>
           )}
 
+          {/* Draft watermark — hidden once executed, when nothing is marked */}
+          {watermarkPolicy && !watermarkPolicy.settled && (
+            <div
+              className={`flex items-start gap-3 rounded-md border p-3 ${
+                watermarkPolicy.forced
+                  ? "border-amber-200 bg-amber-50"
+                  : watermarkOn
+                    ? "border-muted bg-muted/40"
+                    : "border-red-200 bg-red-50"
+              }`}
+            >
+              <Checkbox
+                id="wm-toggle"
+                checked={watermarkOn}
+                disabled={watermarkPolicy.forced}
+                onCheckedChange={(v: boolean | "indeterminate") => setWatermarkOn(!!v)}
+                className="mt-0.5"
+              />
+              <div className="min-w-0">
+                <Label htmlFor="wm-toggle" className="text-sm font-medium cursor-pointer">
+                  Draft watermark
+                </Label>
+                <p
+                  className={`text-xs ${
+                    watermarkPolicy.forced
+                      ? "text-amber-800"
+                      : watermarkOn
+                        ? "text-muted-foreground"
+                        : "text-red-700"
+                  }`}
+                >
+                  {watermarkPolicy.forced && "🔒 "}
+                  {watermarkOn
+                    ? watermarkPolicy.reason
+                    : "Clean, unexecuted copy. Who released it is recorded against the case."}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-2 pt-2 border-t">
             <Button size="sm" variant="outline" onClick={handleViewPdf} disabled={viewing}>
@@ -569,19 +853,19 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               View PDF
             </Button>
 
-            <Button size="sm" variant="outline" onClick={handleDownloadForStampPaper} disabled={viewing}>
+            <Button size="sm" variant="outline" onClick={handleDownloadForStampPaper} disabled={viewing || needsRegenerate}>
               {viewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
               Download for Stamp Paper
             </Button>
 
-            {isEditable && (
+            {isEditable && !needsRegenerate && (
               <Button size="sm" variant="outline" onClick={openEditDialog}>
                 <Pencil className="mr-2 h-4 w-4" />
                 Edit Agreement
               </Button>
             )}
 
-            {isEditable && (
+            {isEditable && !needsRegenerate && (
               <Button size="sm" variant="outline" onClick={handleRegenerate} disabled={generating}>
                 {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Regenerate
@@ -591,29 +875,26 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
           {/* Status Workflow Buttons */}
           <div className="flex flex-wrap gap-2 pt-2 border-t">
-            {agreement.status === "draft" && (
-              <Button size="sm" onClick={() => handleAction("approve_internally")} disabled={acting}>
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Approve Internally
+            {/* Send is available at any point before execution. The internal
+                and client approval steps were removed: they gated the send
+                behind two clicks that recorded nothing anyone acted on, and
+                left an agreement in sent_to_client with no way forward. */}
+            {agreement.status !== "executed" && (
+              <Button size="sm" onClick={openSendDialog} disabled={sendPreviewLoading || clauseBlocked} title={clauseGate?.reason ?? undefined}>
+                {sendPreviewLoading
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <Send className="mr-2 h-4 w-4" />}
+                Send to Customer
               </Button>
             )}
 
-            {agreement.status === "internally_approved" && (
-              <Button size="sm" onClick={() => handleAction("send_to_client")} disabled={acting}>
-                <Send className="mr-2 h-4 w-4" />
-                Send to Client
-              </Button>
-            )}
-
-            {agreement.status === "sent_to_client" && (
-              <Button size="sm" onClick={() => handleAction("client_approved")} disabled={acting}>
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Mark Client Approved
-              </Button>
-            )}
-
-            {agreement.status === "client_approved" && (
-              <Button size="sm" onClick={handleInitiateSigning} disabled={acting}>
+            {["client_approved", "sent_to_client", "internally_approved"].includes(agreement.status) && (
+              <Button
+                size="sm"
+                onClick={handleInitiateSigning}
+                disabled={acting || !leegalityEnabled || clauseBlocked}
+                title={clauseGate?.reason ?? (leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing.")}
+              >
                 <PenTool className="mr-2 h-4 w-4" />
                 Initiate E-Stamping & Signing
               </Button>
@@ -631,14 +912,68 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             )}
 
             {canUploadManualSign && (
-              <Button size="sm" variant="outline" onClick={() => setUploadOpen(true)}>
+              <Button size="sm" variant="outline" onClick={() => setUploadOpen(true)} disabled={clauseBlocked} title={clauseGate?.reason ?? undefined}>
                 <Upload className="mr-2 h-4 w-4" />
                 Upload Signed Document
               </Button>
             )}
 
+            {canStampSignSeal && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleOpenStampPreview}
+                disabled={stampPreviewLoading || clauseBlocked}
+                title={clauseGate?.reason ?? undefined}
+              >
+                {stampPreviewLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Stamp className="mr-2 h-4 w-4" />
+                )}
+                Stamp with company seal
+              </Button>
+            )}
+
+            {/* A signed copy was uploaded (which executes the agreement) before TWV's
+                stamp went on: stamp that copy itself, keeping the customer's signature. */}
+            {agreement.status === "executed" && uploadedCopyId && !agreement.stamp_reference && agreement.leegality_status !== "COMPLETED" && userRole === "admin" && (
+              <StampUploadedDocument
+                caseId={caseId}
+                agreementId={agreement.id}
+                signedDocumentId={uploadedCopyId}
+                onStamped={fetchAgreement}
+              />
+            )}
+
+            {agreement.signed_document_id && agreement.stamp_reference && userRole === "admin" && (
+              <Button size="sm" variant="outline" onClick={() => { setStampError(null); setCancelStampOpen(true); }}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Cancel sign & seal
+              </Button>
+            )}
+
             {acting && <Loader2 className="h-4 w-4 animate-spin ml-2" />}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Agreement document history — old executed versions stay
+          visible/downloadable after a reupload (e.g. customer name change
+          or a change-of-law redocumentation). */}
+      <Card>
+        <CardContent className="pt-4">
+          <AgreementDocumentHistory
+            listUrl={`/api/cases/${caseId}/leave-license/agreement-versions`}
+            reuploadUrl={`/api/cases/${caseId}/leave-license/reupload-agreement`}
+            reuploadExtraFields={{ agreement_id: agreement.id }}
+            canManage={
+              agreement.status === "executed" &&
+              ["admin", "manager", "sales_rep", "office_admin"].includes(userRole ?? "")
+            }
+            hasExistingDocument={!!(agreement.signed_document_id || agreement.generated_document_id)}
+            onChanged={fetchAgreement}
+          />
         </CardContent>
       </Card>
 
@@ -760,6 +1095,130 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
         </DialogContent>
       </Dialog>
 
+      {/* Send to Customer — preview exactly what goes out */}
+      <Dialog open={sendOpen} onOpenChange={(v) => { if (!v) setSendOpen(false); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5" />
+              Send Agreement to Customer
+            </DialogTitle>
+          </DialogHeader>
+
+          {sendPreview && (
+            <div className="space-y-4">
+              {sendPreview.blocked && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {sendPreview.blocked}
+                </div>
+              )}
+
+              <div className="rounded-md border divide-y text-sm">
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">To</span>
+                  <span className="font-medium">
+                    {sendPreview.to ?? <span className="text-red-600">no address on record</span>}
+                    {sendPreview.to && (
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        {sendPreview.toName}
+                        {sendPreview.toKind === "aggregator" && " · aggregator"}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {sendPreview.onBehalfOf && (
+                  <div className="flex gap-3 px-3 py-2">
+                    <span className="w-20 shrink-0 text-muted-foreground">On behalf of</span>
+                    <span>{sendPreview.onBehalfOf}</span>
+                  </div>
+                )}
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">Subject</span>
+                  <span className="font-medium">{sendPreview.subject}</span>
+                </div>
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">Attached</span>
+                  <span>
+                    {sendPreview.attachmentName
+                      ? (watermarkOn
+                          ? sendPreview.attachmentName
+                          : sendPreview.attachmentName.replace(/^DRAFT-/, ""))
+                      : <span className="text-red-600">no PDF generated</span>}
+                    {sendPreview.isDraft && watermarkOn && (
+                      <span className="ml-2 text-xs text-amber-700">watermarked DRAFT</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="send-cc">CC (optional)</Label>
+                <Input
+                  id="send-cc"
+                  value={sendCc}
+                  onChange={(e) => setSendCc(e.target.value)}
+                  placeholder="someone@example.com, another@example.com"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Separate multiple addresses with commas.
+                </p>
+              </div>
+
+              {sendPreview.watermark && !sendPreview.watermark.settled && (
+                <div
+                  className={`flex items-start gap-3 rounded-md border p-3 ${
+                    sendPreview.watermark.forced
+                      ? "border-amber-200 bg-amber-50"
+                      : watermarkOn
+                        ? "border-muted bg-muted/40"
+                        : "border-red-200 bg-red-50"
+                  }`}
+                >
+                  <Checkbox
+                    id="wm-send"
+                    checked={watermarkOn}
+                    disabled={sendPreview.watermark.forced}
+                    onCheckedChange={(v: boolean | "indeterminate") => setWatermarkOn(!!v)}
+                    className="mt-0.5"
+                  />
+                  <div className="min-w-0">
+                    <Label htmlFor="wm-send" className="text-sm font-medium cursor-pointer">
+                      Draft watermark
+                    </Label>
+                    <p className={`text-xs ${sendPreview.watermark.forced ? "text-amber-800" : "text-muted-foreground"}`}>
+                      {sendPreview.watermark.forced && "🔒 "}
+                      {sendPreview.watermark.reason}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <Label>Message preview</Label>
+                <div
+                  className="rounded-md border bg-muted/30 p-3 max-h-72 overflow-y-auto"
+                  dangerouslySetInnerHTML={{ __html: sendPreview.html }}
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSendOpen(false)}>Cancel</Button>
+            <Button
+              onClick={handleSendToCustomer}
+              disabled={
+                sending || !sendPreview || !!sendPreview.blocked ||
+                !sendPreview.to || !sendPreview.hasPdf
+              }
+            >
+              {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+              Send Now
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Upload Manually Signed Document Dialog */}
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent className="max-w-md">
@@ -798,6 +1257,89 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             <Button onClick={handleUploadSignedDocument} disabled={uploading}>
               {uploading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Upload & Mark Executed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stampConfirmOpen} onOpenChange={(open) => { if (!open) closeStampPreview(); }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Preview: stamp with company seal</DialogTitle>
+            <DialogDescription>
+              This is exactly what will be saved as the signed Leave &amp; License Agreement —
+              TWV&apos;s signature and seal applied in the Lessor field, ref {stampPreviewRef}.
+              Review it before confirming. This marks the agreement executed and does not go
+              through Leegality. You can cancel it afterward from &quot;Cancel sign &amp;
+              seal&quot; if needed.
+            </DialogDescription>
+          </DialogHeader>
+          {stampPreviewUrl && (
+            <div className="rounded-md border bg-muted/30 p-4 flex items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                Review the exact PDF before confirming.
+              </p>
+              <Button asChild variant="outline" size="sm" className="shrink-0">
+                <a href={stampPreviewUrl} target="_blank" rel="noopener noreferrer">
+                  <Eye className="mr-1.5 h-3.5 w-3.5" />
+                  Open preview PDF
+                </a>
+              </Button>
+            </div>
+          )}
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeStampPreview}>
+              Cancel
+            </Button>
+            <Button onClick={handleStampSignSeal} disabled={stampingSignSeal}>
+              {stampingSignSeal ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Stamping...
+                </>
+              ) : (
+                "Confirm & save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cancelStampOpen} onOpenChange={(open) => { setCancelStampOpen(open); if (!open) setStampError(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel sign & seal?</DialogTitle>
+            <DialogDescription>
+              This removes the stamped signed document and reverts the agreement to its
+              status before stamping — Edit Agreement becomes available again if that status
+              is draft or internally approved. You can re-stamp it afterward if needed. If the
+              stamp was put on an uploaded signed copy, only the stamp is removed: that copy
+              stays as the signed agreement.
+            </DialogDescription>
+          </DialogHeader>
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCancelStampOpen(false); setStampError(null); }}>
+              Keep it
+            </Button>
+            <Button variant="destructive" onClick={handleCancelStamp} disabled={cancellingStamp}>
+              {cancellingStamp ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                "Cancel sign & seal"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,12 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
+import { loadDepositCollection } from "@/lib/deposit-instalment-server";
+import { partialDepositWarning } from "@/lib/deposit-activation";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { CONTRACT_STATUS_TRANSITIONS } from "@/lib/constants";
-import { generateMonthlyStatements } from "@/lib/billing";
+import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE, CONTRACT_PRE_ACTIVATION_STATUSES, canWithdrawContract } from "@/lib/constants";
+import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
+import { renewalChainContractIds } from "@/lib/renewal-chain";
+import { getRenewalProrataGate, PRORATA_UNSENT_ERROR } from "@/lib/renewal-prorata";
 import { setUserActive } from "@/lib/cosec";
-import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, siteConfigForStoredVoucher, buildVoucherNote, isUnifiLocation } from "@/lib/unifi";
+import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
+import { resolveContractCommitment } from "@/lib/contract-commitment";
+import { hasCommitmentTerms } from "@/lib/proposal-terms";
+import { canCompleteOn } from "@/lib/contract-exit";
+import { completeExitOnTerminate, getLiveExit } from "@/lib/contract-exit-server";
 
 export async function GET(
   _request: NextRequest,
@@ -19,7 +29,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name), rate_phases:contract_rate_phases(*)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months, tenure_months, lock_in_months, notice_period_months), commitment_overridden_by_user:users!contracts_commitment_overridden_by_fkey(full_name), location:locations!contracts_location_id_fkey(id, name, code, address, city, state, proposal_amenity_icons, agreement_terms), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name), rate_phases:contract_rate_phases(*)")
     .eq("id", id)
     .single();
 
@@ -34,7 +44,57 @@ export async function GET(
     delete (data as Record<string, unknown>)[`${key}_by_user`];
   }
 
-  return NextResponse.json({ data: { ...data, ...actorNames } });
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "contract", entityId: id, performedBy: dbUser.id });
+  }
+
+  // Parent contract number for the renewal-chain link — fetched separately
+  // rather than embedded in the select() above: PostgREST's self-referencing
+  // embed for contracts!contracts_parent_contract_id_fkey doesn't resolve
+  // against this project's schema cache (confirmed directly, not just a
+  // stale-cache blip), so a plain follow-up query sidesteps it entirely.
+  let parentContract: { id: string; contract_number: string } | null = null;
+  if (data.parent_contract_id) {
+    const { data: parent } = await supabase
+      .from("contracts")
+      .select("id, contract_number")
+      .eq("id", data.parent_contract_id)
+      .maybeSingle();
+    parentContract = parent;
+  }
+
+  // Who decided the negotiated escalation, and when — shown on the renewal's
+  // approval banner. Read through the user client: approval_requests is readable
+  // by any signed-in user, and the name comes from the same join the rest of
+  // this route uses.
+  let escalationDecision: { acted_by_name: string | null; acted_at: string | null; rejection_reason: string | null } | null = null;
+  if (data.escalation_approval_id && data.escalation_approval_status && data.escalation_approval_status !== "pending") {
+    const { data: ar } = await supabase
+      .from("approval_requests")
+      .select("acted_at, rejection_reason, acted_by_user:users!approval_requests_acted_by_fkey(full_name)")
+      .eq("id", data.escalation_approval_id)
+      .maybeSingle();
+    if (ar) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const actor = (ar as any).acted_by_user as { full_name: string } | null;
+      escalationDecision = { acted_by_name: actor?.full_name ?? null, acted_at: ar.acted_at ?? null, rejection_reason: ar.rejection_reason ?? null };
+    }
+  }
+
+  const renewalProrataGate = data.is_renewal && data.status !== "active"
+    ? await getRenewalProrataGate(createAdminClient(), data)
+    : null;
+
+  return NextResponse.json({
+    data: {
+      ...data,
+      ...actorNames,
+      parent_contract: parentContract,
+      escalation_decision: escalationDecision,
+      renewal_prorata_blocking: renewalProrataGate?.blocking ?? false,
+    },
+  });
 }
 
 export async function PATCH(
@@ -50,6 +110,7 @@ export async function PATCH(
   const allowedFields: Record<string, unknown> = {};
 
   if (body.status) allowedFields.status = body.status;
+  if (body.start_date) allowedFields.start_date = body.start_date;
   if (body.location_id !== undefined) allowedFields.location_id = body.location_id || null;
   if (body.notes !== undefined) allowedFields.notes = body.notes;
   if (body.termination_reason) allowedFields.termination_reason = body.termination_reason;
@@ -73,6 +134,13 @@ export async function PATCH(
     allowedFields.department_id = trimmed;
   }
 
+  // Customer PO number — the annual purchase order the customer's own
+  // invoice processing requires on every statement for this contract.
+  if (body.po_number !== undefined) {
+    const trimmed = (typeof body.po_number === "string" ? body.po_number.trim() : body.po_number) || null;
+    allowedFields.po_number = trimmed;
+  }
+
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
   }
@@ -80,6 +148,35 @@ export async function PATCH(
   const { data: oldContract } = await supabase.from("contracts").select("*").eq("id", id).single();
   if (!oldContract) {
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+  }
+
+  // Preserve document history when the signed document is swapped through
+  // this general-purpose route (e.g. the "Signed Contract → Replace" button)
+  // rather than the dedicated reupload-agreement flow — otherwise the
+  // previous executed document is silently discarded with no trace, which is
+  // exactly what reupload-agreement/route.ts exists to prevent. Chaining it
+  // here means every caller that changes signed_document_id gets history for
+  // free, not just the one dedicated route.
+  if (
+    allowedFields.signed_document_id &&
+    oldContract.signed_document_id &&
+    allowedFields.signed_document_id !== oldContract.signed_document_id
+  ) {
+    const adminSupabase = await createAdminClient();
+    const { data: oldDoc } = await adminSupabase
+      .from("documents")
+      .select("version")
+      .eq("id", oldContract.signed_document_id)
+      .single();
+    if (oldDoc) {
+      await adminSupabase
+        .from("documents")
+        .update({
+          version: (oldDoc.version || 1) + 1,
+          parent_document_id: oldContract.signed_document_id,
+        })
+        .eq("id", allowedFields.signed_document_id as string);
+    }
   }
 
   // Department ID rules:
@@ -112,6 +209,37 @@ export async function PATCH(
   // Resolve the CRM user ID early — needed for _by actor columns and audit log
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
 
+  // Term / lock-in agreed on the proposal stay locked after creation too —
+  // same gate as POST /api/contracts. Contracts from proposals that predate
+  // structured terms (and renewals, which have no proposal) are unaffected.
+  if (("tenure_months" in allowedFields || "lock_in_months" in allowedFields) && oldContract.proposal_id) {
+    const { data: linkedProposal } = await supabase
+      .from("proposals")
+      .select("proposal_number, tenure_months, lock_in_months, notice_period_months")
+      .eq("id", oldContract.proposal_id)
+      .single();
+    if (linkedProposal && hasCommitmentTerms(linkedProposal)) {
+      const commitment = resolveContractCommitment({
+        proposal: linkedProposal,
+        submitted: {
+          tenure_months: (allowedFields.tenure_months as number | undefined) ?? oldContract.tenure_months,
+          lock_in_months: (allowedFields.lock_in_months as number | null | undefined) ?? oldContract.lock_in_months ?? undefined,
+          notice_period_months: oldContract.notice_period_months ?? undefined,
+        },
+        overrideReason: body.commitment_override_reason,
+        isAdmin: dbUser?.role === "admin",
+      });
+      if (!commitment.ok) {
+        return NextResponse.json({ error: commitment.error }, { status: commitment.status });
+      }
+      if (commitment.overridden) {
+        allowedFields.commitment_override_reason = String(body.commitment_override_reason).trim();
+        allowedFields.commitment_overridden_by = dbUser?.id ?? null;
+        allowedFields.commitment_overridden_at = new Date().toISOString();
+      }
+    }
+  }
+
   // Only admins may bypass the proposal payment gate
   if (body.payment_override_reason && dbUser?.role !== "admin") {
     return NextResponse.json(
@@ -119,6 +247,33 @@ export async function PATCH(
       { status: 403 }
     );
   }
+
+  // start_date is a placeholder until the linked proposal's pro-rata invoice
+  // is paid — editable while start_date_confirmed is false, locked once true
+  // (always true after activation). The admin payment_override_reason path
+  // (already gated to admin role above) can still push it through when
+  // locked, but only as part of the same request that activates the
+  // contract — it must not become a general-purpose bypass for editing
+  // start_date on a contract that's already active. (allowedFields.start_date
+  // was staged earlier, before oldContract was available to check.)
+  if (allowedFields.start_date !== undefined) {
+    const overrideUnlocksThisRequest = !!body.payment_override_reason && body.status === "active";
+    if (oldContract.start_date_confirmed && !overrideUnlocksThisRequest) {
+      return NextResponse.json({
+        error: "Start date is locked — the linked proposal's pro-rata invoice has already been paid. Use the admin override while activating to change it.",
+      }, { status: 400 });
+    }
+  }
+
+  // Set when an attributed ad-hoc invoice stands in for the proposal's own
+  // pro-rata payment at activation. Merged into the audit entry below, which is
+  // built after this block.
+  let prorataSatisfiedByInvoice: string | null = null;
+  // Set when the contract activates with a part-paid deposit (see the snapshot below).
+  let partialDepositClaimed: { paid: number; required: number; pending: number } | null = null;
+  // Set when a never-activated contract is closed via Withdraw (stored as
+  // `terminated`), so the audit trail distinguishes it from a live termination.
+  let withdrawnBeforeActivation = false;
 
   // Handle special status transitions
   if (body.status && body.status !== oldContract.status) {
@@ -139,14 +294,44 @@ export async function PATCH(
       allowedFields.viewed_at = body.viewed_at || now;
       allowedFields.viewed_by = actorId;
     } else if (body.status === "accepted") {
+      // draft → accepted (skipping sent/viewed) is only for a draft that
+      // already has a signed agreement attached — e.g. a customer-signed
+      // scan uploaded off-band before Send Agreement was ever clicked.
+      // "Send Agreement" only renders while signed_document is unset (see
+      // the contract detail page), so once a document is attached there's
+      // otherwise no way to move the contract past draft at all. Restricted
+      // to admin/manager since it bypasses the normal send/view
+      // acknowledgement steps — same roles as contract termination.
+      if (oldContract.status === "draft") {
+        if (!oldContract.signed_document_id) {
+          return NextResponse.json({
+            error: "Cannot mark a draft contract accepted without a signed agreement attached first.",
+          }, { status: 400 });
+        }
+        if (!["admin", "manager"].includes(dbUser?.role ?? "")) {
+          return NextResponse.json(
+            { error: "Only admins and managers can mark a draft contract accepted directly." },
+            { status: 403 }
+          );
+        }
+      }
       allowedFields.accepted_at = body.accepted_at || now;
       allowedFields.accepted_by = actorId;
     } else if (body.status === "rejected") {
       allowedFields.rejected_at = body.rejected_at || now;
       allowedFields.rejected_by = actorId;
     } else if (body.status === "active") {
-      // Block activation if escalation approval is pending
-      if (oldContract.escalation_approval_status === "pending") {
+      // Block activation if escalation approval is pending. The request itself
+      // is authoritative: the contract's status flag can be missing while a
+      // request is still open.
+      const { count: openEscalationRequests } = await createAdminClient()
+        .from("approval_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("entity_type", "contract")
+        .eq("entity_id", id)
+        .eq("status", "pending")
+        .in("approval_type", ["escalation_reduction", "escalation_waiver"]);
+      if (oldContract.escalation_approval_status === "pending" || (openEscalationRequests ?? 0) > 0) {
         return NextResponse.json({
           error: "Cannot activate: escalation rate approval is pending. Ask your admin to approve the negotiated rate first.",
         }, { status: 400 });
@@ -160,6 +345,8 @@ export async function PATCH(
       // Renewal contracts carry the deposit forward — skip the proposal
       // payment gate when deposit_carried_from is set.
       const isRenewal = !!oldContract.deposit_carried_from;
+      // Set when the deposit is part-paid but over the activation threshold (see below).
+      let partialDepositAtActivation: Awaited<ReturnType<typeof loadDepositCollection>> | null = null;
 
       // Payment gate — skipped for renewals (deposit carried forward)
       if (!isRenewal && !body.payment_override_reason) {
@@ -173,7 +360,7 @@ export async function PATCH(
 
         const { data: proposal } = await supabase
           .from("proposals")
-          .select("payment_status, deposit_payment_status, security_deposit_months, deposit_waiver_verified_at")
+          .select("payment_status, deposit_payment_status, security_deposit_months, security_deposit_amount, deposit_exception_amount, deposit_credit_amount, deposit_waiver_verified_at, deposit_claimed_by_contract_id")
           .eq("id", oldContract.proposal_id)
           .single();
 
@@ -183,53 +370,203 @@ export async function PATCH(
           }, { status: 400 });
         }
 
+        // The pro-rata / first invoice isn't always collected through the
+        // proposal's own Razorpay link — NEFT, a delta-seat expansion, or a
+        // corrected amount often gets billed through an ad-hoc invoice instead.
+        // A paid ad-hoc invoice explicitly attributed to this contract as the
+        // first invoice settles the same obligation, so it satisfies the gate.
+        // Only ACTIVATION_UNBLOCKING_PURPOSE counts: an unrelated paid ad-hoc
+        // charge attributed to the contract must never open this gate.
+        let prorataInvoice: { invoice_number: string; total_amount: number } | null = null;
+        if (proposal.payment_status !== "paid") {
+          const { data: attributed } = await supabase
+            .from("proforma_invoices")
+            .select("invoice_number, total_amount")
+            .eq("contract_id", id)
+            .eq("attribution_purpose", ACTIVATION_UNBLOCKING_PURPOSE)
+            .eq("status", "paid")
+            .limit(1)
+            .maybeSingle();
+          prorataInvoice = attributed ?? null;
+        }
+
         const missing: string[] = [];
-        if (proposal.payment_status !== "paid") missing.push("pro-rata / first invoice payment");
+        if (proposal.payment_status !== "paid" && !prorataInvoice) {
+          missing.push("pro-rata / first invoice payment");
+        }
         const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
-        if (depositRequired && proposal.deposit_payment_status !== "paid") missing.push("security deposit");
+        // A proposal's collected deposit belongs to whichever contract first
+        // claims it (see the snapshot block below) — if a different contract
+        // already claimed it, this proposal's "paid" status doesn't cover
+        // this contract too. It needs its own separate deposit collection.
+        const depositClaimedByOther = !!proposal.deposit_claimed_by_contract_id
+          && proposal.deposit_claimed_by_contract_id !== id;
+        // Staff can cover this contract's deposit from the customer's pooled,
+        // already-collected deposit (Apply button → apply-pooled-deposit route)
+        // instead of collecting it again or asking an admin for an override.
+        const depositCoveredByPool = Number(oldContract.deposit_pool_applied_amount || 0) > 0;
+        // Deposit collected in parts: more than half received lets the contract
+        // activate with a pending-balance warning (the pro-rata invoice is still
+        // required above). The caller must acknowledge the warning.
+        const partial = depositRequired && !depositCoveredByPool && proposal.deposit_payment_status !== "paid" && !depositClaimedByOther
+          ? await loadDepositCollection(createAdminClient(), { id: oldContract.proposal_id, ...proposal })
+          : null;
+        if (depositRequired && !depositCoveredByPool && (proposal.deposit_payment_status !== "paid" || depositClaimedByOther)) {
+          if (partial?.allowsActivation) {
+            partialDepositAtActivation = partial;
+          } else {
+            missing.push(depositClaimedByOther
+              ? "security deposit (already claimed by another contract activated from this same proposal — apply the customer's available deposit to this contract, or collect a separate one)"
+              : "security deposit");
+          }
+        }
         if (!depositRequired && !proposal.deposit_waiver_verified_at) missing.push("admin deposit waiver OTP approval");
         if (missing.length > 0) {
           return NextResponse.json({
             error: `Cannot activate: ${missing.join(" and ")} not yet collected on the linked proposal`,
           }, { status: 400 });
         }
+        if (partialDepositAtActivation && body.acknowledge_partial_deposit !== true) {
+          return NextResponse.json({
+            error: `${partialDepositWarning(partialDepositAtActivation)} Confirm to activate with the deposit pending (do this from the contract page).`,
+            code: "PARTIAL_DEPOSIT_ACK_REQUIRED",
+            deposit: partialDepositAtActivation,
+          }, { status: 409 });
+        }
+
+        // Record which invoice stood in for the proposal payment, so the
+        // activation is explainable later without re-deriving it.
+        if (prorataInvoice) {
+          prorataSatisfiedByInvoice = `${prorataInvoice.invoice_number} (${prorataInvoice.total_amount})`;
+        }
       }
-      // For mid-month renewals: pro-rata must be paid before activation.
-      // Check the billing statement directly so all payment paths (Razorpay,
-      // AR manual record, Tally inbox record) unblock activation automatically.
-      if (
-        oldContract.is_renewal &&
-        oldContract.prorata_payment_status === "pending" &&
-        !body.payment_override_reason
-      ) {
-        let prorataSettled = false;
-        if (oldContract.prorata_billing_statement_id) {
-          const { data: prorataStmt } = await supabase
-            .from("billing_statements")
-            .select("payment_status")
-            .eq("id", oldContract.prorata_billing_statement_id)
-            .single();
-          if (prorataStmt?.payment_status === "paid") {
-            prorataSettled = true;
-            // Sync the contract column so future checks are fast
-            await supabase
-              .from("contracts")
-              .update({ prorata_payment_status: "paid" })
-              .eq("id", id);
+      // Renewals carry the deposit forward, but a mid-month start still owes a
+      // pro-rata invoice for the balance of that month. Nothing else raises it:
+      // activation raises no invoice (see below) and the monthly rent run opens
+      // at the FOLLOWING month. So the pro-rata must be sent (or admin-waived)
+      // before activation — otherwise the partial month is silently never billed
+      // (TWV-C-0155, Oct 2026). Sending stays a deliberate click on the Pro-Rata
+      // card; activation itself never emails a customer.
+      if (isRenewal) {
+        const prorataGate = await getRenewalProrataGate(createAdminClient(), oldContract);
+        if (prorataGate.blocking) {
+          return NextResponse.json({ error: PRORATA_UNSENT_ERROR, code: "PRORATA_UNSENT" }, { status: 400 });
+        }
+      }
+
+      // Snapshot the proposal's deposit fields onto the contract at the
+      // moment of activation — after this, the contract owns its own
+      // deposit ledger and never needs the proposal join again. Skipped for
+      // renewals (deposit_carried_from already resolves to the ancestor's
+      // own snapshot) and decoupled from payment_override_reason so an
+      // admin-override activation still gets whatever the proposal has.
+      if (!isRenewal && oldContract.proposal_id) {
+        const { data: depositSnapshot } = await supabase
+          .from("proposals")
+          .select("security_deposit_amount, security_deposit_months, deposit_exception_amount, deposit_credit_amount, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes, occupation_start_date, deposit_claimed_by_contract_id")
+          .eq("id", oldContract.proposal_id)
+          .single();
+
+        if (depositSnapshot) {
+          // Nothing to claim (not_required/waived/still-pending) or already
+          // claimed by this same contract — no DB round-trip needed, this
+          // contract is entitled to the proposal's payment fields as-is.
+          // When the customer's pooled deposit was applied to this contract,
+          // it must not also claim the proposal's own payment — that would
+          // count the same deposit twice.
+          const poolApplied = Number(oldContract.deposit_pool_applied_amount || 0);
+          // A deposit collected in parts and still short: this contract holds the
+          // money received so far, so it must claim the proposal's deposit now
+          // (like a paid one) — otherwise a second contract off the same proposal
+          // could claim it, and the balance paid later would have no owner.
+          const partsCollection = poolApplied <= 0 && depositSnapshot.deposit_payment_status !== "paid"
+            ? await loadDepositCollection(createAdminClient(), { id: oldContract.proposal_id, ...depositSnapshot })
+            : null;
+          const partsHeld = !!partsCollection && partsCollection.paid > 0;
+          let claimGranted = poolApplied > 0
+            ? false
+            : (depositSnapshot.deposit_payment_status !== "paid" && !partsHeld) ||
+              depositSnapshot.deposit_claimed_by_contract_id === id;
+
+          if (!claimGranted && poolApplied <= 0) {
+            // Paid, and not yet claimed by this contract — a proposal's
+            // collected deposit can only ever belong to one contract, so
+            // claim it atomically. WHERE ... IS NULL means only the request
+            // that actually wins a race (two contracts off the same
+            // proposal activating near-simultaneously) gets the update
+            // applied — a plain read-then-write here would let both win.
+            const admin = createAdminClient();
+            const { data: claimed } = await admin
+              .from("proposals")
+              .update({ deposit_claimed_by_contract_id: id })
+              .eq("id", oldContract.proposal_id)
+              .is("deposit_claimed_by_contract_id", null)
+              .select("id");
+            claimGranted = !!claimed && claimed.length > 0;
+          }
+
+          Object.assign(allowedFields, buildContractDepositSnapshot(depositSnapshot, claimGranted));
+          if (partsHeld && claimGranted && partsCollection) {
+            const note = `Activated with ₹${partsCollection.paid.toLocaleString("en-IN")} of the ₹${partsCollection.required.toLocaleString("en-IN")} deposit received in parts (${partsCollection.percent}%); ₹${partsCollection.pending.toLocaleString("en-IN")} still pending.`;
+            allowedFields.deposit_internal_notes = [note, depositSnapshot.deposit_internal_notes].filter(Boolean).join(" ");
+            partialDepositClaimed = partsCollection;
+          }
+          if (poolApplied > 0) {
+            allowedFields.deposit_internal_notes =
+              `₹${poolApplied} of this contract's security deposit is covered by the customer's pooled deposit (applied before activation); it was collected under another of their contracts.`;
           }
         }
-        if (!prorataSettled) {
-          return NextResponse.json({
-            error: "Cannot activate: pro-rata payment for the partial first month has not been collected. Send the PI or GST invoice from the Pro-Rata section and collect payment first.",
-          }, { status: 400 });
+
+        // Lock start_date to the paid pro-rata invoice's occupation date —
+        // once payment has actually been collected against a specific date,
+        // that date is authoritative and the placeholder entered earlier no
+        // longer is. Admin overrides skip the re-derivation and keep
+        // whatever start_date this same request explicitly set (or the
+        // existing value if it didn't), consistent with the payment gate
+        // bypass above.
+        if (!body.payment_override_reason) {
+          const lockedStartDate = depositSnapshot?.occupation_start_date || oldContract.start_date;
+          if (lockedStartDate !== oldContract.start_date) {
+            allowedFields.start_date = lockedStartDate;
+            // phase_start_date (the rate-escalation clock anchor) defaults to
+            // start_date at creation but is independently editable — only
+            // re-sync it here if it was never moved off that default.
+            if (oldContract.phase_start_date === oldContract.start_date) {
+              allowedFields.phase_start_date = lockedStartDate;
+            }
+          }
         }
+      }
+
+      // start_date is locked from this point on — no route allows editing it
+      // once active. Renewals are out of scope for this: their draft
+      // start_date is managed entirely by the renewal edit-terms flow, and
+      // start_date_confirmed already defaults to true for them.
+      if (!isRenewal) {
+        allowedFields.start_date_confirmed = true;
+        allowedFields.start_date_locked_at = now;
       }
 
       allowedFields.activated_at = now;
       allowedFields.activated_by = actorId;
     } else if (body.status === "terminated") {
-      // Only admin or manager may terminate a contract
-      if (!["admin", "manager"].includes(dbUser?.role ?? "")) {
+      const isWithdrawal = (CONTRACT_PRE_ACTIVATION_STATUSES as readonly string[]).includes(oldContract.status);
+      if (isWithdrawal) {
+        if (oldContract.is_renewal) {
+          return NextResponse.json(
+            { error: "A renewal draft can't be withdrawn — use Cancel Renewal on the original contract instead" },
+            { status: 400 }
+          );
+        }
+        if (!canWithdrawContract(oldContract, dbUser?.role)) {
+          return NextResponse.json(
+            { error: "Only admins, managers and sales reps can withdraw a contract" },
+            { status: 403 }
+          );
+        }
+        withdrawnBeforeActivation = true;
+      } else if (!["admin", "manager"].includes(dbUser?.role ?? "")) {
+        // Only admin or manager may terminate a live contract
         return NextResponse.json(
           { error: "Only admins and managers can terminate a contract" },
           { status: 403 }
@@ -237,6 +574,17 @@ export async function PATCH(
       }
       if (!body.termination_reason && !allowedFields.termination_reason) {
         return NextResponse.json({ error: "Termination reason is required" }, { status: 400 });
+      }
+      // A contract with an exit in notice can only be terminated from its last
+      // day. (An admin can still shorten the exit's last day on the exit page.)
+      if (!isWithdrawal) {
+        const liveExit = await getLiveExit(createAdminClient(), id);
+        if (liveExit?.status === "in_notice" && !canCompleteOn(liveExit.last_day, new Date())) {
+          return NextResponse.json(
+            { error: `This exit's last day is ${liveExit.last_day}. Complete it on or after that day, or change the last day on the exit page.` },
+            { status: 409 }
+          );
+        }
       }
       allowedFields.terminated_at = now;
       allowedFields.terminated_by = actorId;
@@ -257,11 +605,36 @@ export async function PATCH(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Close the exit workflow when a live contract is terminated: marks the exit
+  // completed and tells the team. A no-op when there was no exit.
+  if (body.status === "terminated" && oldContract.status !== "terminated" && !withdrawnBeforeActivation) {
+    const { data: leadRow } = await createAdminClient()
+      .from("leads").select("first_name, last_name, company").eq("id", oldContract.lead_id).maybeSingle();
+    await completeExitOnTerminate(createAdminClient(), {
+      contractId: id,
+      contractNumber: (oldContract.contract_number as string | null) ?? null,
+      actorId: dbUser?.id ?? null,
+      customer: leadRow?.company || `${leadRow?.first_name ?? ""} ${leadRow?.last_name ?? ""}`.trim() || "Customer",
+    });
+  }
+
   if (dbUser?.id && oldContract) {
     const auditChanges = diffChanges(oldContract as Record<string, unknown>, allowedFields);
     // If admin used the payment override, record the reason explicitly in the audit trail
     if (body.payment_override_reason && body.status === "active") {
       auditChanges["payment_override_reason"] = { old: null, new: body.payment_override_reason };
+    }
+    if (body.status === "active" && Number(oldContract.deposit_pool_applied_amount || 0) > 0 && !oldContract.deposit_carried_from) {
+      auditChanges["deposit_covered_by_pool"] = { old: null, new: Number(oldContract.deposit_pool_applied_amount) };
+    }
+    if (partialDepositClaimed) {
+      auditChanges["deposit_activated_while_part_paid"] = { old: null, new: { paid: partialDepositClaimed.paid, required: partialDepositClaimed.required, pending: partialDepositClaimed.pending } };
+    }
+    if (prorataSatisfiedByInvoice) {
+      auditChanges["prorata_satisfied_by_invoice"] = { old: null, new: prorataSatisfiedByInvoice };
+    }
+    if (withdrawnBeforeActivation) {
+      auditChanges["withdrawn_before_activation"] = { old: null, new: true };
     }
     logAudit(supabase, {
       entityType: "contract",
@@ -276,17 +649,76 @@ export async function PATCH(
   if (body.status === "active" && oldContract.status !== "active") {
     await autoUpdateLeadStatus(supabase, oldContract.lead_id, "contract");
 
-    // Generate the current month's billing statement immediately. The monthly
-    // cron runs on the last day of each month at 21:00 IST — without this hook,
-    // contracts activated mid-month would have no bill until then.
-    // Idempotent: skips if a statement for this month already exists.
+    // Resolve the lead's enquiry as Converted. The daily enquiry-reconcile cron is the backstop,
+    // so a failure here must never fail the activation.
+    try {
+      await reconcileLeadEnquiries(createAdminClient(), [oldContract.lead_id]);
+    } catch (err) {
+      console.error("[contract activation] enquiry reconcile failed:", err instanceof Error ? err.message : "unknown");
+    }
+
+    // Activation deliberately raises NO invoice.
+    //
+    // It used to call generateMonthlyStatements() — the legacy combined
+    // generator — on the reasoning that "contracts activated mid-month would
+    // have no bill until the cron". Under the proposal → contract split that
+    // reasoning no longer holds, and the hook actively caused the gap it was
+    // meant to prevent:
+    //   • The proposal already collected the deposit and the pro-rata for the
+    //     partial start month. There is nothing outstanding at activation.
+    //   • Contract billing starts at the first FULL month, which the month-end
+    //     rent run covers on its own.
+    //   • The hook anchored on the activation date rather than the contract, so
+    //     a contract activated after its own first billing month got a draft for
+    //     the month after ACTIVATION — and every month in between was billed by
+    //     nobody: the run had skipped it (not yet active), the hook jumped past
+    //     it. Four contracts lost their August 2026 rent this way.
+    //   • It emitted legacy `combined` statements that the rent + usage split
+    //     then had to void and supersede.
+    //
+    // What activation does instead is REPORT. Months already past their billing
+    // run with no rent statement are recorded on the audit trail and surfaced on
+    // the contract, for a person to decide about. Never auto-billed: rent is
+    // sometimes invoiced outside the CRM, and silently raising back-dated
+    // invoices against a customer is not a side effect a status change may have.
     try {
       const admin = createAdminClient();
-      await generateMonthlyStatements(admin, { contractId: id });
+      // The whole renewal chain, not just this row: a renewal's opening months
+      // are billed on its parent while it awaits activation, so checking one
+      // contract in isolation reports paid months as unbilled.
+      const chain = await renewalChainContractIds(admin, id);
+      const { data: existing } = await admin
+        .from("billing_statements")
+        .select("contract_id, billed_on_behalf_of_contract_id, statement_type, period_start, period_end, prepaid_month, prepaid_year, voided_at")
+        .in("contract_id", chain);
+
+      const missing = unbilledMonths({
+        startDate: oldContract.start_date as string,
+        endDate: oldContract.end_date as string,
+        createdAt: oldContract.created_at as string,
+        today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        statements: (existing ?? []) as RentCoverage[],
+        contractId: id,
+        contractStatus: oldContract.status as string,
+      });
+
+      if (missing.length > 0) {
+        const label = missing.map((m) => `${String(m.month).padStart(2, "0")}/${m.year}`).join(", ");
+        logAudit(admin, {
+          entityType: "contract",
+          entityId: id,
+          action: "update",
+          performedBy: dbUser?.id ?? null,
+          changes: {
+            unbilled_months_at_activation: { old: null, new: label },
+          },
+        });
+      }
     } catch (err) {
-      console.error("[contract-activate] auto-generate statement failed:", err);
-      // Non-fatal: activation still succeeds. Operator can use the
-      // "Generate Missing Bills" button in /billing to retry.
+      console.error("[contract-activate] unbilled-month check failed:", err);
+      // Non-fatal and non-blocking: this is a report, not a gate. The same
+      // check runs on the contract's Invoices card, so a failure here loses
+      // the audit entry, not the visibility.
     }
 
     // ── UniFi API voucher issuance (Nungambakkam LGF only) ───────────
@@ -299,23 +731,27 @@ export async function PATCH(
           const admin = createAdminClient();
           const { data: location } = await admin
             .from("locations")
-            .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
+            .select("code, unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
             .eq("id", oldContract.location_id)
             .single();
 
           if (location && isUnifiLocation(location)) {
             const siteConfig = siteConfigFromLocation(location);
             const durationMinutes = calcVoucherMinutes(oldContract.end_date);
-            const seatedCount = oldContract.no_of_seats || 1;
+            const seatedCount = oldContract.seats || 1;
             const { id: unifiVoucherId, code: unifiCode } = await createUnifiVoucher({
               durationMinutes,
-              note: `contract_${data.contract_number}`,
+              note: buildVoucherNote(location.code, `contract_${data.contract_number}`),
               quota: seatedCount,
             }, siteConfig);
             // Store the UniFi voucher _id on the contract for revocation on cancellation
             await admin
               .from("contracts")
-              .update({ unifi_voucher_id: unifiVoucherId })
+              .update({
+                unifi_voucher_id: unifiVoucherId,
+                unifi_voucher_console_id: siteConfig.consoleId,
+                unifi_voucher_location_code: location.code ?? null,
+              })
               .eq("id", id);
             console.log(`[unifi] Issued voucher ${unifiCode} (${durationMinutes} min, ${seatedCount} seats) for ${data.contract_number}`);
           }
@@ -353,11 +789,12 @@ export async function PATCH(
           // 1a. Revoke parent contract's UniFi API voucher (Nungambakkam LGF)
           const { data: parentContract } = await admin
             .from("contracts")
-            .select("unifi_voucher_id")
+            .select("unifi_voucher_id, unifi_voucher_console_id, location_id")
             .eq("id", oldContract.parent_contract_id)
             .single();
           if (parentContract?.unifi_voucher_id) {
-            revokeUnifiVoucher(parentContract.unifi_voucher_id)
+            // The console that issued it, not whatever the location points at now.
+            revokeUnifiVoucher(parentContract.unifi_voucher_id, await siteConfigForStoredVoucher({ consoleId: parentContract.unifi_voucher_console_id, locationId: parentContract.location_id }))
               .catch((err: unknown) => console.error("[renewal-activate] UniFi voucher revocation failed:", err));
           }
 
@@ -506,8 +943,11 @@ export async function PATCH(
     })();
   }
 
-  // On termination: release all active space allocations so units are available for re-allocation
-  if (body.status === "terminated" && oldContract.status !== "terminated") {
+  // On termination/expiry: release all active space allocations so units are available for re-allocation
+  if (
+    (body.status === "terminated" || body.status === "expired") &&
+    oldContract.status === "active"
+  ) {
     (async () => {
       try {
         const admin = createAdminClient();
@@ -524,7 +964,9 @@ export async function PATCH(
 
   // On termination: revoke UniFi voucher instantly (Nungambakkam LGF only)
   if (body.status === "terminated" && oldContract.status !== "terminated" && oldContract.unifi_voucher_id) {
-    revokeUnifiVoucher(oldContract.unifi_voucher_id)
+    // Revoke on the contract's own site console, not the default one.
+    siteConfigForStoredVoucher({ consoleId: oldContract.unifi_voucher_console_id, locationId: oldContract.location_id })
+      .then((cfg) => revokeUnifiVoucher(oldContract.unifi_voucher_id, cfg))
       .catch(err => console.error("[unifi] voucher revocation on termination failed:", err));
   }
 
@@ -535,7 +977,7 @@ export async function PATCH(
         // Fetch active voucher issuances with voucher codes
         const { data: issuances } = await supabase
           .from("voucher_issuances")
-          .select("id, voucher_id, unifi_voucher_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
+          .select("id, voucher_id, unifi_voucher_id, unifi_console_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
           .eq("contract_id", id)
           .eq("is_active", true);
 
@@ -561,11 +1003,14 @@ export async function PATCH(
           // Revoke Unifi live-API per-seat vouchers (fire-and-forget)
           for (const issuance of issuances) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const uid = (issuance as any).unifi_voucher_id as string | null;
+            const { unifi_voucher_id: uid, unifi_console_id: issuedOn } = issuance as any as { unifi_voucher_id: string | null; unifi_console_id: string | null };
             if (uid) {
-              revokeUnifiVoucher(uid).catch((err: unknown) =>
-                console.error(`[unifi] per-seat revoke ${uid} on termination failed:`, err)
-              );
+              // Each voucher goes back to the console that issued it.
+              siteConfigForStoredVoucher({ consoleId: issuedOn, locationId: oldContract.location_id })
+                .then((cfg) => revokeUnifiVoucher(uid, cfg))
+                .catch((err: unknown) =>
+                  console.error(`[unifi] per-seat revoke ${uid} on termination failed:`, err)
+                );
             }
           }
 

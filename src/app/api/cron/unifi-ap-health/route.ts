@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { unifiRequest, siteConfigFromLocation } from "@/lib/unifi";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/cron/unifi-ap-health
@@ -20,7 +21,7 @@ interface UnifiDevice {
   state?: number;
 }
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -182,3 +183,5 @@ async function sendApAlertEmail(
     `,
   });
 }
+
+export const GET = withCronHealth("cron/unifi-ap-health", handler);

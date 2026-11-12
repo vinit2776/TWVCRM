@@ -24,6 +24,8 @@ interface ContractAddonsSectionProps {
   contractEndDate?: string;
   taxPercentage?: number;
   readOnly?: boolean;
+  /** Bump to open the Add dialog (the contract page's Invoice wizard does this). */
+  openAddSignal?: number;
 }
 
 const EMPTY_FORM = {
@@ -33,7 +35,7 @@ const EMPTY_FORM = {
   effective_until: "",
 };
 
-export function ContractAddonsSection({ contractId, contractStartDate, contractEndDate, taxPercentage = 18, readOnly = false }: ContractAddonsSectionProps) {
+export function ContractAddonsSection({ contractId, contractStartDate, contractEndDate, taxPercentage = 18, readOnly = false, openAddSignal = 0 }: ContractAddonsSectionProps) {
   const [addons, setAddons] = useState<ContractAddon[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -57,6 +59,11 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
     setForm(EMPTY_FORM);
     setDialogOpen(true);
   }
+
+  useEffect(() => {
+    if (openAddSignal > 0 && !readOnly) openAdd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openAddSignal]);
 
   function openEdit(addon: ContractAddon) {
     setEditing(addon);

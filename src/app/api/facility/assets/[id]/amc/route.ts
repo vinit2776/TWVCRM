@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { poIdsCoveringAsset } from "@/lib/procurement/amc-assets";
 
 /**
  * GET /api/facility/assets/[id]/amc
@@ -20,7 +21,8 @@ export async function GET(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Fetch AMC contracts linked to this asset
+  // Fetch AMC contracts covering this asset (one PO may cover several assets)
+  const coveringPoIds = await poIdsCoveringAsset(supabase, assetId);
   const { data: contracts } = await supabase
     .from("purchase_orders")
     .select(`
@@ -32,10 +34,11 @@ export async function GET(
       amc_scope_covered, amc_scope_exclusions,
       amc_terminated_at, amc_termination_reason,
       total_ordered_amount, created_at, status,
+      billing_cycle, cycle_count, unit_cost_per_cycle,
       terminator:users!amc_terminated_by(id, full_name),
       procurement_vendors(id, name)
     `)
-    .eq("linked_asset_id", assetId)
+    .in("id", coveringPoIds)
     .eq("po_type", "service")
     .order("amc_start_date", { ascending: false });
 
@@ -52,6 +55,7 @@ export async function GET(
       checklist:amc_event_checklist_items(id, checked)
     `)
     .eq("asset_id", assetId)
+    .is("voided_at", null)
     .order("event_date", { ascending: false })
     .limit(50);
 

@@ -57,17 +57,43 @@ import {
   FileSpreadsheet,
   BadgeIndianRupee,
   Flame,
+  Flag,
   Inbox,
   Zap,
+  MessageCircleQuestion,
+  MessageCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
+import { useSidebarBadges, type SidebarBadgeKey } from "@/hooks/use-sidebar-badges";
 
 type NavItem = {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   roles: string[] | null; // null = visible to all roles
+  /** Shows a count pill when the matching number is above zero. */
+  badge?: SidebarBadgeKey;
+};
+
+type BadgeCounts = Partial<Record<SidebarBadgeKey, number>>;
+
+function CountPill({ count, label }: { count: number; label: string }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className="ml-auto shrink-0 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white"
+      title={label}
+      aria-label={label}
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+const BADGE_LABELS: Record<SidebarBadgeKey, (n: number) => string> = {
+  queries_awaiting: (n) => `${n} ${n === 1 ? "query" : "queries"} waiting on you`,
+  payments_to_verify: (n) => `${n} reported ${n === 1 ? "payment" : "payments"} to verify`,
 };
 
 type NavSection = {
@@ -81,12 +107,23 @@ type NavSection = {
 const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "viewer"];
 
 // Operations menu (Bookings, Spaces, Packages, Vouchers): all active roles.
-const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "viewer"];
+const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "coordinator", "viewer"];
 
 // Top-level items — always visible, never grouped
 const topNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
+  { href: "/analytics", label: "Analytics", icon: BarChart3Icon, roles: ["admin"] },
   { href: "/my-tickets", label: "My Tickets", icon: Ticket, roles: null },
+  // Queries sits here rather than under Finance because it spans modules —
+  // a thread can hang off a statement, a vendor bill, a contract or a PO.
+  // Roles mirror ANY_QUERY_ROLE in src/lib/queries/registry.ts.
+  {
+    href: "/queries",
+    label: "Queries",
+    icon: MessageCircleQuestion,
+    roles: ["admin", "manager", "sales_rep", "floor_manager", "accounts", "office_admin", "viewer"],
+    badge: "queries_awaiting",
+  },
 ];
 
 // Collapsible sections
@@ -96,10 +133,10 @@ const navSections: NavSection[] = [
     label: "Sales",
     icon: TrendingUp,
     items: [
-      { href: "/leads",      label: "Leads",      icon: Users,       roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/pipeline",   label: "Pipeline",    icon: GitBranch,   roles: LEGACY_ROLES },
-      { href: "/activities", label: "Activities",  icon: Activity,    roles: LEGACY_ROLES },
-      { href: "/proposals",  label: "Proposals",   icon: FileText,    roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/leads",      label: "Leads",      icon: Users,       roles: [...LEGACY_ROLES, "accounts", "coordinator"] },
+      { href: "/pipeline",   label: "Pipeline",    icon: GitBranch,   roles: [...LEGACY_ROLES, "coordinator"] },
+      { href: "/activities", label: "Activities",  icon: Activity,    roles: [...LEGACY_ROLES, "coordinator"] },
+      { href: "/proposals",  label: "Proposals",   icon: FileText,    roles: [...LEGACY_ROLES, "accounts", "coordinator"] },
     ],
   },
   {
@@ -112,8 +149,12 @@ const navSections: NavSection[] = [
       { href: "/contracts/kyc-pending", label: "KYC Pending",   icon: ShieldCheck, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/billing",    label: "Billing", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting/receivables", label: "Receivables (AR)",  icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
+      // Deliberately narrower than the LEGACY_ROLES shorthand used above — this
+      // report is scoped to admin/manager/accounts only, not sales_rep/floor_manager/viewer.
+      { href: "/accounting/billing-reconciliation", label: "Billing Reconciliation", icon: FileSpreadsheet, roles: ["admin", "manager", "accounts"] },
+      { href: "/accounting/deposit-review", label: "Deposit Review", icon: ShieldCheck, roles: ["admin", "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/accounting/inbox", label: "Tally Inbox",         icon: Inbox,       roles: ["admin", "manager", "accounts", "office_admin"] },
+      { href: "/accounting/inbox", label: "Tally Inbox",         icon: Inbox,       roles: ["admin", "manager", "accounts", "office_admin"], badge: "payments_to_verify" },
       { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts", "viewer"] },
       { href: "/petty-cash",               label: "Petty Cash",          icon: Wallet,      roles: null },
     ],
@@ -133,14 +174,19 @@ const navSections: NavSection[] = [
     label: "Operations",
     icon: CalendarClock,
     items: [
-      { href: "/contracts", label: "Contracts", icon: ScrollText,    roles: [...OPERATIONS_ROLES, "accounts"] },
+      // IT roles manage each contract's vouchers and door access from the detail page.
+      { href: "/contracts", label: "Contracts", icon: ScrollText,    roles: [...OPERATIONS_ROLES, "accounts", "it_manager", "it_technician"] },
       { href: "/bookings",  label: "Bookings",  icon: CalendarClock, roles: OPERATIONS_ROLES },
       { href: "/spaces",    label: "Spaces",    icon: DoorOpen,      roles: OPERATIONS_ROLES },
       { href: "/headcount", label: "Headcount", icon: UsersRound,    roles: OPERATIONS_ROLES },
       { href: "/packages",  label: "Packages",  icon: TicketCheck,   roles: OPERATIONS_ROLES },
       { href: "/vouchers",    label: "Vouchers",    icon: Wifi,          roles: [...OPERATIONS_ROLES, "facility_staff", "it_manager", "it_technician"] },
-      { href: "/network",     label: "Network",     icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "office_admin"] },
+      { href: "/network",     label: "Network",     icon: Server,        roles: ["coordinator", "admin", "manager", "it_manager", "it_technician", "office_admin"] },
       { href: "/attendance",  label: "Attendance",  icon: Fingerprint,   roles: ["admin", "manager", "viewer"] },
+      // Launch page for the Attendance Gateway satellite app. Deliberately a
+      // separate entry from "Attendance" above, which is this CRM's own unrelated
+      // module — the gateway has its own database and its own user accounts.
+      { href: "/attendance-gateway", label: "Attendance Gateway", icon: Fingerprint, roles: ["admin", "manager", "office_admin"] },
     ],
   },
   {
@@ -148,8 +194,8 @@ const navSections: NavSection[] = [
     label: "Virtual Offices",
     icon: Building2,
     items: [
-      { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: LEGACY_ROLES },
-      { href: "/cases",       label: "Cases",       icon: Briefcase, roles: LEGACY_ROLES },
+      { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: [...LEGACY_ROLES, "coordinator"] },
+      { href: "/cases",       label: "Cases",       icon: Briefcase, roles: [...LEGACY_ROLES, "coordinator"] },
     ],
   },
   {
@@ -157,17 +203,17 @@ const navSections: NavSection[] = [
     label: "Procurement",
     icon: ShoppingCart,
     items: [
-      { href: "/procurement",              label: "Dashboard",         icon: BarChart3Icon,     roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/requests",    label: "Material Requests", icon: ClipboardListIcon, roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/orders",      label: "Purchase Orders",   icon: Package,           roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/bills",       label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/payables",    label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/vendors",     label: "Vendors",           icon: Truck,             roles: ["admin", "manager", "office_admin", "accounts", "viewer"] },
-      { href: "/procurement/catalog",     label: "Item Catalog",      icon: Archive,           roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: ["admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
-      { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
-      { href: "/procurement/replenishment", label: "Replenishment",   icon: RefreshCw,         roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: ["admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
+      { href: "/procurement",              label: "Dashboard",         icon: BarChart3Icon,     roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/requests",    label: "Material Requests", icon: ClipboardListIcon, roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/orders",      label: "Purchase Orders",   icon: Package,           roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/bills",       label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/payables",    label: "Payables",          icon: IndianRupee,       roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/vendors",     label: "Vendors",           icon: Truck,             roles: ["coordinator", "admin", "manager", "office_admin", "accounts", "viewer"] },
+      { href: "/procurement/catalog",     label: "Item Catalog",      icon: Archive,           roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: ["coordinator", "admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
+      { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["coordinator", "admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
+      { href: "/procurement/replenishment", label: "Replenishment",   icon: RefreshCw,         roles: ["coordinator", "admin", "manager", "office_admin"] },
+      { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: ["coordinator", "admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
       { href: "/procurement/electricity",  label: "Electricity Bills", icon: Zap,               roles: ["admin", "manager", "accounts", "office_admin"] },
       { href: "/procurement/verify",       label: "Verify Approval",   icon: ShieldCheck,       roles: ["admin", "manager", "office_admin"] },
     ],
@@ -177,12 +223,12 @@ const navSections: NavSection[] = [
     label: "Facility",
     icon: Wrench,
     items: [
-      { href: "/facility",               label: "Dashboard",           icon: BarChart3Icon, roles: ["admin", "manager", "it_manager", "it_technician", "fms", "floor_manager", "office_admin", "viewer"] },
-      { href: "/procurement/amc",        label: "AMC Contracts",       icon: Wrench,        roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/facility",               label: "Dashboard",           icon: BarChart3Icon, roles: ["coordinator", "admin", "manager", "it_manager", "it_technician", "fms", "floor_manager", "office_admin", "viewer"] },
+      { href: "/procurement/amc",        label: "AMC Contracts",       icon: Wrench,        roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
       { href: "/facility/issues",        label: "Tasks / Work Orders", icon: ClipboardList, roles: null },
       { href: "/facility/my-issues",     label: "My Tasks",            icon: Ticket,        roles: null },
-      { href: "/facility/assets",        label: "Assets",              icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "fms", "viewer", "floor_manager", "office_admin"] },
-      { href: "/facility/team-kpi",      label: "Team KPI",            icon: TrendingUp,    roles: ["admin", "manager", "it_manager", "fms", "viewer"] },
+      { href: "/facility/assets",        label: "Assets",              icon: Server,        roles: ["coordinator", "admin", "manager", "it_manager", "it_technician", "fms", "viewer", "floor_manager", "office_admin"] },
+      { href: "/facility/team-kpi",      label: "Team KPI",            icon: TrendingUp,    roles: ["coordinator", "admin", "manager", "it_manager", "fms", "viewer"] },
       { href: "/facility/settings",      label: "Facility Settings",   icon: Settings,      roles: ["admin", "it_manager", "it_team"] },
       { href: "/admin/employees",        label: "Employees",           icon: UsersRound,    roles: ["admin", "manager", "office_admin", "floor_manager", "fms"] },
       { href: "/admin/cosec-devices",    label: "COSEC Devices",       icon: Fingerprint,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
@@ -209,11 +255,14 @@ const navSections: NavSection[] = [
     label: "Admin",
     icon: Settings,
     items: [
-      { href: "/locations",                        label: "Locations",              icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager"] },
+      { href: "/locations",                        label: "Locations",              icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager", "it_manager"] },
       { href: "/admin/user-locations",             label: "User Locations",          icon: UsersRound,    roles: ["admin", "manager"] },
       { href: "/admin/transfer-billing-policies",  label: "Transfer Billing",        icon: ArrowLeftRight, roles: ["admin"] },
       { href: "/admin/electricity-billing-profiles", label: "Electricity Profiles",  icon: Zap,            roles: ["admin", "manager"] },
+      { href: "/admin/customer-value",             label: "Customer Value",          icon: TrendingUp,     roles: ["admin"] },
+      { href: "/admin/cost-parameters",             label: "Value Cost Settings",    icon: Calculator,     roles: ["admin"] },
       { href: "/audit-logs",                       label: "Audit Logs",              icon: ClipboardList, roles: ["admin", "manager"] },
+      { href: "/admin/process-exceptions",         label: "Staff Exceptions",        icon: Flag,          roles: ["admin", "manager"] },
       // "Tally Sync" nav entry intentionally hidden — the automated bridge-sync
       // feature is shelved (superseded by Tally Inbox / tally_handoff_v2_enabled).
       // Page itself is NOT deleted — see docs/tally-integration-status.md before
@@ -221,6 +270,7 @@ const navSections: NavSection[] = [
       // { href: "/admin/tally-sync",    label: "Tally Sync",     icon: RefreshCw,     roles: ["admin"] },
       { href: "/infrastructure",      label: "Infrastructure", icon: Server,        roles: ["admin"] },
       { href: "/support",             label: "Support",        icon: LifeBuoy,      roles: ["admin"] },
+      { href: "/admin/assistant-analytics", label: "Assistant Analytics", icon: MessageCircle, roles: ["admin"] },
       { href: "/settings",            label: "Settings",       icon: Settings,      roles: ["admin"] },
       { href: "/team",                label: "Team",           icon: UserPlus,      roles: ["admin", "manager", "sales_rep"] },
     ],
@@ -250,6 +300,7 @@ function CollapsibleSection({
   pathname,
   userRole,
   onNavigate,
+  badges,
 }: {
   section: NavSection;
   isOpen: boolean;
@@ -257,9 +308,17 @@ function CollapsibleSection({
   pathname: string;
   userRole: string | null;
   onNavigate: () => void;
+  badges: BadgeCounts;
 }) {
   const visibleItems = filterItems(section.items, userRole);
   if (visibleItems.length === 0) return null;
+
+  // A collapsed section would otherwise hide the very badge meant to pull
+  // attention to it, so its header carries the sum until it is opened.
+  const sectionTotal = visibleItems.reduce(
+    (sum, item) => sum + (item.badge ? (badges[item.badge] ?? 0) : 0),
+    0,
+  );
 
   const isActive = visibleItems.some(
     (item) => pathname === item.href || pathname.startsWith(item.href + "/")
@@ -278,6 +337,9 @@ function CollapsibleSection({
       >
         <section.icon className="h-5 w-5 shrink-0" />
         {section.label}
+        {!isOpen && sectionTotal > 0 && (
+          <CountPill count={sectionTotal} label={`${sectionTotal} items waiting on you in ${section.label}`} />
+        )}
         <ChevronDown
           className={cn(
             "ml-auto h-4 w-4 shrink-0 transition-transform duration-200",
@@ -304,6 +366,9 @@ function CollapsibleSection({
               >
                 <item.icon className="h-4 w-4 shrink-0" />
                 {item.label}
+                {item.badge && (
+                  <CountPill count={badges[item.badge] ?? 0} label={BADGE_LABELS[item.badge](badges[item.badge] ?? 0)} />
+                )}
               </Link>
             );
           })}
@@ -318,6 +383,7 @@ export function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useUiStore();
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  const badges = useSidebarBadges(!!userRole);
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -489,6 +555,9 @@ export function Sidebar() {
                   >
                     <item.icon className="h-5 w-5 shrink-0" />
                     {item.label}
+                    {item.badge && (
+                      <CountPill count={badges[item.badge] ?? 0} label={BADGE_LABELS[item.badge](badges[item.badge] ?? 0)} />
+                    )}
                   </Link>
                 );
               })}
@@ -503,6 +572,7 @@ export function Sidebar() {
                   pathname={pathname}
                   userRole={userRole}
                   onNavigate={closeSidebar}
+                  badges={badges}
                 />
               ))}
             </>
@@ -511,19 +581,23 @@ export function Sidebar() {
 
         {/* Help — pinned at bottom, always visible */}
         <div className="shrink-0 border-t border-sidebar-accent px-3 py-3">
-          {/* Version badge — semver driven by package.json, sha + date in tooltip. */}
+          {/* Build badge — the commit SHA, with the build date in the tooltip. This was
+              a semver from package.json until the workflow that bumped it turned out
+              not to be able to merge its own PR, leaving the badge five weeks stale
+              while reading as exact. The SHA is baked at build time, can't drift, and
+              is what you'd actually search for to check whether a fix is live. */}
           {(() => {
-            const version = process.env.NEXT_PUBLIC_APP_VERSION;
             const sha =
               process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
-              process.env.NEXT_PUBLIC_GIT_SHA ||
-              undefined;
+              process.env.NEXT_PUBLIC_GIT_SHA;
             const date = process.env.NEXT_PUBLIC_BUILD_DATE;
-            if (!version) return null;
-            const tooltip = [sha && `commit ${sha}`, date && `built ${date}`].filter(Boolean).join(" · ");
+            if (!sha) return null;
             return (
-              <p className="px-3 pb-2 text-[10px] text-sidebar-foreground/35 select-none" title={tooltip || undefined}>
-                {version}
+              <p
+                className="px-3 pb-2 font-mono text-[10px] text-sidebar-foreground/35 select-none"
+                title={date ? `built ${date}` : undefined}
+              >
+                {sha}
               </p>
             );
           })()}

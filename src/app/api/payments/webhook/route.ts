@@ -7,6 +7,11 @@ import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
 import { handleRenewalPayment } from "@/lib/vo-renewal";
 import { computeSettlement } from "@/lib/settlement";
+import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
+import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { logAudit, diffChanges } from "@/lib/audit";
+import { sendPartEmail } from "@/lib/deposit-instalment-email-server";
+import { syncContractDepositFromParts } from "@/lib/deposit-instalment-server";
 
 export const dynamic = "force-dynamic";
 
@@ -185,49 +190,142 @@ export async function POST(request: NextRequest) {
     // Check if this payment link belongs to a proposal (main payment)
     const { data: proposal } = await supabase
       .from("proposals")
-      .select("id, proposal_number, lead_id, payment_status")
+      .select("id, proposal_number, lead_id, status, payment_status, payment_amount, payment_reference, payment_received_at")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .maybeSingle();
 
     if (proposal && proposal.payment_status !== "paid") {
       const now = new Date().toISOString();
+      // A superseded proposal still records the money, but must not be revived.
+      const revive = proposal.status !== "superseded";
+      const proposalUpdate = {
+        payment_status: "paid",
+        ...(revive ? { status: "accepted", accepted_at: now } : {}),
+        payment_received_at: now,
+        payment_amount: amountPaid,
+        payment_reference: razorpayPaymentId || paymentLinkId,
+      };
       await supabase
         .from("proposals")
-        .update({
-          payment_status: "paid",
-          status: "accepted",
-          accepted_at: now,
-          payment_received_at: now,
-          payment_amount: amountPaid,
-          payment_reference: razorpayPaymentId || paymentLinkId,
-        })
+        .update(proposalUpdate)
         .eq("id", proposal.id);
+
+      logAudit(supabase, {
+        entityType: "proposal",
+        entityId: proposal.id,
+        action: "update",
+        performedBy: "system",
+        changes: diffChanges(proposal, proposalUpdate),
+      }).catch(() => {});
 
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "proposal" });
     }
 
+    // Staged deposit: a payment on one of a proposal's part links, or a late
+    // payment on its original full-deposit link once parts exist. Only that part
+    // is marked paid; the proposal's deposit flips to paid when the parts add up.
+    // A proposal with no parts is not matched here and takes the path below.
+    const { data: partPayment, error: partError } = await supabase.rpc("record_deposit_payment_for_link", {
+      p_link_id: paymentLinkId,
+      p_payment_id: razorpayPaymentId,
+      p_amount: amountPaid,
+    });
+    // PGRST202 = function not deployed in this database yet; anything else is a
+    // real failure and must not fall through to "unmatched" — return 500 so
+    // Razorpay retries instead of the payment going unrecorded.
+    if (partError && partError.code !== "PGRST202") {
+      console.error("[webhook] deposit part recording failed:", partError.message);
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit_part", outcome: "error", outcome_detail: partError.message });
+      return NextResponse.json({ error: "Failed to record deposit part" }, { status: 500 });
+    }
+    if (partPayment?.matched) {
+      if (partPayment.success && !partPayment.already_paid) {
+        logAudit(supabase, {
+          entityType: "proposal",
+          entityId: partPayment.proposal_id,
+          action: "update",
+          performedBy: "system",
+          changes: {
+            deposit_part_paid: { old: null, new: { amount: amountPaid, reference: razorpayPaymentId, ...(partPayment.via_original_link ? { via_original_link: true } : {}) } },
+            deposit_total_paid: { old: null, new: partPayment.paid },
+            ...(partPayment.accepted_now ? { status: { old: partPayment.proposal_status_before, new: "accepted" } } : {}),
+            ...(partPayment.complete ? { deposit_complete: { old: false, new: true } } : {}),
+          },
+        }).catch(() => {});
+      }
+      // Last part in: a contract activated while the deposit was part-paid now holds the full deposit.
+      if (partPayment.success && !partPayment.already_paid && partPayment.complete) {
+        await syncContractDepositFromParts(supabase, partPayment.proposal_id).catch((e) =>
+          console.error("[webhook] contract deposit sync failed:", e instanceof Error ? e.message : e));
+      }
+      // Receipt with the running breakup — once per part (a repeat delivery is already_paid).
+      if (partPayment.success && !partPayment.already_paid && partPayment.instalment_id) {
+        await sendPartEmail(supabase, { instalmentId: partPayment.instalment_id, kind: "received" }).catch((e) =>
+          console.error("[webhook] deposit part receipt email failed:", e instanceof Error ? e.message : e));
+      }
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit_part", outcome: partPayment.success ? "processed" : "error", outcome_detail: partPayment.success ? null : partPayment.error });
+      return NextResponse.json({ status: "ok", entity: "proposal_deposit_part" });
+    }
+
     // Check if this payment link belongs to a proposal security deposit
     const { data: depositProposal } = await supabase
       .from("proposals")
-      .select("id, proposal_number, deposit_payment_status")
+      .select("id, proposal_number, status, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_received_at, deposit_payment_medium")
       .eq("deposit_razorpay_link_id", paymentLinkId)
       .maybeSingle();
 
     if (depositProposal && depositProposal.deposit_payment_status !== "paid") {
       const now = new Date().toISOString();
-      // Mark deposit as paid AND auto-accept the proposal
+      /**
+       * Record the money always; auto-accept only a proposal that is still
+       * alive.
+       *
+       * A deposit link stays payable at Razorpay until someone cancels it,
+       * and until this PR nothing could. So a link issued against a proposal
+       * that was later rejected could still be paid — and this handler would
+       * have flipped that rejected proposal to 'accepted', resurrecting a
+       * dead deal on the strength of a stale link. One such proposal existed
+       * with a live ₹33,000 link on it.
+       *
+       * The money is real either way and must be recorded. What must not
+       * happen silently is the status change; a rejected proposal that
+       * receives a deposit is something a human needs to look at.
+       */
+      const resurrects = ["rejected", "expired", "superseded"].includes(depositProposal.status);
+      if (resurrects) {
+        console.warn(
+          `[webhook] deposit paid on ${depositProposal.status} proposal ${depositProposal.proposal_number} — ` +
+          `recording the payment but leaving its status alone`,
+        );
+      }
+      // Mark deposit as paid, and auto-accept only if it isn't a dead deal.
+      const depositUpdate = {
+        deposit_payment_status: "paid",
+        deposit_payment_received_at: now,
+        deposit_payment_amount: amountPaid,
+        deposit_payment_reference: razorpayPaymentId || paymentLinkId,
+        // Stamped here because the Tally Inbox shows this column to tell
+        // accounts how the money arrived. Omitting it left every
+        // link-paid deposit in the inbox with a blank medium, while
+        // manually recorded ones (which set it in
+        // /api/proposals/[id]/deposit-payment) read correctly — so the
+        // cleanest path produced the least legible inbox row.
+        deposit_payment_medium: "razorpay",
+        ...(resurrects ? {} : { status: "accepted", accepted_at: now }),
+      };
       await supabase
         .from("proposals")
-        .update({
-          deposit_payment_status: "paid",
-          deposit_payment_received_at: now,
-          deposit_payment_amount: amountPaid,
-          deposit_payment_reference: razorpayPaymentId || paymentLinkId,
-          status: "accepted",
-          accepted_at: now,
-        })
+        .update(depositUpdate)
         .eq("id", depositProposal.id);
+
+      logAudit(supabase, {
+        entityType: "proposal",
+        entityId: depositProposal.id,
+        action: "update",
+        performedBy: "system",
+        changes: diffChanges(depositProposal, depositUpdate),
+      }).catch(() => {});
 
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "proposal_deposit" });
@@ -257,9 +355,26 @@ export async function POST(request: NextRequest) {
     // Check if this payment link belongs to a billing statement (invoice)
     const { data: billingStatement } = await supabase
       .from("billing_statements")
-      .select("id, total_amount, payment_status")
+      .select("id, total_amount, payment_status, voided_at")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .maybeSingle();
+
+    // A voided statement is no longer a receivable. Its Razorpay link is
+    // cancelled at void time, but a payment already in flight (or a link the
+    // cancel call failed on) must not be booked against a cancelled invoice —
+    // that would resurrect it in AR and mis-state the month. Record the receipt
+    // for reconciliation and let accounts handle it as an unallocated payment.
+    if (billingStatement?.voided_at) {
+      logWebhookReceipt(supabase, {
+        event,
+        razorpay_payment_id: razorpayPaymentId,
+        razorpay_payment_link_id: paymentLinkId,
+        entity: "billing_statement",
+        outcome: "ignored",
+        outcome_detail: `Statement ${billingStatement.id} is voided — payment not recorded`,
+      });
+      return NextResponse.json({ status: "ok", entity: "billing_statement", ignored: "voided" });
+    }
 
     if (billingStatement && billingStatement.payment_status !== "paid") {
       // Record payment
@@ -344,15 +459,18 @@ export async function POST(request: NextRequest) {
           .single();
 
         if (stmtFull?.case_id && stmtFull.statement_type === "vo_renewal") {
-          void handleRenewalPayment({
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          adminSupabase: supabase as unknown as any,
-            caseId: stmtFull.case_id,
-            statementId: billingStatement.id,
-            amountPaid,
-            razorpayPaymentId: razorpayPaymentId || "",
-            razorpayLinkId: paymentLinkId,
-          }).catch((err) => console.error("[webhook] VO renewal completion failed:", err));
+          // Awaited: a fire-and-forget promise can be cut off when the
+          // function returns, leaving a paid renewal unrenewed.
+          try {
+            await handleRenewalPayment({
+              adminSupabase: supabase,
+              statementId: billingStatement.id,
+              razorpayPaymentId: razorpayPaymentId || "",
+              razorpayLinkId: paymentLinkId,
+            });
+          } catch (err) {
+            console.error("[webhook] VO renewal completion failed:", err);
+          }
         }
       }
 
@@ -373,6 +491,153 @@ export async function POST(request: NextRequest) {
 
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "billing_statement", outcome: "processed", outcome_detail: newStatus });
       return NextResponse.json({ status: "ok", entity: "billing_statement" });
+    }
+
+    // Check if this payment link belongs to an ad-hoc lead invoice
+    // (proforma_invoices). These links are created eagerly at invoice
+    // creation time (POST /api/invoices) and paid directly by the customer —
+    // unlike every other entity above, nothing else in the CRM ever recorded
+    // this payment, so it silently fell through to "no matching entity"
+    // below and the invoice stayed "sent" forever.
+    const { data: adhocInvoice } = await supabase
+      .from("proforma_invoices")
+      .select("id, invoice_number, status, title, items, subtotal, tax_percentage, tax_amount, total_amount, due_date, proposal_id, lead_id")
+      .eq("razorpay_link_id", paymentLinkId)
+      .maybeSingle();
+
+    // A cancelled invoice's Razorpay link is best-effort cancelled at cancel
+    // time, but a payment already in flight must not resurrect it — same
+    // rationale as the voided billing_statement guard above.
+    if (adhocInvoice?.status === "cancelled") {
+      logWebhookReceipt(supabase, {
+        event,
+        razorpay_payment_id: razorpayPaymentId,
+        razorpay_payment_link_id: paymentLinkId,
+        entity: "adhoc_invoice",
+        outcome: "ignored",
+        outcome_detail: `Invoice ${adhocInvoice.invoice_number} is cancelled — payment not recorded`,
+      });
+      return NextResponse.json({ status: "ok", entity: "adhoc_invoice", ignored: "cancelled" });
+    }
+
+    // Idempotency — a retried webhook delivery for an invoice already marked
+    // paid. Return here with the right entity tag rather than falling
+    // through to the booking check below, which would misreport it as "no
+    // matching entity" in the log.
+    if (adhocInvoice?.status === "paid") {
+      logWebhookReceipt(supabase, {
+        event,
+        razorpay_payment_id: razorpayPaymentId,
+        razorpay_payment_link_id: paymentLinkId,
+        entity: "adhoc_invoice",
+        outcome: "ignored",
+        outcome_detail: "Already paid — duplicate webhook delivery",
+      });
+      return NextResponse.json({ status: "ok", entity: "adhoc_invoice", reason: "Payment already recorded" });
+    }
+
+    if (adhocInvoice) {
+      // Find (or defensively create) the linked billing_statements row —
+      // mirrors POST /api/invoices/[id]/payment (the manual "Record payment"
+      // route) so both paths settle identically and land in the same Tally
+      // Inbox flow. Normally this already exists (created when the invoice
+      // was emailed), but the payment link is live from creation, so a
+      // customer can in principle pay before the invoice was ever sent.
+      let { data: statement } = await supabase
+        .from("billing_statements")
+        .select("id, total_amount, payment_status")
+        .eq("invoice_id", adhocInvoice.id)
+        .maybeSingle();
+
+      if (!statement) {
+        const todayYmd = new Date().toISOString().slice(0, 10);
+        const lineItems = ((adhocInvoice.items || []) as Array<{ description: string; quantity: number; unit_price: number; total: number }>).map((item) => ({
+          description: item.description,
+          qty: item.quantity,
+          unit_price: item.unit_price,
+          amount: item.total,
+          hsn_sac_code: resolveHsnCode("ad_hoc_charges"),
+        }));
+        const { data: newStatement } = await supabase
+          .from("billing_statements")
+          .insert({
+            invoice_id: adhocInvoice.id,
+            contract_id: null,
+            proposal_id: adhocInvoice.proposal_id ?? null,
+            lead_id: adhocInvoice.lead_id ?? null,
+            statement_type: "usage",
+            created_via: "adhoc_invoice",
+            status: "finalized",
+            payment_status: "unpaid",
+            handoff_state: "pi_awaiting_payment",
+            period_start: todayYmd,
+            period_end: todayYmd,
+            subtotal: adhocInvoice.subtotal,
+            fixed_amount: adhocInvoice.subtotal,
+            tax_percentage: adhocInvoice.tax_percentage,
+            tax_amount: adhocInvoice.tax_amount,
+            total_amount: adhocInvoice.total_amount,
+            due_date: (adhocInvoice.due_date as string | null) || todayYmd,
+            line_items: [{ type: "usage", label: adhocInvoice.title, items: lineItems, subtotal: adhocInvoice.subtotal }],
+          })
+          .select("id, total_amount, payment_status")
+          .single();
+        statement = newStatement;
+      }
+
+      if (statement) {
+        await supabase.from("billing_payments").insert({
+          billing_statement_id: statement.id,
+          amount: amountPaid,
+          payment_date: new Date().toISOString().slice(0, 10),
+          payment_mode: "razorpay",
+          payment_reference: razorpayPaymentId || paymentLinkId,
+          razorpay_payment_id: razorpayPaymentId,
+        });
+
+        // Reverse-sync to Tally as a receipt voucher, same as the
+        // billing_statement branch above — no-op unless this statement's
+        // GST invoice was issued by Tally and sync is active.
+        const v2Enabled = await isHandoffV2Enabled(supabase);
+        if (!v2Enabled) {
+          void enqueueTallyReceiptVoucher(statement.id, {
+            paymentId: razorpayPaymentId || paymentLinkId,
+            amount: amountPaid,
+            date: new Date().toISOString().slice(0, 10),
+            mode: "razorpay",
+            reference: razorpayPaymentId || paymentLinkId,
+          });
+        }
+
+        // Shared settlement tail — persists payment_status and fires the
+        // paid-transition chain (GST auto-gen / v2 handoff) identically to
+        // every other payment-creation path.
+        await finalizeBillingPayment(supabase, {
+          statementId: statement.id,
+          statementTotalAmount: statement.total_amount,
+          previousPaymentStatus: statement.payment_status,
+          reason: "razorpay_payment_link_paid",
+        });
+      }
+
+      const now = new Date().toISOString();
+      const invoiceUpdate = {
+        status: "paid",
+        paid_at: now,
+        payment_reference: razorpayPaymentId || paymentLinkId,
+      };
+      await supabase.from("proforma_invoices").update(invoiceUpdate).eq("id", adhocInvoice.id);
+
+      logAudit(supabase, {
+        entityType: "invoice",
+        entityId: adhocInvoice.id,
+        action: "update",
+        performedBy: "system",
+        changes: diffChanges(adhocInvoice, invoiceUpdate),
+      }).catch(() => {});
+
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "adhoc_invoice", outcome: "processed" });
+      return NextResponse.json({ status: "ok", entity: "adhoc_invoice" });
     }
 
     // Find the booking by razorpay_payment_link_id

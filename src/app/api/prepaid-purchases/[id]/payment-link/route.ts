@@ -1,3 +1,4 @@
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 
@@ -89,7 +90,7 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pkg = purchase.package as Record<string, any> | null;
   const amountInPaise = Math.round(Number(pkg?.price || purchase.price_paid) * 100);
-  const expireBy = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+  const expireBy = Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
 
   const rzpPayload: Record<string, unknown> = {
     amount: amountInPaise,

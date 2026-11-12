@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import Link from "next/link";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -222,6 +223,7 @@ export default function AttendancePage() {
 
   return (
     <div className="p-6 space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Attendance" }} />
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>

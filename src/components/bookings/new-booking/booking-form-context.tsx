@@ -19,6 +19,10 @@ export interface CustomerSuggestion {
 export interface ContractOption {
   id: string;
   contract_number: string;
+  status: string;
+  start_date: string;
+  end_date: string;
+  terminated_at?: string | null;
   lead?: { id: string; first_name: string; last_name: string; company?: string; email?: string; phone?: string; mobile?: string };
 }
 
@@ -124,6 +128,12 @@ export interface BookingFormState {
   leadHasIdProof: boolean;
   idProofLookingUp: boolean;
   contracts: ContractOption[];
+  // When set, the contract dropdown also lists terminated contracts — for
+  // logging a booking that happened before termination but never got
+  // entered. The booking date must still fall within the contract's own
+  // active window; the server enforces that regardless of this flag.
+  includeTerminatedContracts: boolean;
+  setIncludeTerminatedContracts: (v: boolean) => void;
 
   // Facilities
   selectedFacilities: string[];

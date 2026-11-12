@@ -32,6 +32,7 @@ import {
   SYSTEM_LEAD_STATUSES,
 } from "@/lib/constants";
 import type { Lead } from "@/types";
+import { preventEnterSubmit } from "@/lib/utils";
 import { useState } from "react";
 import { Loader2, AlertTriangle } from "lucide-react";
 import { LocationSelector } from "@/components/shared/location-selector";
@@ -119,7 +120,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit, onFormError)} className="space-y-8">
+    <form onSubmit={handleSubmit(onFormSubmit, onFormError)} onKeyDown={preventEnterSubmit} className="space-y-8">
       {/* Action buttons */}
       <div className="flex items-center justify-end gap-2 sticky top-0 bg-background z-10 pb-4 border-b">
         <Button type="button" variant="outline" onClick={onCancel}>
@@ -238,12 +239,26 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Label>Lead Status</Label>
             {(SYSTEM_LEAD_STATUSES as readonly string[]).includes(status) ? (
               /* System-driven status — read-only, can only be changed by
-                 logging a tour, creating a proposal, or activating a contract */
-              <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm flex items-center justify-between">
-                <span className="font-medium">{LEAD_STATUS_LABELS[status]}</span>
-                <span className="text-xs text-muted-foreground ml-2">
-                  🔒 Set automatically
-                </span>
+                 logging a tour, creating a proposal, or activating a contract.
+                 Exception: "won" already has an active contract behind it, so
+                 it stays fully locked. The others can still be escaped to
+                 lost/junk if the deal goes cold after a tour/proposal. */
+              <div className="space-y-1.5">
+                <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm flex items-center justify-between">
+                  <span className="font-medium">{LEAD_STATUS_LABELS[status]}</span>
+                  <span className="text-xs text-muted-foreground ml-2">
+                    🔒 Set automatically
+                  </span>
+                </div>
+                {status !== "won" && (
+                  <button
+                    type="button"
+                    onClick={() => setValue("status", "lost")}
+                    className="text-xs text-destructive hover:underline"
+                  >
+                    This lead went cold — mark as lost instead
+                  </button>
+                )}
               </div>
             ) : (
               <Select

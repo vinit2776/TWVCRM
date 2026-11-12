@@ -6,11 +6,16 @@ import { pingCronHealth } from "@/lib/cron-ping";
 /**
  * GET /api/petty-cash/day-book
  * Generates and emails the daily petty cash summary.
- * Called by Vercel cron at 6:30 PM IST daily.
- * Also supports ?date=YYYY-MM-DD for on-demand generation.
+ * Called by Vercel cron at 6:30 PM IST daily. Requires `Authorization: Bearer $CRON_SECRET`.
+ * ?date=YYYY-MM-DD regenerates a past day (still needs the secret).
  */
 export async function GET(request: Request) {
-  // Verify cron secret for automated runs (optional header check)
+  // Vercel cron sends this header; nothing else calls the route. Without the check anyone
+  // with the URL could make it email the day book to accounts/admin on demand.
+  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const targetDate = searchParams.get("date") || new Date().toISOString().slice(0, 10);
 
@@ -39,7 +44,11 @@ export async function GET(request: Request) {
   const approvedEntries = entries || [];
   const issuedRequests = issuances || [];
 
+  // Every exit records a run. Only the send-success path used to, so any day without
+  // petty-cash activity left the health row frozen and the monitor could not tell
+  // "nothing to send" from "never ran".
   if (approvedEntries.length === 0 && issuedRequests.length === 0) {
+    await pingCronHealth("petty-cash/day-book", "ok", { sent_to: 0, date: targetDate, skipped: "no transactions" });
     return NextResponse.json({ message: "No transactions today, skipping email." });
   }
 
@@ -160,6 +169,7 @@ export async function GET(request: Request) {
 
   const emails = (recipients || []).map((r) => r.email).filter(Boolean);
   if (emails.length === 0) {
+    await pingCronHealth("petty-cash/day-book", "error", { date: targetDate, error: "no recipients" });
     return NextResponse.json({ message: "No recipients found" });
   }
 
@@ -173,6 +183,7 @@ export async function GET(request: Request) {
   });
 
   if (emailErr) {
+    await pingCronHealth("petty-cash/day-book", "error", { date: targetDate, error: emailErr.message.slice(0, 200) });
     return NextResponse.json({ error: emailErr.message }, { status: 500 });
   }
 

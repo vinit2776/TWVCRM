@@ -1,4 +1,5 @@
 import Handlebars from "handlebars";
+import { stripSpecialConditionsHeading } from "@/lib/special-clause/membership";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS } from "@/lib/constants";
@@ -14,6 +15,8 @@ import {
   addFooter,
   createPdfContext,
 } from "@/lib/pdf-utils";
+import { drawCompanyStamp } from "@/lib/company-stamp";
+import { cleanAddressText } from "@/lib/agreement-address-gate";
 import type { VoPurpose, EntityType } from "@/types";
 
 // ================================================================
@@ -55,7 +58,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of virtual office address for the purpose of GST Registration under the Goods and Services Tax Act, 2017.
 
@@ -86,7 +89,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of registered office address for Company/LLP registration with the Ministry of Corporate Affairs (MCA).
 
@@ -116,7 +119,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of virtual office address for establishing a branch office presence.
 
@@ -144,7 +147,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of business address with mail handling and forwarding services.
 
@@ -171,7 +174,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of virtual office services including business address and related facilities.
 
@@ -195,6 +198,8 @@ TERMS:
 // ================================================================
 
 export interface AgreementVariables {
+  /** Approved customer-specific clause (special_clauses); printed before the signatures when present. */
+  special_clause_text?: string | null;
   agreement_date: string;
   agreement_number: string;
   company_name: string;
@@ -210,6 +215,10 @@ export interface AgreementVariables {
   client_cin_number?: string;
   client_email?: string;
   client_phone?: string;
+  represented_by_name?: string;
+  represented_by_designation?: string;
+  represented_by_id_label?: string;
+  represented_by_id_number?: string;
   location_name: string;
   location_address: string;
   purpose: VoPurpose;
@@ -240,6 +249,10 @@ export function mergeVariables(params: {
   clientCinNumber?: string;
   clientEmail?: string;
   clientPhone?: string;
+  representedByName?: string;
+  representedByDesignation?: string;
+  representedByIdType?: 'pan' | 'aadhaar';
+  representedByIdNumber?: string;
   locationName: string;
   locationAddress: string;
   purpose: VoPurpose;
@@ -251,6 +264,7 @@ export function mergeVariables(params: {
   const startDate = new Date(params.startDate);
   const endDate = new Date(startDate);
   endDate.setMonth(endDate.getMonth() + params.tenureMonths);
+  endDate.setDate(endDate.getDate() - 1);
 
   return {
     agreement_date: formatDate(params.agreementDate),
@@ -262,12 +276,16 @@ export function mergeVariables(params: {
     client_company_name: params.clientCompanyName,
     client_entity_type: params.clientEntityType,
     entity_type_label: ENTITY_TYPE_LABELS[params.clientEntityType] || params.clientEntityType,
-    client_address: params.clientAddress || "To be provided",
+    client_address: cleanAddressText(params.clientAddress) || "To be provided",
     client_gst_number: params.clientGstNumber,
     client_pan_number: params.clientPanNumber,
     client_cin_number: params.clientCinNumber,
     client_email: params.clientEmail,
     client_phone: params.clientPhone,
+    represented_by_name: params.representedByName,
+    represented_by_designation: params.representedByDesignation,
+    represented_by_id_label: params.representedByIdType === "aadhaar" ? "Aadhaar" : "PAN",
+    represented_by_id_number: params.representedByIdNumber,
     location_name: params.locationName,
     location_address: params.locationAddress,
     purpose: params.purpose,
@@ -297,7 +315,8 @@ export function renderAgreementText(
   }
 
   const template = Handlebars.compile(templateSource);
-  return template(variables);
+  // Agreements stored before addresses were cleaned on the way in still print on one line.
+  return template({ ...variables, client_address: cleanAddressText(variables.client_address) });
 }
 
 /**
@@ -305,7 +324,8 @@ export function renderAgreementText(
  */
 export function generateAgreementPdf(
   templateKey: AgreementTemplateKey,
-  variables: AgreementVariables
+  variables: AgreementVariables,
+  options?: { applyCompanyStamp?: boolean; stampRef?: string }
 ): jsPDF {
   const doc = new jsPDF();
   const startY = addBrandHeader(doc);
@@ -358,6 +378,15 @@ export function generateAgreementPdf(
     }
   }
 
+  // ── Special conditions (customer-specific, approved) ──
+  if (variables.special_clause_text) {
+    ctx.y += 4;
+    ctx.checkPageBreak(25);
+    ctx.addWrappedText("SPECIAL CONDITIONS:", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5);
+    ctx.y += 2;
+    ctx.addWrappedText(stripSpecialConditionsHeading(variables.special_clause_text), ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5);
+  }
+
   // ── Signature block ──
   ctx.y += 10;
   ctx.checkPageBreak(50);
@@ -384,13 +413,22 @@ export function generateAgreementPdf(
   doc.setLineWidth(0.3);
   doc.line(col1X, ctx.y, col1X + colWidth, ctx.y);
   doc.line(col2X, ctx.y, col2X + colWidth, ctx.y);
+
+  if (options?.applyCompanyStamp) {
+    drawCompanyStamp(doc, col1X, ctx.y, colWidth, options.stampRef);
+  }
+
   ctx.y += 5;
+
+  const clientSignatoryLine = variables.represented_by_name
+    ? `${variables.represented_by_name}${variables.represented_by_designation ? ", " + variables.represented_by_designation : ""}`
+    : "Authorized Signatory";
 
   doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(80, 80, 80);
   doc.text("Authorized Signatory", col1X, ctx.y);
-  doc.text("Authorized Signatory", col2X, ctx.y);
+  doc.text(clientSignatoryLine, col2X, ctx.y);
   ctx.y += 5;
   doc.text(`Date: ${variables.agreement_date}`, col1X, ctx.y);
   doc.text(`Date: ${variables.agreement_date}`, col2X, ctx.y);

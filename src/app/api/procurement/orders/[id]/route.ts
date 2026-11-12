@@ -1,8 +1,32 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
+import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
+import { TERMINATE_ROLES, terminateBlocker, terminationPatch } from "@/lib/procurement/amc-terminate";
+import { amcStatusFor, poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
+
+// Admin-only corrections, one step back each. See src/lib/procurement/admin-rollback.ts.
+const ROLLBACK_ACTIONS = [
+  "unorder", "unmark_received", "restore_cancelled", "restore_partial_cancel", "reopen_advance", "reverse_advance", "reinstate_amc",
+] as const;
+
+// cancel_po_reversing_receipts / restore_cancelled_po (00611) raise these as the exception message.
+const CANCEL_RPC_ERRORS: Record<string, string> = {
+  PO_NOT_CANCELLABLE: "Only pre-invoice POs can be cancelled",
+  BILLS_EXIST: "This PO has vendor bills. An admin must withdraw them before the PO can be cancelled.",
+  NOT_CANCELLED: "This PO is not cancelled",
+};
+
+// restore_partially_cancelled_po raises these as the exception message (00602).
+const RESTORE_RPC_ERRORS: Record<string, string> = {
+  NOT_PARTIALLY_CANCELLED: "This PO is no longer partially cancelled",
+  NO_SNAPSHOT: "The original quantities weren't recorded for this partial cancellation, so it can't be restored. Raise a new PO for the extra quantity.",
+  BILLS_PAST_APPROVAL: "A bill on this PO was approved at the reduced amount. Un-approve it first, then restore.",
+};
 
 const patchPoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("mark_ordered") }),
@@ -26,6 +50,13 @@ const patchPoSchema = z.discriminatedUnion("action", [
     /** Bank rail used to pay the vendor — same enum as bill payments. */
     advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]),
   }),
+  z.object({ action: z.literal("unorder"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("unmark_received"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("restore_cancelled"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("restore_partial_cancel"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("reopen_advance"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("reverse_advance"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("reinstate_amc"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("approve_advance") }),
   z.object({ action: z.literal("reject_advance") }),
   z.object({
@@ -58,7 +89,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
+      `*, purchase_order_items(*, linked_asset:facility_assets(id, name, asset_code), procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), companies(id, name, brand_name, gstin, address, city, state, pincode, phone, email), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -96,6 +127,10 @@ export async function PATCH(
 
   if (fetchError || !po) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
 
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { poId: id });
+  if (lockedChain) return lockedChain;
+
   const body = await request.json();
   const parsed = patchPoSchema.safeParse(body);
   if (!parsed.success) {
@@ -104,6 +139,11 @@ export async function PATCH(
 
   const { action } = parsed.data;
   let updatePayload: Record<string, unknown> = {};
+  const extraAuditChanges: Record<string, { old: unknown; new: unknown }> = {};
+  const isRollback = (ROLLBACK_ACTIONS as readonly string[]).includes(action);
+  if (isRollback && !canRollback(dbUser.role)) {
+    return NextResponse.json({ error: "Only an admin can roll back a purchase order step" }, { status: 403 });
+  }
 
   switch (action) {
     case "mark_ordered": {
@@ -171,14 +211,16 @@ export async function PATCH(
         return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
       }
 
-      // Block cancellation if vendor bills exist — must handle bills first
+      // Block cancellation if vendor bills exist — must handle bills first.
+      // A withdrawn bill is out of play (admin pulled it back), so it doesn't block.
       const { count: billCount } = await supabase
         .from("vendor_bills")
         .select("id", { count: "exact", head: true })
-        .eq("po_id", id);
+        .eq("po_id", id)
+        .neq("approval_status", "withdrawn");
       if (billCount && billCount > 0) {
         return NextResponse.json({
-          error: "This PO has vendor bills. Delete or void the bills before cancelling.",
+          error: "This PO has vendor bills. An admin must withdraw them before the PO can be cancelled.",
         }, { status: 422 });
       }
 
@@ -187,16 +229,52 @@ export async function PATCH(
         const { count: deliveryCount } = await supabase
           .from("po_delivery_receipts")
           .select("id", { count: "exact", head: true })
-          .eq("po_id", id);
+          .eq("po_id", id)
+          .is("reversed_at", null);
         if (deliveryCount && deliveryCount > 0 && !parsed.data.force) {
           return NextResponse.json({
             error: "This PO has received goods. Use force cancel or reject deliveries first.",
             has_deliveries: true,
           }, { status: 422 });
         }
+
+        // Goods were received and stocked: cancelling must take them back out of
+        // stock, or the inventory keeps goods the business no longer has. One
+        // atomic step (stock, received quantities, receipts flagged reversed,
+        // status) — see migration 00611.
+        if (deliveryCount && deliveryCount > 0) {
+          const { data: result, error: cancelRpcError } = await createAdminClient().rpc("cancel_po_reversing_receipts", {
+            p_po_id: id,
+            p_actor: dbUser.id,
+            p_reason: null,
+          });
+          if (cancelRpcError) {
+            const known = Object.entries(CANCEL_RPC_ERRORS).find(([code]) => cancelRpcError.message.includes(code));
+            if (known) return NextResponse.json({ error: known[1] }, { status: 422 });
+            console.error(`[orders/${id}] cancel with stock reversal failed:`, cancelRpcError.message);
+            return NextResponse.json({ error: "Could not cancel the purchase order" }, { status: 500 });
+          }
+          if (po.pr_id) await recalculatePrStatus(supabase, po.pr_id);
+          const shortfalls = (result?.shortfalls ?? []) as unknown[];
+          await logAudit(supabase, {
+            entityType: "purchase_order",
+            entityId: id,
+            action: "update",
+            performedBy: dbUser.id,
+            changes: {
+              status: { old: po.status, new: "cancelled" },
+              status_before_cancel: { old: null, new: po.status },
+              stock_deducted: { old: null, new: result?.stock_deducted ?? 0 },
+              receipts_reversed: { old: null, new: result?.receipts_reversed ?? 0 },
+              ...(shortfalls.length ? { stock_shortfall: { old: null, new: shortfalls } } : {}),
+            },
+          });
+          return NextResponse.json({ data: { ...po, status: "cancelled" }, stock: result });
+        }
       }
 
-      updatePayload = { status: "cancelled" };
+      // Remembered so an admin can restore the PO to exactly where it was.
+      updatePayload = { status: "cancelled", status_before_cancel: po.status };
       break;
     }
 
@@ -248,7 +326,16 @@ export async function PATCH(
       const { data: existingBills } = await supabase
         .from("vendor_bills")
         .select("id, total_amount, amount_paid, payment_status")
-        .eq("po_id", id);
+        .eq("po_id", id)
+        .neq("approval_status", "withdrawn");
+
+      // Snapshot what this action is about to change so an admin can restore it.
+      const partialCancelSnapshot = {
+        status_before: po.status,
+        total_ordered_amount: po.total_ordered_amount ?? null,
+        items: (poItems ?? []).map((i) => ({ id: i.id, quantity_ordered: Number(i.quantity_ordered) })),
+        bills: (existingBills ?? []).map((b) => ({ id: b.id, total_amount: Number(b.total_amount), payment_status: b.payment_status })),
+      };
 
       for (const bill of existingBills ?? []) {
         const amountPaid = Number(bill.amount_paid);
@@ -270,7 +357,193 @@ export async function PATCH(
         }
       }
 
-      updatePayload = { status: "partially_cancelled", total_ordered_amount: newTotal };
+      updatePayload = { status: "partially_cancelled", total_ordered_amount: newTotal, partial_cancel_snapshot: partialCancelSnapshot };
+      break;
+    }
+
+    case "unorder": {
+      if (po.status !== "ordered") {
+        return NextResponse.json({ error: "Only an ordered PO can be moved back to pending" }, { status: 422 });
+      }
+      const [{ count: receipts }, { count: bills }, { count: reports }] = await Promise.all([
+        supabase.from("po_delivery_receipts").select("id", { count: "exact", head: true }).eq("po_id", id).is("reversed_at", null),
+        supabase.from("vendor_bills").select("id", { count: "exact", head: true }).eq("po_id", id).neq("approval_status", "withdrawn"),
+        supabase.from("po_service_reports").select("id", { count: "exact", head: true }).eq("po_id", id),
+      ]);
+      if ((receipts ?? 0) > 0) {
+        return NextResponse.json({ error: "Goods have been received against this PO. Reject the deliveries first." }, { status: 422 });
+      }
+      if ((bills ?? 0) > 0) {
+        return NextResponse.json({ error: "This PO has vendor bills. Withdraw them first." }, { status: 422 });
+      }
+      if ((reports ?? 0) > 0 || Number(po.amc_visits_used ?? 0) > 0) {
+        return NextResponse.json({ error: "Service work has been logged against this PO, so it can't go back to pending." }, { status: 422 });
+      }
+      if (po.advance_status === "processed") {
+        return NextResponse.json({ error: "The advance has been paid. Reverse it first." }, { status: 422 });
+      }
+      // vendor_item_prices learned at mark_ordered is deliberately left alone:
+      // the previous price it overwrote isn't recorded, so it can't be put back.
+      updatePayload = { status: "pending" };
+      break;
+    }
+
+    case "unmark_received": {
+      if (po.status !== "received") {
+        return NextResponse.json({ error: "Only a received PO can be un-marked" }, { status: 422 });
+      }
+      const { data: items } = await supabase
+        .from("purchase_order_items").select("quantity_ordered, quantity_received").eq("po_id", id);
+      const next = poStatusAfterUnmarkReceived(items ?? []);
+      if (!next) {
+        return NextResponse.json(
+          { error: "Delivery receipts cover the whole order, so Received is correct. Reject the wrong delivery instead." },
+          { status: 422 }
+        );
+      }
+      updatePayload = { status: next, actual_delivery_date: null };
+      break;
+    }
+
+    case "restore_cancelled": {
+      if (po.status !== "cancelled") {
+        return NextResponse.json({ error: "Only a cancelled PO can be restored" }, { status: 422 });
+      }
+      if (po.pr_id) {
+        const { data: pr } = await supabase.from("purchase_requests").select("status").eq("id", po.pr_id).single();
+        if (!pr || !["approved", "partially_ordered", "po_created"].includes(pr.status)) {
+          return NextResponse.json({ error: "The material request is no longer open for ordering, so this PO can't be restored" }, { status: 422 });
+        }
+      }
+      const overflow = await poExceedsPrQty(supabase, id);
+      if (overflow) return NextResponse.json({ error: overflow }, { status: 422 });
+      const { data: items } = await supabase
+        .from("purchase_order_items").select("quantity_ordered, quantity_received").eq("po_id", id);
+      const restoreStatus = poStatusAfterCancelRestore(po.status_before_cancel ?? null, items ?? []);
+
+      // Puts back exactly the stock the cancel took out, the received quantities
+      // and the delivery receipts, then sets the status — atomically (00611).
+      const { data: restored, error: restoreRpcError } = await createAdminClient().rpc("restore_cancelled_po", {
+        p_po_id: id,
+        p_actor: dbUser.id,
+        p_status: restoreStatus,
+      });
+      if (restoreRpcError) {
+        const known = Object.entries(CANCEL_RPC_ERRORS).find(([code]) => restoreRpcError.message.includes(code));
+        if (known) return NextResponse.json({ error: known[1] }, { status: 422 });
+        console.error(`[orders/${id}] restore cancelled PO failed:`, restoreRpcError.message);
+        return NextResponse.json({ error: "Could not restore the purchase order" }, { status: 500 });
+      }
+      if (po.pr_id) await recalculatePrStatus(supabase, po.pr_id);
+      await logAudit(supabase, {
+        entityType: "purchase_order",
+        entityId: id,
+        action: "rollback",
+        performedBy: dbUser.id,
+        changes: {
+          rollback_kind: { old: null, new: "cancel_restored" },
+          rollback_reason: { old: null, new: parsed.data.reason },
+          status: { old: "cancelled", new: restoreStatus },
+          ...(restored?.stock_restored ? { stock_restored: { old: null, new: restored.stock_restored } } : {}),
+        },
+      });
+      return NextResponse.json({ data: { ...po, status: restoreStatus }, stock: restored });
+    }
+
+    case "restore_partial_cancel": {
+      if (po.status !== "partially_cancelled") {
+        return NextResponse.json({ error: "Only a partially cancelled PO can be restored" }, { status: 422 });
+      }
+      const snap = po.partial_cancel_snapshot as { items?: Array<{ id: string; quantity_ordered: number }> } | null;
+      if (!snap) return NextResponse.json({ error: RESTORE_RPC_ERRORS.NO_SNAPSHOT }, { status: 422 });
+      const qtyByItem = Object.fromEntries((snap.items ?? []).map((i) => [i.id, Number(i.quantity_ordered)]));
+      const overflow = await poExceedsPrQty(supabase, id, qtyByItem);
+      if (overflow) return NextResponse.json({ error: overflow }, { status: 422 });
+
+      const { data: result, error: rpcError } = await createAdminClient().rpc("restore_partially_cancelled_po", {
+        p_po_id: id,
+        p_actor: dbUser.id,
+      });
+      if (rpcError) {
+        const known = Object.entries(RESTORE_RPC_ERRORS).find(([code]) => rpcError.message.includes(code));
+        if (known) return NextResponse.json({ error: known[1] }, { status: 422 });
+        console.error(`[orders/${id}] restore partial cancel failed:`, rpcError.message);
+        return NextResponse.json({ error: "Could not restore the partial cancellation" }, { status: 500 });
+      }
+      if (po.pr_id) await recalculatePrStatus(supabase, po.pr_id);
+      await logAudit(supabase, {
+        entityType: "purchase_order",
+        entityId: id,
+        action: "rollback",
+        performedBy: dbUser.id,
+        changes: {
+          rollback_kind: { old: null, new: "partial_cancel_restored" },
+          rollback_reason: { old: null, new: parsed.data.reason },
+          status: { old: po.status, new: result?.status },
+          total_ordered_amount: { old: po.total_ordered_amount, new: result?.total_ordered_amount },
+        },
+      });
+      return NextResponse.json({ data: result });
+    }
+
+    case "reopen_advance": {
+      if (po.advance_status === "processed") {
+        return NextResponse.json({ error: "The advance has already been paid. Reverse the payment first." }, { status: 422 });
+      }
+      if (!["approved", "rejected"].includes(po.advance_approval_status ?? "")) {
+        return NextResponse.json({ error: "There is no approval decision to re-open" }, { status: 422 });
+      }
+      updatePayload = { advance_approval_status: "pending_review" };
+      break;
+    }
+
+    case "reverse_advance": {
+      if (po.advance_status !== "processed") {
+        return NextResponse.json({ error: "This advance has not been paid" }, { status: 422 });
+      }
+      // New bills on this PO were pre-credited with the advance (amount_paid),
+      // so undoing the advance would leave them showing money that was never paid.
+      const { count: liveBills } = await supabase
+        .from("vendor_bills")
+        .select("id", { count: "exact", head: true })
+        .eq("po_id", id)
+        .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
+      if ((liveBills ?? 0) > 0) {
+        return NextResponse.json(
+          { error: "Bills on this PO were credited with the advance. Withdraw or reject them first." },
+          { status: 422 }
+        );
+      }
+      updatePayload = {
+        advance_status: "pending",
+        advance_processed_by: null,
+        advance_processed_at: null,
+        advance_payment_date: null,
+        advance_payment_mode: null,
+        advance_payment_reference: null,
+      };
+      break;
+    }
+
+    case "reinstate_amc": {
+      if (!po.amc_terminated_at) {
+        return NextResponse.json({ error: "This contract has not been terminated" }, { status: 422 });
+      }
+      if (["cancelled", "partially_cancelled"].includes(po.status)) {
+        return NextResponse.json({ error: "The purchase order is cancelled. Restore it first." }, { status: 422 });
+      }
+      updatePayload = {
+        amc_terminated_at: null,
+        amc_terminated_by: null,
+        amc_termination_reason: null,
+        amc_status: amcStatusFor({
+          start: po.amc_start_date ?? null,
+          end: po.amc_end_date ?? null,
+          visitsCovered: po.amc_visits_covered != null ? Number(po.amc_visits_covered) : null,
+          visitsUsed: Number(po.amc_visits_used ?? 0),
+          today: new Date(),
+        }),
+      };
       break;
     }
 
@@ -369,36 +642,20 @@ export async function PATCH(
       // Admin/manager only — terminating an AMC mid-contract is a destructive,
       // irreversible action. Once terminated, no new events can be logged and
       // the only way back is to create a new PO.
-      if (!["admin", "manager"].includes(dbUser.role)) {
+      if (!(TERMINATE_ROLES as readonly string[]).includes(dbUser.role)) {
         return NextResponse.json(
           { error: "Only admin and manager can terminate an AMC" },
           { status: 403 }
         );
       }
-      if (po.po_type !== "service") {
-        return NextResponse.json(
-          { error: "Termination is only available on service / AMC POs" },
-          { status: 422 }
-        );
+      let requestIsAmc = false;
+      if (po.pr_id) {
+        const { data: pr } = await supabase.from("purchase_requests").select("expenditure_type").eq("id", po.pr_id).maybeSingle();
+        requestIsAmc = pr?.expenditure_type === "amc";
       }
-      if (po.amc_terminated_at) {
-        return NextResponse.json(
-          { error: "This AMC has already been terminated" },
-          { status: 422 }
-        );
-      }
-      if (!["active", "expiring"].includes(po.amc_status ?? "")) {
-        return NextResponse.json(
-          { error: `Can only terminate an active or expiring AMC (current state: ${po.amc_status ?? "unknown"})` },
-          { status: 422 }
-        );
-      }
-      updatePayload = {
-        amc_terminated_at: new Date().toISOString(),
-        amc_terminated_by: dbUser.id,
-        amc_termination_reason: parsed.data.termination_reason.trim(),
-        amc_status: "terminated",
-      };
+      const blocker = terminateBlocker(po, requestIsAmc);
+      if (blocker) return NextResponse.json({ error: blocker }, { status: 422 });
+      updatePayload = terminationPatch(dbUser.id, parsed.data.termination_reason);
       break;
     }
   }
@@ -412,17 +669,32 @@ export async function PATCH(
 
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
 
-  // Recalculate PR status after any cancellation so remaining qty is freed
-  if (["cancel", "partial_cancel"].includes(action) && po.pr_id) {
+  // Recalculate PR status after any cancellation (or restore) so remaining qty tracks reality
+  if (["cancel", "partial_cancel", "restore_cancelled"].includes(action) && po.pr_id) {
     await recalculatePrStatus(supabase, po.pr_id);
+  }
+
+  if (isRollback && "reason" in parsed.data) {
+    extraAuditChanges.rollback_kind = { old: null, new: ({
+      unorder: "order_reversed",
+      unmark_received: "received_reversed",
+      restore_cancelled: "cancel_restored",
+      reopen_advance: "advance_reopened",
+      reverse_advance: "advance_reversed",
+      reinstate_amc: "amc_reinstated",
+    } as Record<string, string>)[action] ?? action };
+    extraAuditChanges.rollback_reason = { old: null, new: parsed.data.reason };
   }
 
   await logAudit(supabase, {
     entityType: "purchase_order",
     entityId: id,
-    action: "update",
+    action: isRollback ? "rollback" : "update",
     performedBy: dbUser.id,
-    changes: diffChanges(po as Record<string, unknown>, { ...po, ...updatePayload } as Record<string, unknown>),
+    changes: {
+      ...diffChanges(po as Record<string, unknown>, { ...po, ...updatePayload } as Record<string, unknown>),
+      ...extraAuditChanges,
+    },
   });
 
   return NextResponse.json({ data: updated });

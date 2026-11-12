@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { ITEM_UNITS } from "@/lib/constants";
 import { computeOrderedQtyMap, recalculatePrStatus } from "@/lib/procurement/pr-status";
+import { canCombineLines, combinedPerCycleCost } from "@/lib/procurement/amc-lines";
+import { cycleFromUnit } from "@/lib/procurement/amc-billing";
 
 const createPoItemSchema = z.object({
   pr_item_id: z.string().uuid().nullish(),
   item_id: z.string().uuid().nullish(),
   item_name: z.string().min(1),
   quantity_ordered: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"]),
+  unit: z.enum(ITEM_UNITS),
   unit_price: z.number().min(0).nullish(),
   gst_rate: z.number().min(0).max(28).default(0),
   notes: z.string().nullish(),
@@ -47,12 +50,21 @@ const createGoodsPoSchema = z.object({
 const createServicePoSchema = z.object({
   po_type: z.literal("service"),
   // When a service PO is created from an approved AMC MR, the MR id is carried
-  // through so the audit trail and PR-status recalc work the same as goods.
+  // through so the audit trail and PR-status recalc work the same as goods —
+  // company_id is inherited from that PR in that case. When there is no
+  // parent PR (a standalone service PO), company_id must be supplied directly.
   pr_id: z.string().uuid().nullish(),
+  // Which request line this PO fulfils. Optional while a request has a single
+  // line (that line is used); required once a request carries several.
+  pr_item_id: z.string().uuid().nullish(),
+  // Combined PO: several request lines (one asset each) ordered as one PO. Cost, cycles
+  // and frequency are then taken from the lines, not from the body.
+  pr_item_ids: z.array(z.string().uuid()).min(2).nullish(),
+  company_id: z.string().uuid().nullish(),
   vendor_id: z.string().uuid(),
   location_id: z.string().uuid().nullish(),
   service_start_date: z.string().min(1, "Service start date is required"),
-  billing_cycle: z.enum(["monthly", "quarterly", "yearly"]),
+  billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   cycle_count: z.number().int().positive("Number of cycles must be at least 1"),
   unit_cost_per_cycle: z.number().positive("Cost per cycle must be greater than 0"),
   service_item_name: z.string().min(1, "Service description is required"),
@@ -75,15 +87,10 @@ const createServicePoSchema = z.object({
   amc_escalation_phone: z.string().nullish(),
   amc_escalation2_name: z.string().nullish(),
   amc_escalation2_phone: z.string().nullish(),
-}).merge(advancePaymentSchema);
-
-function generatePoNumber(count: number): string {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const seq = String(count + 1).padStart(3, "0");
-  return `PO-${yy}${mm}-${seq}`;
-}
+}).merge(advancePaymentSchema).refine(
+  (d) => !!d.pr_id || !!d.company_id,
+  { message: "Select which company this order is for", path: ["company_id"] }
+);
 
 // Helper: apply shared filters to any purchase_orders query
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -94,19 +101,26 @@ function applyPoFilters(
     status?: string | null;
     vendorId?: string | null;
     locationId?: string | null;
+    companyId?: string | null;
     prId?: string | null;
     advanceStatus?: string | null;
     search?: string;
     prIdsFromDept?: string[] | null;
     monthStart?: string | null;
     monthEnd?: string | null;
+    // Opt-in: "active" hides fully cancelled POs, "cancelled" shows cancelled + partially
+    // cancelled ones. Omitted = no restriction, so other callers of this route are unchanged.
+    view?: "active" | "cancelled" | null;
   }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
-  const { status, vendorId, locationId, prId, advanceStatus, search, prIdsFromDept, monthStart, monthEnd } = opts;
+  const { status, vendorId, locationId, prId, advanceStatus, search, prIdsFromDept, monthStart, monthEnd, companyId, view } = opts;
+  if (view === "active") query = query.neq("status", "cancelled");
+  else if (view === "cancelled") query = query.in("status", ["cancelled", "partially_cancelled"]);
   if (status) query = query.eq("status", status);
   if (vendorId) query = query.eq("vendor_id", vendorId);
   if (locationId) query = query.eq("location_id", locationId);
+  if (companyId) query = query.eq("company_id", companyId);
   if (prId) query = query.eq("pr_id", prId);
   if (advanceStatus) query = query.eq("advance_status", advanceStatus);
   // Department filter: pre-resolved to a list of PR IDs
@@ -138,11 +152,15 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const vendorId = searchParams.get("vendor_id");
   const locationId = searchParams.get("location_id");
+  const companyId = searchParams.get("company_id");
   const prId = searchParams.get("pr_id");
   const advanceStatus = searchParams.get("advance_status");
   const department = searchParams.get("department");
   const month = searchParams.get("month"); // YYYY-MM
   const includeTotals = searchParams.get("include_totals") === "true";
+  const viewParam = searchParams.get("view");
+  const view: "active" | "cancelled" | null =
+    viewParam === "active" || viewParam === "cancelled" ? viewParam : null;
   const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
@@ -179,13 +197,13 @@ export async function GET(request: NextRequest) {
     vendorIdsFromSearch = (matchingVendors ?? []).map((v: { id: string }) => v.id);
   }
 
-  const filterOpts = { status, vendorId, locationId, prId, advanceStatus, prIdsFromDept, monthStart, monthEnd };
+  const filterOpts = { status, vendorId, locationId, companyId, prId, advanceStatus, prIdsFromDept, monthStart, monthEnd, view };
 
   // ── Main paginated query ────────────────────────────────────────────────────
   let query = supabase
     .from("purchase_orders")
     .select(
-      `*, procurement_vendors(id, name), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department)`,
+      `*, procurement_vendors(id, name), locations(id, name), companies(id, name, brand_name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
@@ -220,6 +238,9 @@ export async function GET(request: NextRequest) {
       .select("total_ordered_amount, total_amount_with_gst");
 
     totalsQuery = applyPoFilters(totalsQuery, filterOpts);
+    // Cancelled tab: total only the fully cancelled POs. A partially cancelled PO stores just
+    // its reduced amount (not what was cancelled), so it is listed but never summed here.
+    if (view === "cancelled") totalsQuery = totalsQuery.eq("status", "cancelled");
 
     if (search.length >= 3) {
       if (vendorIdsFromSearch && vendorIdsFromSearch.length > 0) {
@@ -232,12 +253,14 @@ export async function GET(request: NextRequest) {
     // Run PO totals + optional budget fetch in parallel
     const [{ data: allPos }, budgetRow] = await Promise.all([
       totalsQuery,
-      // Only fetch budget when department + month are both selected
-      (department && month)
+      // Only fetch budget when department + month + company are all selected —
+      // department_budgets is now scoped per company_id (00540_procurement_company_scoping.sql).
+      (department && month && companyId && view !== "cancelled")
         ? supabase
             .from("department_budgets")
             .select("monthly_budget, is_active")
             .eq("department", department)
+            .eq("company_id", companyId)
             .is("location_id", null)
             .single()
         : Promise.resolve({ data: null }),
@@ -293,14 +316,110 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { count: existingCount } = await supabase
-      .from("purchase_orders")
-      .select("*", { count: "exact", head: true });
-    const poNumber = generatePoNumber(existingCount ?? 0);
+    // company_id is inherited from the parent PR when this service PO was
+    // created from one (e.g. an approved AMC MR); otherwise it's the
+    // standalone value supplied in the request — enforced by the schema
+    // refine() above. po_number is trigger-assigned, company-scoped.
+    let servicePoCompanyId = parsed.data.company_id ?? null;
+    let servicePrItemId: string | null = null;
+    let openingCycles = 0;
+    let openingVisits = 0;
+    // What the PO will actually be created with. A combined PO overrides the body's
+    // schedule and cost with the sum of its lines.
+    const svc = {
+      billingCycle: parsed.data.billing_cycle,
+      cycleCount: parsed.data.cycle_count,
+      unitCost: parsed.data.unit_cost_per_cycle,
+      linkedAssetId: parsed.data.linked_asset_id ?? null,
+    };
+    let combinedLines: Array<{ id: string; item_name: string; quantity: number; unit: string; estimated_price: number; linked_asset_id: string }> = [];
+    if (parsed.data.pr_id) {
+      const { data: parentPr, error: parentPrError } = await supabase
+        .from("purchase_requests")
+        .select("company_id, status, department, expenditure_type, opening_cycles, opening_visits")
+        .eq("id", parsed.data.pr_id)
+        .single();
+      if (parentPrError || !parentPr) {
+        return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
+      }
+      // Mirror of the goods-PO guard: a service PO that points at a request must
+      // come from an AMC request, and one that is actually ready to order.
+      if (parentPr.department !== "amc" && parentPr.expenditure_type !== "amc") {
+        return NextResponse.json({
+          error: "Only AMC requests are ordered through a service PO. Use Create PO on the request to open the right form.",
+        }, { status: 422 });
+      }
+      if (!["approved", "partially_ordered"].includes(parentPr.status)) {
+        return NextResponse.json({
+          error: "A Purchase Order can only be created from an approved or partially ordered Purchase Request",
+        }, { status: 422 });
+      }
+      servicePoCompanyId = parentPr.company_id;
+      // A contract that was already running keeps its starting point on the PO.
+      openingCycles = Number(parentPr.opening_cycles ?? 0);
+      openingVisits = Number(parentPr.opening_visits ?? 0);
 
-    const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
+      // Tie this PO to the request line(s) it fulfils. Without the link the request
+      // never registers as ordered, stays "approved", and can be ordered again.
+      const { data: prLines } = await supabase
+        .from("purchase_request_items")
+        .select("id, item_name, quantity, unit, estimated_price, linked_asset_id")
+        .eq("pr_id", parsed.data.pr_id);
+
+      if (parsed.data.pr_item_ids?.length) {
+        // ── Combined PO ──
+        const wanted = new Set(parsed.data.pr_item_ids);
+        const picked = (prLines ?? []).filter((l) => wanted.has(l.id));
+        if (picked.length !== wanted.size) {
+          return NextResponse.json({ error: "One of those lines does not belong to this request" }, { status: 422 });
+        }
+        const orderedMap = await computeOrderedQtyMap(supabase, picked.map((l) => l.id));
+        const check = canCombineLines(picked.map((l) => ({ ...l, already_ordered_qty: orderedMap[l.id] ?? 0 })));
+        if (!check.ok) return NextResponse.json({ error: check.reason }, { status: 422 });
+        combinedLines = picked.map((l) => ({
+          id: l.id,
+          item_name: l.item_name,
+          quantity: Number(l.quantity),
+          unit: l.unit as string,
+          estimated_price: Number(l.estimated_price ?? 0),
+          linked_asset_id: l.linked_asset_id as string,
+        }));
+        svc.billingCycle = cycleFromUnit(combinedLines[0].unit);
+        svc.cycleCount = combinedLines[0].quantity;
+        svc.unitCost = combinedPerCycleCost(picked);
+        svc.linkedAssetId = combinedLines[0].linked_asset_id;
+      } else {
+        const line = parsed.data.pr_item_id
+          ? prLines?.find((l) => l.id === parsed.data.pr_item_id)
+          : prLines?.length === 1 ? prLines[0] : undefined;
+        if (!line) {
+          return NextResponse.json({
+            error: parsed.data.pr_item_id
+              ? "That line does not belong to this request"
+              : "Choose which request line this order is for",
+          }, { status: 422 });
+        }
+        const alreadyOrdered = (await computeOrderedQtyMap(supabase, [line.id]))[line.id] ?? 0;
+        if (alreadyOrdered >= Number(line.quantity)) {
+          return NextResponse.json({
+            error: "This request line has already been ordered. Cancel the existing order first if it needs to be redone.",
+          }, { status: 422 });
+        }
+        servicePrItemId = line.id;
+        // A running contract's line holds only the cycles still to bill; the form must not
+        // order more than was approved, whatever count it derived from the dates.
+        if (openingCycles > 0) svc.cycleCount = Number(line.quantity);
+      }
+    }
+
+    const totalAmount = svc.unitCost * svc.cycleCount;
     const svcGstRate = parsed.data.gst_rate ?? 0;
-    const svcGstAmount = Math.round(totalAmount * svcGstRate) / 100;
+    // A combined PO's GST is the sum of its lines' GST, so the PO total always equals the lines.
+    const combinedLineGst = (l: { quantity: number; estimated_price: number }) =>
+      Math.round(l.quantity * l.estimated_price * svcGstRate) / 100;
+    const svcGstAmount = combinedLines.length
+      ? combinedLines.reduce((sum, l) => sum + combinedLineGst(l), 0)
+      : Math.round(totalAmount * svcGstRate) / 100;
     const totalWithGst = totalAmount + svcGstAmount;
 
     // Advance cannot exceed PO total (including GST)
@@ -335,18 +454,18 @@ export async function POST(request: NextRequest) {
       .from("purchase_orders")
       .insert({
         po_type: "service",
+        company_id: servicePoCompanyId,
         // Link back to the originating AMC MR if this PO was created from one
         pr_id: parsed.data.pr_id ?? null,
         vendor_id: parsed.data.vendor_id,
         location_id: parsed.data.location_id ?? null,
         service_start_date: parsed.data.service_start_date,
-        billing_cycle: parsed.data.billing_cycle,
-        cycle_count: parsed.data.cycle_count,
-        unit_cost_per_cycle: parsed.data.unit_cost_per_cycle,
+        billing_cycle: svc.billingCycle,
+        cycle_count: svc.cycleCount,
+        unit_cost_per_cycle: svc.unitCost,
         notes: parsed.data.notes ?? null,
         payment_terms: parsed.data.payment_terms ?? null,
         terms_and_conditions: parsed.data.terms_and_conditions ?? null,
-        po_number: poNumber,
         ordered_by: dbUser.id,
         total_ordered_amount: totalAmount,
         total_gst_amount: svcGstAmount,
@@ -360,12 +479,16 @@ export async function POST(request: NextRequest) {
         amc_start_date: amcStart,
         amc_end_date: amcEnd,
         amc_visits_covered: amcVisitsCovered,
-        amc_visits_used: 0,
+        // Visits already done before the contract was entered here, if any.
+        amc_visits_used: openingVisits,
+        opening_cycles: openingCycles,
+        opening_visits: openingVisits,
         amc_contact_name: parsed.data.amc_contact_name ?? null,
         amc_helpline_number: parsed.data.amc_helpline_number ?? null,
         amc_contact_email: parsed.data.amc_contact_email ?? null,
         amc_status: amcStatus,
-        linked_asset_id: parsed.data.linked_asset_id ?? null,
+        // A combined PO holds its first asset here; every asset is on its own PO line.
+        linked_asset_id: svc.linkedAssetId,
         amc_coverage_type: parsed.data.amc_coverage_type ?? null,
         amc_escalation_name: parsed.data.amc_escalation_name ?? null,
         amc_escalation_phone: parsed.data.amc_escalation_phone ?? null,
@@ -379,20 +502,44 @@ export async function POST(request: NextRequest) {
 
     if (poError) return NextResponse.json({ error: poError.message }, { status: 500 });
 
-    // Insert a single representative line item for the service
-    const unitMap: Record<string, string> = { monthly: "month", quarterly: "quarter", yearly: "year" };
-    await supabase.from("purchase_order_items").insert({
-      po_id: po.id,
-      item_id: parsed.data.item_id ?? null,
-      item_name: parsed.data.service_item_name,
-      quantity_ordered: parsed.data.cycle_count,
-      quantity_received: 0,
-      unit: unitMap[parsed.data.billing_cycle],
-      unit_price: parsed.data.unit_cost_per_cycle,
-      total_amount: totalAmount,
-      gst_rate: svcGstRate,
-      gst_amount: svcGstAmount,
-    });
+    // Line items: one representative line for a single-asset service, or one line per
+    // asset for a combined PO. Each carries its asset and (when ordered from a request) its request line.
+    const unitMap: Record<string, string> = { monthly: "month", quarterly: "quarter", half_yearly: "half_year", yearly: "year" };
+    const serviceLines = combinedLines.length
+      ? combinedLines.map((l) => ({
+          po_id: po.id,
+          pr_item_id: l.id,
+          item_id: null,
+          item_name: l.item_name,
+          quantity_ordered: l.quantity,
+          quantity_received: 0,
+          unit: unitMap[svc.billingCycle],
+          unit_price: l.estimated_price,
+          total_amount: l.quantity * l.estimated_price,
+          gst_rate: svcGstRate,
+          gst_amount: combinedLineGst(l),
+          linked_asset_id: l.linked_asset_id,
+        }))
+      : [{
+          po_id: po.id,
+          pr_item_id: servicePrItemId,
+          item_id: parsed.data.item_id ?? null,
+          item_name: parsed.data.service_item_name,
+          quantity_ordered: svc.cycleCount,
+          quantity_received: 0,
+          unit: unitMap[svc.billingCycle],
+          unit_price: svc.unitCost,
+          total_amount: totalAmount,
+          gst_rate: svcGstRate,
+          gst_amount: svcGstAmount,
+          linked_asset_id: svc.linkedAssetId,
+        }];
+    const { error: serviceItemsError } = await supabase.from("purchase_order_items").insert(serviceLines);
+    if (serviceItemsError) {
+      // A service PO with no lines is unusable and would invite a duplicate on retry.
+      await supabase.from("purchase_orders").delete().eq("id", po.id);
+      return NextResponse.json({ error: serviceItemsError.message }, { status: 500 });
+    }
 
     await logAudit(supabase, {
       entityType: "purchase_order",
@@ -404,8 +551,9 @@ export async function POST(request: NextRequest) {
         po_type: { old: null, new: "service" },
         vendor_id: { old: null, new: parsed.data.vendor_id },
         total_ordered_amount: { old: null, new: totalAmount },
-        billing_cycle: { old: null, new: parsed.data.billing_cycle },
-        cycle_count: { old: null, new: parsed.data.cycle_count },
+        billing_cycle: { old: null, new: svc.billingCycle },
+        cycle_count: { old: null, new: svc.cycleCount },
+        ...(combinedLines.length ? { combined_assets: { old: null, new: combinedLines.length } } : {}),
         ...(parsed.data.pr_id ? { pr_id: { old: null, new: parsed.data.pr_id } } : {}),
       },
     });
@@ -430,12 +578,32 @@ export async function POST(request: NextRequest) {
   // ── 1. Validate PR exists and is in an approvable state ──
   const { data: pr, error: prFetchError } = await supabase
     .from("purchase_requests")
-    .select("id, status, purchase_request_items(id, quantity, estimated_price)")
+    .select("id, status, company_id, department, expenditure_type, tolerance_percent, purchase_request_items(id, quantity, estimated_price)")
     .eq("id", parsed.data.pr_id)
     .single();
 
   if (prFetchError || !pr) {
     return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
+  }
+
+  // A goods PO has no billing cycles, service reports or one-invoice-per-cycle
+  // rule, so an AMC ordered this way ends up with no way to log service
+  // reports and invoices that pile up unlinked. Services go through the
+  // service PO flow only.
+  if (pr.department === "amc" || pr.expenditure_type === "amc") {
+    return NextResponse.json({
+      error: "AMC requests are ordered through a service PO, not a goods PO. Use Create service PO on the request.",
+    }, { status: 422 });
+  }
+  const { data: goodsVendor } = await supabase
+    .from("procurement_vendors")
+    .select("name, is_service_provider")
+    .eq("id", parsed.data.vendor_id)
+    .single();
+  if (goodsVendor?.is_service_provider) {
+    return NextResponse.json({
+      error: `${goodsVendor.name} is a service provider — order from them through a service PO, not a goods PO.`,
+    }, { status: 422 });
   }
   if (!["approved", "partially_ordered"].includes(pr.status)) {
     return NextResponse.json({
@@ -489,11 +657,8 @@ export async function POST(request: NextRequest) {
     return sum + Math.round(base * (item.gst_rate ?? 0)) / 100;
   }, 0);
 
-  const { count: existingCount } = await supabase
-    .from("purchase_orders")
-    .select("*", { count: "exact", head: true });
-
-  const poNumber = generatePoNumber(existingCount ?? 0);
+  // po_number is trigger-assigned, company-scoped via pr.company_id below —
+  // see 00541_procurement_number_counters.sql.
 
   // ── 4. Validate advance amount ≤ PO total ──
   const goodsTotalWithGst = totalOrderedAmount + totalGstAmount;
@@ -509,6 +674,9 @@ export async function POST(request: NextRequest) {
     .from("purchase_orders")
     .insert({
       po_type: "goods",
+      // Inherited from the approved request; never set at PO time.
+      tolerance_percent: Number(pr.tolerance_percent ?? 0),
+      company_id: pr.company_id,
       pr_id: poData.pr_id,
       vendor_id: poData.vendor_id,
       location_id: poData.location_id ?? null,
@@ -516,7 +684,6 @@ export async function POST(request: NextRequest) {
       notes: poData.notes ?? null,
       payment_terms: poData.payment_terms ?? null,
       terms_and_conditions: poData.terms_and_conditions ?? null,
-      po_number: poNumber,
       ordered_by: dbUser.id,
       total_ordered_amount: totalOrderedAmount,
       total_gst_amount: totalGstAmount,

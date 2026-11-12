@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { caseAgreementGateError } from "@/lib/agreement-gate";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import {
   uploadForEStampAndSigning,
   getSigningStatus,
+  isLeegalitySigningEnabled,
 } from "@/lib/leegality";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { advanceCaseOnAgreementExecuted } from "@/lib/case-status-events";
 
 /**
  * POST: Leegality e-stamp & e-sign operations (user-triggered)
@@ -57,11 +61,23 @@ export async function POST(
     return NextResponse.json({ error: "L&L Agreement not found" }, { status: 404 });
   }
 
+  {
+    const clauseBlock = await caseAgreementGateError(supabase, caseId, agreementId);
+    if (clauseBlock) return NextResponse.json({ error: clauseBlock }, { status: 409 });
+  }
+
   switch (action) {
     case "initiate": {
       if (!["client_approved"].includes(agreement.status)) {
         return NextResponse.json(
           { error: "Agreement must be client approved before initiating e-signing" },
+          { status: 400 }
+        );
+      }
+
+      if (!(await isLeegalitySigningEnabled(adminSupabase))) {
+        return NextResponse.json(
+          { error: "E-signing via Leegality is currently turned off. Use company stamp or upload a manually signed document instead." },
           { status: 400 }
         );
       }
@@ -174,21 +190,30 @@ export async function POST(
         .update({ leegality_status: status.status })
         .eq("id", agreementId);
 
-      // If completed, mark as executed
+      // If completed, mark as executed — unless this case still needs a
+      // paid VO invoice first (src/lib/vo-execution-gate.ts). The customer
+      // already e-signed by this point, so record that, but hold status at
+      // its current value instead of flipping to 'executed'; accounts can
+      // complete it manually once payment lands.
       if (status.status === "COMPLETED") {
+        const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+
         await supabase
           .from("case_agreements")
           .update({
-            status: "executed",
-            signed_at: new Date().toISOString(),
+            ...(gateError ? {} : { status: "executed", signed_at: new Date().toISOString() }),
             leegality_status: "COMPLETED",
           })
           .eq("id", agreementId);
 
-        await supabase
-          .from("cases")
-          .update({ ll_agreement_status: "executed" })
-          .eq("id", caseId);
+        if (!gateError) {
+          await supabase
+            .from("cases")
+            .update({ ll_agreement_status: "executed" })
+            .eq("id", caseId);
+
+          await advanceCaseOnAgreementExecuted(supabase, caseId);
+        }
       }
 
       return NextResponse.json({ data: status });

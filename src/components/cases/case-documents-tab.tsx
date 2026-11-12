@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,6 +21,8 @@ import {
   Clock,
   Loader2,
   Eye,
+  Ban,
+  RotateCcw,
 } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { useCaseDocuments } from "@/hooks/use-cases";
@@ -42,6 +44,57 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
   const [viewing, setViewing] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
+
+  // Waiver state — a permanent decision not to collect a requirement.
+  const [waiveDocId, setWaiveDocId] = useState<string | null>(null);
+  const [waiveLabel, setWaiveLabel] = useState("");
+  const [waiveReason, setWaiveReason] = useState("");
+  const [waiving, setWaiving] = useState(false);
+  const [unwaiving, setUnwaiving] = useState<string | null>(null);
+  // Hidden until migration 00535 is applied — see /api/kyc/waiver-available.
+  const [waiverAvailable, setWaiverAvailable] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/kyc/waiver-available")
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (live && j?.data?.available) setWaiverAvailable(true); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+
+  const handleWaive = async () => {
+    if (!waiveDocId || !waiveReason.trim()) return;
+    setWaiving(true);
+    const res = await fetch(`/api/cases/${caseId}/documents/${waiveDocId}/waive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: waiveReason.trim() }),
+    });
+    setWaiving(false);
+    if (res.ok) {
+      toast.success("Requirement waived — it will no longer be chased");
+      setWaiveDocId(null);
+      setWaiveReason("");
+      refetch();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to waive document");
+    }
+  };
+
+  const handleUnwaive = async (docId: string) => {
+    setUnwaiving(docId);
+    const res = await fetch(`/api/cases/${caseId}/documents/${docId}/waive`, { method: "DELETE" });
+    setUnwaiving(null);
+    if (res.ok) {
+      toast.success("Waiver removed — document is now pending");
+      refetch();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to remove the waiver");
+    }
+  };
 
   const handleView = async (docId: string) => {
     setViewing(docId);
@@ -170,6 +223,11 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
                       {doc.rejection_reason && (
                         <p className="text-xs text-red-500 mt-1">Reason: {doc.rejection_reason}</p>
                       )}
+                      {doc.status === "waived" && (
+                        <p className="text-xs text-slate-600 mt-1 italic">
+                          Will not be collected{doc.waived_reason ? ` — “${doc.waived_reason}”` : ""}
+                        </p>
+                      )}
                       {(doc.status === "approved" || doc.status === "rejected") && doc.reviewed_at && (
                         <p className={`text-xs mt-1 ${doc.status === "approved" ? "text-green-600" : "text-red-500"}`}>
                           {doc.status === "approved" ? "Approved" : "Rejected"}
@@ -228,6 +286,35 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
                         </Button>
                       </>
                     )}
+                    {waiverAvailable && doc.is_required && doc.status !== "approved" && doc.status !== "waived" && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-slate-600"
+                        onClick={() => {
+                          setWaiveDocId(doc.id);
+                          setWaiveLabel(doc.label);
+                          setWaiveReason("");
+                        }}
+                      >
+                        <Ban className="mr-1 h-4 w-4" />
+                        Waive
+                      </Button>
+                    )}
+                    {doc.status === "waived" && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-muted-foreground"
+                        disabled={unwaiving === doc.id}
+                        onClick={() => handleUnwaive(doc.id)}
+                      >
+                        {unwaiving === doc.id
+                          ? <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                          : <RotateCcw className="mr-1 h-4 w-4" />}
+                        Remove waiver
+                      </Button>
+                    )}
                     {doc.status === "uploaded" && (
                       <div className="flex gap-1">
                         <Button
@@ -265,6 +352,44 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
           ))}
         </div>
       )}
+
+      {/* Waive Dialog */}
+      <Dialog open={!!waiveDocId} onOpenChange={(v) => { if (!v) setWaiveDocId(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="h-4 w-4 text-slate-600" />
+              Waive Requirement
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md bg-muted/50 border px-3 py-2 text-sm font-medium">
+              {waiveLabel}
+            </div>
+            <Textarea
+              rows={3}
+              value={waiveReason}
+              onChange={(e) => setWaiveReason(e.target.value)}
+              placeholder="e.g. Proprietorship — no MOA/AOA exists for this entity type"
+            />
+            <p className="text-xs text-muted-foreground">
+              A waiver has no expiry date. This document will never be collected and drops out of
+              the weekly KYC reminders permanently.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWaiveDocId(null)}>Cancel</Button>
+            <Button
+              onClick={handleWaive}
+              disabled={waiving || !waiveReason.trim()}
+              className="bg-slate-700 hover:bg-slate-800 text-white"
+            >
+              {waiving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+              Waive Requirement
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Review Dialog */}
       <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>

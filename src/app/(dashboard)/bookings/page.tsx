@@ -22,7 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { useLocations } from "@/hooks/use-locations";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatCurrency, bookingWindowHours } from "@/lib/utils";
 import {
   BOOKING_STATUSES, BOOKING_STATUS_LABELS, BOOKING_STATUS_COLORS,
   BOOKING_CUSTOMER_TYPES, BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_CUSTOMER_TYPE_COLORS,
@@ -35,6 +35,8 @@ import { BookingCountdown } from "@/components/bookings/booking-countdown";
 import { BulkActionsBar } from "@/components/bookings/bulk-actions-bar";
 import dynamic from "next/dynamic";
 import { CustomerSegments } from "@/components/bookings/customer-segments";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 // Recharts is ~200 KB gzipped. Lazy-load the two chart-heavy components so the
 // Analytics tab only pulls them in when the user actually opens it.
@@ -52,6 +54,27 @@ function formatTime12(timeStr: string): string {
   const ampm = h >= 12 ? "PM" : "AM";
   const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
   return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+// check_in_at / check_out_at are full ISO timestamps (unlike start_time /
+// end_time, which are bare "HH:MM:SS" slot strings) — always render in IST
+// regardless of the browser/server's local timezone.
+function formatActualTime12(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function actualUsageDuration(checkInAt: string, checkOutAt: string): string {
+  const minutes = Math.max(0, Math.round((new Date(checkOutAt).getTime() - new Date(checkInAt).getTime()) / 60000));
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
 }
 
 function isBookingPastStartTime(b: Booking): boolean {
@@ -73,7 +96,10 @@ function copyBookingDetails(b: Booking) {
     `Booking Confirmation - ${b.booking_number}`,
     ``,
     `Date: ${formatDate(b.booking_date)}`,
-    `Time: ${formatTime12(b.start_time)} - ${formatTime12(b.end_time)} (${b.duration_hours}h)`,
+    `Time: ${formatTime12(b.start_time)} - ${formatTime12(b.end_time)} (${(() => {
+      const h = bookingWindowHours(b.start_time, b.end_time);
+      return Number.isInteger(h) ? h : h.toFixed(1).replace(/\.0$/, "");
+    })()}h)`,
     `Space: ${b.space?.name || "—"}`,
     `Location: ${b.location?.name || "—"}`,
   ];
@@ -241,7 +267,10 @@ function BookingTable({
                     className={`border-b hover:bg-muted/30 transition-colors cursor-pointer ${
                       shouldBlink ? "animate-pulse bg-amber-50" : ""
                     } ${selectedIds.has(b.id) ? "bg-blue-50/50" : ""}`}
-                    onClick={() => router.push(`/bookings/${b.id}`)}
+                    onClick={() => {
+                      pushTrailEntry({ href: `/bookings/${b.id}`, label: b.booking_number });
+                      router.push(`/bookings/${b.id}`);
+                    }}
                   >
                     <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
                       <input
@@ -261,6 +290,21 @@ function BookingTable({
                     <td className="px-4 py-2.5 hidden xl:table-cell text-xs text-muted-foreground">{b.location?.name || "—"}</td>
                     <td className="px-4 py-2.5">
                       <div className="text-xs">{formatTime12(b.start_time)} – {formatTime12(b.end_time)}</div>
+                      {b.check_in_at && (
+                        <div className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
+                          <LogIn className="h-3 w-3 shrink-0" />
+                          {formatActualTime12(b.check_in_at)}
+                          {b.check_out_at ? (
+                            <>
+                              <LogOut className="h-3 w-3 shrink-0 ml-0.5" />
+                              {formatActualTime12(b.check_out_at)}
+                              <span className="text-muted-foreground">({actualUsageDuration(b.check_in_at, b.check_out_at)})</span>
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground">(in progress)</span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-xs">{customerName}</td>
                     <td className="px-4 py-2.5 hidden lg:table-cell">
@@ -276,7 +320,7 @@ function BookingTable({
                         {BOOKING_CUSTOMER_TYPE_LABELS[b.customer_type]}
                       </Badge>
                     </td>
-                    <td className="px-4 py-2.5 text-right font-medium text-xs hidden sm:table-cell">{formatCurrency(b.total_amount)}</td>
+                    <td className="px-4 py-2.5 text-right font-medium text-xs hidden sm:table-cell">{formatCurrency(b.total_amount_with_gst || b.total_amount + (b.gst_amount || 0))}</td>
                     <td className="px-4 py-2.5 hidden lg:table-cell">
                       <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_STATUS_COLORS[b.payment_status]}`}>
                         {BOOKING_PAYMENT_STATUS_LABELS[b.payment_status]}
@@ -291,6 +335,16 @@ function BookingTable({
                           Array.isArray(b.feedback) && b.feedback.length > 0
                             ? <span title="Feedback submitted"><Star className="h-3 w-3 fill-green-500 text-green-500" /></span>
                             : <span title="Feedback pending"><MessageSquareWarning className="h-3 w-3 text-amber-500" /></span>
+                        )}
+                        {b.facility_resolution === "unresolved" && (
+                          <span title="Multiple facility quotas on this contract, none matched the room booked — needs manual review to attribute the right quota">
+                            <AlertTriangle className="h-3 w-3 text-amber-500" />
+                          </span>
+                        )}
+                        {b.facility_resolution === "override" && (
+                          <span title={`Substitute allocation${b.facility_override_reason ? `: ${b.facility_override_reason}` : ""}`}>
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 bg-purple-50 text-purple-700 border-purple-200">Substitute</Badge>
+                          </span>
                         )}
                       </div>
                     </td>
@@ -500,6 +554,7 @@ export default function BookingsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Bookings" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -737,7 +792,10 @@ export default function BookingsPage() {
                           <tr
                             key={b.id}
                             className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                            onClick={() => router.push(`/bookings/${b.id}`)}
+                            onClick={() => {
+                              pushTrailEntry({ href: `/bookings/${b.id}`, label: b.booking_number });
+                              router.push(`/bookings/${b.id}`);
+                            }}
                           >
                             <td className="px-4 py-3 font-mono text-xs">{b.booking_number}</td>
                             <td className="px-4 py-3 hidden md:table-cell text-xs">{b.space?.name || "—"}</td>
@@ -747,6 +805,21 @@ export default function BookingsPage() {
                               <div className="text-xs text-muted-foreground">
                                 {formatTime12(b.start_time)} – {formatTime12(b.end_time)}
                               </div>
+                              {b.check_in_at && (
+                                <div className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
+                                  <LogIn className="h-3 w-3 shrink-0" />
+                                  {formatActualTime12(b.check_in_at)}
+                                  {b.check_out_at ? (
+                                    <>
+                                      <LogOut className="h-3 w-3 shrink-0 ml-0.5" />
+                                      {formatActualTime12(b.check_out_at)}
+                                      <span className="text-muted-foreground">({actualUsageDuration(b.check_in_at, b.check_out_at)})</span>
+                                    </>
+                                  ) : (
+                                    <span className="text-muted-foreground">(in progress)</span>
+                                  )}
+                                </div>
+                              )}
                             </td>
                             <td className="px-4 py-3 text-xs">{customerName}</td>
                             <td className="px-4 py-3 hidden lg:table-cell">
@@ -757,7 +830,7 @@ export default function BookingsPage() {
                                 {BOOKING_CUSTOMER_TYPE_LABELS[b.customer_type]}
                               </Badge>
                             </td>
-                            <td className="px-4 py-3 text-right font-medium hidden sm:table-cell text-xs">{formatCurrency(b.total_amount)}</td>
+                            <td className="px-4 py-3 text-right font-medium hidden sm:table-cell text-xs">{formatCurrency(b.total_amount_with_gst || b.total_amount + (b.gst_amount || 0))}</td>
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-1">
                                 <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[b.status]}`}>
@@ -767,6 +840,16 @@ export default function BookingsPage() {
                                   Array.isArray(b.feedback) && b.feedback.length > 0
                                     ? <span title="Feedback submitted"><Star className="h-3 w-3 fill-green-500 text-green-500" /></span>
                                     : <span title="Feedback pending"><MessageSquareWarning className="h-3 w-3 text-amber-500" /></span>
+                                )}
+                                {b.facility_resolution === "unresolved" && (
+                                  <span title="Multiple facility quotas on this contract, none matched the room booked — needs manual review to attribute the right quota">
+                                    <AlertTriangle className="h-3 w-3 text-amber-500" />
+                                  </span>
+                                )}
+                                {b.facility_resolution === "override" && (
+                                  <span title={`Substitute allocation${b.facility_override_reason ? `: ${b.facility_override_reason}` : ""}`}>
+                                    <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 bg-purple-50 text-purple-700 border-purple-200">Substitute</Badge>
+                                  </span>
                                 )}
                               </div>
                             </td>

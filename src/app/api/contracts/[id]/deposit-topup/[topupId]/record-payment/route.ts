@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { PAYMENT_RECORDING_ROLES } from "@/lib/constants";
 
-const ALLOWED_ROLES = ["admin", "manager", "accounts", "office_admin"];
+// office_admin is a deliberate pre-existing carve-out here and is left
+// alone; only `manager` is dropped, in line with every other payment gate.
+const ALLOWED_ROLES = [...PAYMENT_RECORDING_ROLES, "office_admin"] as readonly string[];
 
 /**
  * POST /api/contracts/[id]/deposit-topup/[topupId]/record-payment

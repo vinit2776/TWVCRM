@@ -2,6 +2,23 @@ import { CASE_STATUS_TRANSITIONS, CASE_STATUS_LABELS, CASE_STATUS_GROUPS } from 
 import type { CaseStatus } from "@/types";
 
 /**
+ * The name a case is known by across the CRM.
+ *
+ * A Virtual Office case is opened for a business, with a named individual as
+ * its contact — so the registered company is the identity that matters (it is
+ * what goes on the invoice, the agreement, and the GST registration), and the
+ * contact person is secondary. Sole proprietors have no company name; they
+ * fall back to the person. Display the contact separately as a subline rather
+ * than in place of this.
+ */
+export function caseDisplayName(caseData: {
+  client_company_name?: string | null;
+  client_name?: string | null;
+}): string {
+  return caseData.client_company_name || caseData.client_name || "(unnamed)";
+}
+
+/**
  * Check if a status transition is valid.
  */
 export function validateTransition(
@@ -84,7 +101,27 @@ export function calculateEndDate(
   const start = new Date(startDate);
   const end = new Date(start);
   end.setMonth(end.getMonth() + tenureMonths);
+  end.setDate(end.getDate() - 1);
   return end.toISOString();
+}
+
+/**
+ * The same term end as a plain YYYY-MM-DD, which is what cases.end_date is.
+ *
+ * calculateEndDate returns a full ISO timestamp and had no callers at all,
+ * so end_date was never populated on any case — and every stage of the
+ * renewal cron compares end_date, where SQL comparisons are never true
+ * against NULL. Nothing could renew, and nothing could lapse.
+ *
+ * Returns null when either input is missing rather than inventing a date:
+ * a wrong expiry on a virtual office is worse than a visibly absent one.
+ */
+export function caseEndDate(
+  startDate: string | null | undefined,
+  tenureMonths: number | null | undefined,
+): string | null {
+  if (!startDate || !tenureMonths || tenureMonths <= 0) return null;
+  return calculateEndDate(startDate, tenureMonths).slice(0, 10);
 }
 
 /**

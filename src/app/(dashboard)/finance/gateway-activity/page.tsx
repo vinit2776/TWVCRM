@@ -36,10 +36,14 @@ import { Separator } from "@/components/ui/separator";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type EntityType = "contract" | "booking" | "billing_statement" | "unmatched";
+type EntityType =
+  | "contract" | "booking" | "billing_statement"
+  | "proposal" | "deposit_topup" | "prepaid_purchase" | "adhoc_invoice"
+  | "unmatched";
 
 interface GatewayTransaction {
   id: string;
@@ -49,6 +53,7 @@ interface GatewayTransaction {
   entity_label: string;
   entity_href: string | null;
   customer_name: string;
+  gateway_reference?: string | null;
   amount: number;
   razorpay_payment_id: string | null;
   payment_reference: string | null;
@@ -177,6 +182,18 @@ function EntityTypeBadge({ row }: { row: GatewayTransaction }) {
     return <Badge variant="secondary" className="text-[10px] bg-cyan-100 text-cyan-800">Booking</Badge>;
   }
   if (row.entity_type === "billing_statement") {
+    return <Badge variant="secondary" className="text-[10px] bg-indigo-100 text-indigo-800">Invoice</Badge>;
+  }
+  if (row.entity_type === "proposal") {
+    return <Badge variant="secondary" className="text-[10px] bg-amber-100 text-amber-800">Proposal</Badge>;
+  }
+  if (row.entity_type === "deposit_topup") {
+    return <Badge variant="secondary" className="text-[10px] bg-teal-100 text-teal-800">Deposit top-up</Badge>;
+  }
+  if (row.entity_type === "prepaid_purchase") {
+    return <Badge variant="secondary" className="text-[10px] bg-pink-100 text-pink-800">Prepaid</Badge>;
+  }
+  if (row.entity_type === "adhoc_invoice") {
     return <Badge variant="secondary" className="text-[10px] bg-indigo-100 text-indigo-800">Invoice</Badge>;
   }
   return <Badge variant="secondary" className="text-[10px] bg-orange-100 text-orange-700">Not in CRM</Badge>;
@@ -570,6 +587,7 @@ export default function GatewayActivityPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px]">
+      <PageBreadcrumb resetTo={{ label: "Gateway Activity" }} />
       {linkRow && (
         <LinkDrawer
           row={linkRow}
@@ -710,6 +728,10 @@ export default function GatewayActivityPage() {
             <SelectItem value="all">All types</SelectItem>
             <SelectItem value="booking">Bookings</SelectItem>
             <SelectItem value="billing_statement">Invoices</SelectItem>
+            <SelectItem value="proposal">Proposals</SelectItem>
+            <SelectItem value="deposit_topup">Deposit top-ups</SelectItem>
+            <SelectItem value="prepaid_purchase">Prepaid</SelectItem>
+            <SelectItem value="adhoc_invoice">Ad-hoc invoices</SelectItem>
             <SelectItem value="unmatched">Not in CRM</SelectItem>
           </SelectContent>
         </Select>
@@ -793,8 +815,13 @@ export default function GatewayActivityPage() {
                         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
                           {formatDate(row.created_at)}
                         </td>
-                        <td className="px-4 py-3 font-medium max-w-[160px] truncate">
-                          {row.customer_name}
+                        <td className="px-4 py-3 font-medium max-w-[160px]">
+                          <div className="truncate">{row.customer_name}</div>
+                          {row.gateway_reference && (
+                            <div className="text-[10px] font-normal text-muted-foreground truncate" title={row.gateway_reference}>
+                              {row.gateway_reference}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5">

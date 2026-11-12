@@ -23,17 +23,39 @@ import {
   Eye,
   Pencil,
   RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
 import type { CaseAgreement } from "@/types";
+import { ADDRESS_STALE_REASON, agreementAddressGate, agreementAddressIsStale } from "@/lib/agreement-address-gate";
 
 interface CaseAgreementTabProps {
   caseId: string;
+  /** From the case's special clause: when blocked, nothing may leave the building. */
+  clauseGate?: { blocked: boolean; reason: string | null };
+  /** The case's current client address, to warn when the agreement's copy is out of date. */
+  caseAddress?: string | null;
 }
 
-export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
+export function CaseAgreementTab({ caseId, clauseGate: clauseGateFromCase, caseAddress }: CaseAgreementTabProps) {
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
+  // A draft with no client address (or no pincode) may exist, but must not go out.
+  const addressGate = agreement
+    ? agreementAddressGate(((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined)
+    : { blocked: false, reason: null };
+  const addressStale = !!agreement && agreementAddressIsStale(
+    caseAddress,
+    ((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined,
+  );
+  // The case address moved on after this was generated: until it is regenerated,
+  // Regenerate is the only action offered. A signed one never gets here, because
+  // changing the address resets it to a draft first.
+  const needsRegenerate = addressStale && !["executed", "signing"].includes(agreement?.status ?? "");
+  const clauseGate = clauseGateFromCase?.blocked
+    ? clauseGateFromCase
+    : needsRegenerate ? { blocked: true, reason: ADDRESS_STALE_REASON } : addressGate;
+  const clauseBlocked = clauseGate.blocked;
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -140,6 +162,7 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
 
       const endDate = new Date(startDate);
       endDate.setMonth(endDate.getMonth() + tenureMonths);
+      endDate.setDate(endDate.getDate() - 1);
 
       const formatCurrency = (amt: number) =>
         "Rs. " +
@@ -202,7 +225,7 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
         const err = await res.json();
         throw new Error(err.error || "Failed to regenerate proposal");
       }
-      toast.success("Proposal regenerated from case data");
+      toast.success("Proposal regenerated with the current address. Next: send it to the customer.");
       fetchAgreement();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Regeneration failed");
@@ -291,6 +314,39 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* The address itself can't go out (missing, no pincode, unprintable letters): say so
+              on the page, with the fix, rather than only in a tooltip on a disabled button. */}
+          {!needsRegenerate && addressGate.blocked && !["executed", "signing"].includes(agreement.status) && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{addressGate.reason}</span>
+            </div>
+          )}
+          {needsRegenerate && (
+            <div className="flex flex-col gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  The case address has changed since this proposal was generated. <strong>Step 1:</strong> regenerate
+                  it to pick up the new address. <strong>Step 2:</strong> send it to the customer. The other
+                  actions stay locked until step 1 is done.
+                </span>
+              </div>
+              <Button size="sm" className="shrink-0" onClick={handleRegenerate} disabled={generating}>
+                {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Regenerate proposal
+              </Button>
+            </div>
+          )}
+          {!!agreement && !!(agreement.variables as Record<string, unknown> | null)?.address_reset_at && agreement.status !== "executed" && (
+            <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                The client address was changed after this agreement was signed. This agreement has been reset and
+                must be signed again. The previous signed version is kept in the documents.
+              </span>
+            </div>
+          )}
           {/* Proposal Info Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
             <div>
@@ -365,7 +421,7 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
             </Button>
 
             {/* Edit — only in draft / internally_approved */}
-            {isEditable && (
+            {isEditable && !needsRegenerate && (
               <Button
                 size="sm"
                 variant="outline"
@@ -377,7 +433,7 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
             )}
 
             {/* Regenerate — only in draft / internally_approved */}
-            {isEditable && (
+            {isEditable && !needsRegenerate && (
               <Button
                 size="sm"
                 variant="outline"
@@ -400,7 +456,7 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
               <Button
                 size="sm"
                 onClick={() => handleAction("approve_internally")}
-                disabled={acting}
+                disabled={acting || needsRegenerate}
               >
                 <CheckCircle className="mr-2 h-4 w-4" />
                 Approve Internally
@@ -411,7 +467,8 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
               <Button
                 size="sm"
                 onClick={() => handleAction("send_to_client")}
-                disabled={acting}
+                disabled={acting || clauseBlocked}
+                title={clauseGate?.reason ?? undefined}
               >
                 <Send className="mr-2 h-4 w-4" />
                 Send to Client
@@ -422,7 +479,7 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
               <Button
                 size="sm"
                 onClick={() => handleAction("client_approved")}
-                disabled={acting}
+                disabled={acting || needsRegenerate}
               >
                 <CheckCircle className="mr-2 h-4 w-4" />
                 Mark Client Approved
@@ -433,7 +490,8 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
               <Button
                 size="sm"
                 onClick={handleInitiateSigning}
-                disabled={acting}
+                disabled={acting || clauseBlocked}
+                title={clauseGate?.reason ?? undefined}
               >
                 <PenTool className="mr-2 h-4 w-4" />
                 Initiate E-Signing

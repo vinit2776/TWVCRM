@@ -6,16 +6,31 @@
  *  2. Offline caching with app-shell strategy
  */
 
-const CACHE_NAME = "twv-crm-v3";
+const CACHE_NAME = "twv-crm-v4";
 const OFFLINE_URL = "/offline";
+
+// Offline caching is a production-only feature. On localhost the "/_next/static/"
+// cache-first rule below is actively harmful: production chunk filenames are
+// content-hashed (so a changed file always gets a new URL), but Turbopack's dev
+// server reuses the same chunk URLs across rebuilds. Serving those from cache
+// runs stale JS against freshly server-rendered HTML, which React reports on
+// every page load as "Hydration failed because the server rendered text didn't
+// match" — and then throws away the SSR tree for that subtree. Push
+// notifications are unaffected; only the fetch handler is skipped.
+const IS_LOCALHOST =
+  self.location.hostname === "localhost" ||
+  self.location.hostname === "127.0.0.1" ||
+  self.location.hostname === "[::1]";
 
 // ─── Install: precache app shell ───────────────────────────────────────────────
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) =>
-      cache.addAll(["/", OFFLINE_URL])
-    )
-  );
+  if (!IS_LOCALHOST) {
+    event.waitUntil(
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.addAll(["/", OFFLINE_URL])
+      )
+    );
+  }
   self.skipWaiting();
 });
 
@@ -35,6 +50,9 @@ self.addEventListener("activate", (event) => {
 
 // ─── Fetch: route-based caching strategy ───────────────────────────────────────
 self.addEventListener("fetch", (event) => {
+  // Never serve anything from cache in local development — see IS_LOCALHOST above
+  if (IS_LOCALHOST) return;
+
   const { request } = event;
   const url = new URL(request.url);
 

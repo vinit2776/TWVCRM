@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { normalizePhoneFields } from "@/lib/phone";
+import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import { updateLeadSchema } from "@/lib/validations";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 
 export async function GET(
   _request: NextRequest,
@@ -50,6 +52,11 @@ export async function GET(
     delete (data as Record<string, unknown>)._pending_followups;
   }
 
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "lead", entityId: id, performedBy: dbUser.id });
+  }
+
   return NextResponse.json({ data });
 }
 
@@ -80,7 +87,7 @@ export async function PATCH(
   // Fetch current state for audit diff
   const { data: oldLead } = await supabase.from("leads").select("*").eq("id", id).single();
 
-  const updateData: Record<string, unknown> = { ...result.data };
+  const updateData: Record<string, unknown> = normalizePhoneFields({ ...result.data });
 
   // Handle status transitions
   if (result.data.status === "won" && !body.converted_at) {
@@ -111,6 +118,15 @@ export async function PATCH(
       performedBy: dbUser.id,
       changes: diffChanges(oldLead as Record<string, unknown>, updateData),
     });
+  }
+
+  // A lost lead's open enquiries resolve as Not interested; the daily cron is the backstop.
+  if (result.data.status === "lost") {
+    try {
+      await reconcileLeadEnquiries(createAdminClient(), [id]);
+    } catch (err) {
+      console.error("[lead update] enquiry reconcile failed:", err instanceof Error ? err.message : "unknown");
+    }
   }
 
   return NextResponse.json({ data });

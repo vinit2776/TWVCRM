@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { evictCachedSetting } from "@/lib/app-settings-cache";
+import { MAX_RENEWAL_GRACE_DAYS, VO_RENEWAL_GRACE_DAYS_SETTING } from "@/lib/vo-renewal-desk";
+import { RENEWAL_CRON_MODES, VO_RENEWAL_CRON_MODE_SETTING } from "@/lib/vo-renewal-reminders";
 
 // GET — fetch all settings (admin only, secrets masked)
 export async function GET() {
@@ -66,6 +69,9 @@ export async function PATCH(request: NextRequest) {
     "tally_sync_enabled",
     "facility_classifier_ui_enabled",
     "facility_category_autofill_enabled",
+    "leegality_enabled",
+    VO_RENEWAL_GRACE_DAYS_SETTING,
+    VO_RENEWAL_CRON_MODE_SETTING,
   ];
 
   const updates: { key: string; value: string }[] = [];
@@ -75,6 +81,22 @@ export async function PATCH(request: NextRequest) {
       if (value.startsWith("••••")) continue;
       updates.push({ key, value });
     }
+  }
+
+  const grace = updates.find((u) => u.key === VO_RENEWAL_GRACE_DAYS_SETTING);
+  if (grace) {
+    const n = Number(grace.value);
+    if (!Number.isInteger(n) || n < 1 || n > MAX_RENEWAL_GRACE_DAYS) {
+      return NextResponse.json(
+        { error: `Grace period must be a whole number of days from 1 to ${MAX_RENEWAL_GRACE_DAYS}` },
+        { status: 400 },
+      );
+    }
+  }
+
+  const cronMode = updates.find((u) => u.key === VO_RENEWAL_CRON_MODE_SETTING);
+  if (cronMode && !(RENEWAL_CRON_MODES as readonly string[]).includes(cronMode.value)) {
+    return NextResponse.json({ error: "Renewal reminders must be off, dry_run or live" }, { status: 400 });
   }
 
   if (updates.length === 0) {
@@ -102,6 +124,7 @@ export async function PATCH(request: NextRequest) {
     if (error) {
       return NextResponse.json({ error: `Failed to update ${key}: ${error.message}` }, { status: 500 });
     }
+    evictCachedSetting(key);
   }
 
   // Audit each key individually so the trail is searchable per setting.

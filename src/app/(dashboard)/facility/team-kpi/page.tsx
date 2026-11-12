@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/facility-ui";
 import type { FacilityTechnicianKpi } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const PRESETS: Array<{ label: string; days: number }> = [
   { label: "30d", days: 30 },
@@ -48,6 +49,7 @@ export default function FacilityTeamKpiPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Team KPI" }} />
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Team KPI</h1>
@@ -92,6 +94,7 @@ export default function FacilityTeamKpiPage() {
                 <th className="text-right px-3 py-2 font-medium">SLA Compliance</th>
                 <th className="text-right px-3 py-2 font-medium">Reopen Rate</th>
                 <th className="text-right px-3 py-2 font-medium">Satisfaction</th>
+                <th className="text-right px-3 py-2 font-medium">Hours Logged</th>
               </tr>
             </thead>
             <tbody>
@@ -129,6 +132,7 @@ export default function FacilityTeamKpiPage() {
                         </span>
                       )}
                     </td>
+                    <td className="px-3 py-2 text-right font-medium">{formatDuration(r.minutes_logged)}</td>
                   </tr>
                 );
               })}

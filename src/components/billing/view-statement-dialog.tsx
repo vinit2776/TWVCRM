@@ -14,8 +14,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2, IndianRupee, ExternalLink, Bell, Clock, Copy, Download, Mail } from "lucide-react";
+import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2, IndianRupee, ExternalLink, Bell, Clock, Copy, Download, Mail, FileMinus2, PauseCircle, PlayCircle } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { computeSettlement } from "@/lib/settlement";
@@ -23,11 +24,16 @@ import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-s
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
+import { canOverridePiToGst, hasLivePi } from "@/lib/pi-override";
+import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 import { StatementLifecyclePanel } from "@/components/accounting/statement-lifecycle";
 import { StatementTimeline } from "@/components/accounting/statement-timeline";
 import { CommunicationSentDialog } from "@/components/communications/communication-sent-dialog";
 import { RecentCommunicationsCard } from "@/components/communications/recent-communications-card";
 import type { CommunicationLogEntry } from "@/types";
+import { canRecordPayments } from "@/lib/constants";
+import Link from "next/link";
+import { bookingChargeTotals, type BookingChargeView } from "@/lib/booking-usage-line";
 
 interface UsageCharge {
   id: string;
@@ -41,6 +47,8 @@ interface UsageCharge {
   waived_at?: string | null;
   waive_reason?: string | null;
   waived_by_user?: { full_name: string } | null;
+  /** Set by the statement API for booking charges only; null keeps the single-line rendering. */
+  booking_view?: BookingChargeView | null;
 }
 
 interface FacilityCharge {
@@ -117,6 +125,22 @@ interface Statement {
   notes?: string;
   reminder_count?: number | null;
   voided_at?: string | null;
+  /** Set when this draft was created by voiding an earlier statement. */
+  voided_statement_id?: string | null;
+  /** Usage only. Set when this statement is a SUPPLEMENT — a second,
+   *  smaller statement topping up an already-sent/paid original for the
+   *  same contract+period (see generateUsageStatements in billing.ts). */
+  supplements_statement_id?: string | null;
+  supplements?: { statement_number: string } | null;
+  /** Hold — blocks send/GST-issuance only; held_at set = currently on hold. */
+  held_at?: string | null;
+  hold_reason?: string | null;
+  held_by_user?: { full_name: string } | null;
+  /** Bad-debt write-off — CRM-only, leaves the GST invoice/Tally record untouched. */
+  written_off_at?: string | null;
+  write_off_reason?: string | null;
+  written_off_amount?: number | null;
+  written_off_by_user?: { full_name: string } | null;
   // Tally state (surfaced via TallyStatusBadge)
   issuance_channel?: string | null;
   lifecycle_stage?: string | null;
@@ -176,6 +200,7 @@ export function ViewStatementDialog({
   const [retryingTally, setRetryingTally] = useState(false);
   const [showConvertToGst, setShowConvertToGst] = useState(false);
   const [gstModeReady, setGstModeReady] = useState<boolean | null>(null); // null = loading
+  const [showCreditNoteCancel, setShowCreditNoteCancel] = useState(false);
 
   // Reminder state
   const [sendingReminder, setSendingReminder] = useState(false);
@@ -199,6 +224,27 @@ export function ViewStatementDialog({
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voidSubmitting, setVoidSubmitting] = useState(false);
+
+  // Reverse-a-recorded-payment state (admin only) — which payment row has the form open
+  const [reversingPaymentId, setReversingPaymentId] = useState<string | null>(null);
+  const [reversePaymentReason, setReversePaymentReason] = useState("");
+  const [reversePaymentSubmitting, setReversePaymentSubmitting] = useState(false);
+
+  // Write-off state
+  const [showWriteOffConfirm, setShowWriteOffConfirm] = useState(false);
+  const [writeOffReason, setWriteOffReason] = useState("");
+  const [writeOffSubmitting, setWriteOffSubmitting] = useState(false);
+
+  // Discard-draft state
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [discardReason, setDiscardReason] = useState("");
+  const [discardSubmitting, setDiscardSubmitting] = useState(false);
+
+  // Hold state — pauses send/GST-issuance only, draft stays editable
+  const [showHoldConfirm, setShowHoldConfirm] = useState(false);
+  const [holdReason, setHoldReason] = useState("");
+  const [holdSubmitting, setHoldSubmitting] = useState(false);
+  const [releaseHoldSubmitting, setReleaseHoldSubmitting] = useState(false);
 
   // Waive-charge state — tracks which charge row has the waive form open
   const [waivedChargeId, setWaivedChargeId] = useState<string | null>(null);
@@ -225,6 +271,10 @@ export function ViewStatementDialog({
     statement?.status === "draft" &&
     !!userRole &&
     ADD_CHARGE_ROLES.includes(userRole);
+
+  // The page passes onRecordPayment unconditionally, so without this the
+  // Record Payment buttons rendered for anyone who could open a statement.
+  const mayRecordPayment = canRecordPayments(userRole);
 
   const resetChargeForm = () => {
     setChargeDesc("");
@@ -337,8 +387,14 @@ export function ViewStatementDialog({
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
       });
       const json = await res.json();
-      if (res.ok) {
-        toast.success(json.emailedTo ? `Proforma sent to ${json.emailedTo}` : "Proforma generated (no email on file)");
+      if (res.ok && json.standby) {
+        toast.warning("Nothing was sent — GST invoicing is on standby.");
+      } else if (res.ok) {
+        toast.success(
+          json.handedToAccounts
+            ? "Handed to accounts — GST invoice will be issued from the Tally Inbox"
+            : json.emailedTo ? `Proforma sent to ${json.emailedTo}` : "Proforma generated (no email on file)",
+        );
         onStatusChange();
         const refreshed = await fetch(`/api/billing-statements/${statementId}`);
         if (refreshed.ok) { const j = await refreshed.json(); setStatement(j.data || null); }
@@ -438,6 +494,36 @@ export function ViewStatementDialog({
     }
   };
 
+  const handleReversePayment = async () => {
+    if (!statementId || !reversingPaymentId || reversePaymentReason.trim().length < 10) return;
+    setReversePaymentSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/payment/${reversingPaymentId}/reverse`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reversePaymentReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Payment reversed — the statement is back to awaiting payment");
+        setReversingPaymentId(null);
+        setReversePaymentReason("");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to reverse payment");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setReversePaymentSubmitting(false);
+    }
+  };
+
   const handleRevertToDraft = async () => {
     if (!statementId) return;
     setRevertingToDraft(true);
@@ -484,23 +570,11 @@ export function ViewStatementDialog({
         onOpenChange(false);
         return;
       }
-      // Tally-issued invoice — auto-route to credit-note cancel
+      // Tally-issued invoice — plain void isn't allowed, cancellation needs a
+      // real credit note (see credit-note-upload-dialog.tsx).
       if (json.issuance_channel === "tally") {
-        const cancelRes = await fetch(`/api/billing-statements/${statementId}/cancel-tally`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: voidReason.trim() }),
-        });
-        const cancelJson = await cancelRes.json();
-        if (cancelRes.ok) {
-          toast.success(cancelJson.message || "Credit note queued — invoice will cancel once Tally confirms.");
-          setShowVoidConfirm(false);
-          setVoidReason("");
-          onStatusChange();
-          onOpenChange(false);
-        } else {
-          toast.error(cancelJson.error || "Failed to queue the Tally credit note");
-        }
+        setShowVoidConfirm(false);
+        setShowCreditNoteCancel(true);
       } else {
         toast.error(json.error || "Failed to void statement");
       }
@@ -515,6 +589,147 @@ export function ViewStatementDialog({
     !!statement &&
     ["finalized", "exported"].includes(statement.status) &&
     userRole === "admin";
+
+  const handleWriteOffStatement = async () => {
+    if (!statementId || !writeOffReason.trim()) return;
+    setWriteOffSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/write-off`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ write_off_reason: writeOffReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(json.message || "Statement written off");
+        setShowWriteOffConfirm(false);
+        setWriteOffReason("");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to write off statement");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setWriteOffSubmitting(false);
+    }
+  };
+
+  // Billed correctly but uncollectible — distinct from Void, which assumes
+  // the invoice itself was wrong. See the tooltip on the button for the
+  // exact "use this instead of Void when…" guidance.
+  const canWriteOff =
+    !!statement &&
+    ["finalized", "exported"].includes(statement.status) &&
+    statement.payment_status !== "paid" &&
+    statement.payment_status !== "written_off" &&
+    userRole === "admin";
+
+  // Discard is void's draft-stage counterpart: the client has never seen a
+  // draft, so this is an internal cleanup rather than a cancellation, and it
+  // sits with everyone who runs billing rather than admin alone.
+  const canDiscard =
+    !!statement &&
+    statement.status === "draft" &&
+    ["admin", "manager", "accounts"].includes(userRole ?? "");
+
+  const handleDiscardStatement = async () => {
+    if (!statementId || !discardReason.trim()) return;
+    setDiscardSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/discard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ discard_reason: discardReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(json.message || "Draft discarded");
+        setShowDiscardConfirm(false);
+        setDiscardReason("");
+        onStatusChange();
+        onOpenChange(false);
+      } else {
+        toast.error(json.error || "Failed to discard draft");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setDiscardSubmitting(false);
+    }
+  };
+
+  // Hold — pauses send/GST-issuance while something is being clarified or
+  // corrected, without freezing the draft itself. Not destructive like
+  // Void/Discard, so it isn't red and release needs no reason text.
+  const canPlaceHold =
+    !!statement &&
+    ["draft", "finalized"].includes(statement.status) &&
+    !statement.held_at &&
+    canRecordPayments(userRole);
+
+  const canReleaseHold = !!statement && !!statement.held_at && canRecordPayments(userRole);
+
+  const handlePlaceHold = async () => {
+    if (!statementId || !holdReason.trim()) return;
+    setHoldSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/hold`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hold_reason: holdReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Statement is now on hold");
+        setShowHoldConfirm(false);
+        setHoldReason("");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to place hold");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setHoldSubmitting(false);
+    }
+  };
+
+  const handleReleaseHold = async () => {
+    if (!statementId) return;
+    setReleaseHoldSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/release-hold`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Hold released");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to release hold");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setReleaseHoldSubmitting(false);
+    }
+  };
 
   const customerName = statement?.lead
     ? statement.lead.company || `${statement.lead.first_name} ${statement.lead.last_name}`
@@ -636,10 +851,20 @@ export function ViewStatementDialog({
           </div>
         ) : statement ? (
           <div className="space-y-5">
+            {/* Supplemental cross-reference — this statement tops up an
+                already-sent/paid original for the same contract+period. The
+                original itself is never reopened or edited; this banner is
+                the only place that relationship surfaces on this view. */}
+            {statement.supplements_statement_id && (
+              <div className="rounded-md border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-900">
+                🔗 Supplements <span className="font-mono font-semibold">{statement.supplements?.statement_number ?? statement.supplements_statement_id}</span> — that original statement was already billed and is untouched by this one.
+              </div>
+            )}
+
             {/* Universal handoff lifecycle (visible on every statement,
                 regardless of tally_handoff_v2 state — the panel reads from
                 /api/accounting/inbox?id=… and gracefully degrades). */}
-            <StatementLifecyclePanel statementId={statement.id} />
+            <StatementLifecyclePanel statementId={statement.id} fallbackStatus={statement.status} />
 
             {/* Collapsible chronological history — fetches timeline events
                 only when the user expands the disclosure. */}
@@ -785,7 +1010,7 @@ export function ViewStatementDialog({
                 <div className="rounded-lg overflow-hidden border border-l-4 border-l-emerald-400 border-gray-200">
                   <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
                     <h4 className="text-sm font-semibold text-emerald-800">Payments Received</h4>
-                    {!isFullyPaid && onRecordPayment && (
+                    {!isFullyPaid && onRecordPayment && mayRecordPayment && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -835,7 +1060,8 @@ export function ViewStatementDialog({
                         const modeLabel = isRazorpay ? "Razorpay" : (p.payment_mode?.toUpperCase() || "—");
                         const settled = Number(p.amount) + Number(p.tds_amount || 0);
                         return (
-                          <div key={p.id} className="flex items-center justify-between px-3 py-2">
+                          <React.Fragment key={p.id}>
+                          <div className="flex items-center justify-between px-3 py-2">
                             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                               <span className="text-xs text-muted-foreground">{formatDate(p.payment_date)}</span>
                               <Badge variant="outline" className={`text-xs ${isRazorpay ? "border-violet-300 text-violet-700 bg-violet-50" : ""}`}>
@@ -868,8 +1094,57 @@ export function ViewStatementDialog({
                               {(p.tds_amount || 0) > 0 && (
                                 <span className="text-[10px] text-muted-foreground">settled {formatCurrency(settled)}</span>
                               )}
+                              {userRole === "admin" && !isRazorpay && reversingPaymentId !== p.id && (
+                                <button
+                                  className="mt-0.5 text-[11px] text-red-600 hover:text-red-800 underline"
+                                  onClick={() => { setReversingPaymentId(p.id); setReversePaymentReason(""); }}
+                                >
+                                  Reverse
+                                </button>
+                              )}
                             </div>
                           </div>
+                          {reversingPaymentId === p.id && (
+                            <div className="flex flex-col gap-2 border-t border-red-200 bg-red-50 px-3 py-3">
+                              <p className="text-xs font-medium text-red-700">
+                                Use this only if the payment was recorded in error (e.g. the money never arrived).
+                                It removes this {formatCurrency(p.amount)} payment, sets the statement back to awaiting payment
+                                and takes it off the accounts Tally Inbox. Nothing is sent to the customer.
+                              </p>
+                              <Textarea
+                                placeholder="Why is this payment being reversed? (required, saved to the audit trail)"
+                                value={reversePaymentReason}
+                                onChange={(e) => setReversePaymentReason(e.target.value)}
+                                className="text-sm"
+                                rows={2}
+                              />
+                              <div className="flex gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="flex-1"
+                                  onClick={() => { setReversingPaymentId(null); setReversePaymentReason(""); }}
+                                  disabled={reversePaymentSubmitting}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                                  onClick={handleReversePayment}
+                                  disabled={reversePaymentSubmitting || reversePaymentReason.trim().length < 10}
+                                >
+                                  {reversePaymentSubmitting ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <RotateCcw className="mr-2 h-4 w-4" />
+                                  )}
+                                  Reverse payment
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                          </React.Fragment>
                         );
                       })}
                       <div className="flex justify-between items-center px-3 py-2 bg-muted/30 text-xs">
@@ -964,10 +1239,24 @@ export function ViewStatementDialog({
                             className={`border-b ${charge.is_waived ? "bg-red-50/40" : ""}`}
                           >
                             <td className="px-3 py-2">
-                              <div className={`font-medium ${charge.is_waived ? "line-through text-muted-foreground" : ""}`}>
-                                {charge.description}
-                              </div>
-                              <div className="text-xs text-muted-foreground">{formatDate(charge.charge_date)}</div>
+                              {charge.booking_view ? (
+                                <>
+                                  <div className={`font-medium ${charge.is_waived ? "line-through text-muted-foreground" : ""}`}>
+                                    {charge.booking_view.title} ·{" "}
+                                    {charge.booking_view.bookingId ? (
+                                      <Link href={`/bookings/${charge.booking_view.bookingId}`} className="text-blue-600 hover:underline">{charge.booking_view.bookingNumber}</Link>
+                                    ) : charge.booking_view.bookingNumber}
+                                  </div>
+                                  <div className={`text-xs text-muted-foreground ${charge.is_waived ? "line-through" : ""}`}>{charge.booking_view.detail}</div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className={`font-medium ${charge.is_waived ? "line-through text-muted-foreground" : ""}`}>
+                                    {charge.description}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">{formatDate(charge.charge_date)}</div>
+                                </>
+                              )}
                               {charge.is_waived && charge.waived_by_user && (
                                 <div className="text-xs text-red-600 mt-0.5">
                                   Waived by {charge.waived_by_user.full_name}
@@ -976,10 +1265,10 @@ export function ViewStatementDialog({
                               )}
                             </td>
                             <td className={`px-3 py-2 text-right ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
-                              {charge.quantity}
+                              {charge.booking_view ? charge.booking_view.billedHours : charge.quantity}
                             </td>
                             <td className={`px-3 py-2 text-right ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
-                              {formatCurrency(charge.unit_price)}
+                              {formatCurrency(charge.booking_view ? charge.booking_view.unitPrice : charge.unit_price)}
                             </td>
                             <td className={`px-3 py-2 text-right font-medium ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
                               {formatCurrency(charge.total)}
@@ -1075,6 +1364,27 @@ export function ViewStatementDialog({
                           {canWaive && <td className="px-3 py-2" />}
                         </tr>
                       ))}
+                      {(() => {
+                        const live = (statement.usage_charges ?? []).filter((c) => !c.is_waived && c.status !== "waived" && c.booking_view);
+                        if (live.length < 2) return null;
+                        const t = bookingChargeTotals(live.map((c) => c.booking_view as BookingChargeView));
+                        return (
+                          <tr className="bg-muted/40 border-t">
+                            <td className="px-3 py-2">
+                              <div className="font-medium">Booking charges total</div>
+                              <div className="text-xs text-muted-foreground">
+                                Used {t.usedHours} h, free {t.freeHours} h, billed {t.billedHours} h
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium">{t.billedHours}</td>
+                            <td className="px-3 py-2" />
+                            <td className="px-3 py-2 text-right font-medium">
+                              {formatCurrency(live.reduce((sum, c) => sum + Number(c.total || 0), 0))}
+                            </td>
+                            {canWaive && <td className="px-3 py-2" />}
+                          </tr>
+                        );
+                      })()}
                     </tbody>
                   </table>
                 </div>
@@ -1237,7 +1547,21 @@ export function ViewStatementDialog({
             {statement.notes && (
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Notes</p>
-                <p className="text-sm">{statement.notes}</p>
+                {(() => {
+                  // Re-issues from /void: "Replaces voided X.\nVoid reason: …" — show the
+                  // reason on demand so an old void message doesn't read as a live warning.
+                  const m = statement.notes.match(/^Replaces voided (.+?)\.\nVoid reason: ([\s\S]*)$/);
+                  if (!m) return <p className="text-sm">{statement.notes}</p>;
+                  return (
+                    <details className="text-sm">
+                      <summary className="cursor-pointer select-none">
+                        Replaces voided <span className="font-mono">{m[1]}</span>
+                        <span className="text-xs text-muted-foreground"> · Why it was voided</span>
+                      </summary>
+                      <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap">{m[2]}</p>
+                    </details>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -1250,7 +1574,7 @@ export function ViewStatementDialog({
             Close
           </Button>
           {/* Record Payment — finalized/exported, not yet fully paid */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && onRecordPayment && (() => {
+          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && onRecordPayment && mayRecordPayment && (() => {
             const balanceDue = computeSettlement(statement.total_amount, statement.billing_payments).balanceDue;
             return (
               <Button
@@ -1286,7 +1610,7 @@ export function ViewStatementDialog({
             </Button>
           )}
           {/* Finalized: Send / Resend proforma — only when PI not yet cancelled */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && userRole && ["admin", "manager", "accounts"].includes(userRole) && !showResendChoice && (
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && userRole && ["admin", "manager", "accounts", "sales_rep"].includes(userRole) && !showResendChoice && (
             <Button
               onClick={() => {
                 // First send: go directly. Resend: offer link-renewal choice.
@@ -1296,7 +1620,8 @@ export function ViewStatementDialog({
                   handleSendProforma();
                 }
               }}
-              disabled={sendingProforma || reissuingLink}
+              disabled={sendingProforma || reissuingLink || !!statement?.held_at}
+              title={statement?.held_at ? `On hold: ${statement.hold_reason}` : undefined}
               variant={statement?.proforma_sent_at ? "outline" : "default"}
             >
               {(sendingProforma || reissuingLink) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
@@ -1304,13 +1629,13 @@ export function ViewStatementDialog({
             </Button>
           )}
           {/* Inline resend-choice panel — appears when Resend Proforma is clicked and a link already exists */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && showResendChoice && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && showResendChoice && userRole && ["admin", "manager", "accounts", "sales_rep"].includes(userRole) && (
             <div className="flex w-full flex-col gap-2 rounded-md border border-blue-200 bg-blue-50 p-3">
               <p className="text-sm font-medium text-blue-800">
                 A payment link was previously sent. How would you like to resend?
               </p>
               <p className="text-xs text-blue-600">
-                If the customer&apos;s link has expired, generate a fresh one — it cancels the old link and emails a new invoice with a new 15-day payment link.
+                If the customer&apos;s link has expired, generate a fresh one — it cancels the old link and emails a new invoice with a new 180-day payment link.
               </p>
               <div className="flex gap-2 pt-1">
                 <Button
@@ -1323,15 +1648,17 @@ export function ViewStatementDialog({
                   {sendingProforma ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Send className="mr-1 h-3 w-3" />}
                   Resend with existing link
                 </Button>
-                <Button
-                  size="sm"
-                  className="flex-1 bg-blue-700 hover:bg-blue-800 text-white"
-                  onClick={handleReissuePaymentLink}
-                  disabled={sendingProforma || reissuingLink}
-                >
-                  {reissuingLink ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-1 h-3 w-3" />}
-                  Resend with new payment link
-                </Button>
+                {userRole !== "sales_rep" && (
+                  <Button
+                    size="sm"
+                    className="flex-1 bg-blue-700 hover:bg-blue-800 text-white"
+                    onClick={handleReissuePaymentLink}
+                    disabled={sendingProforma || reissuingLink}
+                  >
+                    {reissuingLink ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-1 h-3 w-3" />}
+                    Resend with new payment link
+                  </Button>
+                )}
               </div>
               <button
                 className="text-xs text-blue-500 hover:underline text-left"
@@ -1342,7 +1669,7 @@ export function ViewStatementDialog({
             </div>
           )}
           {/* Send Reminder — finalized/exported, not yet paid, proforma already sent, not voided */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && !!statement?.proforma_sent_at && !statement?.voided_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && !!statement?.proforma_sent_at && !statement?.voided_at && userRole && ["admin", "manager", "accounts", "sales_rep"].includes(userRole) && (
             <div className="flex gap-1">
               <Button
                 variant="outline"
@@ -1369,8 +1696,8 @@ export function ViewStatementDialog({
               </Button>
             </div>
           )}
-          {/* Early GST override — admin/manager, finalized, unpaid, no GST yet */}
-          {statement?.status === "finalized" && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.payment_status !== "paid" && statement?.contract?.billing_mode !== "gst_direct" && userRole && ["admin", "manager"].includes(userRole) && (
+          {/* Early GST override — admin/manager/sales_rep, finalized, unpaid, no GST yet */}
+          {statement && hasLivePi({ status: statement.status, payment_status: statement.payment_status ?? null, gst_invoice_number: statement.gst_invoice_number ?? null, pi_cancelled_at: statement.pi_cancelled_at ?? null, proforma_sent_at: statement.proforma_sent_at ?? null, voided_at: statement.voided_at }) && canOverridePiToGst(userRole) && (
             <Button
               variant="outline"
               className="border-amber-400 text-amber-700 hover:bg-amber-50"
@@ -1384,8 +1711,14 @@ export function ViewStatementDialog({
           {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && (statement?.payment_status === "paid" || statement?.payment_status === "partially_paid") && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
             <Button
               onClick={handleGenerateGstInvoice}
-              disabled={generatingGst || gstModeReady === false}
-              title={gstModeReady === false ? "GST invoicing is on standby — activate CRM GST or Tally Sync from Admin → Tally Sync" : undefined}
+              disabled={generatingGst || gstModeReady === false || !!statement?.held_at}
+              title={
+                statement?.held_at
+                  ? `On hold: ${statement.hold_reason}`
+                  : gstModeReady === false
+                    ? "GST invoicing is on standby — activate CRM GST or Tally Sync from Admin → Tally Sync"
+                    : undefined
+              }
               className="bg-green-700 hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {generatingGst ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCheck className="mr-2 h-4 w-4" />}
@@ -1412,7 +1745,7 @@ export function ViewStatementDialog({
                 <Download className="h-3 w-3" />
                 PDF
               </a>
-              {statement?.lead?.email && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+              {statement?.lead?.email && userRole && ["admin", "manager", "accounts", "sales_rep"].includes(userRole) && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -1425,6 +1758,163 @@ export function ViewStatementDialog({
                   Resend Email
                 </Button>
               )}
+            </div>
+          )}
+          {/* Already written off — persistent notice, replaces the action button */}
+          {statement?.payment_status === "written_off" && (
+            <div className="flex w-full flex-col gap-1 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm font-medium text-amber-800 flex items-center gap-1.5">
+                <FileMinus2 className="h-4 w-4" />
+                Written off — ₹{(statement.written_off_amount ?? 0).toLocaleString("en-IN")} removed from Accounts Receivable
+              </p>
+              {statement.write_off_reason && (
+                <p className="text-xs text-amber-700">{statement.write_off_reason}</p>
+              )}
+              <p className="text-[11px] text-amber-600">
+                By {statement.written_off_by_user?.full_name ?? "—"}
+                {statement.written_off_at ? ` · ${formatDate(statement.written_off_at)}` : ""}
+              </p>
+            </div>
+          )}
+          {/* Write Off — admin only, finalized/exported, not paid or already written off */}
+          {canWriteOff && !showWriteOffConfirm && (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="border-amber-300 text-amber-700 hover:bg-amber-50"
+                    onClick={() => setShowWriteOffConfirm(true)}
+                  >
+                    <FileMinus2 className="mr-2 h-4 w-4" />
+                    Write Off
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[260px] text-xs">
+                  <p>
+                    <b>Use when:</b> the invoice was billed correctly but the customer can&apos;t or won&apos;t pay — insolvency, unreachable, or not worth the cost to chase.
+                  </p>
+                  <p className="mt-1.5 opacity-80">
+                    Billing mistake instead? Use <b>Void</b> — it reissues the invoice for correction.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {canWriteOff && showWriteOffConfirm && statement && (() => {
+            const writeOffBalance = computeSettlement(statement.total_amount, statement.billing_payments).balanceDue;
+            return (
+              <div className="flex w-full flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-medium text-amber-800">
+                  This removes ₹{writeOffBalance.toLocaleString("en-IN")} from Accounts Receivable. The GST invoice, Tally record and any payments already recorded stay untouched — this is CRM tracking only, and can&apos;t be undone from here.
+                </p>
+                <Textarea
+                  placeholder="Reason for write-off (required)"
+                  value={writeOffReason}
+                  onChange={(e) => setWriteOffReason(e.target.value)}
+                  className="text-sm"
+                  rows={2}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => { setShowWriteOffConfirm(false); setWriteOffReason(""); }}
+                    disabled={writeOffSubmitting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="flex-1 bg-amber-600 hover:bg-amber-700 text-white"
+                    onClick={handleWriteOffStatement}
+                    disabled={writeOffSubmitting || !writeOffReason.trim()}
+                  >
+                    {writeOffSubmitting ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <FileMinus2 className="mr-2 h-4 w-4" />
+                    )}
+                    Confirm Write-off
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+          {/* Hold — pauses send/GST-issuance while something is being
+              clarified/corrected. Not destructive: shown to anyone viewing
+              the statement, but only accounts/admin get the buttons. */}
+          {statement?.held_at && (
+            <div className="flex w-full flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm font-medium text-amber-800">
+                On hold{statement.held_by_user?.full_name ? ` — placed by ${statement.held_by_user.full_name}` : ""}
+              </p>
+              <p className="text-xs text-amber-700">{statement.hold_reason}</p>
+              {canReleaseHold && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-fit border-amber-300 text-amber-800 hover:bg-amber-100"
+                  onClick={handleReleaseHold}
+                  disabled={releaseHoldSubmitting}
+                >
+                  {releaseHoldSubmitting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <PlayCircle className="mr-2 h-4 w-4" />
+                  )}
+                  Release Hold
+                </Button>
+              )}
+            </div>
+          )}
+          {canPlaceHold && !showHoldConfirm && (
+            <Button
+              variant="outline"
+              className="border-amber-300 text-amber-800 hover:bg-amber-50"
+              onClick={() => setShowHoldConfirm(true)}
+            >
+              <PauseCircle className="mr-2 h-4 w-4" />
+              Place Hold
+            </Button>
+          )}
+          {canPlaceHold && showHoldConfirm && (
+            <div className="flex w-full flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm font-medium text-amber-800">
+                This blocks Send / GST-invoice generation only — the draft stays fully editable.
+              </p>
+              <Textarea
+                placeholder="Reason for hold — what needs clarifying or correcting (required)"
+                value={holdReason}
+                onChange={(e) => setHoldReason(e.target.value)}
+                className="text-sm"
+                rows={2}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => { setShowHoldConfirm(false); setHoldReason(""); }}
+                  disabled={holdSubmitting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={handlePlaceHold}
+                  disabled={holdSubmitting || !holdReason.trim()}
+                >
+                  {holdSubmitting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <PauseCircle className="mr-2 h-4 w-4" />
+                  )}
+                  Place Hold
+                </Button>
+              </div>
             </div>
           )}
           {/* Void / Cancel — admin only, finalized or exported statements */}
@@ -1478,6 +1968,60 @@ export function ViewStatementDialog({
               </div>
             </div>
           )}
+          {/* Discard — drafts only, admin/manager/accounts */}
+          {canDiscard && !showDiscardConfirm && (
+            <Button
+              variant="outline"
+              className="border-red-300 text-red-600 hover:bg-red-50"
+              onClick={() => setShowDiscardConfirm(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Discard Draft
+            </Button>
+          )}
+          {canDiscard && showDiscardConfirm && (
+            <div className="flex w-full flex-col gap-2 rounded-md border border-red-200 bg-red-50 p-3">
+              <p className="text-sm font-medium text-red-700">
+                {statement?.voided_statement_id
+                  ? "This replacement draft will be discarded. The voided original stays voided, and this period becomes free to regenerate."
+                  : "This draft will be discarded and the period freed up, so billing can regenerate it from scratch."}
+              </p>
+              <p className="text-xs text-red-600">
+                Usage charges, bookings and service usage on this draft go back to unbilled — they will be picked up by whatever bills this period next.
+              </p>
+              <Textarea
+                placeholder="Reason for discarding (required)"
+                value={discardReason}
+                onChange={(e) => setDiscardReason(e.target.value)}
+                className="text-sm"
+                rows={2}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => { setShowDiscardConfirm(false); setDiscardReason(""); }}
+                  disabled={discardSubmitting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                  onClick={handleDiscardStatement}
+                  disabled={discardSubmitting || !discardReason.trim()}
+                >
+                  {discardSubmitting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 h-4 w-4" />
+                  )}
+                  Discard Draft
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1501,6 +2045,26 @@ export function ViewStatementDialog({
         totalAmount={statement.total_amount}
         hasExistingPaymentLink={!!statement.razorpay_payment_link_url}
         onSuccess={() => { onStatusChange(); onOpenChange(false); }}
+      />
+    )}
+
+    {/* Credit-note cancellation dialog — Tally-issued invoices only */}
+    {statement && showCreditNoteCancel && (
+      <CreditNoteUploadDialog
+        statement={{
+          id: statement.id,
+          statement_number: statement.statement_number,
+          tally_invoice_number: statement.tally_invoice_number ?? null,
+          total_amount: statement.total_amount,
+          payment_status: statement.payment_status ?? "unpaid",
+        }}
+        onCancelled={() => {
+          setShowCreditNoteCancel(false);
+          setVoidReason("");
+          onStatusChange();
+          onOpenChange(false);
+        }}
+        onClose={() => setShowCreditNoteCancel(false)}
       />
     )}
 

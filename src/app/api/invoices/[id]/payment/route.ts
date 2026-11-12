@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { handleStatementPaid } from "@/lib/tally-handoff-server";
+import { closeReportForRecordedPayment } from "@/lib/queries/close-report-on-payment";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { canRecordPayments } from "@/lib/constants";
+import { OVERPAYMENT_CODE, overpaymentMessage } from "@/lib/overpayment-guard";
 
 /**
  * POST /api/invoices/[id]/payment
@@ -27,6 +30,19 @@ export async function POST(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // This route had no role check at all — any authenticated user could record
+  // money against an ad-hoc invoice, including roles with no finance access.
+  // Every other payment route gated on admin/manager/accounts; this one was
+  // simply missed. Brought in line with the rest.
+  const { data: actor } = await supabase
+    .from("users").select("id, role, full_name").eq("auth_id", user.id).maybeSingle();
+  if (!actor || !canRecordPayments(actor.role)) {
+    return NextResponse.json(
+      { error: "Only admin or accounts can record payments" },
+      { status: 403 },
+    );
+  }
 
   const body = await request.json();
   const amount = parseFloat(body.amount);
@@ -75,6 +91,7 @@ export async function POST(
         invoice_id: id,
         contract_id: null,
         proposal_id: invoice.proposal_id ?? null,
+        lead_id: invoice.lead_id ?? null,
         statement_type: "usage",
         created_via: "adhoc_invoice",
         status: "finalized",
@@ -97,18 +114,60 @@ export async function POST(
 
   // ── Record the payment + route through the shared Tally-handoff pipeline ───
   if (statement) {
-    await adminSupabase.from("billing_payments").insert({
-      billing_statement_id: statement.id,
-      amount,
-      payment_date: paidAt.slice(0, 10),
-      payment_mode: "other",
-      payment_reference: reference,
+    // Same guard as the statement payment route: one receipt must not be able
+    // to credit an ad-hoc invoice twice, whichever screen it is recorded from.
+    const guarded = await adminSupabase.rpc("record_billing_payment_guarded", {
+      p_statement_id: statement.id,
+      p_amount: amount,
+      p_payment_date: paidAt.slice(0, 10),
+      p_payment_mode: "other",
+      p_payment_reference: reference,
+      p_proof_path: null,
+      p_notes: null,
+      p_tds_amount: 0,
+      p_tds_section: null,
+      p_recorded_by: actor.id,
     });
+    if (guarded.error) {
+      console.error("[invoice payment] guarded insert failed:", guarded.error.message);
+      return NextResponse.json({ error: "Failed to record payment" }, { status: 500 });
+    }
+    const outcome = (guarded.data as Array<{
+      success: boolean;
+      error_code: string | null;
+      outstanding: number | string | null;
+      settled: number | string | null;
+      payment: { id: string } | null;
+    }> | null)?.[0];
+    if (!outcome?.success) {
+      if (outcome?.error_code === OVERPAYMENT_CODE) {
+        const outstanding = Number(outcome.outstanding ?? 0);
+        return NextResponse.json(
+          {
+            error: overpaymentMessage({ outstanding, settled: Number(outcome.settled ?? 0), attempted: amount }),
+            code: OVERPAYMENT_CODE,
+            outstanding,
+          },
+          { status: 409 },
+        );
+      }
+      return NextResponse.json({ error: "Failed to record payment" }, { status: 500 });
+    }
     await adminSupabase
       .from("billing_statements")
       .update({ payment_status: "paid" })
       .eq("id", statement.id);
-    await handleStatementPaid(adminSupabase, statement.id, "invoice_payment_recorded");
+    await handleStatementPaid(adminSupabase, statement.id, "invoice_payment_recorded", actor.id);
+
+    // Same as the statement payment route: recording the payment verifies any
+    // open payment report the credit now covers.
+    if (outcome.payment?.id) {
+      await closeReportForRecordedPayment(
+        adminSupabase,
+        { id: outcome.payment.id },
+        { id: actor.id, role: actor.role, full_name: actor.full_name ?? "Accounts" },
+      );
+    }
   }
 
   // Update invoice — no more self-generated GST invoice number/fields.

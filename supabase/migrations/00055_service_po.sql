@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_purchase_orders_po_type ON purchase_orders(po_typ
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS po_service_reports (
-  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id               UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   po_id            UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
   cycle_number     INTEGER NOT NULL,
   period_from      DATE NOT NULL,

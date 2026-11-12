@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { deleteUserFromDevice } from "@/lib/cosec";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/cron/cosec-booking-cleanup
@@ -13,7 +14,7 @@ import { deleteUserFromDevice } from "@/lib/cosec";
  * entity_id is polymorphic (no FK to bookings), so we fetch booking end_times
  * in a separate query rather than using a PostgREST join.
  */
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -96,3 +97,5 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ ok: true, deleted, errors });
 }
+
+export const GET = withCronHealth("cron/cosec-booking-cleanup", handler);

@@ -26,13 +26,17 @@ import { cn, getInitials } from "@/lib/utils";
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
 import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
 import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
+import { ComplaintsQueue } from "@/components/facility/complaints-queue";
+import { FacilityViewTabs } from "@/components/facility/facility-view-tabs";
 import {
-  PRIORITY_LIST, PRIORITY_STYLES, STATUS_LIST, STATUS_STYLES, kpiPointsStyle,
+  PRIORITY_LIST, PRIORITY_STYLES, SCOPE_LABEL, STATUS_LIST, STATUS_STYLES, kpiPointsStyle,
   timeAgo, timeUntil,
 } from "@/lib/facility-ui";
 import type {
-  FacilityIssue, FacilityIssuePriority, FacilityIssueStatus,
+  FacilityIssue, FacilityIssuePriority, FacilityIssueStatus, FacilityScope,
 } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface Location { id: string; name: string; code: string }
 
@@ -64,6 +68,7 @@ function FacilityIssuesPageInner() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [complaintsRefresh, setComplaintsRefresh] = useState(0);
   const [delegateOpen, setDelegateOpen] = useState(false);
   // Groups that are all-closed (nothing open) start collapsed; anyone with
   // open work stays visible by default.
@@ -81,9 +86,11 @@ function FacilityIssuesPageInner() {
   const [locationId, setLocationId] = useState("");
   const [onlyOpen, setOnlyOpen] = useState(() => searchParams.get("only_open") === "true");
   const [onlyMine, setOnlyMine] = useState(false);
+  const [onlyReportedByMe, setOnlyReportedByMe] = useState(false);
   const [onlyUnowned, setOnlyUnowned] = useState(false);
   const [slaBreached, setSlaBreached] = useState(false);
   const [assignedToFilter, setAssignedToFilter] = useState(() => searchParams.get("assigned_to") ?? "");
+  const [attentionTile, setAttentionTile] = useState<AttentionTile | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(() => !!searchParams.get("assigned_to"));
 
   const fetchData = async () => {
@@ -94,6 +101,7 @@ function FacilityIssuesPageInner() {
     if (slaBreached) params.set("sla_breached", "true");
     if (onlyMine) params.set("assigned_to", "me");
     else if (onlyUnowned) params.set("assigned_to", "unassigned");
+    if (onlyReportedByMe) params.set("reported_by", "me");
     // Note: assignedToFilter (the "Assigned to" person picker) is applied
     // client-side in `filtered` below, not here — sending it server-side would
     // shrink `issues` to just that person's tasks, collapsing the picker's own
@@ -129,7 +137,7 @@ function FacilityIssuesPageInner() {
   useEffect(() => {
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [priority, locationId, slaBreached, onlyMine, onlyOpen, onlyUnowned, statusFilters]);
+  }, [priority, locationId, slaBreached, onlyMine, onlyReportedByMe, onlyOpen, onlyUnowned, statusFilters]);
 
   // Distinct assignees currently present in the loaded set — only people who
   // actually have a task show up, so the dropdown doesn't list the whole company.
@@ -158,6 +166,9 @@ function FacilityIssuesPageInner() {
     if (assignedToFilter) {
       result = result.filter((i) => i.assigned_to === assignedToFilter);
     }
+    if (attentionTile) {
+      result = result.filter((i) => matchesAttentionTile(i, attentionTile));
+    }
     if (onlyUnowned) {
       // Sort: claim_sla_breached first, then by priority (critical → low), then by created_at
       const PRIORITY_WEIGHT: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -172,7 +183,7 @@ function FacilityIssuesPageInner() {
       });
     }
     return result;
-  }, [issues, search, onlyUnowned, assignedToFilter]);
+  }, [issues, search, onlyUnowned, assignedToFilter, attentionTile]);
 
   // Group by assignee — "Unclaimed" pinned first (own bucket so tickets
   // nobody owns stay visible instead of disappearing until claimed), then
@@ -233,8 +244,23 @@ function FacilityIssuesPageInner() {
     return parts.length > 0 ? parts.join(" · ") : null;
   };
 
+  if (searchParams.get("view") === "complaints") {
+    return (
+      <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
+        <PageBreadcrumb resetTo={{ label: "Issues" }} />
+        <div>
+          <h1 className="text-xl md:text-2xl font-semibold">Tasks / Work Orders</h1>
+          <p className="text-xs md:text-sm text-muted-foreground">Customer complaints and requests from WhatsApp, to assess and act on</p>
+        </div>
+        <FacilityViewTabs active="complaints" refreshKey={complaintsRefresh} />
+        <ComplaintsQueue onChanged={() => setComplaintsRefresh((n) => n + 1)} />
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Issues" }} />
       {/* ───── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-3">
         <div>
@@ -256,7 +282,9 @@ function FacilityIssuesPageInner() {
         </div>
       </div>
 
-      <ActivityFeed />
+      <FacilityViewTabs active="work" />
+
+      <ActivityFeed activeTile={attentionTile} onTile={setAttentionTile} shown={attentionTile ? filtered.length : null} />
 
       {/* ───── Search + filter toggle ──────────────────────────────────────── */}
       <div className="flex items-center gap-2">
@@ -290,6 +318,12 @@ function FacilityIssuesPageInner() {
         </Chip>
         <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setOnlyUnowned(false); setStatusFilters([]); }}>Open only</Chip>
         <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); setAssignedToFilter(""); }}>Mine</Chip>
+        {/* Deliberately does NOT clear onlyUnowned, unlike the Mine chip above.
+            Mine and Unclaimed both write `assigned_to`, so they are genuinely
+            exclusive; this one writes `reported_by`, which composes with either.
+            "Created by me" + "Unclaimed" is the useful view of work you handed
+            out that nobody has picked up yet. */}
+        <Chip active={onlyReportedByMe} onClick={() => setOnlyReportedByMe((v) => !v)}>Created by me</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
           <AlertTriangle className="h-3 w-3 mr-1 inline" /> Overdue <span className="opacity-70 ml-0.5">(TAT)</span>
         </Chip>
@@ -499,7 +533,12 @@ function FacilityIssuesPageInner() {
   );
 }
 
-interface ActivityEvent {
+interface ActivityIssue {
+  issue_number: string; title: string; task_type: string; status: string; scope: string; priority: string;
+  reported_at: string | null; resolved_at: string | null; sla_target_at: string | null;
+  location: { name: string } | null; assignee: { full_name: string } | null;
+}
+interface ActivityRow {
   id: string;
   issue_id: string;
   event_type: string;
@@ -507,44 +546,112 @@ interface ActivityEvent {
   message: string | null;
   payload: Record<string, unknown> | null;
   created_at: string;
-  issue: { issue_number: string; title: string; task_type: string; status: string } | null;
+  collaborators_added: number;
+  issue: ActivityIssue | null;
+}
+interface ActivityAttention {
+  overdue: number; oldest_overdue: { issue_number: string; hours: number } | null;
+  due_soon: number; unclaimed: number; critical: number; reopened_week: number;
+}
+interface ActivityWeekly { resolved: number; on_time: number; avg_hours: number | null; busiest: { name: string; count: number } | null }
+
+function formatSpan(ms: number): string {
+  const mins = Math.max(Math.round(ms / 60_000), 1);
+  if (mins < 60) return `${mins}m`;
+  const hours = mins / 60;
+  if (hours < 48) return `${Math.floor(hours)}h${mins % 60 ? ` ${mins % 60}m` : ""}`;
+  return `${Math.round(hours / 24)}d`;
 }
 
-// The stepper on an activity-feed row must show the status AS OF that event,
-// not the ticket's live current status — otherwise every historical row for
-// the same ticket shows an identical (and possibly stale-looking) stepper,
-// e.g. an old "reopened" row displaying today's "resolved" as if that's what
-// happened back then. resolved/reopened/status_changed events carry
-// payload.to (the resulting status) already; claiming always lands on
-// "acknowledged" per the assign route. Plain assignment/take-over doesn't
-// change status, so there's no reliable historical value to show for those
-// — the stepper is omitted for that row rather than guessing.
-function statusAtEvent(e: ActivityEvent): string | null {
-  if (e.event_type === "claimed") return "acknowledged";
-  if (e.event_type === "resolved" || e.event_type === "reopened" || e.event_type === "status_changed") {
-    const to = e.payload?.to;
-    return typeof to === "string" ? to : null;
+// Plain-English outcome for a ticket's latest event, plus an on-time/late tag
+// when the ticket is done. TAT is judged from the ticket's own resolved_at.
+function describeActivity(r: ActivityRow): { text: string; tag?: { label: string; tone: "ok" | "bad" | "warn" } } {
+  const i = r.issue;
+  const who = r.actor_label ?? "Someone";
+  const done = r.event_type === "resolved" || (r.event_type === "status_changed" && r.payload?.to === "closed");
+  if (done && i?.resolved_at && i.reported_at) {
+    const took = new Date(i.resolved_at).getTime() - new Date(i.reported_at).getTime();
+    const by = i.assignee?.full_name ?? who;
+    if (!i.sla_target_at) return { text: `${r.event_type === "resolved" ? "Resolved" : "Closed"} by ${by} in ${formatSpan(took)}` };
+    const tat = new Date(i.sla_target_at).getTime() - new Date(i.reported_at).getTime();
+    const late = new Date(i.resolved_at).getTime() - new Date(i.sla_target_at).getTime();
+    return {
+      text: `${r.event_type === "resolved" ? "Resolved" : "Closed"} by ${by} in ${formatSpan(took)} (TAT ${formatSpan(tat)})`,
+      tag: late <= 0 ? { label: "on time", tone: "ok" } : { label: `late by ${formatSpan(late)}`, tone: "bad" },
+    };
   }
-  return null;
+  const collab = r.collaborators_added > 0 ? ` · +${r.collaborators_added} collaborator${r.collaborators_added > 1 ? "s" : ""}` : "";
+  if (r.event_type === "reopened") return { text: `Reopened by ${who}${collab}`, tag: { label: "reopened", tone: "warn" } };
+  if (r.event_type === "claimed") return { text: `${who} picked this up${collab}` };
+  const overdue = i && ["new", "acknowledged", "in_progress", "reopened"].includes(i.status) && i.sla_target_at && new Date(i.sla_target_at).getTime() < Date.now();
+  return { text: `${r.message ?? "Updated"}${collab}`, tag: overdue ? { label: "overdue", tone: "bad" } : undefined };
 }
 
-// Global "who did what, when" strip — claims, assignments, take-overs,
-// resolutions, reopens, closes, across every technician. Independent of the
-// grouped-by-assignee list below (and its filters); this is a shared feed.
-function ActivityFeed() {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
+const TAG_TONE = { ok: "bg-emerald-50 text-emerald-700", bad: "bg-red-50 text-red-700", warn: "bg-amber-50 text-amber-700" } as const;
+
+function dayGroup(iso: string): string {
+  const d = new Date(iso);
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const diffDays = Math.floor((startOfToday.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86_400_000);
+  if (diffDays <= 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return "Earlier this week";
+  return "Older";
+}
+
+// Overview above the grouped list: what needs attention now, one row per
+// ticket (not per event), and a weekly roll-up. Independent of the filters
+// of the grouped-by-assignee list below.
+type AttentionTile = "overdue" | "due_soon" | "unclaimed" | "critical" | "reopened";
+
+const OPEN_ISSUE_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
+const TILE_HOUR_MS = 3_600_000;
+
+// Mirrors the counts in /api/facility/issues/activity so a tile's number and
+// the list it opens agree. "Reopened" uses the current status: the tile counts
+// tickets reopened this week, which can include ones since resolved again.
+function matchesAttentionTile(i: FacilityIssue, tile: AttentionTile): boolean {
+  const open = OPEN_ISSUE_STATUSES.includes(i.status);
+  const now = Date.now();
+  const due = i.sla_target_at ? new Date(i.sla_target_at).getTime() : null;
+  switch (tile) {
+    case "overdue": return open && due !== null && due < now;
+    case "due_soon": return open && due !== null && due >= now && due <= now + 4 * TILE_HOUR_MS;
+    case "unclaimed": return (i.status === "new" || i.status === "reopened") && !i.assigned_to && new Date(i.reported_at).getTime() < now - 6 * TILE_HOUR_MS;
+    case "critical": return open && i.priority === "critical";
+    case "reopened": return i.status === "reopened";
+  }
+}
+
+function ActivityFeed({ activeTile, onTile, shown }: { activeTile: AttentionTile | null; onTile: (t: AttentionTile | null) => void; shown: number | null }) {
+  const [rows, setRows] = useState<ActivityRow[]>([]);
+  const [attention, setAttention] = useState<ActivityAttention | null>(null);
+  const [weekly, setWeekly] = useState<ActivityWeekly | null>(null);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
+  const [scopeFilter, setScopeFilter] = useState<string>("all");
 
   useEffect(() => {
     fetch("/api/facility/issues/activity")
       .then((r) => r.json())
-      .then((j) => setEvents(j.data ?? []))
+      .then((j) => { setRows(j.data ?? []); setAttention(j.attention ?? null); setWeekly(j.weekly ?? null); })
       .finally(() => setLoading(false));
   }, []);
 
-  if (!loading && events.length === 0) return null;
+  if (!loading && rows.length === 0 && !attention) return null;
 
+  const scopes = [...new Set(rows.map((r) => r.issue?.scope).filter((x): x is string => !!x))];
+  const visible = scopeFilter === "all" ? rows : rows.filter((r) => r.issue?.scope === scopeFilter);
+  const tiles: { key: AttentionTile; label: string; value: number; detail?: string; tone: "bad" | "warn" | "neutral" }[] = attention ? [
+    { key: "overdue", label: "Overdue", value: attention.overdue, detail: attention.oldest_overdue ? `oldest: ${formatSpan(attention.oldest_overdue.hours * 3_600_000)}, ${attention.oldest_overdue.issue_number}` : undefined, tone: "bad" },
+    { key: "due_soon", label: "Due in 4h", value: attention.due_soon, tone: "warn" },
+    { key: "unclaimed", label: "Unclaimed 6h+", value: attention.unclaimed, tone: "warn" },
+    { key: "critical", label: "Critical open", value: attention.critical, tone: "bad" },
+    { key: "reopened", label: "Reopened this week", value: attention.reopened_week, tone: "neutral" },
+  ] : [];
+  const TILE_TONE = { bad: "bg-red-50 text-red-700", warn: "bg-amber-50 text-amber-700", neutral: "bg-muted/40 text-muted-foreground" } as const;
+
+  let lastGroup = "";
   return (
     <div className="rounded-lg border overflow-hidden">
       <button
@@ -552,53 +659,105 @@ function ActivityFeed() {
         onClick={() => setCollapsed((v) => !v)}
         className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors bg-muted/10"
       >
-        <span className="text-sm font-medium">Recent activity</span>
-        <span className="text-xs text-muted-foreground">who did what, last {events.length}</span>
+        <span className="text-sm font-medium">Overview</span>
+        <span className="text-xs text-muted-foreground">what needs attention and what just happened</span>
         <ChevronDown className={cn("h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150", collapsed && "-rotate-90")} />
       </button>
       {!collapsed && (
-        <div className="divide-y">
-          {loading ? (
-            <div className="px-3 py-3 text-xs text-muted-foreground">Loading…</div>
-          ) : (
-            events.map((e) => {
-              const isTask = e.issue?.task_type === "delegated_task";
-              return (
-                <Link
-                  key={e.id}
-                  href={`/facility/issues/${e.issue_id}`}
+        <div>
+          {tiles.length > 0 && (
+            <>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-3">
+              {tiles.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  disabled={t.value === 0}
+                  aria-pressed={activeTile === t.key}
+                  onClick={() => onTile(activeTile === t.key ? null : t.key)}
                   className={cn(
-                    "block px-3 py-2 hover:bg-muted/20 transition-colors",
-                    isTask && "bg-teal-50/60",
+                    "rounded-lg px-2.5 py-2 text-xs text-left transition-shadow",
+                    t.value > 0 ? cn(TILE_TONE[t.tone], "hover:ring-1 hover:ring-current cursor-pointer") : "bg-muted/30 text-muted-foreground cursor-default",
+                    activeTile === t.key && "ring-2 ring-current",
                   )}
                 >
-                  <div className="flex items-center gap-2.5">
-                    <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0">
-                      {getInitials(e.actor_label ?? "?")}
-                    </span>
-                    <span className="text-xs flex-1 min-w-0 truncate">
-                      <span className="font-medium">{e.actor_label ?? "Someone"}</span>
-                      {" — "}
-                      <span className="text-muted-foreground">{e.message}</span>
-                      {e.issue && <span className="text-muted-foreground"> · {e.issue.issue_number}</span>}
-                    </span>
-                    {(() => { const s = statusAtEvent(e); return s ? <LifecycleStepper status={s} inline /> : null; })()}
-                    {e.issue && (
-                      isTask ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5 shrink-0">
-                          <UserPlus className="h-2.5 w-2.5" /> Task
+                  <div className="text-xl font-medium leading-tight">{t.value}</div>
+                  <div>{t.label}</div>
+                  {t.detail && t.value > 0 && <div className="text-[11px] opacity-80 truncate">{t.detail}</div>}
+                </button>
+              ))}
+            </div>
+            {activeTile && (
+              <div className="flex items-center gap-2 px-3 pb-2 text-xs text-muted-foreground">
+                <span>Showing {shown ?? 0} ticket{shown === 1 ? "" : "s"} in the list below for “{tiles.find((t) => t.key === activeTile)?.label}”.</span>
+                <button type="button" onClick={() => onTile(null)} className="underline hover:text-foreground">Clear</button>
+              </div>
+            )}
+            </>
+          )}
+          {scopes.length > 1 && (
+            <div className="flex gap-1.5 flex-wrap px-3 pb-2">
+              {["all", ...scopes].map((sc) => (
+                <button
+                  key={sc}
+                  type="button"
+                  onClick={() => setScopeFilter(sc)}
+                  className={cn("text-xs rounded-full border px-2.5 py-1", scopeFilter === sc ? "bg-foreground text-background border-foreground" : "hover:bg-muted/40")}
+                >
+                  {sc === "all" ? "All" : SCOPE_LABEL[sc as FacilityScope] ?? sc}
+                </button>
+              ))}
+            </div>
+          )}
+          <div>
+            {loading ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground border-t">Loading…</div>
+            ) : visible.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground border-t">No recent activity here.</div>
+            ) : (
+              visible.map((e) => {
+                const group = dayGroup(e.created_at);
+                const header = group !== lastGroup ? group : null;
+                lastGroup = group;
+                const d = describeActivity(e);
+                const isTask = e.issue?.task_type === "delegated_task";
+                return (
+                  <div key={e.id}>
+                    {header && <div className="px-3 py-1 text-[11px] text-muted-foreground bg-muted/20 border-t">{header}</div>}
+                    <Link
+                      href={`/facility/issues/${e.issue_id}`}
+                      className={cn("block px-3 py-2 border-t hover:bg-muted/20 transition-colors", isTask && "bg-teal-50/60")}
+                      onClick={() => pushTrailEntry({ href: `/facility/issues/${e.issue_id}`, label: e.issue?.title ?? e.issue?.issue_number ?? "Issue" })}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0 mt-0.5">
+                          {getInitials(e.issue?.assignee?.full_name ?? e.actor_label ?? "?")}
                         </span>
-                      ) : (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-slate-50 text-slate-700 ring-slate-200 inline-flex items-center gap-0.5 shrink-0">
-                          <Wrench className="h-2.5 w-2.5" /> Work Order
-                        </span>
-                      )
-                    )}
-                    <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">
+                            <span className="text-muted-foreground font-normal">{e.issue?.issue_number} · </span>
+                            {e.issue?.title ?? "Ticket"}
+                            {d.tag && <span className={cn("ml-2 text-[11px] font-normal rounded-full px-2 py-0.5", TAG_TONE[d.tag.tone])}>{d.tag.label}</span>}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {[e.issue?.location?.name, d.text].filter(Boolean).join(" · ")}
+                          </p>
+                        </div>
+                        <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
+                      </div>
+                    </Link>
                   </div>
-                </Link>
-              );
-            })
+                );
+              })
+            )}
+          </div>
+          {weekly && weekly.resolved > 0 && (
+            <div className="px-3 py-2 border-t bg-muted/20 text-[11px] text-muted-foreground text-center">
+              This week: {weekly.resolved} resolved · {weekly.on_time} on time
+              {weekly.avg_hours != null && <> · avg {weekly.avg_hours}h</>}
+              {attention && <> · {attention.reopened_week} reopened</>}
+              {weekly.busiest && <> · busiest: {weekly.busiest.name} ({weekly.busiest.count})</>}
+            </div>
           )}
         </div>
       )}
@@ -677,6 +836,7 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
         breached && (isTask ? "border-red-500" : "bg-red-50 border-red-300"),
         claimOverdue && !isTask && !breached && "border-amber-300",
       )}
+      onClick={() => pushTrailEntry({ href: `/facility/issues/${issue.id}`, label: issue.title })}
     >
       {tatBar && (
         <div className={cn("h-[3px] w-full", TAT_BAR_TRACK[tatBar.status])}>

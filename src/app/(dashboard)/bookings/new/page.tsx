@@ -15,6 +15,7 @@ import type { BookingCredit, BookingComplimentaryReason } from "@/types";
 import { WaitlistDialog } from "@/components/bookings/waitlist-dialog";
 import { CreateRecurringDialog } from "@/components/bookings/create-recurring-dialog";
 import { ContractQuotaBanner } from "@/components/bookings/new-booking/contract-quota-banner";
+import { SubstituteAllocationPanel } from "@/components/bookings/new-booking/substitute-allocation-panel";
 import {
   BookingFormProvider,
   RoomSelectionSection,
@@ -26,6 +27,7 @@ import {
   BookingSummarySection,
 } from "@/components/bookings/new-booking";
 import type { CustomerSuggestion, ContractOption, AvailableSlot, OutstandingCharge, AppliedCredit } from "@/components/bookings/new-booking";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 function NewBookingForm() {
   const router = useRouter();
@@ -67,6 +69,12 @@ function NewBookingForm() {
     preselectedCustomerType === "contract_holder" ? "contract_holder" : "walk_in"
   );
   const [contractId, setContractId] = useState(preselectedContractId);
+  // Substitute allocation: attribute this booking's quota to a different
+  // contract_facilities row than the one that would be auto-matched by
+  // room name. Reset whenever the contract or room changes so a stale
+  // override can't silently follow onto an unrelated booking.
+  const [facilityOverrideId, setFacilityOverrideId] = useState("");
+  const [facilityOverrideReason, setFacilityOverrideReason] = useState("");
   const [leadId, setLeadId] = useState(preselectedLeadId);
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
@@ -84,6 +92,7 @@ function NewBookingForm() {
   const [idProofLookingUp, setIdProofLookingUp] = useState(false);
 
   const [contracts, setContracts] = useState<ContractOption[]>([]);
+  const [includeTerminatedContracts, setIncludeTerminatedContracts] = useState(false);
   const [outstandingCharges, setOutstandingCharges] = useState<OutstandingCharge[]>([]);
   const [selectedChargeIds, setSelectedChargeIds] = useState<Set<string>>(new Set());
   const [expandedChargeId, setExpandedChargeId] = useState<string | null>(null);
@@ -118,6 +127,8 @@ function NewBookingForm() {
   const [appliedCredit, setAppliedCredit] = useState<AppliedCredit | null>(null);
 
   useEffect(() => { setAppliedCredit(null); }, [bookerPhone, locationId]);
+
+  useEffect(() => { setFacilityOverrideId(""); setFacilityOverrideReason(""); }, [contractId, spaceId]);
 
   // Complimentary
   const [complimentaryReason, setComplimentaryReason] = useState<BookingComplimentaryReason | "">("");
@@ -475,15 +486,21 @@ function NewBookingForm() {
 
   // Contracts
   useEffect(() => {
-    if (debouncedCustomerType === "contract_holder") {
-      const params = new URLSearchParams({ status: "active,renewal_in_progress", limit: "100" });
-      if (debouncedLocationId) params.set("location_id", debouncedLocationId);
-      fetch(`/api/contracts?${params}`)
-        .then(r => r.json())
-        .then(json => setContracts(json.data || []))
-        .catch(() => setContracts([]));
+    if (debouncedCustomerType !== "contract_holder") return;
+    const params = new URLSearchParams({ status: "active,renewal_in_progress", limit: "100" });
+    if (debouncedLocationId) params.set("location_id", debouncedLocationId);
+
+    const requests = [fetch(`/api/contracts?${params}`).then(r => r.json())];
+    if (includeTerminatedContracts) {
+      const terminatedParams = new URLSearchParams({ status: "terminated", limit: "100" });
+      if (debouncedLocationId) terminatedParams.set("location_id", debouncedLocationId);
+      requests.push(fetch(`/api/contracts?${terminatedParams}`).then(r => r.json()));
     }
-  }, [debouncedCustomerType, debouncedLocationId]);
+
+    Promise.all(requests)
+      .then(results => setContracts(results.flatMap(json => json.data || [])))
+      .catch(() => setContracts([]));
+  }, [debouncedCustomerType, debouncedLocationId, includeTerminatedContracts]);
 
   // ── Image compression ───────────────────────────────────────────────────────
   const compressIdProof = async (file: File): Promise<File> => {
@@ -526,6 +543,9 @@ function NewBookingForm() {
       if (complimentaryReason === "other" && !complimentaryDetails.trim()) { toast.error('Add details — "Other" requires a reason'); return; }
     }
     if (customerType === "contract_holder" && !contractId) { toast.error("Please select a contract"); return; }
+    if (facilityOverrideId && !facilityOverrideReason.trim()) {
+      toast.error("Add a reason for the substitute allocation"); return;
+    }
     if (customerType === "walk_in" && !leadId && !guestName.trim()) { toast.error("Please select a lead or enter guest details"); return; }
     if (customerType === "walk_in" && !leadHasIdProof && !idProofFile) {
       toast.error("Government ID proof is mandatory. Please upload the customer's ID document."); return;
@@ -562,6 +582,8 @@ function NewBookingForm() {
         complimentary_details: totalAmountWithGst <= 0 ? (complimentaryDetails.trim() || undefined) : undefined,
         settle_charge_ids: selectedChargeIds.size > 0 ? Array.from(selectedChargeIds) : undefined,
         send_sms: sendSms, send_whatsapp: sendWhatsapp,
+        contract_facility_id_override: facilityOverrideId || undefined,
+        facility_override_reason: facilityOverrideId ? facilityOverrideReason.trim() || undefined : undefined,
       };
 
       const res = await fetch("/api/bookings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -578,7 +600,12 @@ function NewBookingForm() {
           fetch(`/api/leads/${createdLeadId}/id-proof`, { method: "POST", body: fd })
             .catch(() => toast.warning("Booking created but ID proof upload failed. Please upload from the booking page."));
         }
-        if (bookingId) {
+        const willCollectPaymentNow = collectAdvancePayment && (advancePaymentMode === "upi" || advancePaymentMode === "razorpay");
+        if (bookingId && !willCollectPaymentNow) {
+          // Skip the create-time email when we're about to redirect to collect payment now —
+          // payment_status is still "pending" at this point, which would render a misleading
+          // "payment pending" confirmation. bookings/[id]/page.tsx sends the confirmation email
+          // instead, once the payment is actually recorded and the booking is fully paid.
           fetch(`/api/bookings/${bookingId}/email`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "confirmation" }) }).catch(() => {});
         }
         if (collectAdvancePayment && advancePaymentMode === "send_link" && bookingId) {
@@ -607,6 +634,7 @@ function NewBookingForm() {
     advancePaymentMode, advancePaymentAmount, advancePaymentReference, usePrepaid,
     activePurchase, appliedCredit, selectedChargeIds, sendSms, sendWhatsapp,
     leadHasIdProof, idProofFile, router,
+    facilityOverrideId, facilityOverrideReason,
   ]);
 
   // ── Context value ───────────────────────────────────────────────────────────
@@ -627,6 +655,7 @@ function NewBookingForm() {
     bookerGstNumber, setBookerGstNumber, gstError, setGstError,
     selectedCustomer, setSelectedCustomer,
     idProofFile, setIdProofFile, leadHasIdProof, idProofLookingUp, contracts,
+    includeTerminatedContracts, setIncludeTerminatedContracts,
     selectedFacilities, setSelectedFacilities,
     paymentMode, setPaymentMode, paymentReference, setPaymentReference,
     notes, setNotes, aggregatorBookingId, setAggregatorBookingId,
@@ -659,6 +688,7 @@ function NewBookingForm() {
     guestName, guestEmail, guestPhone, guestCompany,
     bookerGstNumber, gstError, selectedCustomer,
     idProofFile, leadHasIdProof, idProofLookingUp, contracts,
+    includeTerminatedContracts,
     selectedFacilities, paymentMode, paymentReference, notes,
     aggregatorBookingId, purpose, loiNumber, accessProvidedBy, collectAdvancePayment, advancePaymentMode,
     advancePaymentReference, advancePaymentAmount, razorpayEnabled,
@@ -676,6 +706,10 @@ function NewBookingForm() {
   return (
     <BookingFormProvider value={contextValue}>
       <div className="space-y-6 max-w-4xl">
+        <PageBreadcrumb
+          current={{ label: "New Booking" }}
+          fallbackParent={{ href: "/bookings", label: "Bookings" }}
+        />
         {/* Header */}
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.push("/bookings")}>
@@ -697,6 +731,16 @@ function NewBookingForm() {
             contractId={contractId}
             durationHours={durationHours}
             bookingDate={bookingDate}
+          />
+        )}
+
+        {customerType === "contract_holder" && contractId && spaceId && !isConferenceOrMeetingRoom && (
+          <SubstituteAllocationPanel
+            contractId={contractId}
+            spaceName={selectedSpace?.name || ""}
+            facilityId={facilityOverrideId}
+            reason={facilityOverrideReason}
+            onChange={({ facilityId, reason }) => { setFacilityOverrideId(facilityId); setFacilityOverrideReason(reason); }}
           />
         )}
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
+import { poIdsCoveringAsset } from "@/lib/procurement/amc-assets";
 import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 
 const MAX_FILES = 5;
@@ -28,10 +29,11 @@ export async function POST(
   }
 
   // Must have active AMC
+  const coveringPoIds = await poIdsCoveringAsset(admin, asset.id);
   const { count } = await admin
     .from("purchase_orders")
     .select("id", { count: "exact", head: true })
-    .eq("linked_asset_id", asset.id)
+    .in("id", coveringPoIds)
     .eq("po_type", "service")
     .in("amc_status", ["active", "expiring"]);
 

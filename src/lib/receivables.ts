@@ -71,6 +71,10 @@ export interface ReceivableRow {
   /** Owning record's id where the receivable is a child — the contract for
    *  a top-up. Needed to address the settle endpoint. */
   parent_id?: string | null;
+  /** A deposit collected in parts: the part this row is for, and a one-line
+   *  description of where the whole deposit stands. */
+  part_id?: string | null;
+  part_label?: string | null;
 }
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -93,11 +97,66 @@ export function isStale(dueDate: string | null): boolean {
   return d !== null && d >= STALE_AFTER_DAYS;
 }
 
+export interface DepositChaseInput {
+  status: string | null | undefined;
+  /** Set once a Razorpay deposit link has been generated for the proposal. */
+  deposit_razorpay_link_id?: string | null;
+  /** Set when an admin withdrew that link. */
+  deposit_link_cancelled_at?: string | null;
+}
+
 /**
- * A deposit is only chaseable once the customer has actually accepted the
- * proposal. Chasing a deposit on a rejected or still-open proposal is
- * pestering a prospect over money they never agreed to pay.
+ * Is this deposit ours to chase?
+ *
+ * Acceptance was the only test, on the reasoning that chasing a deposit on an
+ * unaccepted proposal is pestering a prospect over money they never agreed to
+ * pay. That holds right up until someone sends them a payment link — at which
+ * point we have asked for the money in as concrete a way as exists, and
+ * staying silent isn't restraint, it's just losing track.
+ *
+ * Two proposals sat in exactly that state: sent, link issued, due date lapsed
+ * in April, and nothing chasing them because they had never been marked
+ * accepted.
+ *
+ * Still deliberately excluded:
+ *
+ *   draft     — the proposal has not gone out. A link may exist because
+ *               someone generated one early; that is a reason to cancel it,
+ *               not to start dunning a prospect who has seen nothing.
+ *   rejected  — the deal is dead. Chasing here is worse than useless, and the
+ *               live link on such a proposal is a hazard to withdraw rather
+ *               than a receivable to pursue.
+ *   cancelled link — an admin has withdrawn the demand. The deposit may still
+ *               be owed, but not by that link and not on this ladder.
  */
-export function depositIsChaseable(proposalStatus: string | null | undefined): boolean {
-  return proposalStatus === "accepted";
+export function depositIsChaseable(input: DepositChaseInput | string | null | undefined): boolean {
+  // Callers used to pass the bare status. Keep that working rather than make
+  // the narrower behaviour the silent default for anyone not yet updated.
+  if (typeof input === "string" || input == null) return input === "accepted";
+
+  if (input.deposit_link_cancelled_at) return false;
+  if (input.status === "accepted") return true;
+  return (
+    (input.status === "sent" || input.status === "viewed") && !!input.deposit_razorpay_link_id
+  );
+}
+
+/**
+ * The reference a billing statement is known by on screen.
+ *
+ * Once a GST invoice exists it always wins: that is the number on the
+ * document the customer holds, and it is what the AR row, the proforma link
+ * and every email show. The statement number is an internal handle that stops
+ * being the thing anyone says out loud.
+ *
+ * Centralised because the two disagreeing is worse than either choice. The
+ * report dialog's invoice picker offered "TWV-BS-0103" while the AR row for
+ * the same invoice read "TWV/INV/26-27/0004", so someone reported a payment
+ * against one name and then could not find it under the other.
+ */
+export function statementReference(row: {
+  statement_number?: string | null;
+  gst_invoice_number?: string | null;
+}): string {
+  return row.gst_invoice_number || row.statement_number || "Draft";
 }

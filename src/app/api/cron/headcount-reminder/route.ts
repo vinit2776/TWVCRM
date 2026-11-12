@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import webPush from "web-push";
+import { withCronHealth } from "@/lib/cron-ping";
 
 export const maxDuration = 60;
 
@@ -30,7 +31,7 @@ function isAuthorised(request: NextRequest): boolean {
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   if (!isAuthorised(request)) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
@@ -184,3 +185,5 @@ function getSlotLabel(utcDate: Date): string {
   if (istHour < 15)  return "2:00 PM";
   return "6:00 PM";
 }
+
+export const GET = withCronHealth("cron/headcount-reminder", handler);

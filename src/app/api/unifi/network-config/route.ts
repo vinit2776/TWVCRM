@@ -4,9 +4,9 @@
  * Returns port forwarding rules and WLAN configurations.
  * Auth required: admin, it_manager, it_technician ONLY.
  */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { unifiRequest } from "@/lib/unifi";
+import { unifiRequest, siteConfigForLocationId } from "@/lib/unifi";
 
 interface UnifiPortForward {
   name?: string;
@@ -24,7 +24,7 @@ interface UnifiWlan {
   enabled?: boolean;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -39,9 +39,10 @@ export async function GET() {
   }
 
   try {
+    const siteCfg = await siteConfigForLocationId(new URL(request.url).searchParams.get("location_id"));
     const [portForwardRaw, wlanRaw] = await Promise.all([
-      unifiRequest<UnifiPortForward[]>("/list/portforward"),
-      unifiRequest<UnifiWlan[]>("/list/wlanconf"),
+      unifiRequest<UnifiPortForward[]>("/list/portforward", {}, siteCfg),
+      unifiRequest<UnifiWlan[]>("/list/wlanconf", {}, siteCfg),
     ]);
 
     const port_forwards = portForwardRaw.map((pf) => ({

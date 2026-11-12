@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Upload, AlertCircle, CheckCircle2, RefreshCw, Trash2, Loader2, PackageOpen } from "lucide-react";
 import { toast } from "sonner";
+import { preventEnterSubmit } from "@/lib/utils";
 
 interface PublishedState {
   target_version: string | null;
@@ -154,7 +155,7 @@ export function PublishBridgeCard() {
         </div>
 
         {/* Upload form */}
-        <form onSubmit={handlePublish} className="space-y-3">
+        <form onSubmit={handlePublish} onKeyDown={preventEnterSubmit} className="space-y-3">
           <div>
             <Label htmlFor="bridge-zip" className="text-xs">Bridge release zip (must contain dist/)</Label>
             <Input

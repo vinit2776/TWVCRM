@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -18,71 +18,119 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
-import { Plus, Loader2, AlertTriangle } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Loader2, AlertTriangle, FileCheck, Zap, ExternalLink, Ban } from "lucide-react";
 import { toast } from "sonner";
-import {
-  AGG_INVOICE_STATUS_LABELS,
-  AGG_INVOICE_STATUS_COLORS,
-} from "@/lib/constants";
-import { formatCurrency } from "@/lib/utils";
-import type { AggregatorInvoice, VoCase } from "@/types";
+import Link from "next/link";
+import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
 
-const MONTH_LABELS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+interface ReferralCase {
+  id: string;
+  case_number: string;
+  client_name: string;
+  purpose: string;
+  rate: number | null;
+}
 
-const BILLABLE_CASE_STATUSES = ["active", "renewal_due", "invoiced", "executed"];
-const UNPAID_INVOICE_STATUSES = ["draft", "sent", "overdue"];
+interface BilledReferral extends ReferralCase {
+  amount: number;
+  statement: {
+    id: string;
+    statement_number: string | null;
+    status: string;
+    handoff_state: HandoffState | null;
+    payment_status: string;
+    proforma_sent_at: string | null;
+    gst_invoice_number: string | null;
+    issuance_channel: string | null;
+  };
+}
 
 interface AggregatorBillingTabProps {
   aggregatorId: string;
   creditLimit?: number;
-  primaryEmail?: string;
+  billingMode?: "proforma_first" | "gst_direct" | null;
+  billingMethod?: "postpaid" | "prepaid";
 }
 
-export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }: AggregatorBillingTabProps) {
-  const [invoices, setInvoices] = useState<AggregatorInvoice[]>([]);
-  const [eligibleCaseCount, setEligibleCaseCount] = useState(0);
-  const [eligibleCasesSum, setEligibleCasesSum] = useState(0);
+export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, billingMethod }: AggregatorBillingTabProps) {
+  // Prepaid aggregators bill per-case from the case's own Billing tab
+  // (src/lib/case-invoicing.ts) — this tab's Referrals list only applies to
+  // postpaid's bundled monthly billing. Prepaid aggregators still need this
+  // tab for the Proforma/GST-Direct toggle above, just not the rest.
+  const isPostpaid = billingMethod !== "prepaid";
+  const [pending, setPending] = useState<ReferralCase[]>([]);
+  const [billed, setBilled] = useState<BilledReferral[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? null)).catch(() => {});
+  }, []);
+
+  // Void — mirrors the billing-statement void flow used elsewhere (case
+  // Billing tab, /billing statement dialog). Only for non-Tally-issued
+  // invoices; Tally-issued ones must go through the credit-note cancel flow.
+  const [voidTarget, setVoidTarget] = useState<{ statementId: string; caseCount: number } | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidSubmitting, setVoidSubmitting] = useState(false);
+
+  // Proforma-vs-GST-Direct billing mode — same toggle pattern as
+  // src/components/contracts/contract-invoices-section.tsx. Takes effect
+  // from the next invoice only, never retroactive.
+  const [currentMode, setCurrentMode] = useState<"proforma_first" | "gst_direct">(billingMode || "gst_direct");
+  const [savingMode, setSavingMode] = useState(false);
+
+  useEffect(() => {
+    setCurrentMode(billingMode || "gst_direct");
+  }, [billingMode]);
+
+  const handleModeChange = async (newMode: "proforma_first" | "gst_direct") => {
+    if (newMode === currentMode) return;
+    setSavingMode(true);
+    try {
+      const res = await fetch(`/api/aggregators/${aggregatorId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ billing_mode: newMode }),
+      });
+      if (res.ok) {
+        setCurrentMode(newMode);
+        toast.success(newMode === "gst_direct" ? "GST Direct billing enabled from next invoice" : "Proforma First billing enabled from next invoice");
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to update billing mode");
+      }
+    } catch {
+      toast.error("Failed to update billing mode");
+    } finally {
+      setSavingMode(false);
+    }
+  };
 
   const now = new Date();
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear();
-
-  const [generateOpen, setGenerateOpen] = useState(false);
+  const [genMonth, setGenMonth] = useState(String(now.getMonth() + 1));
+  const [genYear, setGenYear] = useState(String(now.getFullYear()));
   const [generating, setGenerating] = useState(false);
-  const [genMonth, setGenMonth] = useState(String(currentMonth));
-  const [genYear, setGenYear] = useState(String(currentYear));
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const [sendFor, setSendFor] = useState<AggregatorInvoice | null>(null);
-  const [sendEmail, setSendEmail] = useState("");
-  const [payFor, setPayFor] = useState<AggregatorInvoice | null>(null);
-  const [payReference, setPayReference] = useState("");
-  const [actioning, setActioning] = useState(false);
+  // Selection defaults to "bill all" — every pending case starts checked;
+  // unchecking one carves it out as a one-off exception for this invoice
+  // (it stays in the pending pool for next time).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [invRes, caseRes] = await Promise.all([
-        fetch(`/api/aggregator-invoices?aggregator_id=${aggregatorId}&limit=50`),
-        fetch(`/api/cases?aggregator_id=${aggregatorId}&limit=100`),
-      ]);
-
-      if (invRes.ok) {
-        const json = await invRes.json();
-        setInvoices(json.data || []);
-      }
-
-      if (caseRes.ok) {
-        const json = await caseRes.json();
-        const eligible = ((json.data || []) as VoCase[]).filter((c) =>
-          BILLABLE_CASE_STATUSES.includes(c.status)
-        );
-        setEligibleCaseCount(eligible.length);
-        setEligibleCasesSum(eligible.reduce((sum, c) => sum + (c.rate || 0), 0));
+      const res = await fetch(`/api/aggregators/${aggregatorId}/billing-reconciliation`);
+      if (res.ok) {
+        const json = await res.json();
+        setPending(json.data?.pending || []);
+        setBilled(json.data?.billed || []);
       }
     } finally {
       setLoading(false);
@@ -93,18 +141,89 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
     fetchData();
   }, [fetchData]);
 
-  const currentPeriodInvoice = invoices.find(
-    (i) => i.period_month === currentMonth && i.period_year === currentYear && i.status !== "cancelled"
+  useEffect(() => {
+    setSelectedIds(new Set(pending.map((c) => c.id)));
+  }, [pending]);
+
+  const toggleCase = (caseId: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(caseId);
+      else next.delete(caseId);
+      return next;
+    });
+  };
+
+  const allSelected = pending.length > 0 && selectedIds.size === pending.length;
+  const selectedSum = pending
+    .filter((c) => selectedIds.has(c.id))
+    .reduce((sum, c) => sum + (c.rate || 0), 0);
+  const pendingSum = pending.reduce((sum, c) => sum + (c.rate || 0), 0);
+
+  // Outstanding = unpaid invoiced amount + everything still pending — the
+  // credit-limit check needs the full exposure, not just what's on an
+  // already-sent invoice.
+  const unpaidBilledSum = useMemo(
+    () => billed.filter((c) => c.statement.payment_status !== "paid").reduce((sum, c) => sum + c.amount, 0),
+    [billed],
   );
-
-  const outstanding = useMemo(() => {
-    const unpaidTotal = invoices
-      .filter((i) => UNPAID_INVOICE_STATUSES.includes(i.status))
-      .reduce((sum, i) => sum + i.total_amount, 0);
-    return unpaidTotal + (currentPeriodInvoice ? 0 : eligibleCasesSum);
-  }, [invoices, currentPeriodInvoice, eligibleCasesSum]);
-
+  const outstanding = unpaidBilledSum + pendingSum;
   const overLimit = creditLimit != null && creditLimit > 0 && outstanding >= creditLimit;
+
+  // Referrals are consolidated onto one billing_statement per invoice run —
+  // group by statement id so the Void action (and its "N referrals" label)
+  // is shown once per invoice, not once per case row.
+  const statementCaseCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of billed) counts.set(c.statement.id, (counts.get(c.statement.id) || 0) + 1);
+    return counts;
+  }, [billed]);
+  const firstRowForStatement = useMemo(() => {
+    const seen = new Set<string>();
+    const firsts = new Set<string>();
+    for (const c of billed) {
+      if (!seen.has(c.statement.id)) {
+        seen.add(c.statement.id);
+        firsts.add(c.id);
+      }
+    }
+    return firsts;
+  }, [billed]);
+
+  const canVoid = (statement: BilledReferral["statement"]) =>
+    userRole === "admin" &&
+    ["finalized", "exported"].includes(statement.status) &&
+    statement.issuance_channel !== "tally";
+
+  const handleVoid = async () => {
+    if (!voidTarget || !voidReason.trim()) return;
+    setVoidSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${voidTarget.statementId}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ void_reason: voidReason.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to void invoice");
+      toast.success(json.message || "Invoice voided");
+      setVoidTarget(null);
+      setVoidReason("");
+      fetchData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to void invoice");
+    } finally {
+      setVoidSubmitting(false);
+    }
+  };
+
+  const handleOpenConfirm = () => {
+    if (selectedIds.size === 0) {
+      toast.error("Select at least one referral to invoice.");
+      return;
+    }
+    setConfirmOpen(true);
+  };
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -116,14 +235,15 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
           aggregator_id: aggregatorId,
           period_month: parseInt(genMonth),
           period_year: parseInt(genYear),
+          case_ids: Array.from(selectedIds),
         }),
       });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to generate invoice");
       }
-      toast.success("Invoice generated");
-      setGenerateOpen(false);
+      toast.success(`Invoice generated for ${selectedIds.size} referral(s)`);
+      setConfirmOpen(false);
       fetchData();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to generate invoice");
@@ -132,233 +252,299 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
     }
   };
 
-  const runAction = async (invoiceId: string, body: Record<string, unknown>, successMessage: string) => {
-    setActioning(true);
-    try {
-      const res = await fetch(`/api/aggregator-invoices/${invoiceId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Action failed");
-      }
-      toast.success(successMessage);
-      setSendFor(null);
-      setPayFor(null);
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Action failed");
-    } finally {
-      setActioning(false);
-    }
-  };
-
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="rounded-md border p-4">
-          <p className="text-xs text-muted-foreground">Outstanding (unpaid + this month&apos;s estimate)</p>
-          <p className="text-2xl font-semibold mt-1">{formatCurrency(outstanding)}</p>
-          {overLimit && (
-            <div className="flex items-center gap-1.5 text-xs text-amber-700 mt-2">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Over credit limit ({formatCurrency(creditLimit!)})
-            </div>
-          )}
+      {/* Billing mode toggle */}
+      <div className="rounded-md border p-4">
+        <p className="text-xs text-muted-foreground mb-2 font-medium">Invoice Type (from next invoice)</p>
+        <div className="flex gap-2">
+          <button
+            onClick={() => handleModeChange("proforma_first")}
+            disabled={savingMode}
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+              currentMode === "proforma_first"
+                ? "bg-[#015E65] text-white border-[#015E65]"
+                : "bg-background text-muted-foreground border-border hover:bg-muted/30"
+            }`}
+          >
+            <FileCheck className="h-3.5 w-3.5 shrink-0" />
+            Proforma First
+          </button>
+          <button
+            onClick={() => handleModeChange("gst_direct")}
+            disabled={savingMode}
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+              currentMode === "gst_direct"
+                ? "bg-violet-700 text-white border-violet-700"
+                : "bg-background text-muted-foreground border-border hover:bg-muted/30"
+            }`}
+          >
+            <Zap className="h-3.5 w-3.5 shrink-0" />
+            GST Direct
+          </button>
         </div>
-        <div className="rounded-md border p-4">
-          <p className="text-xs text-muted-foreground">
-            {MONTH_LABELS[currentMonth - 1]} {currentYear}
+        {currentMode === "gst_direct" && (
+          <p className="text-[10px] text-violet-700 mt-1.5">
+            Tax invoice issued directly · Accountant creates it in Tally, then the customer is billed · No proforma
           </p>
-          {currentPeriodInvoice ? (
-            <p className="text-sm mt-1">
-              Invoiced: <span className="font-medium">{currentPeriodInvoice.invoice_number}</span>
-            </p>
-          ) : (
-            <p className="text-sm mt-1 text-muted-foreground">
-              {eligibleCaseCount} billable case(s), not yet invoiced this month
-            </p>
-          )}
-        </div>
+        )}
+        {currentMode === "proforma_first" && (
+          <p className="text-[10px] text-[#015E65] mt-1.5">
+            Proforma invoice sent immediately with a payment link · Real GST invoice issued once paid
+          </p>
+        )}
       </div>
 
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-muted-foreground">{invoices.length} invoice(s)</h3>
-        <Button size="sm" onClick={() => setGenerateOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Generate Invoice
-        </Button>
-      </div>
-
+      {isPostpaid && (
+      <>
       {loading ? (
         <div className="text-center py-8 text-muted-foreground text-sm">Loading...</div>
-      ) : invoices.length === 0 ? (
-        <div className="text-center py-8 text-muted-foreground text-sm">No invoices generated yet.</div>
       ) : (
-        <div className="rounded-md border overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-4 py-3 text-left font-medium">Invoice #</th>
-                <th className="px-4 py-3 text-left font-medium">Period</th>
-                <th className="px-4 py-3 text-left font-medium">Status</th>
-                <th className="px-4 py-3 text-left font-medium">Total</th>
-                <th className="px-4 py-3 text-left font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoices.map((inv) => (
-                <tr key={inv.id} className="border-b">
-                  <td className="px-4 py-3 font-medium">{inv.invoice_number}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {MONTH_LABELS[inv.period_month - 1]} {inv.period_year}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge className={AGG_INVOICE_STATUS_COLORS[inv.status]}>
-                      {AGG_INVOICE_STATUS_LABELS[inv.status]}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 font-medium">{formatCurrency(inv.total_amount)}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-2">
-                      {inv.status === "draft" && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setSendFor(inv);
-                            setSendEmail(inv.sent_to || primaryEmail || "");
-                          }}
-                        >
-                          Send
-                        </Button>
-                      )}
-                      {(inv.status === "sent" || inv.status === "overdue") && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setPayFor(inv);
-                            setPayReference(inv.payment_reference || "");
-                          }}
-                        >
-                          Mark Paid
-                        </Button>
-                      )}
-                      {inv.status === "sent" && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={actioning}
-                          onClick={() => runAction(inv.id, { action: "mark_overdue" }, "Marked overdue")}
-                        >
-                          Mark Overdue
-                        </Button>
-                      )}
-                      {inv.status !== "paid" && inv.status !== "cancelled" && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={actioning}
-                          onClick={() => runAction(inv.id, { action: "cancel" }, "Invoice cancelled")}
-                        >
-                          Cancel
-                        </Button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="rounded-md border p-4">
+            <p className="text-xs text-muted-foreground">Outstanding (unpaid invoices + pending referrals)</p>
+            <p className="text-2xl font-semibold mt-1">{formatCurrency(outstanding)}</p>
+            {overLimit && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-700 mt-2">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Over credit limit ({formatCurrency(creditLimit!)})
+              </div>
+            )}
+          </div>
+
+          {/* Pending referrals */}
+          <div className="rounded-md border">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b bg-muted/30">
+              <div>
+                <h3 className="text-sm font-medium">Pending Referrals ({pending.length})</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {selectedIds.size} selected · {formatCurrency(selectedSum)} of {formatCurrency(pendingSum)}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select value={genMonth} onValueChange={setGenMonth}>
+                  <SelectTrigger className="w-32 h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTH_NAMES.map((label, idx) => (
+                      <SelectItem key={label} value={String(idx + 1)}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="number"
+                  value={genYear}
+                  onChange={(e) => setGenYear(e.target.value)}
+                  className="w-20 h-8 text-xs"
+                />
+                <Button size="sm" onClick={handleOpenConfirm} disabled={generating || selectedIds.size === 0}>
+                  Invoice Selected ({selectedIds.size})
+                </Button>
+              </div>
+            </div>
+
+            {pending.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground text-sm">No pending referrals to bill.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-4 py-2 text-left">
+                        <Checkbox
+                          checked={allSelected}
+                          onCheckedChange={(checked) =>
+                            setSelectedIds(checked ? new Set(pending.map((c) => c.id)) : new Set())
+                          }
+                        />
+                      </th>
+                      <th className="px-4 py-2 text-left font-medium">Case</th>
+                      <th className="px-4 py-2 text-left font-medium">Client</th>
+                      <th className="px-4 py-2 text-left font-medium">Purpose</th>
+                      <th className="px-4 py-2 text-right font-medium">Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pending.map((c) => (
+                      <tr key={c.id} className="border-b last:border-0">
+                        <td className="px-4 py-2">
+                          <Checkbox
+                            checked={selectedIds.has(c.id)}
+                            onCheckedChange={(checked) => toggleCase(c.id, checked === true)}
+                          />
+                        </td>
+                        <td className="px-4 py-2 font-mono text-xs">{c.case_number}</td>
+                        <td className="px-4 py-2">{c.client_name}</td>
+                        <td className="px-4 py-2 text-muted-foreground">{VO_PURPOSE_LABELS[c.purpose] ?? c.purpose}</td>
+                        <td className="px-4 py-2 text-right font-medium">{formatCurrency(c.rate || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Billed referrals */}
+          <div className="rounded-md border">
+            <div className="p-4 border-b bg-muted/30">
+              <h3 className="text-sm font-medium">Invoiced Referrals ({billed.length})</h3>
+            </div>
+            {billed.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground text-sm">No referrals invoiced yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-4 py-2 text-left font-medium">Case</th>
+                      <th className="px-4 py-2 text-left font-medium">Client</th>
+                      <th className="px-4 py-2 text-left font-medium">Statement</th>
+                      <th className="px-4 py-2 text-left font-medium">Status</th>
+                      <th className="px-4 py-2 text-right font-medium">Amount</th>
+                      <th className="px-4 py-2 text-left font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {billed.map((c) => (
+                      <tr key={c.id} className="border-b last:border-0">
+                        <td className="px-4 py-2 font-mono text-xs">{c.case_number}</td>
+                        <td className="px-4 py-2">{c.client_name}</td>
+                        <td className="px-4 py-2 font-mono text-xs">{c.statement.statement_number ?? "—"}</td>
+                        <td className="px-4 py-2">
+                          <div className="flex flex-col items-start gap-1">
+                            <Badge variant={c.statement.payment_status === "paid" ? "default" : "outline"}>
+                              {c.statement.payment_status === "paid" ? "Paid" : "Unpaid"}
+                            </Badge>
+                            {c.statement.handoff_state && (
+                              <Badge variant="outline" className="text-xs">
+                                {HANDOFF_STATE_LABELS[c.statement.handoff_state] ?? c.statement.handoff_state}
+                              </Badge>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2 text-right font-medium">{formatCurrency(c.amount)}</td>
+                        <td className="px-4 py-2">
+                          <div className="flex flex-col items-start gap-1">
+                            {(() => {
+                              const viewHref = c.statement.gst_invoice_number
+                                ? `/api/billing-statements/${c.statement.id}/gst-invoice-pdf`
+                                : c.statement.proforma_sent_at
+                                  ? `/api/billing-statements/${c.statement.id}/proforma-pdf`
+                                  : null;
+                              return viewHref ? (
+                                <a
+                                  href={viewHref}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline whitespace-nowrap"
+                                >
+                                  View Invoice <ExternalLink className="h-3 w-3" />
+                                </a>
+                              ) : null;
+                            })()}
+                            {c.statement.handoff_state ? (
+                              <Link
+                                href={`/accounting/inbox?id=${c.statement.id}`}
+                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline whitespace-nowrap"
+                              >
+                                View in Tally Inbox <ExternalLink className="h-3 w-3" />
+                              </Link>
+                            ) : c.statement.proforma_sent_at ? (
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                Sent {formatDate(c.statement.proforma_sent_at)} — awaiting payment
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">Awaiting payment</span>
+                            )}
+                            {firstRowForStatement.has(c.id) && canVoid(c.statement) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setVoidTarget({
+                                    statementId: c.statement.id,
+                                    caseCount: statementCaseCounts.get(c.statement.id) || 1,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 text-xs text-red-700 hover:underline whitespace-nowrap"
+                              >
+                                <Ban className="h-3 w-3" /> Void invoice
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+      </>
       )}
 
-      {/* Generate Invoice Dialog */}
-      <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+      {/* Confirm before dispatching — this is a real, customer-facing action */}
+      <Dialog open={confirmOpen} onOpenChange={(open) => !generating && setConfirmOpen(open)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Generate Invoice</DialogTitle>
+            <DialogTitle>Generate invoice for {selectedIds.size} referral(s)?</DialogTitle>
+            <DialogDescription>
+              {MONTH_NAMES[parseInt(genMonth) - 1]} {genYear} · {formatCurrency(selectedSum)} subtotal
+            </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Month</Label>
-              <Select value={genMonth} onValueChange={setGenMonth}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MONTH_LABELS.map((label, idx) => (
-                    <SelectItem key={label} value={String(idx + 1)}>{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Year</Label>
-              <Input
-                type="number"
-                value={genYear}
-                onChange={(e) => setGenYear(e.target.value)}
-              />
-            </div>
+          <div className="rounded-md border divide-y text-sm max-h-48 overflow-y-auto">
+            {pending
+              .filter((c) => selectedIds.has(c.id))
+              .map((c) => (
+                <div key={c.id} className="flex items-center justify-between px-3 py-2">
+                  <span>{c.case_number} — {c.client_name}</span>
+                  <span className="font-medium">{formatCurrency(c.rate || 0)}</span>
+                </div>
+              ))}
           </div>
           <p className="text-xs text-muted-foreground">
-            Pulls every active/renewal-due/invoiced/executed case for this aggregator and consolidates them into one invoice for the selected month.
+            {currentMode === "proforma_first"
+              ? "A proforma invoice will be generated and a payment link will be emailed to the aggregator immediately."
+              : "No invoice or payment link goes out yet — this queues in the Tally Inbox until an accountant issues the real GST invoice."}
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setGenerateOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={generating}>Cancel</Button>
             <Button onClick={handleGenerate} disabled={generating}>
               {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Generate
+              Confirm & Generate
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Send Dialog */}
-      <Dialog open={!!sendFor} onOpenChange={(open) => !open && setSendFor(null)}>
+      {/* Void invoice — blocked server-side if any payment is recorded */}
+      <Dialog open={!!voidTarget} onOpenChange={(open) => { if (!open && !voidSubmitting) { setVoidTarget(null); setVoidReason(""); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Send {sendFor?.invoice_number}</DialogTitle>
+            <DialogTitle>Void this invoice?</DialogTitle>
+            <DialogDescription>
+              {voidTarget && voidTarget.caseCount > 1
+                ? `This voids the whole consolidated invoice, covering ${voidTarget.caseCount} referrals. Every case on it returns to "pending" and can be re-invoiced.`
+                : "The case returns to \"pending\" and can be re-invoiced."}
+              {" "}Blocked if any payment has already been recorded.
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label>Send to email</Label>
-            <Input type="email" value={sendEmail} onChange={(e) => setSendEmail(e.target.value)} />
-          </div>
+          <Textarea
+            placeholder="Reason for voiding (required)"
+            value={voidReason}
+            onChange={(e) => setVoidReason(e.target.value)}
+            rows={2}
+          />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSendFor(null)}>Cancel</Button>
-            <Button
-              disabled={actioning}
-              onClick={() => sendFor && runAction(sendFor.id, { action: "send", email: sendEmail }, "Invoice marked sent")}
-            >
-              {actioning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Send
+            <Button variant="outline" onClick={() => { setVoidTarget(null); setVoidReason(""); }} disabled={voidSubmitting}>
+              Cancel
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Mark Paid Dialog */}
-      <Dialog open={!!payFor} onOpenChange={(open) => !open && setPayFor(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Mark {payFor?.invoice_number} Paid</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label>Payment Reference (optional)</Label>
-            <Input value={payReference} onChange={(e) => setPayReference(e.target.value)} placeholder="e.g. UTR / cheque no." />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPayFor(null)}>Cancel</Button>
-            <Button
-              disabled={actioning}
-              onClick={() => payFor && runAction(payFor.id, { action: "mark_paid", payment_reference: payReference || undefined }, "Invoice marked paid")}
-            >
-              {actioning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Mark Paid
+            <Button variant="destructive" onClick={handleVoid} disabled={voidSubmitting || !voidReason.trim()}>
+              {voidSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Ban className="mr-2 h-4 w-4" />}
+              Void Invoice
             </Button>
           </DialogFooter>
         </DialogContent>

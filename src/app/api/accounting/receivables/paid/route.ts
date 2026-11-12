@@ -1,0 +1,178 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+const PAGE_SIZE = 20;
+
+/**
+ * GET /api/accounting/receivables/paid?page=1&limit=20&search=
+ *
+ * Paginated feed for the "Paid" tab on the Accounts Receivable page.
+ * Unlike /api/accounting/receivables (which fetches the whole open-AR set
+ * in one call because it's naturally bounded), the paid history only grows —
+ * so this is server-paginated with .range() rather than loaded in full.
+ *
+ * Sorted by billing_statements.updated_at desc as a proxy for "most recently
+ * paid": the record-payment flow updates payment_status on the statement row
+ * itself, so the trigger-maintained updated_at tracks the last payment.
+ */
+export async function GET(req: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!dbUser || !["admin", "manager", "accounts", "sales_rep"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || String(PAGE_SIZE), 10) || PAGE_SIZE));
+  const search = (searchParams.get("search") || "").trim();
+  const offset = (page - 1) * limit;
+
+  let query = supabase
+    .from("billing_statements")
+    .select(`
+      id, statement_number, statement_type, period_start, period_end, total_amount,
+      gst_invoice_number, updated_at,
+      status, payment_status, accounted, proforma_sent_at, pi_cancelled_at,
+      proforma_viewed_at, gst_invoice_viewed_at,
+      contract:contracts!billing_statements_contract_id_fkey(
+        id, contract_number,
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        id, proposal_number,
+        lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company)
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        id, invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company)
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, client_name, client_company_name, client_email, client_phone, bill_to,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone)
+    `, { count: "exact" })
+    .in("status", ["finalized", "exported"])
+    .eq("payment_status", "paid")
+    .is("voided_at", null)
+    .order("updated_at", { ascending: false });
+
+  if (search) {
+    // PostgREST's .or() filter DSL treats "," and "(" / ")" as syntax —
+    // strip them out of free-typed search text so it can't be misread as
+    // extra filter clauses.
+    const safe = search.replace(/[,()]/g, "").trim();
+    if (safe) {
+      const orClauses = [`statement_number.ilike.%${safe}%`, `gst_invoice_number.ilike.%${safe}%`];
+
+      // Customer name / company and contract/proposal/invoice number live on
+      // joined tables, which PostgREST can't OR-filter alongside top-level
+      // columns in one request — resolve matching ids first, then fold them
+      // into the same .or() as an `.in()` clause.
+      const { data: matchingLeads } = await supabase
+        .from("leads")
+        .select("id")
+        .or(`company.ilike.%${safe}%,first_name.ilike.%${safe}%,last_name.ilike.%${safe}%`);
+      const leadIds = (matchingLeads || []).map((l) => l.id as string);
+
+      const [{ data: matchingContracts }, { data: matchingProposals }, { data: matchingInvoices }, { data: matchingAggregators }] = await Promise.all([
+        supabase.from("contracts").select("id")
+          .or(`contract_number.ilike.%${safe}%${leadIds.length ? `,lead_id.in.(${leadIds.join(",")})` : ""}`),
+        supabase.from("proposals").select("id")
+          .or(`proposal_number.ilike.%${safe}%${leadIds.length ? `,lead_id.in.(${leadIds.join(",")})` : ""}`),
+        supabase.from("proforma_invoices").select("id")
+          .or(`invoice_number.ilike.%${safe}%${leadIds.length ? `,lead_id.in.(${leadIds.join(",")})` : ""}`),
+        supabase.from("aggregators").select("id").ilike("name", `%${safe}%`),
+      ]);
+
+      const contractIds = (matchingContracts || []).map((c) => c.id as string);
+      const proposalIds = (matchingProposals || []).map((p) => p.id as string);
+      const invoiceIds = (matchingInvoices || []).map((i) => i.id as string);
+      const aggregatorIds = (matchingAggregators || []).map((a) => a.id as string);
+      if (contractIds.length) orClauses.push(`contract_id.in.(${contractIds.join(",")})`);
+      if (proposalIds.length) orClauses.push(`proposal_id.in.(${proposalIds.join(",")})`);
+      if (invoiceIds.length) orClauses.push(`invoice_id.in.(${invoiceIds.join(",")})`);
+      if (aggregatorIds.length) orClauses.push(`aggregator_id.in.(${aggregatorIds.join(",")})`);
+
+      const { data: matchingCases } = await supabase.from("cases").select("id")
+        .or(`case_number.ilike.%${safe}%,client_name.ilike.%${safe}%,client_company_name.ilike.%${safe}%${aggregatorIds.length ? `,aggregator_id.in.(${aggregatorIds.join(",")})` : ""}`);
+      const caseIds = (matchingCases || []).map((c) => c.id as string);
+      if (caseIds.length) orClauses.push(`case_id.in.(${caseIds.join(",")})`);
+
+      query = query.or(orClauses.join(","));
+    }
+  }
+
+  const { data: statements, count, error } = await query.range(offset, offset + limit - 1);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const statementIds = (statements || []).map((s) => s.id as string);
+  const paidInfoByStatement = new Map<string, { paid_on: string; payment_mode: string }>();
+  // Full payment trail per statement — powers the "Payment received" detail
+  // dialog (amount, reference, who recorded it), most recent first.
+  const paymentsByStatement = new Map<string, Array<{
+    id: string; amount: number; payment_date: string; created_at: string; payment_mode: string;
+    payment_reference: string | null; razorpay_payment_id: string | null;
+    notes: string | null; recorded_by_user: { id: string; full_name: string } | null;
+  }>>();
+  if (statementIds.length > 0) {
+    const { data: payments } = await supabase
+      .from("billing_payments")
+      .select(`
+        billing_statement_id, id, amount, payment_date, payment_mode, created_at,
+        payment_reference, razorpay_payment_id, notes,
+        recorded_by_user:users!billing_payments_recorded_by_fkey(id, full_name)
+      `)
+      .in("billing_statement_id", statementIds)
+      .order("created_at", { ascending: true });
+
+    // Last payment recorded per statement drives "Paid on" / "Mode"; a
+    // statement settled across multiple partial payments shows "Multiple".
+    const modesByStatement = new Map<string, Set<string>>();
+    for (const p of payments || []) {
+      const sid = p.billing_statement_id as string;
+      paidInfoByStatement.set(sid, { paid_on: p.payment_date as string, payment_mode: p.payment_mode as string });
+      if (!modesByStatement.has(sid)) modesByStatement.set(sid, new Set());
+      modesByStatement.get(sid)!.add(p.payment_mode as string);
+
+      if (!paymentsByStatement.has(sid)) paymentsByStatement.set(sid, []);
+      paymentsByStatement.get(sid)!.unshift({
+        id: p.id as string,
+        amount: p.amount as number,
+        payment_date: p.payment_date as string,
+        created_at: p.created_at as string,
+        payment_mode: p.payment_mode as string,
+        payment_reference: p.payment_reference as string | null,
+        razorpay_payment_id: p.razorpay_payment_id as string | null,
+        notes: p.notes as string | null,
+        recorded_by_user: (p.recorded_by_user as unknown as { id: string; full_name: string } | null) ?? null,
+      });
+    }
+    for (const [sid, info] of paidInfoByStatement) {
+      const modes = modesByStatement.get(sid);
+      if (modes && modes.size > 1) info.payment_mode = "Multiple";
+    }
+  }
+
+  const rows = (statements || []).map((s) => {
+    const info = paidInfoByStatement.get(s.id as string);
+    return {
+      ...s,
+      paid_on: info?.paid_on ?? null,
+      payment_mode: info?.payment_mode ?? null,
+      payments: paymentsByStatement.get(s.id as string) ?? [],
+    };
+  });
+
+  return NextResponse.json({
+    rows,
+    total: count ?? rows.length,
+    page,
+    hasMore: offset + rows.length < (count ?? 0),
+  });
+}

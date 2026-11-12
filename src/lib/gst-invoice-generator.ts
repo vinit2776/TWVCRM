@@ -12,6 +12,8 @@ import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { COMPANY_SEAL_BASE64 } from "@/lib/seal-data";
 import { COMPANY_SIGNATURE_BASE64 } from "@/lib/signature-data";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { sanitizeForPdf } from "@/lib/pdf-text";
+import type { ElectricityAnnexure } from "@/lib/electricity-annexure";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101];
@@ -96,7 +98,7 @@ function drawSignatureMark(doc: jsPDF, sx: number, baseY: number): void {
     /* keep square fallback */
   }
   try {
-    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", sx, baseY - sigH, sigW, sigH);
+    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", sx, baseY - sigH, sigW, sigH, undefined, "FAST");
   } catch {
     /* signature failed to load — silently skip */
   }
@@ -109,7 +111,7 @@ function drawSignatureMark(doc: jsPDF, sx: number, baseY: number): void {
 function drawCompanySeal(doc: jsPDF, cx: number, cy: number, r: number): void {
   const size = r * 2;
   try {
-    doc.addImage(COMPANY_SEAL_BASE64, "PNG", cx - r, cy - r, size, size);
+    doc.addImage(COMPANY_SEAL_BASE64, "PNG", cx - r, cy - r, size, size, undefined, "FAST");
   } catch {
     /* seal failed to load — silently skip */
   }
@@ -162,16 +164,26 @@ export interface GstInvoiceData {
   buyerName: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  buyerPan?: string;
   buyerState?: string;
   buyerStateCode?: string;
   // Billing
   periodStart: string;
   periodEnd: string;
   contractNumber: string;
+  /**
+   * Ad-hoc invoices belong to no contract and to no billing period (the
+   * statement's period is just the day it was raised). Set to label the
+   * reference "Ref:" instead of "Contract:" and to drop the Billing Period line.
+   */
+  adhoc?: boolean;
+  /** Customer's own PO number for this contract — printed on both the proforma and tax invoice when set. */
+  poNumber?: string | null;
   /** Customer payment due date (proforma only). YYYY-MM-DD. Printed in the totals block. */
   dueDate?: string;
   // Line items
-  lineItems: { description: string; hsnSac: string; qty: number; rate: number; amount: number }[];
+  /** `workings` prints under the description (e.g. "158 pages used, 70 free = 88 over x Rs. 5 per page"). */
+  lineItems: { description: string; workings?: string; hsnSac: string; qty: number; rate: number; amount: number }[];
   /**
    * Renders the line-item table as just Description | Amount — no HSN, qty,
    * rate, or per-line tax columns. Only the bottom totals block carries the
@@ -199,6 +211,14 @@ export interface GstInvoiceData {
   irn?: string | null;
   /** Base64 PNG of the IRP signed QR code — mandatory on B2B e-invoices */
   irnQrBase64?: string | null;
+  /**
+   * Number of customer-facing supporting documents (receipts, vendor bills)
+   * appended as extra pages after this invoice — see reimbursement-supporting-docs.ts.
+   * When set, a short note is printed so the merged PDF is self-explanatory.
+   */
+  supportingDocsCount?: number;
+  /** Electricity re-billing only: printed as "Annexure A — Calculation" on its own last page. */
+  annexure?: ElectricityAnnexure;
 }
 
 export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
@@ -216,7 +236,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
 
   // Logo
   try {
-    doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, 52, 13);
+    doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, 52, 13, undefined, "FAST");
   } catch { /* skip if logo fails */ }
 
   // Title: TAX INVOICE or PROFORMA INVOICE
@@ -229,23 +249,33 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(80, 80, 80);
+  let detailY = 32;
   if (isProforma) {
     doc.text(`Proforma Ref: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
     doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
-    doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+    doc.text(`${data.adhoc ? "Ref" : "Contract"}: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+    if (data.poNumber) {
+      detailY += 5;
+      doc.text(`Customer PO Number: ${data.poNumber}`, pageWidth - 14, detailY, { align: "right" });
+    }
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
   } else {
     doc.text(`Invoice No: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
     doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
     doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+    if (data.poNumber) {
+      detailY += 5;
+      doc.text(`Customer PO Number: ${data.poNumber}`, pageWidth - 14, detailY, { align: "right" });
+    }
 
     // e-Invoice: IRN + IRP QR code (B2B mandatory per GST rules)
     if (data.irn) {
+      detailY += 5;
       doc.setFontSize(6.5);
       doc.setTextColor(100, 100, 100);
       const irnShort = data.irn.length > 40 ? data.irn.slice(0, 40) + "…" : data.irn;
-      doc.text(`IRN: ${irnShort}`, pageWidth - 14, 37, { align: "right" });
+      doc.text(`IRN: ${irnShort}`, pageWidth - 14, detailY, { align: "right" });
     }
     if (data.irnQrBase64) {
       try {
@@ -255,7 +285,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
         const qrSize = 20;
         const qrX = Math.round(pageWidth / 2) - qrSize / 2; // centred on page
         const qrY = 8;
-        doc.addImage(data.irnQrBase64, "PNG", qrX, qrY, qrSize, qrSize);
+        doc.addImage(data.irnQrBase64, "PNG", qrX, qrY, qrSize, qrSize, undefined, "FAST");
         doc.setFontSize(5.5);
         doc.setTextColor(100, 100, 100);
         doc.text("e-Invoice QR", qrX + qrSize / 2, qrY + qrSize + 2, { align: "center" });
@@ -263,28 +293,50 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     }
   }
 
-  y = data.irn ? 42 : 38;
+  y = detailY + (detailY > 32 ? 5 : 6);
 
   // ── Seller / Buyer box ──
+  // Row heights are derived from the actual wrapped line count of each address
+  // (rather than hardcoded offsets) so a long recipient address can't collide
+  // with the GSTIN/PAN/State lines drawn below it.
+  doc.setFontSize(8);
+  const LINE_H = 4;
+  const sellerAddr = doc.splitTextToSize(SELLER.address, pageWidth / 2 - 20);
+  const buyerAddr = data.buyerAddress ? doc.splitTextToSize(data.buyerAddress, pageWidth / 2 - 20) : [];
+
+  let sellerBottom = y + 10 + 2 * LINE_H + sellerAddr.length * LINE_H; // name + brand + address
+  sellerBottom += LINE_H; // GSTIN
+  sellerBottom += LINE_H; // State
+
+  let buyerBottom = y + 10 + LINE_H; // name
+  buyerBottom += buyerAddr.length * LINE_H;
+  if (data.buyerGstin || data.buyerPan) buyerBottom += LINE_H;
+  if (data.buyerState) buyerBottom += LINE_H;
+  buyerBottom += LINE_H; // Place of Supply
+
+  const boxHeight = Math.max(36, Math.max(sellerBottom, buyerBottom) - y + 4);
+
   doc.setDrawColor(200, 200, 200);
   doc.setLineWidth(0.3);
-  doc.rect(14, y, pageWidth - 28, 36);
-  doc.line(pageWidth / 2, y, pageWidth / 2, y + 36);
+  doc.rect(14, y, pageWidth - 28, boxHeight);
+  doc.line(pageWidth / 2, y, pageWidth / 2, y + boxHeight);
 
   // Service Provider (left)
-  doc.setFontSize(8);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
   doc.text("SERVICE PROVIDER", 16, y + 5);
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
   doc.setTextColor(60, 60, 60);
-  doc.text(SELLER.name, 16, y + 10);
-  doc.text(SELLER.brand, 16, y + 14);
-  const sellerAddr = doc.splitTextToSize(SELLER.address, pageWidth / 2 - 20);
-  doc.text(sellerAddr, 16, y + 18);
-  doc.text(`GSTIN: ${SELLER.gstin}`, 16, y + 26);
-  doc.text(`State: ${SELLER.state} (${SELLER.stateCode})`, 16, y + 30);
+  let sy = y + 10;
+  doc.text(SELLER.name, 16, sy);
+  sy += LINE_H;
+  doc.text(SELLER.brand, 16, sy);
+  sy += LINE_H;
+  doc.text(sellerAddr, 16, sy);
+  sy += sellerAddr.length * LINE_H;
+  doc.text(`GSTIN: ${SELLER.gstin}`, 16, sy);
+  sy += LINE_H;
+  doc.text(`State: ${SELLER.state} (${SELLER.stateCode})`, 16, sy);
 
   // Service Recipient (right)
   const bx = pageWidth / 2 + 4;
@@ -293,21 +345,35 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.text("SERVICE RECIPIENT", bx, y + 5);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(60, 60, 60);
-  doc.text(data.buyerName, bx, y + 10);
+  let by = y + 10;
+  doc.text(data.buyerName, bx, by);
+  by += LINE_H;
   if (data.buyerAddress) {
-    const buyerAddr = doc.splitTextToSize(data.buyerAddress, pageWidth / 2 - 20);
-    doc.text(buyerAddr, bx, y + 14);
+    doc.text(buyerAddr, bx, by);
+    by += buyerAddr.length * LINE_H;
   }
-  if (data.buyerGstin) doc.text(`GSTIN: ${data.buyerGstin}`, bx, y + 22);
-  if (data.buyerState) doc.text(`State: ${data.buyerState}${data.buyerStateCode ? ` (${data.buyerStateCode})` : ""}`, bx, y + 26);
-  doc.text(`Place of Supply: ${data.isInterstate ? (data.buyerState || "Other") : SELLER.state}`, bx, y + 30);
+  if (data.buyerGstin || data.buyerPan) {
+    const idParts = [
+      data.buyerGstin ? `GSTIN: ${data.buyerGstin}` : null,
+      data.buyerPan ? `PAN: ${data.buyerPan}` : null,
+    ].filter(Boolean);
+    doc.text(idParts.join("   "), bx, by);
+    by += LINE_H;
+  }
+  if (data.buyerState) {
+    doc.text(`State: ${data.buyerState}${data.buyerStateCode ? ` (${data.buyerStateCode})` : ""}`, bx, by);
+    by += LINE_H;
+  }
+  doc.text(`Place of Supply: ${data.isInterstate ? (data.buyerState || "Other") : SELLER.state}`, bx, by);
 
-  y += 40;
+  y += boxHeight + 4;
 
   // ── Supply details ──
   doc.setFontSize(8);
   doc.setTextColor(100, 100, 100);
-  doc.text(`Billing Period: ${formatDateInv(data.periodStart)} to ${formatDateInv(data.periodEnd)}`, 14, y);
+  if (!data.adhoc) {
+    doc.text(`Billing Period: ${formatDateInv(data.periodStart)} to ${formatDateInv(data.periodEnd)}`, 14, y);
+  }
   doc.text("Reverse Charge: No", pageWidth - 14, y, { align: "right" });
   y += 6;
 
@@ -332,7 +398,9 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
       ];
 
   const tableRows = data.lineItems.map((item, i) => {
-    if (compact) return [item.description, fmt(item.amount)];
+    // Cleaned here, not by callers: one stray character (a typed rupee sign) breaks the whole line.
+    const text = sanitizeForPdf(item.workings ? `${item.description}\n${item.workings}` : item.description);
+    if (compact) return [text, fmt(item.amount)];
 
     const itemCgst = Math.round(item.amount * (halfRate / 100));
     const itemSgst = itemCgst;
@@ -340,7 +408,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     const itemTotal = Math.round(item.amount) + (data.isInterstate ? itemIgst : itemCgst + itemSgst);
 
     return [
-      String(i + 1), item.description, item.hsnSac,
+      String(i + 1), text, item.hsnSac,
       ...(showQtyRate ? [String(item.qty), fmt(item.rate)] : []),
       fmt(item.amount),
       ...(data.isInterstate ? [fmt(itemIgst)] : [fmt(itemCgst), fmt(itemSgst)]),
@@ -429,6 +497,23 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     y += 5;
     doc.setTextColor(80, 80, 80);
   }
+
+  // Supporting documents note — reimbursement invoices only. The referenced
+  // pages are appended after this PDF is generated (see mergeSupportingDocuments
+  // in reimbursement-supporting-docs.ts), so this note is what makes the merged
+  // document self-explanatory rather than just unlabeled extra pages.
+  if (data.supportingDocsCount && data.supportingDocsCount > 0) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    const plural = data.supportingDocsCount === 1 ? "" : "s";
+    doc.text(
+      `Note: ${data.supportingDocsCount} supporting document${plural} attached for reference — see following page${plural}.`,
+      14,
+      y
+    );
+    y += 5;
+  }
   y += 3;
 
   // ── Payment Options ──
@@ -478,19 +563,21 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     y += 4.5 * urlLines.length;
     doc.setFontSize(8);
 
-    // "PAY NOW" clickable button
+    // "PAY NOW" clickable button — width sized to the actual text so it
+    // never clips (a fixed 28mm was too narrow for "PAY NOW →" at 8pt bold).
     if (isProforma) {
-      const btnW = 28;
+      const btnLabel = "PAY NOW →";
       const btnH = 7;
       const btnX = 14;
       const btnY = y;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      const btnW = doc.getTextWidth(btnLabel) + 10;
       // Green filled button
       doc.setFillColor(0, 160, 95);
       doc.roundedRect(btnX, btnY, btnW, btnH, 1.5, 1.5, "F");
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(8);
       doc.setTextColor(255, 255, 255);
-      doc.text("PAY NOW →", btnX + btnW / 2, btnY + 4.8, { align: "center" });
+      doc.text(btnLabel, btnX + btnW / 2, btnY + 4.8, { align: "center" });
       // Make the button area a clickable hyperlink
       doc.link(btnX, btnY, btnW, btnH, { url: data.razorpayUrl });
       y += btnH + 3;
@@ -501,7 +588,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   if (hasQr && data.razorpayQrBase64) {
     try {
       const qrY = qrStartY - 4;
-      doc.addImage(data.razorpayQrBase64, "PNG", qrX, qrY, qrSize, qrSize);
+      doc.addImage(data.razorpayQrBase64, "PNG", qrX, qrY, qrSize, qrSize, undefined, "FAST");
       doc.setFontSize(6.5);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(...BRAND_TEAL);
@@ -554,5 +641,90 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.text(`${SELLER.address.replace(/\n/g, " ")}  |  ${SELLER.phone}  |  ${SELLER.website}`, pageWidth / 2, footerY + 10, { align: "center" });
   doc.text(`GSTIN: ${SELLER.gstin}`, pageWidth / 2, footerY + 14, { align: "center" });
 
+  if (data.annexure) drawElectricityAnnexure(doc, data, pageWidth);
+
   return doc;
+}
+
+/**
+ * Renders Annexure A on its own as a one-page PDF, using the same drawing code
+ * as the full invoice. Used to append the annexure to a Tally-issued PDF.
+ */
+export function generateElectricityAnnexurePDF(
+  data: Pick<GstInvoiceData, "invoiceNumber" | "contractNumber" | "annexure">,
+): Uint8Array {
+  const doc = new jsPDF("p", "mm", "a4");
+  const pageWidth = doc.internal.pageSize.getWidth();
+  drawElectricityAnnexure(doc, data as GstInvoiceData, pageWidth);
+  doc.deletePage(1); // drawElectricityAnnexure adds its own page; drop the blank first one
+  return new Uint8Array(doc.output("arraybuffer"));
+}
+
+function drawElectricityAnnexure(doc: jsPDF, data: GstInvoiceData, pageWidth: number): void {
+  const a = data.annexure!;
+  doc.addPage();
+
+  doc.setFillColor(...BRAND_TEAL);
+  doc.rect(0, 0, pageWidth, 22, "F");
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(255, 255, 255);
+  doc.text("Annexure A - Calculation of electricity charges", 14, 14);
+
+  let y = 32;
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(60, 60, 60);
+  doc.text(sanitizeForPdf(`Invoice ${data.invoiceNumber}  |  Contract ${data.contractNumber}  |  ${a.monthLabel}`), 14, y);
+  y += 10;
+
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("1. Units billed for the premises", 14, y);
+  y += 3;
+  autoTable(doc, {
+    startY: y,
+    body: [["Total units billed for the month", a.totalUnits.toFixed(2)]],
+    theme: "grid",
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right", cellWidth: 40 } },
+    margin: { left: 14, right: 14 },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  autoTable(doc, {
+    startY: y,
+    head: [["Line", "Units", "Rate", "Amount"]],
+    body: a.lines.map((l) => [l.label, l.units.toFixed(2), `Rs. ${l.rate.toFixed(2)}`, `Rs. ${l.amount.toFixed(2)}`]),
+    theme: "grid",
+    headStyles: { fillColor: [1, 94, 101], textColor: [255, 255, 255], fontSize: 8, fontStyle: "bold" },
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" } },
+    didParseCell: (h) => { if (h.section === "head" && h.column.index > 0) h.cell.styles.halign = "right"; },
+    margin: { left: 14, right: 14 },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  const half = a.gstRate / 2;
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("2. Totals", 14, y);
+  y += 3;
+  autoTable(doc, {
+    startY: y,
+    body: [
+      ["Subtotal", `Rs. ${a.subtotal.toFixed(2)}`],
+      [`CGST @${half}%`, `Rs. ${a.cgst.toFixed(2)}`],
+      [`SGST @${half}%`, `Rs. ${a.sgst.toFixed(2)}`],
+      ["Round off", `${a.roundOff < 0 ? "-" : "+"} Rs. ${Math.abs(a.roundOff).toFixed(2)}`],
+      ["Total payable", `Rs. ${a.total.toFixed(2)}`],
+    ],
+    theme: "grid",
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right", cellWidth: 40 } },
+    didParseCell: (h) => { if (h.row.index === 4) h.cell.styles.fontStyle = "bold"; },
+    margin: { left: 14, right: 14 },
+  });
 }

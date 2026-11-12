@@ -10,6 +10,7 @@ import { EntriesTab } from "@/components/petty-cash/entries-tab";
 import { ApprovalsTab } from "@/components/petty-cash/approvals-tab";
 import { AllBooksTab } from "@/components/petty-cash/all-books-tab";
 import { AnalyticsTab } from "@/components/petty-cash/analytics-tab";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export default function PettyCashPage() {
   const { user } = useCurrentUser();
@@ -20,6 +21,7 @@ export default function PettyCashPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Petty Cash" }} />
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Petty Cash</h1>
         <p className="text-muted-foreground">Manage your petty cash book, requests, and expenses</p>

@@ -3,6 +3,7 @@ import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { Inbox } from "lucide-react";
 import { isInboxRole } from "@/lib/tally-handoff";
 import { InboxTabs } from "@/components/accounting/inbox-tabs";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,7 @@ export default async function TallyInboxPage() {
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
+      <PageBreadcrumb resetTo={{ label: "Tally Inbox" }} />
       <div className="flex items-center gap-3 mb-2">
         <Inbox className="h-6 w-6 text-muted-foreground" aria-hidden />
         <h1 className="text-2xl font-semibold">Tally Inbox</h1>

@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { preventEnterSubmit } from "@/lib/utils";
+import { readAttribution } from "@/lib/public-forms/attribution-client";
+import { trackLead } from "@/lib/public-forms/track-lead";
+import { PUBLIC_FORM_LOCATIONS } from "@/lib/public-forms/locations";
+import { TurnstileWidget } from "@/components/public/turnstile-widget";
 
 const WORKSPACE_TYPES = [
   { value: "hot_desk",        label: "Hot Desk" },
@@ -11,7 +16,6 @@ const WORKSPACE_TYPES = [
   { value: "virtual_office",  label: "Virtual Office" },
 ];
 
-const CONFERENCE_ROOM_LOCATIONS = ["Annasalai", "Nungambakkam"];
 
 interface Location {
   id: string;
@@ -32,10 +36,12 @@ export default function WalkInEnquirePage() {
   const [conferenceRoomLoc, setConferenceRoomLoc]     = useState("");
   const [startDate, setStartDate]                     = useState("");
   const [description, setDescription]                 = useState("");
+  const [turnstileToken, setTurnstileToken]           = useState("");
   const [hpField, setHpField]                         = useState(""); // honeypot
 
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted]   = useState(false);
+  const [reference, setReference]   = useState<string | null>(null);
   const [error, setError]           = useState("");
 
   useEffect(() => {
@@ -78,6 +84,8 @@ export default function WalkInEnquirePage() {
           start_date:             startDate || undefined,
           description:            description.trim() || undefined,
           hp_field:               hpField,
+          attribution:            readAttribution(),
+          turnstile_token:        turnstileToken || undefined,
           source:                 "direct_walkin",
         }),
       });
@@ -87,6 +95,8 @@ export default function WalkInEnquirePage() {
         setError(json.error || "Something went wrong. Please try again.");
         return;
       }
+      setReference(typeof json.reference === "string" ? json.reference : null);
+      trackLead({ reference: typeof json.reference === "string" ? json.reference : null, source: "direct_walkin" });
       setSubmitted(true);
     } catch {
       setError("Network error. Please check your connection and try again.");
@@ -120,6 +130,12 @@ export default function WalkInEnquirePage() {
             <p className="text-gray-600 mt-2 text-base">
               Our team will contact you within <span className="font-semibold text-gray-800">24 hours</span>.
             </p>
+            {reference && (
+              <p className="mt-4 text-sm text-gray-600">
+                Your reference number is{" "}
+                <span className="font-mono font-semibold text-[#015E65]">{reference}</span>. Quote it when you speak to us.
+              </p>
+            )}
             <p className="text-gray-400 text-sm mt-4">
               We look forward to helping you find the perfect workspace.
             </p>
@@ -143,7 +159,7 @@ export default function WalkInEnquirePage() {
               </p>
             </div>
 
-            <form onSubmit={handleSubmit} noValidate>
+            <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} noValidate>
               {/* Honeypot — hidden from real users */}
               <div className="hidden" aria-hidden="true">
                 <input
@@ -263,7 +279,7 @@ export default function WalkInEnquirePage() {
                       className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent bg-white"
                     >
                       <option value="">Select a location</option>
-                      {CONFERENCE_ROOM_LOCATIONS.map((loc) => (
+                      {PUBLIC_FORM_LOCATIONS.map((loc) => (
                         <option key={loc} value={loc}>{loc}</option>
                       ))}
                     </select>
@@ -330,6 +346,8 @@ export default function WalkInEnquirePage() {
                     {error}
                   </p>
                 )}
+
+                <TurnstileWidget onToken={setTurnstileToken} />
 
                 <button
                   type="submit"

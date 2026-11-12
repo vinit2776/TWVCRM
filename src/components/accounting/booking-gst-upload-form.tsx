@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Upload, Loader2, AlertCircle, Sparkles } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import type { ExtractResponse, AutofillSource } from "@/lib/tally-handoff";
 
 interface Props {
@@ -11,6 +11,7 @@ interface Props {
   spaceName: string | null;
   customerName: string | null;
   customerGstin: string | null;
+  customerAddress: string | null;
   totalAmount: number;
   irnRequired: boolean;
   expectedSeries: string;
@@ -25,6 +26,7 @@ export function BookingGstUploadForm({
   spaceName,
   customerName,
   customerGstin,
+  customerAddress,
   totalAmount,
   irnRequired,
   expectedSeries,
@@ -153,7 +155,7 @@ export function BookingGstUploadForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border-t bg-muted/30 p-4 space-y-3">
+    <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="border-t bg-muted/30 p-4 space-y-3">
       <div className="text-sm">
         <div className="font-medium">Upload Tally GST invoice — Booking {bookingNumber ?? "—"}</div>
         <div className="text-xs text-muted-foreground mt-0.5">
@@ -162,6 +164,13 @@ export function BookingGstUploadForm({
           {" · Expected series: "}
           <span className="font-mono">{expectedSeries}</span>
           {irnRequired && <span className="ml-2 text-blue-900">· IRN required</span>}
+        </div>
+        <div className="text-xs text-muted-foreground mt-0.5">
+          {customerAddress ? (
+            <>Address: {customerAddress}</>
+          ) : (
+            <span className="text-amber-700">No address on file — check with the customer before raising the invoice.</span>
+          )}
         </div>
       </div>
 

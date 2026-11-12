@@ -1,6 +1,8 @@
+import { followUpRecipient } from "@/lib/followup-recipient";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendWhatsApp } from "@/lib/whatsapp";
+import { withCronHealth } from "@/lib/cron-ping";
 
 const WINDOW_MINUTES = 10;
 
@@ -24,7 +26,7 @@ const WINDOW_MINUTES = 10;
  *     /api/activities/[id]) so a pushed-out follow-up gets exactly one
  *     fresh nudge at its new time.
  */
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -61,7 +63,7 @@ export async function GET(request: NextRequest) {
     .in("id", candidates.map((c) => c.id))
     .is("followup_wa_reminder_sent_at", null)
     .select(
-      "id, lead_id, follow_up_date, created_by, creator:users!activities_created_by_fkey(phone), lead:leads!activities_lead_id_fkey(first_name, last_name, company)"
+      "id, lead_id, follow_up_date, created_by, creator:users!activities_created_by_fkey(phone), lead:leads!activities_lead_id_fkey(first_name, last_name, company, assigned_user:users!leads_assigned_to_fkey(phone))"
     );
 
   if (claimError) {
@@ -86,7 +88,8 @@ export async function GET(request: NextRequest) {
   let skippedNoPhone = 0;
 
   for (const row of claimed as ClaimedRow[]) {
-    const phone = row.creator?.phone;
+    // Goes to whoever handles the lead now; the person who set it only if nobody does.
+    const phone = followUpRecipient(row)?.phone;
     if (!phone) {
       skippedNoPhone++;
       continue;
@@ -129,3 +132,5 @@ export async function GET(request: NextRequest) {
     claimed: claimed.length,
   });
 }
+
+export const GET = withCronHealth("cron/lead-reminder-whatsapp", handler);

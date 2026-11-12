@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, type FieldErrors, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,7 +17,8 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { createAggregatorSchema, type CreateAggregatorInput } from "@/lib/validations";
+import { createAggregatorSchema, updateAggregatorSchema, type CreateAggregatorInput } from "@/lib/validations";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { Aggregator } from "@/types";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import {
@@ -43,7 +45,11 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
     control,
     formState: { errors },
   } = useForm<CreateAggregatorInput>({
-    resolver: zodResolver(createAggregatorSchema),
+    // Editing an existing (possibly legacy) aggregator must not re-enforce
+    // create-time-only requirements like company_name — otherwise saving an
+    // unrelated correction on an aggregator that predates that rule fails
+    // validation before it even reaches the API.
+    resolver: zodResolver(aggregator ? updateAggregatorSchema : createAggregatorSchema) as Resolver<CreateAggregatorInput>,
     defaultValues: {
       name: aggregator?.name || "",
       company_name: aggregator?.company_name || "",
@@ -59,7 +65,11 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
       same_state_as_twv: aggregator?.same_state_as_twv ?? false,
       commission_percentage: aggregator?.commission_percentage ?? 0,
       billing_method: aggregator?.billing_method ?? "postpaid",
-      credit_limit: aggregator?.credit_limit,
+      // ?? undefined, never a bare null: an aggregator with no credit limit
+      // stores null, and seeding the form with it made every such record
+      // unsaveable — worse for a prepaid aggregator, where the Credit Limit
+      // input isn't even rendered, so the error had nowhere to show.
+      credit_limit: aggregator?.credit_limit ?? undefined,
       notes: aggregator?.notes || "",
       tags: aggregator?.tags || [],
       contacts: aggregator?.contacts?.map((c) => ({
@@ -80,6 +90,19 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
   const sameState = watch("same_state_as_twv");
   const billingMethod = watch("billing_method");
 
+  // Without this, a schema error on a field the form doesn't render (or has
+  // scrolled past) makes Save do nothing at all, with no message anywhere —
+  // the user cannot tell a validation failure from a dead button.
+  const onInvalid = (formErrors: FieldErrors<CreateAggregatorInput>) => {
+    const [field, error] = Object.entries(formErrors)[0] ?? [];
+    const message = (error as { message?: string } | undefined)?.message;
+    toast.error(
+      field
+        ? `Could not save — ${field.replace(/_/g, " ")}: ${message ?? "invalid value"}`
+        : "Could not save — please check the form for errors.",
+    );
+  };
+
   const onFormSubmit = async (data: CreateAggregatorInput) => {
     setSubmitting(true);
     try {
@@ -92,7 +115,7 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
   };
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
+    <form onSubmit={handleSubmit(onFormSubmit, onInvalid)} onKeyDown={preventEnterSubmit} className="space-y-6">
       {/* Basic Info */}
       <Card>
         <CardHeader>
@@ -101,13 +124,14 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
+              <Label htmlFor="company_name">Company Name *</Label>
+              <Input id="company_name" {...register("company_name")} />
+              {errors.company_name && <p className="text-sm text-red-500">{errors.company_name.message}</p>}
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="name">Name *</Label>
               <Input id="name" {...register("name")} placeholder="e.g. ABC Associates" />
               {errors.name && <p className="text-sm text-red-500">{errors.name.message}</p>}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="company_name">Company Name</Label>
-              <Input id="company_name" {...register("company_name")} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="gst_number">GST Number</Label>
@@ -137,7 +161,9 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
                 id="commission_percentage"
                 type="number"
                 step="0.1"
-                {...register("commission_percentage", { valueAsNumber: true })}
+                {...register("commission_percentage", {
+                  setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                })}
               />
             </div>
             <div className="space-y-2">
@@ -171,7 +197,9 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
                   type="number"
                   step="1"
                   placeholder="No limit"
-                  {...register("credit_limit", { valueAsNumber: true })}
+                  {...register("credit_limit", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
                 />
                 <p className="text-xs text-muted-foreground">
                   Advisory only — shows a warning when outstanding unbilled amount exceeds this. Leave blank for no limit.
@@ -282,8 +310,11 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
         <CardHeader>
           <CardTitle className="text-base">Additional Notes</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-2">
           <Textarea {...register("notes")} rows={3} placeholder="Any additional notes about this aggregator..." />
+          <p className="text-xs text-muted-foreground">
+            Internal only — never shown to the aggregator.
+          </p>
         </CardContent>
       </Card>
 

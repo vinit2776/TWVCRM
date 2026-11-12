@@ -14,6 +14,7 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 - Ask clarifying questions before writing code if the request touches auth, payments, customer data, migrations, or third-party integrations.
 - Sync with main and create a feature branch before starting: `git checkout main && git pull && git checkout -b feat/<short-description>`.
+- If more than one Claude Code session may be working in this repo at the same time, each session must use its own `git worktree` (e.g. `git worktree add ../twv-crm-<slug> feat/<short-description>`) instead of checking out branches in the shared working directory. Two sessions sharing one working directory can interleave checkouts/commits on the same HEAD — this has already caused an in-progress uncommitted change to jump branches and land a commit directly on `main` by accident (see PR #355's investigation for the incident). Worktrees give each session an isolated working directory and index, so this can't happen.
 - Match existing patterns in the codebase before introducing new ones. Check how similar features are built first.
 - Test locally end-to-end before committing. Run the full flow, not just the changed function.
 - Update documentation in the same PR if you change an API contract, env var, schema, or public function signature.
@@ -21,6 +22,10 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 ### NEVER
 
+- **Never let a real customer be touched by testing, debugging, or verification — no exceptions.** No live customer may receive an email, SMS, invoice, payment link, or any other notification, and no real payment/charge may be triggered, as a side effect of you checking whether something works. This applies even when you are confident the call is "just a preview" or "just a dry run" — if you are not clicking the actual UI control, you do not have that guarantee. Concretely:
+  - To verify a fix or investigate a bug, drive it through the real UI (click the actual button), or read the source code / query the database read-only. Do **not** hand-call a mutating or dispatching API route yourself (via script, curl, browser console, or a one-off fetch) to "check" its behavior, even one that looks like a preview endpoint.
+  - If you must call an API directly for some reason, treat any endpoint that can generate, finalize, or dispatch a customer-facing statement, invoice, message, or payment as radioactive — read its full implementation first, and if there is any ambiguity about whether a given request body is safe, don't send it.
+  - This is not hypothetical: on 2026-09-01, a hand-typed verification call to `/api/billing/auto-generate` used the wrong parameter name (`dryRun` instead of the actual `dry_run`), which silently defaulted to a live run and emailed 20 real customers unsolicited October rent proformas with live payment links, a month early. The fix was to invert the endpoint's default to fail-safe (see that route's code comments) — but the rule that should have prevented it in the first place is this one: never take the shortcut of scripting a call to a live-capable endpoint when a safe, already-tested UI control exists for the same check.
 - Never commit secrets — no `.env` files, no API keys, no Supabase service role keys, no credentials in code or comments. Use `.env.example` for documenting required vars.
 - Never push directly to `main` — all changes go through a PR.
 - Never run destructive operations on production — no `DROP`, `TRUNCATE`, mass `DELETE`, or `supabase db reset` against prod.
@@ -29,6 +34,31 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 - Never use the Supabase service role key in client code — service role is server-only.
 - Never log PII, passwords, tokens, or API keys even at debug level.
 - Never re-enable `tally_sync_enabled` or build on `src/lib/tally/enqueue.ts` (the automated Tally bridge-sync) without an explicit request — see "Shelved features" below.
+
+---
+
+## Co-Developer Working Agreement
+
+Established 2026-08-23; ruleset updated 2026-09-17. `main` is protected by the **Mainprotect** GitHub ruleset:
+
+- **Co-developers (Write access):** no direct pushes, force-pushes, or deletion of `main`. Every change needs a PR that passes `lint-and-build` and `attendance-scope`, is up to date with `main`, and is approved by the code owner (`@vinit2776`, via `.github/CODEOWNERS`). New commits dismiss an existing approval, and the most recent push must itself be approved — so what merges is exactly what Vinit reviewed.
+- **Vinit (repo admin):** bypasses every rule. GitHub won't let an account approve its own PR, so Vinit's and Claude's PRs merge with `gh pr merge <N> --merge --delete-branch --admin`. For these PRs **the merge click is the only approval gate that exists** — nothing else stops them from shipping.
+
+Only invite new developers with **Write** access; Maintain or Admin would let them bypass or change these rules.
+
+**Attendance-only contributors** (since 2026-09-18: `anmolnahar`). GitHub has no per-folder permissions, so they can still *read* the whole repo, but they can only get changes merged inside `attendance-gateway-code/`. `.github/workflows/attendance-scope.yml` fails any PR whose author is listed in the Actions repository variable `ATTENDANCE_ONLY_USERS` (comma-separated usernames) and that changes, or renames from, a file outside that folder. Everyone else — Vinit, `charidevops` (who works on CRM facility code), the version-bump bot — passes immediately. It runs on `pull_request_target`, so it always uses `main`'s copy and a restricted user can't weaken it from inside their own PR; it never checks out PR code, which is what makes that trigger safe here. To restrict or release someone, edit the variable (Settings → Secrets and variables → Actions → Variables) — no PR needed.
+
+**Vinit's role:**
+- Describe bugs/features in plain English — no technical detail required.
+- Review each PR before merging: read the diff/description, and click through the Vercel preview link for anything UI-facing.
+- Either click **Merge** on GitHub directly, or explicitly tell Claude to merge it in that moment. Nothing reaches production until one of these happens.
+- Flag anything that looks wrong immediately after a merge.
+
+**Claude's role — in addition to the rules above:**
+- Open every change as a PR describing what changed, why, and how it was tested.
+- Merge only when explicitly asked to in that moment (e.g. "merge it") — never on Claude's own initiative, and never before CI and the Vercel preview have both been checked. Being asked once does not carry forward to later PRs; each merge needs its own explicit ask.
+- Test every change before opening the PR: build, lint, and an actual browser click-through for UI-facing changes (see "Mandatory: Build → Deploy → Browser Verify" below).
+- Stop and ask before continuing if a task's scope grows beyond what was originally asked.
 
 ---
 
@@ -50,12 +80,14 @@ sidebar entry is intentionally hidden (commented out in `sidebar.tsx`), not dele
 **Every feature or bug fix must follow this sequence before declaring it done:**
 
 1. `npm run build` — must compile with 0 TypeScript errors
-2. `git push origin main` — triggers CI (lint + build) and Vercel auto-deploy
+2. Push the feature branch and open a PR — triggers CI (lint + build) and a Vercel preview deploy for that branch
 3. Wait for CI to pass: `gh run watch <run-id> --exit-status --repo vinit2776/TWVCRM`
-4. Reload the live page in the browser (Chrome MCP) and click through the actual UI change
-5. Only confirm completion to the user after seeing it work in the live browser
+4. Open the Vercel preview URL in the browser and click through the actual UI change.
+   **Confirm the amber STAGING banner is on screen first** — without it that
+   deployment is on production and nothing you click there is safe (see "Staging").
+5. Report the PR to the user for review/merge. Only confirm the feature is *live* after they've merged it and you've re-verified against production — see "Co-Developer Working Agreement" above.
 
-**Never claim a feature is done based on local code alone.** The user expects a live browser screenshot proving it works. If it doesn't look right in the browser, investigate and fix before confirming.
+**Never claim a feature is done based on local code alone.** The user expects proof it works in a real browser — on the PR's preview deploy pre-merge, and on production post-merge. If it doesn't look right, investigate and fix before confirming.
 
 ### Billing / PDF smoke test (mandatory when touching these files)
 
@@ -152,8 +184,18 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 |----------|----------|---------|
 | 28–31st 21:00 IST | `/api/billing/auto-generate` | Monthly invoice generation |
 | Daily 18:30 IST | `/api/cron/contract-expiry` | Contract expiry alerts |
-| Daily 09:30 IST | `/api/digest` | Email digest |
+| Daily 06:00 IST | `/api/cron/auto-renew` | Auto-renewal (see `docs/auto-renewal.md`). For contracts with `contracts.auto_renew` on, emails admin and accounts a digest of who needs a person, what is due now and what is coming up; sends nothing when no contract is opted in. Two further stages each have their own switch and act only when `live`: `app_settings.auto_renew_notice_mode` (prepares customer notice drafts and emails the ones a person approved, on their day) and `auto_renew_roll_mode` (creates the next term once the rate notice has gone out). Both default `dry_run`, so by default it contacts no customer and creates nothing. Activating the next term is a person's click (part 4b-2 will automate it). `auto_renew_cron_mode` is `off` / `dry_run` (`live` reads as `dry_run`) |
+| Daily 20:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
+| Daily 09:00 IST | `/api/cron/query-digest` | The only place queries send email — one digest per person (new/replies/overdue/silent); in-app alerts stay real-time |
+| Daily 09:30 IST | `/api/cron/vo-renewal` | Chases Virtual Office renewals a person has already started (Start renewal) on the same payment link: reminders at 21/14/7 days, final notice at the end date, grace, lapse + discontinuation drafts; rolls confirmed postpaid-partner cases into their next term; emails an internal digest. Never opens a renewal, never contacts a customer who wasn't sent the first notice, and only looks at cases switched on one by one (`cases.renewal_notices_enabled`). Mode is `app_settings.vo_renewal_cron_mode` (`off` / `dry_run` default / `live`); the URL can only make a run more cautious, never live |
+| Daily 10:30 IST | `/api/cron/enquiry-reconcile` | Auto-resolve enquiries: contract active → Converted, lead lost → Not interested, 21 quiet days → No response (only enquiries received after `app_settings.enquiry_auto_resolve_effective_from`) |
+| Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
+| Daily 10:00 IST | `/api/cron/rent-gap-alert` | In-app + push alert to admin/manager/accounts/sales_rep for each new rent gap that can be raised from Billing → Unbilled → Rent gap (staff only, once per contract-month) |
+| Hourly at :07 | `/api/cron/energy-ledger-capture` | Extend each OneGrid-enabled location's energy ledger (`location_energy_readings`) from its last stored row; feeds the Usage baseline |
+| Hourly at :17 | `/api/cron/wifi-ledger-capture` | Copy each UniFi center's Wi-Fi usage (per device and site total) into `wifi_client_hourly` / `wifi_site_hourly` (console keeps ~7 days) and `wifi_client_daily` / `wifi_site_daily` (~90 days) before it ages out; read-only against UniFi, sends nothing |
+| Daily 03:00 IST | `/api/cron/customer-value` | Recompute every customer's monthly Value figures and today's score into `customer_value_monthly` / `customer_value_scores` (writes only those two tables; sends nothing) |
+| Daily 03:15 IST | `/api/cron/customer-value-margin` | Shadow margin after variable costs per customer-month into `customer_value_margin`, from the stored monthly figures and the cost rates in force; shown beside the score, never changes it (writes only that table; sends nothing) |
 
 Billing generation logic is centralised in `src/lib/billing.ts` — used by both the cron and the manual trigger, and called on contract activation to generate the first statement immediately.
 
@@ -161,21 +203,37 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 
 ### Roles and Permissions
 
-`UserRole`: `admin`, `manager`, `sales_rep`, `floor_manager`, `accounts`, `fms`, `office_admin`, `it_manager`, `it_technician`
+`UserRole`: `admin`, `manager`, `sales_rep`, `floor_manager`, `accounts`, `fms`, `office_admin`, `it_manager`, `it_technician`, `coordinator`
 
 | Action | Allowed Roles |
 |--------|--------------|
-| Approve vendor bills | `admin`, `manager` |
-| Record payments (vendor bills) | `accounts`, `admin`, `office_admin` — **only from Finance > Acc Payables** |
-| Record petty cash | `accounts`, `admin`, `office_admin` |
+| Approve vendor bills | `admin` only — a `manager` gets a 403 |
+| Record payments (vendor bills) | `accounts`, `admin`; `office_admin` **cash/petty cash only** — **only from Finance > Acc Payables**, and only on an approved bill |
+| Record payments (customer: invoices, deposits, top-ups, ad-hoc) | `admin`, `accounts` only — `PAYMENT_RECORDING_ROLES` in `src/lib/constants.ts`. Everyone else uses **Report paid**, which routes to accounts to verify against the bank. `office_admin` keeps its existing carve-out for settling a pending deposit top-up. Front-desk **booking** payments are separate and unaffected. |
+| Record petty cash (submit an entry) | **Any authenticated user** — no role gate; entries start at `pending_manager` |
+| Approve petty cash | `admin`, `manager`; entries **≥ ₹5,000** need a second approval from `admin`/`accounts` |
 | Manage contracts | `admin`, `manager`, `sales_rep` |
+| Terminate an **active** contract | `admin`, `manager` |
+| **Withdraw** a never-activated contract (draft/sent/viewed/accepted → stored as `terminated`) | `admin`, `manager`, `sales_rep` — not renewal drafts (use Cancel Renewal) |
 | Facility tickets | `fms`, `admin` |
+| `coordinator` scope | Sales + Operations + Procurement (create/edit **own** MRs, view everything, **no approvals**) + day-to-day Facility. **No** Finance, Payroll, Attendance or Admin — sidebar hides them, `isCoordinatorBlockedPath` (`src/lib/restricted-roles.ts`) redirects typed URLs, API role lists refuse writes |
 | Void billing statements | `admin` only |
+| Withdraw an unverified payment report (Report paid) | the reporter, `admin`, `accounts` — only while it is still unverified; `POST /api/queries/payment-reports/[id]/withdraw`; never for booking reports |
+| Reverse a customer payment recorded in error | `admin` only — `POST /api/billing-statements/[id]/payment/[paymentId]/reverse` (reason ≥10 chars; refused for gateway/Tally-receipted/TDS-filed/deposit-adjustment payments, accounted or period-locked statements, and proposal/invoice/VO-case statements) |
 
 ### Procurement → Payment Flow (strict separation)
 
-1. **Procurement** (`/procurement/bills/[id]`): Create bills, attach invoices. `admin`/`manager` approve/reject. **No payment recording here.**
+1. **Procurement** (`/procurement/bills/[id]`): Create bills, attach invoices. `admin` approves/rejects — `manager` cannot (`canApproveOrReject` in `src/app/api/procurement/bills/[id]/route.ts` is `role === "admin"`). **No payment recording here.**
 2. **Finance > Acc Payables** (`/accounting/vendor-payments/[id]`): `accounts`/`admin`/`office_admin` record payments on approved bills only. Uses `VendorEmailBanner` (`src/components/finance-intelligence/vendor-email-banner.tsx`) to prompt for missing vendor emails.
+
+### Price tolerance (goods POs)
+
+Lets the final vendor invoice drift from the PO value without a hard block (migration `00610`). Not offered for AMC/service POs (fixed cycle amounts).
+
+- **Request**: requester picks Firm / ±5% / ±10% (`purchase_requests.tolerance_requested_percent`, max `PRICE_TOLERANCE_MAX_PERCENT` = 10) with a reason.
+- **Approval**: whoever approves the request (`admin`/`manager`, same threshold rules as today) accepts or changes it; the final figure is `tolerance_percent` (+ `tolerance_decided_by/at`). Approval stays the only place it is decided.
+- **PO**: `purchase_orders.tolerance_percent` is copied from the request at goods-PO creation; never edited at PO time.
+- **Bill** (`POST /api/procurement/bills`, logic in `src/lib/procurement/price-tolerance.ts`): firm PO = old hard block. Flexible PO: cumulative invoiced total vs PO value (or received value on a short delivery) — inside the band records `variance_*` and follows the normal path; outside it sets `out_of_tolerance`, requires `tolerance_exception_reason`, is never auto-approved, and the admin must tick `acknowledge_out_of_tolerance` to approve. The low side is only judged for a single invoice on a fully received PO.
 
 ### Billing Statement Lifecycle
 
@@ -184,6 +242,20 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 - Void action (admin only): `POST /api/billing-statements/[id]/void` — blocked if any payments recorded. Marks original as voided, un-links usage charges back to `pending`, creates a fresh draft with `voided_statement_id` back-reference.
 - GST tax rates are locked to each contract's `tax_percentage` — never recalculate dynamically.
 - `BillingLifecycleStatus` component (`src/components/billing/billing-lifecycle-status.tsx`) renders the 6-step progress indicator on list views.
+
+### Usage Invoices (contract/month grouped)
+
+Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.ts`; API under `/api/usage-billing/` (`unbilled`, `prepare`, `send`, `cancel`; admin/manager/accounts).
+
+- Sources: `usage_charges` (includes every booking charge), `service_usage_records` (print), `facility_usage_records`. **Bookings are never billed directly** — their charge is already a `usage_charges` row (posted at booking, or at checkout for quota rooms); billing the booking too would double-bill.
+- One invoice per contract per month; never spans months. Current month can't be sent. A month locked in accounting can't be sent. A late charge for an already-invoiced month gets its own invoice (`00565` relaxes the one-per-month unique index for `usage` only).
+- Held and within-quota charges never bill; charges older than `USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS` need "Bill anyway" (`reviewed_at`) first. Ended contracts still bill.
+- `prepare` → `create_usage_invoice` RPC (`00564`) locks and links charges to a draft in one transaction and refuses if anything changed (`USAGE_INVOICE_STALE`). Preview with the existing `preview-send` / `proforma-pdf?preview=1` routes. `send` finalizes and dispatches by `contracts.billing_mode`; if it fails before anything irreversible (payment link, GST number, sent), the draft is discarded and charges return to the list. `cancel` discards and releases.
+- Discard and void must release all three charge tables, including `facility_usage_records.billing_statement_id`.
+
+### Ad-hoc invoices on a live contract
+
+A live contract (`active`, or `renewal_in_progress` before its end date — `isContractOperational`) captures all of the customer's financial activity, so `POST /api/invoices` ties a lead's ad-hoc invoice to it at creation (`src/lib/adhoc-contract-attach.ts`): one live contract attaches by itself, several make the form require a pick (`contract_id`, server returns 400 otherwise), none leaves it on the ad-hoc page only. Case-raised invoices have no lead and are untouched. The automatic purpose is always `other` (visibility only) — only a hand-set `prorata_first_invoice` can open the activation gate. The contract card's dropdown can re-tag an invoice as **Security deposit** (for deposits that slipped through before the creation gate): it asks first, only a paid invoice with no GST can be credited to the customer's deposit pool (taxed/unpaid ones show a warning and are refused), and switching away takes the credit back out. Invoices raised before this rule: `node scripts/backfill-adhoc-contract-attach.mjs` (lists by default, `--apply` writes; skips customers with several live contracts).
 
 ### Proposal → Contract Flow (strictly enforced)
 
@@ -196,6 +268,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 - `POST /api/proposals/[id]/send-invoice` always creates a **fresh** link — never reuses `proposal.razorpay_payment_link_url`
 - Deposit paid → webhook auto-accepts proposal (`status → accepted`)
 - Pro-rata paid → `payment_status → paid`
+- The pro-rata invoice goes out **in parallel** with the deposit: it needs the deposit to have been *requested* (single request sent, or at least one live part), not received. Receipt is still required for contract activation.
 
 **Contract activation gate (hard — do not bypass):**
 1. `proposal_id` is set
@@ -203,12 +276,43 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 3. If `security_deposit_months > 0`: `deposit_payment_status = 'paid'`
 - **Renewal exception**: contracts with `deposit_carried_from` bypass the gate
 - Admin bypass: include `payment_override_reason` in PATCH body (logged to audit)
+- **Part-paid deposit (>50%)**: when the deposit is being collected in parts and **more than 50% of the adjusted required amount has actually been received** (`src/lib/deposit-activation.ts`), the deposit leg of the gate is satisfied with a warning: the PATCH must carry `acknowledge_partial_deposit: true` (else 409 `PARTIAL_DEPOSIT_ACK_REQUIRED`), the contract claims the proposal's deposit and snapshots it as `pending` with a note, and when the last part is paid `syncContractDepositFromParts` flips the contract's deposit to paid. The pro-rata / first invoice is still required, and the monthly GST invoice (`send-invoice`) follows the same >50% rule. Any role that can activate may do this. Exactly 50% is not enough. Both the proposal and the contract show a "deposit pending" warning until the balance is in.
+
+### Staged security deposit (parts)
+
+Sales can take a proposal's deposit in parts (e.g. ₹20k of ₹60k now). **Activation is unchanged — the deposit must still be paid in full.** Ships dark: `app_settings.deposit_instalments_enabled` (`false` by default); `deposit_min_first_part_percent` (default 25) is the smallest first part without a manager.
+
+- Each ask is a row in `proposal_deposit_instalments` (`00649`) with its **own fresh Razorpay link** for exactly that amount, **several asks can be open at once** (`00665` dropped the one-open index; what may still be asked is the part neither paid nor already requested). Each open part is its own Receivables line for that part's amount (the whole deposit shows in the line's label), has its own **Report paid** (on the proposal and in Receivables), and accounts record a reported part against the matching open part when verifying. Admin / manager / sales rep may ask (`POST /api/proposals/[id]/deposit-instalments`); a first part below the minimum needs an admin/manager override with a reason; recording a bank payment against a part stays admin/accounts only.
+- The proposal's completed-deposit fields (`deposit_payment_status = paid`, amount, reference, medium, received-at) are written **only when parts paid ≥ required** (`_rollup_proposal_deposit`). Anything that needs *cash received* must read the instalments; anything that means "complete" keeps reading the proposal. The first paid part accepts the proposal and locks its terms.
+- All money changes go through RPCs (service role only): `request_deposit_instalment`, `record_deposit_instalment_paid`, `record_deposit_payment_for_link` (webhook; also records a late payment on the original full-deposit link once parts exist), `cancel_deposit_instalment`.
+- Once any part is asked for or paid, the single-deposit paths stand down (`hasLiveInstalments`): `deposit-link`, `deposit-payment`, `deposit-payment-link`, `accept` and `revise` refuse or skip.
+- Rules and figures: `src/lib/deposit-instalments.ts` (Required / Requested / Paid / Awaiting / Not yet asked / Balance).
+- **Customer messages** (`src/lib/deposit-instalment-email*.ts`): creating a part messages nobody; staff send it with **Email customer** (`POST …/[instalmentId]/send`, `{preview:true}` sends nothing; `{mode:"download"}` returns the details for a **Download PDF** to share by hand and logs it as a manual send). Every email shows total required, paid so far, this part, balance after. A "payment received" email goes out automatically when a part is paid (manual record and webhook), once per part. **Email only** — WhatsApp/SMS keep the single-amount wording until an MSG91 template with breakup fields is approved.
+- **Accounts**: the Tally Inbox lists one row and takes one Tally receipt **per part received** (`kind: "part"` on `/api/accounting/inbox/deposits`, "Part N of M · received now · received to date · balance · Final"); a proposal with paid parts is excluded from the single-deposit rows so nothing is booked twice. Settlement recon stamps each part by its own payment id. The daily collections digest reports each part on the day it arrives. Receivables show received vs. total with the open part's link; the automatic reminder ladder skips these proposals (it would chase the whole amount). Not yet done: payment-report tie to a specific part.
+- **Walk-away refund** (`00650`, `src/lib/deposit-refund.ts`): a customer who paid some parts and walks away is refunded **in full** (no retain). Manager / sales rep / admin request it from the proposal; **admin approves every refund** whatever the amount; accounts/admin pay it from Acc Payables (`/api/deposit-refunds/[id]/{approve,reject,pay}`); paying closes the proposal as `rejected` with "Customer withdrew — deposit refunded (UTR …)". Only while the deposit is still partly paid with no open ask and no contract — a complete deposit or a contract uses the contract exit flow. A live refund blocks new part requests.
 
 ### Contract Lifecycle
 
-Lead → Proposal (deposit + pro-rata) → Contract activation → Monthly billing → Renewal / Cancellation.
+Lead → Proposal (deposit + pro-rata) → Contract activation → Monthly billing → Renewal / Extension / Cancellation.
 
 Cancellation has side effects (WiFi voucher revocation, usage charge settlement) that must be handled atomically.
+
+### Contract Extension (short validity gaps — do not confuse with Renewal)
+
+`POST /api/contracts/[id]/extend` — pushes an **active** contract's `end_date` forward by 1–60 days without changing rate, tenure, or terms. For short gaps only (e.g. a few days before renewal paperwork is signed); a new contract term still goes through Renewal.
+
+**Hard rules (do not bypass):**
+- 60-day cap is a **lifetime total per contract**, tracked in `contracts.days_extended` — not per single extension call.
+- Blocked if contract status is `renewal_in_progress` (the parent's `end_date` is load-bearing for the renewal's split-billing logic in `computeRenewalSplitRentSegments`, `src/lib/billing.ts`).
+- Blocked once `end_date` has already lapsed (`today > end_date`), even if the daily `contract-expiry` cron hasn't flipped status to `expired` yet — Extension is proactive only. A lapsed contract needs a fresh term via Renewal, not retroactive billing.
+- No approval workflow — direct action by `admin`/`manager`/`sales_rep`, same roles as Renewal. A reason is required and logged to `audit_trail` (`action: "contract_extended"`).
+- No new billing logic — billing already prorates by day and pools contracts by `end_date`, so extension just needs the date pushed forward.
+
+### Procurement Admin Rollback & Closed-Chain Lock
+
+Every procurement step can be undone — **admin only, one step back at a time, reason required (≥10 chars), audit action `rollback`**. The menu is **Correct** on the bill, PO and visit/challan/consumption screens. Each rollback is refused while a *later* step still stands (e.g. reverse payments → un-approve → withdraw bill → un-order PO → cancel the MR's POs → revoke the MR's approval), and the error says which to undo first. Rules and helpers: `src/lib/procurement/admin-rollback.ts` (role + reason), `admin-rollback-server.ts` (route guard). Financial reversals are atomic RPCs (service role only); voids are **soft** (row kept, flagged) so history survives. Readers of payments / TDS / bills must ignore reversed/withdrawn rows — use `DEAD_BILL_STATUSES_FILTER` (`src/lib/constants.ts`) for bills.
+
+**Closed-chain lock** (`src/lib/procurement/chain-lock.ts`). A *chain* is an MR with its POs and bills (else a PO + bills, else a standalone bill). It is **complete** when the MR is fully ordered, goods are received (AMC: contract ended), every PO has a live bill, all live bills are approved and paid in full, and all TDS is on a challan. **Closed is computed, never stored.** Corrections lock **7 days after the last step** (`CHAIN_LOCK_DELAY_DAYS`); routes that correct or edit money return **423 `chain_locked`** (`chainLockedResponse`). **Cut-off:** only chains that completed on/after `app_settings.procurement_chain_lock_effective_from` (set to the migration's apply time) ever lock; older chains stay correctable, and if the setting is missing nothing locks. Only an admin can **reopen** (`POST /api/procurement/chain-reopen`: type the MR/PO/bill number + reason); that is stored in `procurement_chain_reopens`, restarts the 7-day window, and the cycle re-closes by itself once complete again. Viewing, queries and attachments are never locked. Adding a new route that corrects a bill/PO/MR? Call `chainLockedResponse` first.
 
 ## Environment Variables
 
@@ -226,9 +330,150 @@ MSG91_AUTH_KEY / MSG91_WHATSAPP_SENDER / MSG91_SMS_*
 B2_KEY_ID / B2_APPLICATION_KEY / B2_BUCKET / B2_ENDPOINT
 LEEGALITY_API_KEY / LEEGALITY_API_URL / LEEGALITY_PROFILE_ID / LEEGALITY_PRIVATE_SALT
 BACKUP_DB_HOST / BACKUP_DB_NAME / BACKUP_DB_USER / BACKUP_DB_PASSWORD / BACKUP_DB_PORT
+ASSET_CREDENTIALS_ENCRYPTION_KEY   # encrypts facility_asset_credentials.password_encrypted; generate with `openssl rand -hex 32`
 ```
 
 Razorpay keys are stored in the `app_settings` DB table, not env vars.
+
+**Not currently set anywhere** (the Gmail inbound pipeline has never run in any
+environment — see `docs/gmail-intake.md` before setting them):
+
+```
+GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN
+GMAIL_WATCH_EMAIL / GMAIL_PUBSUB_TOPIC
+GMAIL_PUBSUB_AUDIENCE / GMAIL_PUBSUB_SA_EMAIL
+```
+
+---
+
+## Staging — Develop Against This, Not Production
+
+There are **two** Supabase projects. Local dev and every Vercel Preview should
+point at staging; production credentials belong only to the production Vercel
+deployment.
+
+| | Project ref | What's in it |
+|---|---|---|
+| **Staging** | `vmxugqfglajqpskazpdc` | Fake seed data — safe to click anything |
+| **Production** | `zlbvadtajetylacxevsm` | Real customers. Never a development target. |
+
+**How to tell which one you're on, at a glance:** every non-production
+environment renders an amber `🧪 STAGING — this is test data` banner across the
+top of every page (`src/components/shared/environment-banner.tsx`). It keys on
+the production project ref and fails *visible* — an unrecognised or misconfigured
+Supabase URL still shows the banner, so a bad env var reads as a warning rather
+than passing for production.
+
+**If you do not see that banner, stop.** You are pointed at real customer data,
+and nothing you are about to click is safe.
+
+### Setting it up
+
+1. Ask Vinit for the staging credentials — Supabase URL, anon key, service role
+   key. They are never committed; `.env.example` documents shape only.
+2. Point your `.env.local` at the **staging** project for day-to-day work.
+3. Seed it (idempotent, safe to re-run):
+
+   ```bash
+   node scripts/seed-staging.mjs
+   ```
+
+   It reads `.env.staging.local` — deliberately a **different file** from
+   `.env.local`, so the seeder can never be pointed at production by picking up
+   the wrong env. It also refuses to run if the target project ref matches
+   production's. `scripts/seed-facility-demo.mjs` and
+   `scripts/seed-staging-queries.mjs` add module-specific fixtures. `scripts/seed-staging-enquiry-flow.mjs`
+   seeds the WhatsApp enquiry, complaint and request screens; everything it creates is marked as test
+   data and removed with `--clear`.
+
+Seed data uses reserved-fake addresses (`@example.com`) and obviously fake phone
+numbers, so even a bug that triggers a live send against it reaches nobody real.
+
+### Preview deployments — test the branch before the PR reaches review
+
+`main` deploys to production. **Every other branch deploys to a Vercel Preview**,
+and Preview is scoped to the staging database — so pushing a branch gives you a
+real, deployed copy of your change running against safe data, before anyone is
+asked to review it.
+
+**Staging is a database, not a copy of the app.** There is no staging branch and
+no shared staging site to deploy over or keep in sync:
+
+- Each branch gets **its own** preview URL. Pushing yours affects nobody else's,
+  and previews are disposable — after a merge they are just stale history, with
+  nothing to clean up or sync back.
+- The **staging database is the one shared piece**. Anyone can seed it, edit it
+  or apply a migration to it, and everyone else's previews see that. It holds
+  test data by design; when it gets messy, re-seed it.
+- **Production is reached only by merging to `main`**, which only Vinit does.
+  Nothing a branch or a preview does can touch it.
+
+So pushing branches and previews needs no approval — the approval gate is the
+merge, and it hasn't moved.
+
+The one way staging and production genuinely drift is **migrations**: a
+migration applied to one and not the other leaves previews testing a schema
+production doesn't have, or the reverse. Whenever you apply one, apply it to
+both. Staging is yours to apply; production is Vinit's.
+
+The intended loop:
+
+1. Push the branch. Vercel builds a preview automatically.
+2. If the change has a migration, apply it to **staging** first (`npx supabase
+   db push` against the staging project) or the preview will run against a
+   schema that doesn't have it yet — a feature can look "shipped" while being
+   impossible to exercise anywhere.
+3. Open the preview URL and click through the actual change.
+4. Open the PR with the preview link and a screenshot showing the change.
+
+**Check the banner every single time you open a preview.** The amber `🧪 STAGING`
+strip is the only thing that tells you which database that deployment is talking
+to. It is not decoration — it is the check:
+
+- **Banner present** → the preview is on staging. Click freely.
+- **Banner absent** → that deployment is on **production**. Stop, don't click
+  anything that writes, and say so — either the Preview environment variables
+  are wrong or they were never set.
+
+Production migrations are Vinit's; staging migrations are not, so don't wait on
+him to be able to test your own schema change.
+
+#### One-time setup (Vinit) — the above assumes this is done
+
+If a preview shows no banner, this is why. In Vercel → project `twv-crm` →
+Settings → Environment Variables, the **Preview** scope of
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and
+`SUPABASE_SERVICE_ROLE_KEY` must hold the **staging** values, with Production
+scope left on production.
+
+Two related settings matter as much:
+
+- **Outbound keys must be dead in Preview.** Razorpay follows the database
+  (`app_settings`), so it is safe automatically — but `RESEND_API_KEY`,
+  `MSG91_*` and `SMTP_*` are project env vars. Give them dummy Preview-scoped
+  values, or a preview can send real email and SMS. Crons are production-only
+  (`vercel.json`), so previews never fire them.
+- **Preview URLs are SSO-protected.** Anyone expected to test a preview needs
+  Vercel team membership, or the link just redirects to `vercel.com/login`.
+  Member/Developer is enough; Owner is not required and shouldn't be given.
+
+Staging Supabase access is per-person and separate from production. Grant the
+staging project only — production stays with Vinit.
+
+### What this means for verification
+
+"Tested locally" means **tested against staging, through the browser** — either
+a local dev server pointed at staging, or the branch's own preview deployment.
+Driving the real UI is the verification the checklists below ask for. A
+hand-rolled `fetch()` or `curl` against an API route is not a substitute — see
+"Critical Rules → NEVER" for why that shortcut once emailed 20 real customers.
+
+State which one you used in the PR, and say plainly when something could not be
+exercised. "The migration isn't on staging yet, so the add/reveal flow is
+unverified" is worth more to a reviewer than a confident sentence that turns out
+to describe what the code was meant to do rather than what was observed.
+
+Staging is exactly what makes clicking through freely safe. Use it.
 
 ## Module Map
 
@@ -253,6 +498,7 @@ Razorpay keys are stored in the `app_settings` DB table, not env vars.
 ### Before starting
 
 - Read the relevant ticket / spec. If unclear, ask.
+- If another Claude Code session might be active in this repo right now, use a worktree instead of the shared working directory — see "Critical Rules → ALWAYS".
 - `git checkout main && git pull`
 - `git checkout -b <type>/<short-description>` (types: `feat`, `fix`, `chore`, `refactor`, `docs`)
 - Run `npm install` if `package.json` or lockfile changed.
@@ -268,7 +514,7 @@ Razorpay keys are stored in the `app_settings` DB table, not env vars.
 
 - [ ] `npm run lint` passes
 - [ ] `npm run build` succeeds
-- [ ] Manually tested the full user flow locally
+- [ ] Manually tested the full user flow **against staging, in a browser** — with the amber STAGING banner visible on screen (see "Staging" above)
 - [ ] No `console.log` debug statements left behind
 - [ ] No commented-out code
 - [ ] No secrets in the diff (`git diff` and look)
@@ -278,7 +524,7 @@ Razorpay keys are stored in the `app_settings` DB table, not env vars.
 
 - [ ] PR description explains why, not just what
 - [ ] Migration rollback noted (if applicable)
-- [ ] Tested on staging (for anything touching auth, payments, or data)
+- [ ] Tested on staging (for anything touching auth, payments, or data) — see "Staging" above for how
 - [ ] Reviewed by at least one other person (once team is in place)
 
 ---
@@ -300,6 +546,7 @@ Razorpay keys are stored in the `app_settings` DB table, not env vars.
 
 - All schema changes go through migrations. Never edit schema via the Supabase dashboard in production.
 - Migration files live in `/supabase/migrations/`. Naming: `NNNNN_description.sql` (sequential 5-digit prefix, matching existing convention).
+- **Pick the number against every branch, not just `main`.** `schema_migrations` keys on the prefix alone, so if two files share a number `db push` records the first and silently skips the rest — no error, the columns just never exist. `main` is not the source of truth here: people run `db push` from feature branches, so production is routinely ahead of `main`. CI runs `.github/scripts/check-migration-numbers.mjs`, which compares what your branch introduces against `main` and every remote branch; run it locally with `node .github/scripts/check-migration-numbers.mjs` before pushing. Re-check right before merging — the number can be taken while your PR is open.
 - Test migrations locally first: `npx supabase db push` against your local instance.
 - RLS is mandatory on every table containing user data. Default policy: deny all, then allow specific.
 - Reversible migrations where possible — include a rollback path in the PR description for destructive changes.
@@ -352,7 +599,9 @@ Steps to verify the change works.
 (If schema changes or destructive operations)
 
 ## Screenshots / screen recordings
-(For UI changes)
+(For UI changes. Capture them against staging with the amber STAGING banner
+visible in frame — that is the reviewer's proof of which database the change
+was exercised against.)
 ```
 
 Keep PRs small. If it's bigger than ~400 lines of diff, consider splitting.

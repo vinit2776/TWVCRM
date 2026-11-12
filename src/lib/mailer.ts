@@ -25,6 +25,23 @@ if (!smtpUser || !smtpPass) {
 // Port 587 uses STARTTLS (requireTLS=true, secure=false).
 // Port 465 uses implicit TLS (secure=true). 465 is often blocked from cloud IPs.
 // We default to 587 which works reliably from Vercel/AWS.
+//
+// Explicit timeouts matter here: nodemailer's own defaults (connectionTimeout
+// ~2min, socketTimeout ~10min) are far longer than callers' outer timeouts
+// (e.g. EMAIL_TIMEOUT_MS=15s in send-proforma.ts). When Gmail SMTP is slow to
+// respond from Vercel's network, sendMail() would just hang past that outer
+// deadline without ever throwing — so the resend.emails.send() wrapper below
+// never gets a chance to catch an SMTP failure and fall back to Resend; the
+// whole operation is abandoned first. Short timeouts here make a stuck SMTP
+// attempt fail fast, leaving the fallback enough of the outer budget to run.
+// connectionTimeout and greetingTimeout are separate, potentially sequential
+// phases (connect, then wait for greeting) — kept low enough that even their
+// worst-case sum leaves several seconds of the outer 15s budget for the
+// Resend fallback to actually complete.
+const SMTP_CONNECTION_TIMEOUT_MS = 5_000;
+const SMTP_GREETING_TIMEOUT_MS = 3_000;
+const SMTP_SOCKET_TIMEOUT_MS = 5_000;
+
 export const transporter = nodemailer.createTransport({
   host: smtpHost,
   port: smtpPort,
@@ -34,7 +51,44 @@ export const transporter = nodemailer.createTransport({
     user: smtpUser,
     pass: smtpPass,
   },
+  connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+  greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
+  socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
 });
+
+// Invoice emails carry a PDF, and Gmail can take well over 5s to answer the DATA
+// command for those — the 5s socket limit above was failing them ("Timeout"),
+// and with Resend unverified there was nothing to fall back to. Invoice sends
+// that have no tight outer deadline opt in with `patient: true` and get these
+// longer limits instead. Callers with a short outer deadline (send-proforma's
+// 15s) must keep the default profile or the fallback never gets its turn.
+const PATIENT_CONNECTION_TIMEOUT_MS = 8_000;
+const PATIENT_GREETING_TIMEOUT_MS = 6_000;
+const PATIENT_SOCKET_TIMEOUT_MS = 20_000;
+
+const patientTransporter = nodemailer.createTransport({
+  host: smtpHost,
+  port: smtpPort,
+  secure: smtpPort === 465,
+  requireTLS: smtpPort === 587,
+  auth: {
+    user: smtpUser,
+    pass: smtpPass,
+  },
+  connectionTimeout: PATIENT_CONNECTION_TIMEOUT_MS,
+  greetingTimeout: PATIENT_GREETING_TIMEOUT_MS,
+  socketTimeout: PATIENT_SOCKET_TIMEOUT_MS,
+});
+
+// Google answers 421/450/451/452 for "try again later" (throttling under a burst
+// of sends). One short retry clears most of these; permanent 5xx must not retry.
+const TRANSIENT_SMTP_CODES = new Set([421, 450, 451, 452]);
+const TRANSIENT_RETRY_DELAY_MS = 2_000;
+
+export function isTransientSmtpError(err: unknown): boolean {
+  const code = (err as { responseCode?: number } | null)?.responseCode;
+  return typeof code === "number" && TRANSIENT_SMTP_CODES.has(code);
+}
 
 // Resend SDK instance for fallback delivery
 const resendClient = process.env.RESEND_API_KEY
@@ -73,6 +127,8 @@ export type SendEmailParams = {
   subject: string;
   html: string;
   replyTo?: string;
+  /** Use the longer SMTP timeouts. For invoice/PDF sends with no tight outer deadline. */
+  patient?: boolean;
   attachments?: Array<{
     filename: string;
     content: Buffer | string;
@@ -103,7 +159,16 @@ async function sendViaSMTP(params: SendEmailParams): Promise<SendEmailResult> {
     })),
   };
 
-  const info = await transporter.sendMail(mailOptions);
+  const smtp = params.patient ? patientTransporter : transporter;
+  let info;
+  try {
+    info = await smtp.sendMail(mailOptions);
+  } catch (err) {
+    if (!isTransientSmtpError(err)) throw err;
+    console.warn("SMTP transient error, retrying once:", err instanceof Error ? err.message : String(err));
+    await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAY_MS));
+    info = await smtp.sendMail(mailOptions);
+  }
   console.log("Email sent via SMTP:", info.messageId, "to:", params.to);
   return { data: { id: info.messageId }, error: null };
 }
@@ -164,8 +229,17 @@ export const resend = {
             const fallbackResult = await sendViaResend(params);
             if (!fallbackResult.error) {
               console.warn("Email delivered via Resend fallback (SMTP was down)");
+              return fallbackResult;
             }
-            return fallbackResult;
+            // Keep why SMTP failed: until now only the Resend error was returned
+            // and saved, so the real cause lived only in the server console.
+            return {
+              data: null,
+              error: {
+                message: `SMTP: ${smtpMessage} | Resend: ${fallbackResult.error.message}`,
+                name: "all_transports_failed",
+              },
+            };
           } catch (resendErr) {
             const resendMessage = resendErr instanceof Error ? resendErr.message : String(resendErr);
             console.error("Resend fallback also failed:", resendMessage);

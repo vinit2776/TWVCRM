@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { annexureFromSections } from "@/lib/electricity-annexure";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
 import { computeGstAndRounding } from "@/lib/gst-math";
@@ -138,7 +139,7 @@ export async function POST(
         currency: "INR",
         description: `Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`,
         reference_id: invoiceNumber.replace(/\//g, "-"),
-        expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60, // 15 days
+        expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
         notify: { sms: !!customerPhone, email: !!customerEmail },
         reminder_enable: true,
         notes: { statement_id: id, contract_number: contract.contract_number, invoice_number: invoiceNumber },
@@ -227,6 +228,7 @@ export async function POST(
 
   // 6. Generate GST invoice PDF
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber,
     invoiceDate: new Date().toISOString().slice(0, 10),
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
@@ -235,6 +237,7 @@ export async function POST(
     periodStart: statement.period_start,
     periodEnd: statement.period_end,
     contractNumber: contract.contract_number,
+    poNumber: statement.po_number,
     lineItems,
     subtotal,
     cgst,
@@ -376,15 +379,14 @@ export async function POST(
     }
   }
 
-  // 11. Update contract.next_billing_date
-  if (contract.next_billing_date) {
-    const nextDate = new Date(contract.next_billing_date + "T00:00:00Z");
-    nextDate.setMonth(nextDate.getMonth() + 1);
-    await adminSupabase
-      .from("contracts")
-      .update({ next_billing_date: nextDate.toISOString().slice(0, 10) })
-      .eq("id", contract.id);
-  }
+  // 11. next_billing_date is deliberately NOT touched here.
+  // It used to be pushed forward one month on every confirm, regardless of the
+  // contract's billing cycle. For anything but a monthly contract that was
+  // wrong twice over: the rent generator had already moved the anchor by the
+  // full cycle when the proforma went out, and a +1 on top drifted it into a
+  // month that belongs to no cycle at all — which is what the advance-cycle
+  // gate reads to decide when the next quarter is due. The generator owns this
+  // field and derives it from the period it actually billed.
 
   // 12. Audit log
   logAudit(adminSupabase, {

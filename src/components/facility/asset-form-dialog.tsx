@@ -34,6 +34,22 @@ function Hint({ children }: { children: React.ReactNode }) {
   return <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{children}</p>;
 }
 
+/** "In maintenance" was being picked to mean "covered by an AMC"; say what each choice means. */
+function StatusNote({ status }: { status: string }) {
+  if (status === "maintenance") {
+    return (
+      <p className="mt-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+        &quot;In maintenance&quot; means the asset is out of use for repair right now. It does <b>not</b> mean it is
+        covered by an AMC — for that, set <b>Lifecycle stage</b> to &quot;Under AMC&quot; and keep Status as &quot;Active&quot;.
+      </p>
+    );
+  }
+  if (status === "retired") {
+    return <Hint>Retired assets are decommissioned and are left out of the AMC request asset list.</Hint>;
+  }
+  return <Hint>&quot;Active&quot; is right for anything in service, including assets under an AMC.</Hint>;
+}
+
 function StepIndicator({ step, total }: { step: number; total: number }) {
   return (
     <div className="flex items-center gap-1.5">
@@ -49,10 +65,12 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   asset?: FacilityAsset | null;
   defaultLocationId?: string;
+  /** Starting values for a NEW asset (ignored when editing), e.g. read from a vendor's proposal. */
+  initialValues?: Partial<Record<"name" | "make" | "model" | "serial_number" | "vendor" | "notes", string>>;
   onSuccess: (asset: FacilityAsset) => void;
 }
 
-export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLocationId, onSuccess }: Props) {
+export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLocationId, initialValues, onSuccess }: Props) {
   const isEdit = !!asset;
 
   const [locations, setLocations] = useState<Location[]>([]);
@@ -81,6 +99,15 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     [categories, form.category_id],
   );
 
+  // `categories` holds inactive ones too so the code-prefix lookup below can
+  // still resolve an asset whose category was deactivated after it was created.
+  // The pickers must not *offer* inactive categories though — except the one
+  // this asset already has, which has to stay visible and selected.
+  const selectableCategories = useMemo(
+    () => categories.filter((c) => c.is_active || c.id === asset?.category_id),
+    [categories, asset?.category_id],
+  );
+
   const customFields: CategoryCustomField[] = useMemo(
     () => (selectedCategory?.custom_field_schema as CategoryCustomField[] | undefined) || [],
     [selectedCategory],
@@ -90,7 +117,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     if (!open) return;
     Promise.all([
       fetch("/api/locations?is_active=true").then((r) => r.json()),
-      fetch("/api/facility/categories").then((r) => r.json()),
+      fetch("/api/facility/categories?include_inactive=true").then((r) => r.json()),
     ]).then(([loc, cat]) => {
       setLocations(loc.data || []);
       setCategories(cat.data || []);
@@ -99,29 +126,29 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       location_id: asset?.location_id || defaultLocationId || "",
       floor_id: asset?.floor_id || "",
       category_id: asset?.category_id || "",
-      name: asset?.name || "",
+      name: asset?.name || initialValues?.name || "",
       asset_code: asset?.asset_code || "",
-      make: asset?.make || "",
-      model: asset?.model || "",
-      serial_number: asset?.serial_number || "",
+      make: asset?.make || initialValues?.make || "",
+      model: asset?.model || initialValues?.model || "",
+      serial_number: asset?.serial_number || initialValues?.serial_number || "",
       mac_address: asset?.mac_address || "",
       ip_address: asset?.ip_address || "",
       purchase_date: asset?.purchase_date?.slice(0, 10) || "",
       warranty_expiry: asset?.warranty_expiry?.slice(0, 10) || "",
-      vendor: asset?.vendor || "",
+      vendor: asset?.vendor || initialValues?.vendor || "",
       status: (asset?.status || "active") as "active" | "maintenance" | "retired",
       lifecycle_stage: (asset?.lifecycle_stage || "operational") as FacilityLifecycleStage,
       installation_date: asset?.installation_date?.slice(0, 10) || "",
       assigned_department: asset?.assigned_department || "",
       next_service_due: asset?.next_service_due?.slice(0, 10) || "",
       location_notes: asset?.location_notes || "",
-      notes: asset?.notes || "",
+      notes: asset?.notes || initialValues?.notes || "",
       attention_notes: asset?.attention_notes || "",
     });
     setCustomValues((asset?.custom_field_values as Record<string, unknown>) || {});
     setPendingPhotos([]);
     setStep(1);
-  }, [open, asset, defaultLocationId]);
+  }, [open, asset, defaultLocationId, initialValues]);
 
   useEffect(() => {
     if (!form.location_id) { setFloors([]); return; }
@@ -131,7 +158,14 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
   }, [form.location_id]);
 
   useEffect(() => {
-    if (isEdit) return;
+    // Editing an asset without touching its location/category: leave the
+    // existing code alone (including reverting back to it if the user tries
+    // a different location/category and then changes their mind).
+    if (isEdit && form.location_id === asset?.location_id && form.category_id === asset?.category_id) {
+      const original = asset?.asset_code || "";
+      setForm((f) => (f.asset_code === original ? f : { ...f, asset_code: original }));
+      return;
+    }
     if (!form.category_id || !form.location_id) {
       setForm((f) => ({ ...f, asset_code: "" }));
       return;
@@ -152,7 +186,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
         const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
         setForm((f) => ({ ...f, asset_code: `${prefix}${String(next).padStart(3, "0")}` }));
       });
-  }, [form.location_id, form.category_id, isEdit, categories, locations]);
+  }, [form.location_id, form.category_id, isEdit, categories, locations, asset]);
 
   const handlePhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -231,6 +265,39 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
       if (pendingPhotos.length > 0) await uploadPhotos(json.data.id);
+      // Either of these rewrites the asset_code, which is what's printed on the
+      // QR sticker — so both need a history entry explaining why the sticker on
+      // the wall no longer matches. Only mention the code when it really moved.
+      if (isEdit && asset) {
+        const codeChanged = form.asset_code !== asset.asset_code;
+        const codeNote = codeChanged
+          ? ` Asset code changed from ${asset.asset_code} to ${form.asset_code} — reprint the QR sticker.`
+          : "";
+        const nameOf = (list: { id: string; name: string }[], id: string, fallback: string) =>
+          list.find((x) => x.id === id)?.name || fallback;
+        const events: { event_type: string; note: string }[] = [];
+
+        if (form.location_id !== asset.location_id) {
+          events.push({
+            event_type: "relocation",
+            note: `Moved from ${nameOf(locations, asset.location_id, "previous location")} to ${nameOf(locations, form.location_id, "new location")}.${codeNote}`,
+          });
+        }
+        if (form.category_id !== asset.category_id) {
+          events.push({
+            event_type: "other",
+            note: `Recategorised from ${nameOf(categories, asset.category_id, "previous category")} to ${nameOf(categories, form.category_id, "new category")}.${codeNote}`,
+          });
+        }
+
+        for (const event of events) {
+          await fetch(`/api/facility/assets/${asset.id}/events`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(event),
+          }).catch(() => null);
+        }
+      }
       toast.success(
         isEdit ? "Asset updated" : "Asset added! Open it to print the QR code or attach AMC documents.",
         { duration: 5000 }
@@ -283,7 +350,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
         >
           <option value="">— Select —</option>
-          {categories.map((c) => (
+          {selectableCategories.map((c) => (
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
@@ -417,10 +484,10 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
         >
           <option value="active">Active — in normal use</option>
-          <option value="maintenance">In maintenance — being serviced</option>
+          <option value="maintenance">In maintenance — out of use, being repaired</option>
           <option value="retired">Retired — decommissioned</option>
         </select>
-        <Hint>Almost always &quot;Active&quot; for new assets. Change when the asset goes for repair.</Hint>
+        <StatusNote status={form.status} />
       </div>
 
       {/* Category-specific custom fields */}
@@ -567,9 +634,16 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <Label className="text-xs">Location</Label>
-          <select value={form.location_id} disabled className="mt-1 w-full h-9 px-2 rounded-md border bg-muted text-sm cursor-not-allowed">
+          <select
+            value={form.location_id}
+            onChange={(e) => setForm({ ...form, location_id: e.target.value, floor_id: "" })}
+            className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
+          >
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
+          {form.location_id !== asset?.location_id && (
+            <Hint>Changing location assigns a new asset code and logs a relocation event.</Hint>
+          )}
         </div>
         <div>
           <Label className="text-xs">Floor</Label>
@@ -585,9 +659,20 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       </div>
       <div>
         <Label className="text-xs">Category</Label>
-        <select value={form.category_id} disabled className="mt-1 w-full h-9 px-2 rounded-md border bg-muted text-sm cursor-not-allowed">
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        <select
+          value={form.category_id}
+          onChange={(e) => { setForm({ ...form, category_id: e.target.value }); setCustomValues({}); }}
+          className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
+        >
+          {selectableCategories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.is_active ? c.name : `${c.name} (inactive)`}
+            </option>
+          ))}
         </select>
+        {form.category_id !== asset?.category_id && (
+          <Hint>Changing category assigns a new asset code and resets category-specific fields below.</Hint>
+        )}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
@@ -631,10 +716,11 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       <div>
         <Label className="text-xs">Status</Label>
         <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as "active" | "maintenance" | "retired" })} className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm">
-          <option value="active">Active</option>
-          <option value="maintenance">In maintenance</option>
-          <option value="retired">Retired</option>
+          <option value="active">Active — in normal use</option>
+          <option value="maintenance">In maintenance — out of use, being repaired</option>
+          <option value="retired">Retired — decommissioned</option>
         </select>
+        <StatusNote status={form.status} />
       </div>
       {customFields.length > 0 && (
         <div className="border-t pt-3 space-y-2.5">

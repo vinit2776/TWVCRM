@@ -6,6 +6,7 @@ import Link from "next/link";
 import QRCode from "qrcode";
 import { ArrowLeft, Printer, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import type { FacilityAsset } from "@/types";
 
 type Layout = "avery" | "9up";
@@ -115,6 +116,12 @@ function BatchPrintContent() {
 
   return (
     <>
+      <div data-print-hide className="px-4 pt-3">
+        <PageBreadcrumb
+          current={{ label: "Batch Print" }}
+          fallbackParent={{ href: "/facility/assets", label: "Assets" }}
+        />
+      </div>
       {/* Controls bar */}
       <div data-print-hide className="flex items-center gap-2 px-4 h-14 border-b bg-background flex-wrap sticky top-0 z-10">
         <Link href="/facility/assets">

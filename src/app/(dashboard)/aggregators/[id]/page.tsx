@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Trash2,
+  Pencil,
   Mail,
   Phone,
   Globe,
@@ -17,13 +18,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useAggregator } from "@/hooks/use-aggregators";
 import { AggregatorContactsTab } from "@/components/aggregators/aggregator-contacts-tab";
 import { AggregatorRateCardsTab } from "@/components/aggregators/aggregator-rate-cards-tab";
 import { AggregatorBillingTab } from "@/components/aggregators/aggregator-billing-tab";
+import { AggregatorForm } from "@/components/aggregators/aggregator-form";
+import { AggregatorCasesTab } from "@/components/aggregators/aggregator-cases-tab";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { AGGREGATOR_BILLING_METHOD_LABELS } from "@/lib/constants";
+import type { CreateAggregatorInput } from "@/lib/validations";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +48,7 @@ export default function AggregatorDetailPage({
   const { data: aggregator, loading, refetch } = useAggregator(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -55,6 +61,24 @@ export default function AggregatorDetailPage({
     }
     setDeleting(false);
     setDeleteOpen(false);
+  };
+
+  const handleEditSubmit = async (data: CreateAggregatorInput) => {
+    const { contacts: _contacts, ...updateData } = data;
+    void _contacts; // contacts are managed separately via the Contacts tab
+    const res = await fetch(`/api/aggregators/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updateData),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      toast.error(err.error || "Failed to update aggregator");
+      throw new Error(err.error || "Failed to update aggregator");
+    }
+    toast.success("Aggregator updated");
+    setEditOpen(false);
+    refetch();
   };
 
   if (loading) {
@@ -84,6 +108,10 @@ export default function AggregatorDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: aggregator.name }}
+        fallbackParent={{ href: "/aggregators", label: "Aggregators" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -99,6 +127,10 @@ export default function AggregatorDetailPage({
           </div>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setEditOpen(true)}>
+            <Pencil className="mr-2 h-4 w-4" />
+            Edit
+          </Button>
           <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
             <Trash2 className="mr-2 h-4 w-4" />
             Delete
@@ -109,11 +141,10 @@ export default function AggregatorDetailPage({
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="cases">Cases</TabsTrigger>
           <TabsTrigger value="contacts">Contacts</TabsTrigger>
           <TabsTrigger value="rate-cards">Rate Cards</TabsTrigger>
-          {aggregator.billing_method === "postpaid" && (
-            <TabsTrigger value="billing">Billing</TabsTrigger>
-          )}
+          <TabsTrigger value="billing">Billing</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-4">
@@ -221,6 +252,17 @@ export default function AggregatorDetailPage({
           </div>
         </TabsContent>
 
+        <TabsContent value="cases" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Cases</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <AggregatorCasesTab aggregatorId={id} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="contacts" className="mt-4">
           <Card>
             <CardHeader>
@@ -247,23 +289,36 @@ export default function AggregatorDetailPage({
           </Card>
         </TabsContent>
 
-        {aggregator.billing_method === "postpaid" && (
-          <TabsContent value="billing" className="mt-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Billing</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <AggregatorBillingTab
-                  aggregatorId={id}
-                  creditLimit={aggregator.credit_limit}
-                  primaryEmail={aggregator.primary_email}
-                />
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
+        <TabsContent value="billing" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Billing</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <AggregatorBillingTab
+                aggregatorId={id}
+                creditLimit={aggregator.credit_limit}
+                billingMode={aggregator.billing_mode}
+                billingMethod={aggregator.billing_method}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
+
+      {/* Edit Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Aggregator</DialogTitle>
+          </DialogHeader>
+          <AggregatorForm
+            aggregator={aggregator}
+            onSubmit={handleEditSubmit}
+            onCancel={() => setEditOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

@@ -1,4 +1,6 @@
-import { google } from "googleapis";
+// Per-API package rather than the "googleapis" meta-package — see the note in
+// src/lib/gmail.ts. Only Calendar is used here.
+import { calendar, auth as googleAuth } from "@googleapis/calendar";
 import { ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import type { ActivityType } from "@/types";
 
@@ -26,14 +28,14 @@ function getCalendarClient(subjectEmail: string) {
     throw new Error("GOOGLE_CALENDAR_SA_EMAIL or GOOGLE_CALENDAR_SA_PRIVATE_KEY not configured");
   }
 
-  const auth = new google.auth.JWT({
+  const auth = new googleAuth.JWT({
     email: clientEmail,
     key: privateKey,
     scopes: CALENDAR_SCOPES,
     subject: subjectEmail,
   });
 
-  return google.calendar({ version: "v3", auth });
+  return calendar({ version: "v3", auth });
 }
 
 interface ReminderEventParams {

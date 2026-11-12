@@ -13,6 +13,8 @@ import {
   MonitorSmartphone, ExternalLink, KeyRound,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -275,6 +277,7 @@ export default function CosecAccessPage() {
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Cosec Access" }} />
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
@@ -587,7 +590,12 @@ export default function CosecAccessPage() {
                             Enable
                           </Button>
                         )}
-                        <Link href={`/admin/cosec-devices/${u.device_id}`}>
+                        <Link
+                          href={`/admin/cosec-devices/${u.device_id}`}
+                          onClick={() => {
+                            pushTrailEntry({ href: `/admin/cosec-devices/${u.device_id}`, label: u.device_label });
+                          }}
+                        >
                           <Button size="sm" variant="outline" className="text-xs h-7 text-violet-700 border-violet-300 hover:bg-violet-50">
                             <ExternalLink size={12} className="mr-1" />
                             View on device

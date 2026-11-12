@@ -11,8 +11,10 @@ import {
   Briefcase,
   LayoutGrid,
   List,
+  CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { caseExpiry, expiryRowClass, expiryTextClass } from "@/lib/case-expiry";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -25,8 +27,11 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { CaseKanbanBoard } from "@/components/cases/case-kanban-board";
+import { CaseLifecycleIcons } from "@/components/cases/case-lifecycle-icons";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useCases } from "@/hooks/use-cases";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { pushTrailEntry } from "@/lib/nav-trail";
 import {
   CASE_STATUSES,
   CASE_STATUS_LABELS,
@@ -34,6 +39,7 @@ import {
   VO_PURPOSE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { caseDisplayName } from "@/lib/case-workflow";
 
 export default function CasesPage() {
   const router = useRouter();
@@ -44,6 +50,7 @@ export default function CasesPage() {
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
+  const [expiringOnly, setExpiringOnly] = useState(false);
 
   const { data: cases, pagination, loading } = useCases({
     page,
@@ -51,6 +58,11 @@ export default function CasesPage() {
     status: statusFilter || undefined,
     purpose: purposeFilter || undefined,
     location_id: locationFilter || undefined,
+    expiring_within: expiringOnly ? 30 : undefined,
+    // Soonest first while filtering by expiry — the whole point of the filter
+    // is what needs attention first.
+    sort_by: expiringOnly ? "end_date" : undefined,
+    sort_order: expiringOnly ? "asc" : undefined,
     limit: viewMode === "kanban" ? 100 : 25,
   });
 
@@ -61,6 +73,7 @@ export default function CasesPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Cases" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -88,6 +101,12 @@ export default function CasesPage() {
               <LayoutGrid className="h-4 w-4" />
             </Button>
           </div>
+          <Button variant="outline" asChild>
+            <Link href="/cases/renewals">
+              <CalendarClock className="mr-2 h-4 w-4" />
+              Renewals
+            </Link>
+          </Button>
           <Button onClick={() => router.push("/cases/new")}>
             <Plus className="mr-2 h-4 w-4" />
             Create Case
@@ -159,6 +178,15 @@ export default function CasesPage() {
               placeholder="All Locations"
             />
           </div>
+          <Button
+            type="button"
+            variant={expiringOnly ? "default" : "outline"}
+            onClick={() => { setExpiringOnly((v) => !v); setPage(1); }}
+            className={expiringOnly ? "bg-amber-600 hover:bg-amber-700 text-white" : ""}
+          >
+            <CalendarClock className="mr-2 h-4 w-4" />
+            Expiring in 30 days
+          </Button>
         </div>
       </div>
 
@@ -185,16 +213,22 @@ export default function CasesPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Aggregator</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Purpose</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
+                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Expires</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Rate</th>
                 <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">Created</th>
               </tr>
             </thead>
             <tbody>
-              {cases.map((c) => (
+              {cases.map((c) => {
+                const expiry = caseExpiry(c);
+                return (
                 <tr
                   key={c.id}
-                  className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
-                  onClick={() => router.push(`/cases/${c.id}`)}
+                  className={`border-b hover:bg-muted/30 cursor-pointer transition-colors ${expiryRowClass(expiry.tone)}`}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/cases/${c.id}`, label: caseDisplayName(c) });
+                    router.push(`/cases/${c.id}`);
+                  }}
                 >
                   <td className="px-4 py-3">
                     <span className="font-mono text-xs">{c.case_number}</span>
@@ -203,22 +237,45 @@ export default function CasesPage() {
                     <Link
                       href={`/cases/${c.id}`}
                       className="font-medium text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pushTrailEntry({ href: `/cases/${c.id}`, label: caseDisplayName(c) });
+                      }}
                     >
-                      {c.client_name}
+                      {c.client_company_name || c.client_name}
                     </Link>
                     {c.client_company_name && (
-                      <p className="text-xs text-muted-foreground">{c.client_company_name}</p>
+                      <p className="text-xs text-muted-foreground">{c.client_name}</p>
                     )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
-                    {c.aggregator ? (c.aggregator as { name: string }).name : "-"}
+                    {c.aggregator
+                      ? (c.aggregator as { name: string; company_name?: string }).company_name ||
+                        (c.aggregator as { name: string }).name
+                      : "-"}
                   </td>
                   <td className="px-4 py-3 hidden md:table-cell">
                     <StatusBadge type="vo_purpose" value={c.purpose} />
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge type="case_status" value={c.status} />
+                    <div className="flex flex-col gap-1">
+                      <StatusBadge type="case_status" value={c.status} />
+                      <CaseLifecycleIcons
+                        proposalStatus={c.agreement?.status}
+                        agreementStatus={c.ll_agreement?.status}
+                        billingStatus={c.billing_statement}
+                      />
+                    </div>
+                  </td>
+                  <td className={`px-4 py-3 hidden lg:table-cell tabular-nums ${expiryTextClass(expiry.tone)}`}>
+                    {c.end_date ? (
+                      <>
+                        {formatDate(c.end_date)}
+                        <span className="block text-xs">{expiry.relative}</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 hidden lg:table-cell">
                     {c.rate ? formatCurrency(c.rate) : "-"}
@@ -227,7 +284,8 @@ export default function CasesPage() {
                     {formatDate(c.created_at)}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

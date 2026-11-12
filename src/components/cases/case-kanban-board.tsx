@@ -19,14 +19,13 @@ interface CaseKanbanBoardProps {
 
 const GROUP_COLORS: Record<string, string> = {
   intake: "border-t-gray-400",
-  processing: "border-t-blue-400",
-  approval: "border-t-purple-400",
+  review_approval: "border-t-purple-400",
   execution: "border-t-orange-400",
   active: "border-t-green-400",
   closed: "border-t-red-400",
 };
 
-const GROUP_ORDER = ["intake", "processing", "approval", "execution", "active", "closed"];
+const GROUP_ORDER = ["intake", "review_approval", "execution", "active", "closed"];
 
 export function CaseKanbanBoard({ cases }: CaseKanbanBoardProps) {
   const router = useRouter();

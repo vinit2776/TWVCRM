@@ -76,8 +76,13 @@ export function AssetEventDialog({ open, onOpenChange, assetId, assetName, asset
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to log event");
 
-      const msg = selectedIssueId && resolveIssue ? "Event logged & issue resolved" : "Event logged";
-      toast.success(msg);
+      if (json.resolve_error) {
+        // The event saved but the ticket did not move — say so, rather than
+        // reporting a resolve that never happened.
+        toast.warning(`Event logged, but the ticket wasn't resolved: ${json.resolve_error}`);
+      } else {
+        toast.success(selectedIssueId && resolveIssue ? "Event logged & issue resolved" : "Event logged");
+      }
       onOpenChange(false);
       reset();
       onCreated?.();

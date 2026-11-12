@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
     .is("voided_at", null);
 
   if (!force && (count ?? 0) > 0) {
-    await pingCronHealth("billing-reminder", "ok", { already_run: true, prepaid: prepaidLabel });
+    await pingCronHealth("cron/billing-reminder", "ok", { already_run: true, prepaid: prepaidLabel });
     return NextResponse.json({ reminded: false, reason: `Already run for ${prepaidLabel} (${count} proformas)` });
   }
 
@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
 
   const emails = (recipients || []).map((r: { email: string }) => r.email).filter(Boolean) as string[];
   if (emails.length === 0) {
-    await pingCronHealth("billing-reminder", "ok", { no_recipients: true });
+    await pingCronHealth("cron/billing-reminder", "ok", { no_recipients: true });
     return NextResponse.json({ reminded: false, reason: "No recipients" });
   }
 
@@ -126,6 +126,6 @@ export async function GET(request: NextRequest) {
     }).catch(console.error);
   }
 
-  await pingCronHealth("billing-reminder", "ok", { reminded: emails.length, prepaid: prepaidLabel });
+  await pingCronHealth("cron/billing-reminder", "ok", { reminded: emails.length, prepaid: prepaidLabel });
   return NextResponse.json({ reminded: emails.length, prepaid: prepaidLabel });
 }

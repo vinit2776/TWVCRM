@@ -6,9 +6,8 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { sendWhatsAppDocument } from "@/lib/whatsapp";
+import { messaging } from "@/lib/whatsapp";
 import { getCachedSettings } from "@/lib/app-settings-cache";
-import { logAudit } from "@/lib/audit";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -19,7 +18,9 @@ import {
   BRAND_DARK,
   COMPANY_NAME,
 } from "@/lib/pdf-utils";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
+import { renewalRecipients, type RenewalRecipient } from "@/lib/renewal-recipients";
+import { completeVoRenewal } from "@/lib/vo-renewal-completion";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,7 +38,19 @@ export interface VoCaseForRenewal {
   tenure_months: number;
   start_date: string;
   end_date: string;
+  /** Agreed escalation applied to the license fee on renewal; 0 renews flat. */
+  renewal_escalation_percentage?: number | null;
   purpose: string;
+  // Routing inputs — see renewalRecipients(). Without these every notice went
+  // to the end client, including on the 51 cases billed to a partner.
+  aggregator_id?: string | null;
+  bill_to?: "aggregator" | "client" | null;
+  aggregator?: {
+    name?: string | null;
+    billing_method?: string | null;
+    primary_email?: string | null;
+    primary_phone?: string | null;
+  } | null;
   renewal_billing_statement_id?: string | null;
   renewal_reminder_count?: number;
   renewal_grace_ends_at?: string | null;
@@ -63,6 +76,8 @@ export function generateRenewalPI(params: {
   periodEnd: string;
   dueDate: string;
   razorpayUrl?: string;
+  /** Fee for the term before GST; defaults to renewalRate(caseData). */
+  subtotal?: number;
 }): Buffer {
   const { caseData, piNumber, periodStart, periodEnd, dueDate, razorpayUrl } = params;
 
@@ -107,13 +122,26 @@ export function generateRenewalPI(params: {
   doc.setTextColor(BRAND_DARK[0], BRAND_DARK[1], BRAND_DARK[2]);
   doc.setFont("helvetica", "normal");
   y += 5;
-  const billTo = [
-    caseData.client_company_name || caseData.client_name,
-    caseData.client_company_name ? caseData.client_name : "",
-    caseData.client_email || "",
-    caseData.client_phone || "",
-    caseData.client_gst_number ? `GSTIN: ${caseData.client_gst_number}` : "",
-  ].filter(Boolean);
+  // Bill To names the party actually being invoiced. When that is an
+  // aggregator the end client is still shown underneath, because an
+  // aggregator holds many cases and the PI is ambiguous without it.
+  const piRouting = renewalRecipients(caseData);
+  const piBillingIsAggregator = piRouting.billing.kind === "aggregator";
+  const billTo = piBillingIsAggregator
+    ? [
+        piRouting.billing.name,
+        piRouting.billing.email || "",
+        piRouting.billing.phone || "",
+        `For: ${caseData.client_company_name || caseData.client_name}`,
+        `Case: ${caseData.case_number}`,
+      ].filter(Boolean)
+    : [
+        caseData.client_company_name || caseData.client_name,
+        caseData.client_company_name ? caseData.client_name : "",
+        caseData.client_email || "",
+        caseData.client_phone || "",
+        caseData.client_gst_number ? `GSTIN: ${caseData.client_gst_number}` : "",
+      ].filter(Boolean);
   billTo.forEach((line) => {
     doc.text(line, marginLeft, y);
     y += 5;
@@ -124,7 +152,9 @@ export function generateRenewalPI(params: {
   const location = caseData.location;
   const locationName = location?.name ?? "The WorkVilla";
   const gstRate = 18;
-  const subtotal = caseData.rate;
+  // Same helper the billing statement uses — the printed PI and the invoice
+  // must never quote different amounts for the same renewal.
+  const subtotal = params.subtotal ?? renewalRate(caseData);
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = gstAmount / 2;
   const sgst = gstAmount / 2;
@@ -196,6 +226,28 @@ export function generateRenewalPI(params: {
 // Create a billing statement for a VO renewal
 // ---------------------------------------------------------------------------
 
+/**
+ * The license fee for the next term.
+ *
+ * Every agreement's renewal clause promised an escalation while
+ * createRenewalBillingStatement billed caseData.rate flat, so each renewal
+ * invoice contradicted the executed contract. The escalation is now an agreed
+ * per-case figure (migration 00527) and this is the single place it is
+ * applied — the renewal notice quotes this same function, so the number in the
+ * email and the number on the invoice cannot drift apart.
+ *
+ * Rounded to whole rupees: a fee of Rs. 18,000 at 5% is Rs. 18,900, not
+ * Rs. 18,900.0000001, and part-rupee line items read as errors on an invoice.
+ */
+export function renewalRate(caseData: {
+  rate: number;
+  renewal_escalation_percentage?: number | null;
+}): number {
+  const escalation = caseData.renewal_escalation_percentage ?? 0;
+  if (!escalation || escalation <= 0) return caseData.rate;
+  return Math.round(caseData.rate * (1 + escalation / 100));
+}
+
 export async function createRenewalBillingStatement(params: {
   adminSupabase: SupabaseClient;
   caseData: VoCaseForRenewal;
@@ -203,10 +255,12 @@ export async function createRenewalBillingStatement(params: {
   periodEnd: string;
   dueDate: string;
   piNumber: string;
+  /** Fee for the term before GST, as offered by Start renewal. Defaults to renewalRate(caseData). */
+  subtotal?: number;
 }): Promise<string> {
   const { adminSupabase, caseData, periodStart, periodEnd, dueDate, piNumber } = params;
 
-  const subtotal = caseData.rate;
+  const subtotal = params.subtotal ?? renewalRate(caseData);
   const gstRate = 18;
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = gstAmount / 2;
@@ -242,7 +296,9 @@ export async function createRenewalBillingStatement(params: {
       finalized_at: new Date().toISOString(),
       line_items: [
         {
-          section: "Virtual Office Renewal",
+          type: "prepaid_rent",
+          label: "Virtual Office Renewal",
+          subtotal,
           items: [
             {
               description: `Virtual Office License Fee — Renewal · ${locationName} · ${formatDate(periodStart)} to ${formatDate(periodEnd)}`,
@@ -270,6 +326,25 @@ export async function createRenewalBillingStatement(params: {
 // Create Razorpay payment link for a renewal
 // ---------------------------------------------------------------------------
 
+// Settings are stored as text, so "false" must not count as enabled.
+function razorpayReady(settings: Record<string, string | null>): boolean {
+  return settings.razorpay_enabled === "true" && !!settings.razorpay_key_id && !!settings.razorpay_key_secret;
+}
+
+/**
+ * Whether renewal payment links can be made at all. Checked before a renewal
+ * bill is raised, so a missing Razorpay setup never leaves a bill behind.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function renewalPaymentLinksAvailable(adminSupabase: any): Promise<boolean> {
+  const settings = await getCachedSettings(adminSupabase, [
+    "razorpay_enabled",
+    "razorpay_key_id",
+    "razorpay_key_secret",
+  ]);
+  return razorpayReady(settings);
+}
+
 export async function createRenewalRazorpayLink(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   adminSupabase: any;
@@ -278,19 +353,25 @@ export async function createRenewalRazorpayLink(params: {
   totalAmount: number;
   dueDate: string;
   piNumber: string;
+  /** Let Razorpay email/SMS the payer itself. Start renewal turns this off
+   *  so the customer hears only through the channels a person ticked. */
+  notifyCustomer?: boolean;
 }): Promise<{ id: string; url: string }> {
-  const { adminSupabase, caseData, statementId, totalAmount, dueDate, piNumber } = params;
+  const { adminSupabase, caseData, statementId, totalAmount, piNumber } = params;
+  const notifyCustomer = params.notifyCustomer ?? true;
 
   const settings = await getCachedSettings(adminSupabase, [
     "razorpay_enabled",
     "razorpay_key_id",
     "razorpay_key_secret",
   ]);
-  if (!settings.razorpay_enabled || !settings.razorpay_key_id || !settings.razorpay_key_secret) {
+  if (!razorpayReady(settings)) {
     throw new Error("Razorpay is not configured");
   }
 
-  const expireBy = Math.floor(new Date(dueDate).getTime() / 1000) + 86400; // due date + 1 day buffer
+  // Max Razorpay validity, deliberately not tied to dueDate (a date-only due
+  // date parses as 00:00 UTC, i.e. already half-way through the day in IST).
+  const expireBy = Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
   const amountPaise = Math.round(totalAmount * 100);
 
   const payload = {
@@ -299,19 +380,24 @@ export async function createRenewalRazorpayLink(params: {
     description: `VO Renewal — ${piNumber} — ${caseData.client_name} — ${COMPANY_NAME}`,
     reference_id: `VO-${caseData.case_number}-${Date.now()}`,
     expire_by: expireBy,
-    notify: { sms: true, email: true },
-    reminder_enable: true,
+    notify: { sms: notifyCustomer, email: notifyCustomer },
+    reminder_enable: notifyCustomer,
     notes: {
       case_id: caseData.id,
       case_number: caseData.case_number,
       statement_id: statementId,
       type: "vo_renewal",
     },
-    customer: {
-      name: caseData.client_company_name || caseData.client_name,
-      email: caseData.client_email || "",
-      contact: caseData.client_phone || "",
-    },
+    customer: (() => {
+      // The payer, not the end client — otherwise a partner settling their
+      // own invoice sees their client's name and contact on the receipt.
+      const payer = renewalRecipients(caseData).billing;
+      return {
+        name: payer.name,
+        email: payer.email || "",
+        contact: payer.phone || "",
+      };
+    })(),
   };
 
   const auth = Buffer.from(
@@ -333,10 +419,19 @@ export async function createRenewalRazorpayLink(params: {
   }
 
   const linkData = await res.json() as Record<string, unknown>;
-  return {
-    id: String(linkData.id),
-    url: String(linkData.short_url),
-  };
+  const link = { id: String(linkData.id), url: String(linkData.short_url) };
+
+  // The webhook finds the statement a payment belongs to by this column.
+  // Renewal links were only ever stored on the case, so a customer paying
+  // one landed as "no matching entity" and nothing renewed.
+  const { error: linkErr } = await adminSupabase
+    .from("billing_statements")
+    .update({ razorpay_payment_link_id: link.id, razorpay_payment_link_url: link.url })
+    .eq("id", statementId);
+  if (linkErr) {
+    throw new Error(`Could not attach the payment link to the renewal bill: ${linkErr.message}`);
+  }
+  return link;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,12 +448,29 @@ export async function sendRenewalEmail(params: {
   totalAmount: number;
   razorpayUrl: string;
   pdfBuffer?: Buffer;
+  /** Who this copy is addressed to. Defaults to the case's own client so
+   *  existing callers keep working; the cron passes the routed party. */
+  recipient?: RenewalRecipient;
+  /** Extra addresses to copy in — used by the manual send. */
+  cc?: string[];
 }): Promise<boolean> {
-  const { caseData, reminderNumber, isGraceNotice, piNumber, periodStart, periodEnd, totalAmount, razorpayUrl, pdfBuffer } = params;
+  const { caseData, reminderNumber, isGraceNotice, piNumber, periodStart, periodEnd, totalAmount, razorpayUrl, pdfBuffer, cc } = params;
 
-  if (!caseData.client_email) return false;
+  const recipient: RenewalRecipient = params.recipient ?? {
+    kind: "client",
+    name: caseData.client_company_name || caseData.client_name,
+    email: caseData.client_email ?? null,
+    phone: caseData.client_phone ?? null,
+  };
 
+  if (!recipient.email) return false;
+
+  // The end client is named throughout even when the aggregator is the one
+  // being asked to pay — an aggregator holds many cases and the notice is
+  // meaningless without saying which client it concerns.
   const clientName = caseData.client_company_name || caseData.client_name;
+  const addressee = recipient.name;
+  const toAggregator = recipient.kind === "aggregator";
   const location = caseData.location;
   const locationName = location?.name ?? "The WorkVilla";
 
@@ -381,7 +493,8 @@ export async function sendRenewalEmail(params: {
         <p style="color:#ccfbf1;margin:4px 0 0;font-size:13px">Virtual Office Agreement Renewal</p>
       </div>
       <div style="padding:24px;background:#fff;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px">
-        <p>Dear ${clientName},</p>
+        <p>Dear ${addressee},</p>
+        ${toAggregator ? `<p>The Virtual Office agreement for your referred client <strong>${clientName}</strong> is due for renewal.</p>` : ""}
         ${urgencyLine}
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
           <tr style="background:#f0fdf4"><td style="padding:8px 12px;border:1px solid #d1fae5"><strong>PI Number</strong></td><td style="padding:8px 12px;border:1px solid #d1fae5">${piNumber}</td></tr>
@@ -409,7 +522,8 @@ export async function sendRenewalEmail(params: {
     await resend.emails.send({
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
-      to: [caseData.client_email],
+      to: [recipient.email],
+      cc: cc && cc.length ? cc : undefined,
       bcc: ["billing@theworkvilla.com"],
       subject,
       html,
@@ -449,9 +563,12 @@ export async function sendRenewalWhatsApp(params: {
   razorpayUrl: string;
   pdfBuffer?: Buffer;
   supabase: SupabaseClient;
+  /** Who to message. Defaults to the case's own client. */
+  recipient?: RenewalRecipient;
 }): Promise<boolean> {
   const { caseData, piNumber, totalAmount, razorpayUrl, pdfBuffer, supabase } = params;
-  if (!caseData.client_phone) return false;
+  const phone = params.recipient ? params.recipient.phone : caseData.client_phone;
+  if (!phone) return false;
 
   if (!pdfBuffer) {
     console.warn(`[vo-renewal] No PI PDF for ${piNumber} — WhatsApp renewal skipped.`);
@@ -476,20 +593,21 @@ export async function sendRenewalWhatsApp(params: {
       return false;
     }
 
-    // Called directly rather than via messaging.invoiceDocument() so the row is
-    // tagged entity_type "case" — that wrapper hardcodes "proposal", which would
-    // break the delivery webhook's lead lookup for a VO case.
-    const result = await sendWhatsAppDocument({
-      to: caseData.client_phone,
-      template: "gst_invoice_doc",
-      documentUrl: pdfUrl,
-      documentFilename: `${piNumber.replace(/\//g, "-")}.pdf`,
+    // Back on messaging.invoiceDocument() now that it takes the entity type
+    // explicitly. It previously hardcoded "proposal", which would have broken
+    // the delivery webhook's lead lookup for a VO case, so this call was
+    // hand-rolled to get the tag right.
+    const result = await messaging.invoiceDocument(
+      phone,
+      clientName,
+      piNumber,
       // Template renders "Rs.{{3}}", so pass the bare number — the old code
       // passed "Rs. 12,000" here, which would have rendered "Rs.Rs. 12,000".
-      params: [clientName, piNumber, totalAmount.toLocaleString("en-IN"), razorpayUrl],
-      entityType: "case",
-      entityId: caseData.id,
-    });
+      totalAmount.toLocaleString("en-IN"),
+      razorpayUrl,
+      pdfUrl,
+      { type: "case", id: caseData.id },
+    );
     return result.success;
   } catch (err) {
     console.error("[vo-renewal] WhatsApp send failed:", err);
@@ -529,68 +647,27 @@ export async function logRenewalReminder(params: {
 // Handle a successful renewal payment (called from webhook)
 // ---------------------------------------------------------------------------
 
+/**
+ * Stamps the Razorpay reference on the statement, then hands off to the same
+ * completion every other payment route uses (completeVoRenewal), so a link
+ * payment and a recorded bank transfer renew a case identically and only once.
+ */
 export async function handleRenewalPayment(params: {
   adminSupabase: SupabaseClient;
-  caseId: string;
   statementId: string;
-  amountPaid: number;
   razorpayPaymentId: string;
   razorpayLinkId: string;
 }): Promise<void> {
-  const { adminSupabase, caseId, statementId, amountPaid, razorpayPaymentId, razorpayLinkId } = params;
+  const { adminSupabase, statementId, razorpayPaymentId, razorpayLinkId } = params;
 
-  // Fetch current case to know tenure_months and end_date
-  const { data: caseData } = await adminSupabase
-    .from("cases")
-    .select("end_date, tenure_months, start_date, renewal_reminder_count")
-    .eq("id", caseId)
-    .single();
-
-  if (!caseData) throw new Error("Case not found for renewal payment");
-
-  // Mark billing statement paid
   await adminSupabase
     .from("billing_statements")
     .update({
-      payment_status: "paid",
       payment_received_at: new Date().toISOString(),
       payment_reference: razorpayPaymentId,
       razorpay_payment_link_id: razorpayLinkId,
     })
     .eq("id", statementId);
 
-  // Advance the end_date by tenure_months
-  const currentEnd = new Date(caseData.end_date);
-  const tenureMonths = caseData.tenure_months || 12;
-  const newStart = new Date(currentEnd);
-  newStart.setDate(newStart.getDate() + 1);
-  const newEnd = new Date(currentEnd);
-  newEnd.setMonth(newEnd.getMonth() + tenureMonths);
-
-  // Update case: back to active for the new term, clear renewal tracking
-  await adminSupabase
-    .from("cases")
-    .update({
-      status: "active",
-      start_date: newStart.toISOString().split("T")[0],
-      end_date: newEnd.toISOString().split("T")[0],
-      renewal_billing_statement_id: null,
-      renewal_razorpay_link_id: null,
-      renewal_razorpay_link_url: null,
-      renewal_grace_ends_at: null,
-      renewal_reminder_count: 0,
-    })
-    .eq("id", caseId);
-
-  logAudit(adminSupabase, {
-    entityType: "case",
-    entityId: caseId,
-    action: "update",
-    performedBy: "system",
-    changes: {
-      action: { old: null, new: "renewal_payment_received" },
-      amount: { old: null, new: amountPaid },
-      new_end_date: { old: caseData.end_date, new: newEnd.toISOString().split("T")[0] },
-    },
-  });
+  await completeVoRenewal(adminSupabase, { statementId, source: "razorpay_link" });
 }

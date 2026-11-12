@@ -66,6 +66,7 @@ All pages are `"use client"` components that fetch from the API routes below.
 - `POST /api/facility/issues/[id]/assign` — `src/app/api/facility/issues/[id]/assign/route.ts`
 - `POST /api/facility/issues/[id]/comment` — `src/app/api/facility/issues/[id]/comment/route.ts`
 - `GET/POST/DELETE /api/facility/issues/[id]/collaborators` — `src/app/api/facility/issues/[id]/collaborators/route.ts`
+- `GET/POST /api/facility/issues/[id]/time-logs` — `src/app/api/facility/issues/[id]/time-logs/route.ts` (manual worklog; summed into `/facility/team-kpi`'s "Hours Logged" column)
 - `POST/DELETE /api/facility/issues/[id]/attachments` — `src/app/api/facility/issues/[id]/attachments/route.ts`
 - `GET/POST /api/facility/assets` — `src/app/api/facility/assets/route.ts` (supports `?search=` for asset search)
 - `GET/PUT/DELETE /api/facility/assets/[id]` — `src/app/api/facility/assets/[id]/route.ts`
@@ -178,6 +179,28 @@ All DB enums and tables are defined in migration `00116_facility_issues.sql`.
 
 **Soft delete:** DELETE API route sets `status = 'retired'` rather than deleting the row.
 
+### `facility_asset_credentials`
+
+Login credentials for network-capable assets (modems, WiFi routers, network printers) — the admin URL/port, username, and password used to log into the device's own management interface. One row per asset (migration 00569).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `asset_id` | UUID FK `facility_assets(id) ON DELETE CASCADE` | **UNIQUE** — one credential set per asset |
+| `admin_url` | TEXT | nullable — e.g. `https://192.168.1.1:8080` |
+| `username` | TEXT | nullable |
+| `password_encrypted` | TEXT NOT NULL | AES-256-GCM ciphertext, base64 (`src/lib/crypto-secrets.ts`) — **never plaintext** |
+| `updated_by` | UUID FK `users(id)` | nullable |
+| `created_at` / `updated_at` | TIMESTAMPTZ | |
+
+**RLS:** SELECT — any `authenticated` (the encrypted blob is useless without the server-only `ASSET_CREDENTIALS_ENCRYPTION_KEY`, so the real access boundary is the reveal endpoint's role check below, not this table's RLS). ALL (write) — `admin`, `it_manager`, `it_technician` only — narrower than `facility_assets` itself, since most asset-editing roles (`fms`, `floor_manager`, `office_admin`) never need the device's own password.
+
+**Reveal flow:** the password is never returned by the main GET (only `admin_url`/`username`/`updated_at`). `POST /api/facility/assets/[id]/credentials/reveal` decrypts and returns it on an explicit click, gated to the same three roles, and every call — success or failure — is logged to `audit_trail` (`entity_type: "facility_asset_credentials"`, `action: "view"`), mirroring the existing `/api/unifi/vouchers/reveal` pattern.
+
+**CSV export:** `GET /api/facility/assets?format=csv` deliberately never joins this table — see the comment at the top of the CSV block in `src/app/api/facility/assets/route.ts`.
+
+**UI:** `src/components/facility/asset-credentials-card.tsx` — renders on the asset detail page's Details tab for any viewer once credentials exist; add/edit/reveal controls only render for the three roles above.
+
 ### `facility_asset_photos`
 
 Multiple photos per asset. Added in migration 00301. Separate from `facility_asset_events.photo_urls` — these are standalone asset photos not tied to a specific event.
@@ -287,7 +310,8 @@ Per-category checklist items that are copied into service events. Optionally sco
 | `resolved_at` | TIMESTAMPTZ | nullable |
 | `closed_at` | TIMESTAMPTZ | nullable |
 | `sla_target_at` | TIMESTAMPTZ | deadline computed from priority + category SLA hours at report time |
-| `sla_breached` | BOOLEAN DEFAULT false | set to true at resolve time if resolved_at > sla_target_at |
+| `sla_breached` | BOOLEAN DEFAULT false | set to true at resolve time if resolved_at > sla_target_at; also set by the `facility-sla-check` cron for still-open issues past `sla_target_at` |
+| `sla_breach_last_notified_at` | TIMESTAMPTZ | nullable — last time `facility-sla-check` included this issue in an SLA-breach alert; throttles the daily re-nag on old breaches (migration 00544) |
 | `resolution_root_cause` | `facility_root_cause` | nullable |
 | `resolution_notes` | TEXT | nullable |
 | `resolution_time_minutes` | INTEGER | `acknowledged_at` → `resolved_at` in minutes |
@@ -341,9 +365,31 @@ Activity timeline per issue. Append-only.
 | `payload` | JSONB DEFAULT `{}` | structured details |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
 
-**Valid `event_type` values:** `created`, `status_changed`, `assigned`, `comment`, `photo_added`, `resolved`, `reopened`, `sla_breached`, `satisfaction`, `priority_changed`.
+**Valid `event_type` values:** `created`, `status_changed`, `assigned`, `comment`, `photo_added`, `resolved`, `reopened`, `sla_breached`, `satisfaction`, `priority_changed`, `updated` (generic field edit — title/description; `payload.field` says which).
 
 **RLS:** SELECT — any `authenticated`. INSERT — any `authenticated`.
+
+### `facility_issue_time_logs`
+
+Manual worklog per issue (migration 00552). Append-only — no update/delete, same as `facility_issue_events` — so a report can sum entries over an arbitrary date range per user.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `issue_id` | UUID FK `facility_issues(id) ON DELETE CASCADE` | |
+| `logged_by` | UUID FK `users(id)` NOT NULL | who logged the entry |
+| `minutes` | INTEGER NOT NULL, CHECK > 0 | |
+| `note` | TEXT | nullable, free text |
+| `logged_at` | TIMESTAMPTZ DEFAULT NOW() | when the work happened — defaults to now, not backdateable via the current UI |
+| `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
+
+**RLS:** SELECT — any `authenticated`. INSERT — any `authenticated` (role gating happens in the API route, same pattern as `facility_issue_events`).
+
+`GET/POST /api/facility/issues/[id]/time-logs` — GET returns `{ data: entries[], total_minutes }` newest-first; POST requires `FACILITY_ROLES.workOnIssues` (same gate as `PUT /api/facility/issues/[id]`, not narrowed to the current assignee — a past assignee or collaborator can log time for work they already did) and body `{ minutes: number, note?: string, logged_at?: string }`.
+
+`parseDuration()` / `formatDuration()` in `src/lib/facility-ui.ts` are the input parser and display formatter — `parseDuration` accepts free text ("1h 30m", "45m", "3d", "1.5h", "0:30" as H:MM, or a bare number as minutes) and returns whole minutes or `null` if unparseable; the `/facility/issues/[id]` page's "Log time" dialog shows an inline error rather than submitting when parsing fails.
+
+Surfaced in two places: the issue detail page's "Time spent" section (running total + entry list, gated behind the same `canAct` check as the page's other mutating UI), and as an "Hours Logged" column on `/facility/team-kpi` (`GET /api/facility/team-kpi`), summed by `logged_at` within the report's date range — independent of which date range the underlying tickets were created in, so hours logged this week count even against a ticket opened last month.
 
 ### `facility_issue_collaborators`
 
@@ -514,7 +560,7 @@ Defined in `src/lib/facility.ts`:
 ```typescript
 FACILITY_ROLES = {
   manage: ["admin", "it_manager", "it_team"],
-  workOnIssues: ["admin", "manager", "it_manager", "it_technician", "it_team", "fms", "office_admin", "floor_manager"],
+  workOnIssues: ["admin", "manager", "it_manager", "it_technician", "it_team", "fms", "office_admin", "floor_manager", "coordinator"],
   // Anyone authenticated can report (no role check on POST /api/facility/issues)
 }
 ```
@@ -548,8 +594,13 @@ For each event, `notifyIssueAssignee(issue, event)` in `src/lib/facility-notific
 1. **Primary assignee** — `issue.assigned_to` (looked up from `users` table)
 2. **Backup assignee** — the `backup_assignee_id` of the issue's category (if set and active)
 3. **Collaborators** — all rows in `facility_issue_collaborators` for the issue
+4. **The ticket's internal creator** (`reported_by`) — push + in-app only, and only when a `status_changed` event's `to` is `resolved`. Not added for any other event type or status, to avoid paging the creator for routine progress updates — mirrors the external `reporter_email` completion email below, just for internal users instead of walk-in/WhatsApp reporters. Requires the caller to pass `reportedByUserId` on the event (see `PATCH /api/facility/issues/[id]/status`).
 
 If the final recipient list is empty (unassigned, no backup, no collaborators), all admins are notified as a fallback.
+
+**Two separate "reporter" notification paths, don't conflate them:** `reporter_email` (external, e.g. WhatsApp/walk-in) gets a dedicated resolved-only *email* built inline in the `status_changed` switch case, independent of the generic recipient list above. `reported_by` (internal user) gets folded into the generic recipient list instead, so they get the same push+in-app the assignee gets — no separate email. A ticket created directly in the app (not via the public report form) has `reported_by` set but `reporter_email` null, so only the second path applies to it.
+
+**Known gap:** `POST /api/facility/assets/[id]/events` (`resolve_issue: true`) is a second way to resolve an issue — via logging a maintenance event on its linked asset — and does not call `notifyIssueAssignee` at all. Nobody (not even the assignee) is notified when an issue is resolved through that path, and it also skips `resolution_time_minutes`, `sla_breached`, `kpi_points`, and `satisfaction_requested_at`. Not fixed here — flagged as a follow-up.
 
 ### Channels
 
@@ -571,13 +622,13 @@ It notifies all active admins so they can update the category routing.
 ### SLA Breach Digest (Cron)
 
 `GET /api/cron/facility-sla-check` runs every 6h (UTC: `0 */6 * * *`). It:
-1. Queries all open issues with `sla_breached = false AND sla_target_at < now()`
-2. Bulk-sets `sla_breached = true` on matched issues
+1. Queries all open issues with `sla_breached = false AND sla_target_at < now()` (newly breached) **and** open issues with `sla_breached = true` whose `sla_breach_last_notified_at` is null or more than 24h old (still-open re-nags)
+2. Bulk-sets `sla_breached = true` on the newly-breached set, and stamps `sla_breach_last_notified_at = now()` on every issue in either set
 3. Groups matched issues by assignee
 4. Sends **one digest email + push per recipient** (not per issue) to avoid spam
 5. Unassigned breaches are routed to all active admins
 
-Protected by `Authorization: Bearer ${CRON_SECRET}`.
+An issue that breaches and is never resolved keeps appearing in this alert once a day (not once ever) until it's resolved or reopened — `sla_breach_last_notified_at` is the throttle, `sla_breached` alone is not. Protected by `Authorization: Bearer ${CRON_SECRET}`.
 
 ---
 
@@ -591,7 +642,7 @@ Query params:
 - `priority` — single value
 - `location_id`
 - `assigned_to` — `"me"` (resolves to current user's DB id), `"unassigned"`, or a UUID
-- `reported_by` — UUID
+- `reported_by` — `"me"` (resolves to current user's DB id, same shorthand as `assigned_to`) or a UUID. `/facility/issues`'s "Created by me" quick filter uses this — the assignee-grouped view then shows every ticket you created, bucketed by whoever it's assigned to.
 - `category_id`
 - `sla_breached` — `"true"`
 - `date_from`, `date_to` — filter by `created_at`
@@ -622,6 +673,8 @@ Body: `{ default_assignee_id: string | null, backup_assignee_id: string | null }
 
 Updates only the assignee routing fields on a category. Validated with Zod (UUID format or null). Logs an audit trail. Used by `/facility/settings` to save routing configuration. Requires `manage` role (`admin`, `it_manager`).
 
+`/facility/settings` also uses `PUT /api/facility/categories/[id]` from the same row to rename a category and to toggle `is_active` (Deactivate/Reactivate button) — deactivating is a soft-delete: it hides the category from pickers for new assets/issues (`GET` filters `is_active = true` by default) without touching existing rows that already reference it, since `DELETE` on this endpoint is itself just `is_active = false` under the hood.
+
 ### `GET /api/facility/assets/[id]/cost-summary`
 
 Returns monthly cost-of-ownership for an asset from approved vendor bills. Follows the chain: `facility_issues → purchase_requests (issue_id) → purchase_orders (pr_id) → vendor_bills (po_id)`. Only bills with `approval_status = 'approved'` are included. Costs aggregated by `invoice_date` month.
@@ -631,6 +684,10 @@ Response: `{ data: [{ month: "2025-03", cost: 12500 }, ...] }` sorted ascending 
 ### `PUT /api/facility/issues/[id]`
 
 Editable fields: `title`, `description`, `priority`, `category_id`, `location_id`, `floor_id`, `space_unit_id`, `asset_id`, `reporter_name`, `reporter_email`, `reporter_phone`, `parts_cost`, `parts_notes`, `resolution_notes`, `resolution_root_cause`.
+
+`title` is rejected with 400 if empty/whitespace-only after trim.
+
+Title and description changes log an `updated` event to `facility_issue_events` (not just the admin-only `logAudit` trail) so the change is visible on the issue's own timeline — same reasoning as `priority_changed` below. `/facility/issues/[id]` exposes both as click-to-edit inline fields (title: single-line, saves on blur/Enter/click-away, Esc to cancel; description: textarea with explicit Save/Cancel buttons), gated behind the same `canAct` check used for the page's other mutating actions (ticket owner or override-tier role — `admin`/`manager`/`office_admin`).
 
 Note: `location_id` is editable on issues but not on assets.
 
@@ -659,13 +716,14 @@ Recurring issues: detected when the same asset (or same location+category combin
 
 Query params: `date_from`, `date_to`, `scope`, `format=csv`.
 
-Only includes users with roles `it_technician`, `it_manager`, `it_team` and `is_active = true`.
+Includes any active user who was an assignee in range, or who logged time in range — not restricted to a fixed IT role list (assignable roles were generalized beyond IT; a role-filtered pre-fetch of all active users doesn't scale once "assignable" isn't a small fixed set).
 
 KPI definitions:
 - **avg_ack_minutes** = mean of (`acknowledged_at` - `reported_at`) per assigned issue
 - **avg_resolution_minutes** = mean of (`resolved_at` - `acknowledged_at`) for resolved issues
 - **sla_compliance_pct** = resolved issues with `sla_target_at` that were NOT `sla_breached` / total eligible resolved × 100 (issues without `sla_target_at` excluded from denominator)
 - **reopen_rate_pct** = issues where `reopen_count > 0` / total assigned × 100
+- **minutes_logged** = sum of `facility_issue_time_logs.minutes` where `logged_by` = this user and `logged_at` falls in `[date_from, date_to]` — filtered by when the work was logged, independent of when the underlying ticket was created
 - **avg_satisfaction** = mean `satisfaction_rating` of resolved issues (null if none)
 
 SLA compliance thresholds in UI: ≥95% → green, 80–94% → amber, <80% → red.
@@ -683,6 +741,14 @@ Auto-reopens the issue if `rating <= 2` and `status === "resolved"`.
 ### `GET /api/facility/assignees`
 
 Returns active users with roles `fms`, `admin`, `floor_manager` and `is_active = true`. These are the users eligible to be assigned to facility issues or set as `default_assignee_id` / `backup_assignee_id` on a category. Used by the issue assign dialog and the category routing settings. No longer hardcodes IT email addresses.
+
+### `GET/PUT/DELETE /api/facility/assets/[id]/credentials`
+
+See `facility_asset_credentials` above. GET returns non-secret fields only (`admin_url`, `username`, `updated_at`) to any authenticated user. PUT (upsert) and DELETE are gated to `admin`/`it_manager`/`it_technician` (`FACILITY_ROLES.credentials`); PUT's `password` field is optional on an update — omit it to keep the existing encrypted value.
+
+### `POST /api/facility/assets/[id]/credentials/reveal`
+
+Decrypts and returns `{ password }` for one asset. Gated to `FACILITY_ROLES.credentials`. Every call is audit-logged (`action: "view"`), win or lose the lookup.
 
 ---
 
@@ -762,6 +828,14 @@ The UI's `nextStatusOptions()` is intentionally narrower than the server's `ALLO
 
 Pass `{ "assignee_id": null }` to unassign. Omitting `assignee_id` also unassigns (it defaults to `body.assignee_id ?? null`).
 
+### Who Can Assign a Ticket to a Third Party
+
+Three paths on `POST /api/facility/issues/[id]/assign`, each with a different bar:
+1. **Claim** (self, no current owner) and **3. Take-over** (self, ticket already owned by someone else) — any authenticated user, no role check.
+2. **Assign-to-other** (a different `assignee_id`, or unassigning someone else's ticket) — restricted to override tier (`admin`, `manager`, `office_admin`) **or** the ticket's own reporter (`reported_by === dbUser.id`). Everyone else gets 403 `"Only managers, admins, or this ticket's reporter can assign it to others"`.
+
+The reporter exception exists so a ticket's creator retains control of who works it even after handing ownership to themselves via take-over — otherwise self-taking-over your own ticket would permanently strand it with you, since a non-override-tier owner has no other path to move it to a third party. The `/facility/issues/[id]` page's Reassign button/menu item mirrors this exactly via `canReassign = isOverrideTier || isReporter` — don't gate it on `isOverrideTier` alone, or the reporter exception silently breaks in the UI while the API still allows it.
+
 ### Reporter vs Assignee
 
 Two different user concepts on an issue:
@@ -774,7 +848,9 @@ Both can be populated simultaneously. The satisfaction survey is sent to `report
 
 ## Environment / Config Dependencies
 
-No module-specific env vars or feature flags beyond the standard app ones (`NEXT_PUBLIC_APP_URL` is used to build issue links in notification emails in `src/lib/facility-notifications.ts`).
+`ASSET_CREDENTIALS_ENCRYPTION_KEY` — required for `facility_asset_credentials` (asset admin login storage). A 64-character hex string; generate with `openssl rand -hex 32`. Without it, `src/lib/crypto-secrets.ts` throws on the first attempt to add or reveal an asset's stored password (everything else in the module is unaffected).
+
+Otherwise, no module-specific env vars or feature flags beyond the standard app ones (`NEXT_PUBLIC_APP_URL` is used to build issue links in notification emails in `src/lib/facility-notifications.ts`).
 
 There are no hardcoded IT email addresses in this module. Assignee routing is fully database-driven via `facility_asset_categories.default_assignee_id` and `backup_assignee_id`.
 
@@ -1106,10 +1182,22 @@ All seven scopes now have seeded categories with scope-specific SLA defaults:
 | `00300_facility_assets_rls_floor_manager.sql` | Extend `facility_assets` RLS write policy to include `floor_manager` and `office_admin` roles |
 | `00301_facility_asset_photos.sql` | Add `facility_asset_photos` table — multiple photos per asset stored in `facility-asset-photos` bucket (id, asset_id, photo_url, caption, uploaded_by, created_at) |
 | `00305_facility_issues_claim_model.sql` | Add claim model to `facility_issues`: `claimed_by uuid REFERENCES users(id)`, `claimed_at timestamptz`; introduces `claimed` intermediate status for floor manager pre-assignment |
+| `00569_facility_asset_credentials.sql` | Add `facility_asset_credentials` table — encrypted admin login (URL, username, password) per network-capable asset |
+
+(Note: this reference table has gaps between 00305 and 00569 from migrations landed without a doc update — not re-backfilled here.)
 
 ---
 
 ## Changelog
+
+### 2026-09-26
+
+**Asset Login Credentials (migration 00569)**
+- New `facility_asset_credentials` table: one row per asset, storing `admin_url`, `username`, and an AES-256-GCM-encrypted `password_encrypted` (`src/lib/crypto-secrets.ts`, key from `ASSET_CREDENTIALS_ENCRYPTION_KEY`).
+- New `FACILITY_ROLES.credentials` tier (`admin`, `it_manager`, `it_technician`) — narrower than general asset write access.
+- API: `GET/PUT/DELETE /api/facility/assets/[id]/credentials` (GET never returns the password) and `POST /api/facility/assets/[id]/credentials/reveal` (decrypts on demand, audit-logged every call — mirrors `/api/unifi/vouchers/reveal`).
+- UI: `asset-credentials-card.tsx` on the asset detail page — masked by default, reveal/edit gated to the roles above.
+- CSV export (`GET /api/facility/assets?format=csv`) intentionally never joins this table.
 
 ### 2026-06-28
 

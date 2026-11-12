@@ -1,6 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
+import { updateProposalSchema } from "@/lib/validations";
+import { PROPOSAL_EDITABLE_STATUSES } from "@/lib/constants";
+import { validateCommitmentTerms } from "@/lib/proposal-terms";
+
+const CONTENT_FIELDS = [
+  "items",
+  "tax_percentage",
+  "discount_percentage",
+  "title",
+  "description",
+  "terms_and_conditions",
+  "notes",
+  "valid_until",
+  "service_quotas",
+  "complimentary_items",
+  "security_deposit_months",
+  "security_deposit_amount",
+  "tenure_months",
+  "lock_in_months",
+  "notice_period_months",
+] as const;
 
 export async function GET(
   _request: NextRequest,
@@ -13,14 +34,38 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("proposals")
-    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, location_id, entity_type, billing_emails), location:locations!proposals_location_id_fkey(id, name, code, proposal_amenity_icons)")
+    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, location_id, entity_type, billing_emails), location:locations!proposals_location_id_fkey(id, name, code, proposal_amenity_icons), deposit_payment_recorded_by_user:users!proposals_deposit_payment_recorded_by_fkey(id, full_name), deposit_waiver_verified_by_user:users!proposals_deposit_waiver_verified_by_fkey(id, full_name)")
     .eq("id", id)
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
 
-  return NextResponse.json({ data });
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "proposal", entityId: id, performedBy: dbUser.id });
+  }
+
+  // The first-month proforma, so the page can offer Report paid against it to
+  // people who can't record. Id and amount only; the proposal itself was
+  // already readable by this user.
+  const { data: piStatement } = await createAdminClient()
+    .from("billing_statements")
+    .select("id, total_amount")
+    .eq("proposal_id", id)
+    .eq("created_via", "proposal_pi")
+    .neq("status", "voided")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return NextResponse.json({
+    data: {
+      ...data,
+      pi_statement_id: piStatement?.id ?? null,
+      pi_statement_total: piStatement ? Number(piStatement.total_amount) : null,
+    },
+  });
 }
 
 export async function PATCH(
@@ -33,7 +78,17 @@ export async function PATCH(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json();
+
+  const { data: oldProposal } = await supabase.from("proposals").select("*").eq("id", id).single();
+  if (!oldProposal) return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
+
   const allowedFields: Record<string, unknown> = {};
+
+  // `superseded` is only ever set by POST /api/proposals/[id]/revise, which also
+  // cancels the payment links. Setting or leaving it here would skip that.
+  if (body.status === "superseded" || oldProposal.status === "superseded") {
+    return NextResponse.json({ error: "A superseded proposal can't be changed." }, { status: 400 });
+  }
 
   if (body.status) allowedFields.status = body.status;
   if (body.location_id !== undefined) allowedFields.location_id = body.location_id || null;
@@ -49,11 +104,75 @@ export async function PATCH(
   if (body.deposit_razorpay_link_url !== undefined) allowedFields.deposit_razorpay_link_url = body.deposit_razorpay_link_url;
   if (body.occupation_start_date !== undefined) allowedFields.occupation_start_date = body.occupation_start_date;
 
+  const contentFieldsInBody = CONTENT_FIELDS.filter((f) => body[f] !== undefined);
+  if (contentFieldsInBody.length > 0) {
+    if (!PROPOSAL_EDITABLE_STATUSES.includes(oldProposal.status)) {
+      return NextResponse.json(
+        {
+          error: ["sent", "viewed"].includes(oldProposal.status)
+            ? "This proposal has been sent, so its terms are locked. Use Revise proposal to create a new version."
+            : `Only draft or rejected proposals can be edited. This proposal is "${oldProposal.status}".`,
+        },
+        { status: 400 }
+      );
+    }
+
+    const contentBody: Record<string, unknown> = {};
+    for (const f of contentFieldsInBody) contentBody[f] = body[f];
+    const result = updateProposalSchema.safeParse(contentBody);
+    if (!result.success) {
+      const fieldErrors = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+      return NextResponse.json({ error: `Validation failed: ${fieldErrors}`, details: result.error.issues }, { status: 400 });
+    }
+
+    // service_quotas lives in proposal_service_quotas, not a proposals column
+    // (same split POST /api/proposals makes) — pulled out and persisted below.
+    // Commitment terms are validated against the merged result, not the partial
+    // body. Any content edit must leave the proposal with a complete, consistent
+    // set — this is how a legacy proposal (created before these fields existed)
+    // gets them the next time it's edited, before it can be re-sent.
+    const commitmentError = validateCommitmentTerms({
+      tenure_months: result.data.tenure_months ?? oldProposal.tenure_months,
+      lock_in_months: result.data.lock_in_months ?? oldProposal.lock_in_months,
+      notice_period_months: result.data.notice_period_months ?? oldProposal.notice_period_months,
+    });
+    if (commitmentError) {
+      return NextResponse.json({ error: commitmentError }, { status: 400 });
+    }
+
+    const { service_quotas, ...contentUpdates } = result.data;
+    Object.assign(allowedFields, contentUpdates);
+
+    // Pricing is derived server-side, never trusted from the client — same
+    // formula as POST /api/proposals so create and edit stay in sync.
+    if ("items" in result.data || "tax_percentage" in result.data || "discount_percentage" in result.data) {
+      const items = (result.data.items ?? oldProposal.items) as { total: number }[];
+      const taxPercentage = result.data.tax_percentage ?? oldProposal.tax_percentage;
+      const discountPercentage = result.data.discount_percentage ?? oldProposal.discount_percentage;
+      const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+      const taxAmount = subtotal * (taxPercentage / 100);
+      const discountAmount = subtotal * (discountPercentage / 100);
+      allowedFields.subtotal = subtotal;
+      allowedFields.total_amount = subtotal + taxAmount - discountAmount;
+    }
+
+    if (service_quotas) {
+      await supabase.from("proposal_service_quotas").delete().eq("proposal_id", id);
+      if (service_quotas.length > 0) {
+        const quotaRows = service_quotas.map((q) => ({
+          proposal_id: id,
+          service_id: q.service_id,
+          monthly_quota: q.monthly_quota,
+          overage_rate: q.overage_rate,
+        }));
+        await supabase.from("proposal_service_quotas").insert(quotaRows);
+      }
+    }
+  }
+
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
   }
-
-  const { data: oldProposal } = await supabase.from("proposals").select("*").eq("id", id).single();
 
   const { data, error } = await supabase
     .from("proposals")

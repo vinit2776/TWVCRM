@@ -21,6 +21,10 @@ import { RecentLeadsWidget } from "@/components/dashboard/widgets/recent-leads-w
 import { RenewalPipelineWidget } from "@/components/dashboard/widgets/renewal-pipeline-widget";
 import { CashAgingWidget } from "@/components/dashboard/widgets/cash-aging-widget";
 import { RevenuePulseWidget } from "@/components/dashboard/widgets/revenue-pulse-widget";
+import { SalesWidget } from "@/components/dashboard/widgets/sales-widget";
+import { ProcurementPoWidget } from "@/components/dashboard/widgets/procurement-po-widget";
+import { FacilityWidget } from "@/components/dashboard/widgets/facility-widget";
+import { MeterTelemetryWidget } from "@/components/dashboard/widgets/meter-telemetry-widget";
 import { OccupancyWidget } from "@/components/dashboard/widgets/occupancy-widget";
 import { SlaRiskWidget } from "@/components/dashboard/widgets/sla-risk-widget";
 import { MemberHealthWidget } from "@/components/dashboard/widgets/member-health-widget";
@@ -30,12 +34,16 @@ import { SourceRoiWidget } from "@/components/dashboard/widgets/source-roi-widge
 import { AggregatorPerformanceWidget } from "@/components/dashboard/widgets/aggregator-performance-widget";
 import { ProcurementSpendWidget } from "@/components/dashboard/widgets/procurement-spend-widget";
 import { QuotaOveruseWidget } from "@/components/dashboard/widgets/quota-overuse-widget";
+import { PendingOvertimeChargesWidget } from "@/components/dashboard/widgets/pending-overtime-charges-widget";
 import { MtdBookingsWidget } from "@/components/dashboard/widgets/mtd-bookings-widget";
 import { PendingActionsWidget } from "@/components/dashboard/widgets/pending-actions-widget";
+import { NextStepsWidget } from "@/components/dashboard/widgets/next-steps-widget";
 import { RentRevenueWidget } from "@/components/dashboard/widgets/rent-revenue-widget";
 import { NetworkWidget } from "@/components/network/network-widget";
 import { WeekInReviewWidget } from "@/components/dashboard/widgets/week-in-review-widget";
 import { QuickChargeWidget } from "@/components/dashboard/widgets/quick-charge-widget";
+import { AccountsOverviewWidget } from "@/components/dashboard/widgets/accounts-overview-widget";
+import { AccountsWorkQueueWidget } from "@/components/dashboard/widgets/accounts-work-queue-widget";
 
 import Link from "next/link";
 import { Zap } from "lucide-react";
@@ -107,7 +115,7 @@ function LiveEnquiriesWidget() {
 
         <div className="space-y-2">
           {items.slice(0, 6).map((item) => (
-            <EnquiryQueueRow key={item.leadId} item={item} />
+            <EnquiryQueueRow key={item.enquiryId} item={item} />
           ))}
           {items.length > 6 && (
             <p className="text-xs text-emerald-700 text-center pt-1">
@@ -179,6 +187,8 @@ export default function DashboardPage() {
     switch (id) {
       case "pending_actions":
         return <PendingActionsWidget key="pending_actions" />;
+      case "next_steps":
+        return <NextStepsWidget key="next_steps" />;
       case "live_enquiries":
         return <LiveEnquiriesWidget key="live_enquiries" />;
       case "kpi_stats":
@@ -205,6 +215,14 @@ export default function DashboardPage() {
         return <RenewalPipelineWidget key="renewal_pipeline" locationFilter={locationFilter} />;
       case "cash_aging":
         return <CashAgingWidget key="cash_aging" />;
+      case "sales":
+        return <SalesWidget key="sales" locationFilter={locationFilter} />;
+      case "procurement_po":
+        return <ProcurementPoWidget key="procurement_po" locationFilter={locationFilter} />;
+      case "meter_telemetry":
+        return <MeterTelemetryWidget key="meter_telemetry" locationFilter={locationFilter} />;
+      case "facility":
+        return <FacilityWidget key="facility" locationFilter={locationFilter} />;
       case "revenue_pulse":
         return <RevenuePulseWidget key="revenue_pulse" locationFilter={locationFilter} />;
       case "occupancy":
@@ -225,6 +243,8 @@ export default function DashboardPage() {
         return <ProcurementSpendWidget key="procurement_spend" locationFilter={locationFilter} />;
       case "quota_overuse":
         return <QuotaOveruseWidget key="quota_overuse" />;
+      case "pending_overtime_charges":
+        return <PendingOvertimeChargesWidget key="pending_overtime_charges" />;
       case "mtd_bookings":
         return <MtdBookingsWidget key="mtd_bookings" locationFilter={locationFilter} />;
       case "rent_revenue":
@@ -235,13 +255,17 @@ export default function DashboardPage() {
         return <WeekInReviewWidget key="week_in_review" />;
       case "quick_charge":
         return <QuickChargeWidget key="quick_charge" />;
+      case "accounts_overview":
+        return <AccountsOverviewWidget key="accounts_overview" />;
+      case "accounts_work_queue":
+        return <AccountsWorkQueueWidget key="accounts_work_queue" />;
       default:
         return null;
     }
   }
 
   // live_enquiries and kpi_stats always render full-width outside the grid
-  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review"];
+  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review", "accounts_overview", "accounts_work_queue", "sales", "procurement_po", "facility", "meter_telemetry"];
   const topWidgets = widgetIds.filter((id) => FULL_WIDTH.includes(id));
   const gridWidgets = widgetIds.filter((id) => !FULL_WIDTH.includes(id));
 

@@ -44,7 +44,8 @@ export async function GET() {
     adminSupabase
       .from("vendor_bills")
       .select("total_amount, amount_paid")
-      .in("payment_status", ["unpaid", "partially_paid"]),
+      .in("payment_status", ["unpaid", "partially_paid"])
+      .neq("approval_status", "withdrawn"),
   ]);
 
   const unpaidBillsCount = unpaidBillsData?.length ?? 0;

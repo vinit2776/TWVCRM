@@ -27,7 +27,9 @@ import {
   CheckCircle2, Circle, IndianRupee, Link2, Sparkles, ScrollText, Gift,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import type { Booking } from "@/types";
+import type { Booking, BookingPayment } from "@/types";
+import { reportedPaymentState } from "@/lib/booking-payment-rules";
+import { bookingWindowHours } from "@/lib/utils";
 
 // Currency formatting kept inline to avoid pulling utils into the
 // timeline (it's used in a sublabel for the Payment step).
@@ -234,12 +236,34 @@ function timeLeft(iso: string): string {
 // Main component
 // ---------------------------------------------------------------------------
 
+/**
+ * Human label for how long the booking runs.
+ *
+ * Deliberately derived from start_time/end_time rather than
+ * `bookings.duration_hours`: for daily-priced spaces that column stores "1"
+ * as a billing day-unit, not one hour, so a 9am–7pm day pass used to render
+ * as "1h slot". `duration_hours` stays untouched — billing, contract
+ * free-quota and utilisation analytics all depend on the day-unit meaning.
+ */
+function slotDurationLabel(booking: Booking): string {
+  const hours = bookingWindowHours(booking.start_time, booking.end_time);
+  // Trim float noise from minute-level windows (1.5 → "1.5", 2.0 → "2").
+  const pretty = Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(/\.0$/, "");
+  return booking.pricing_model === "daily" ? `${pretty}h day pass` : `${pretty}h slot`;
+}
+
 interface BookingLifecycleTimelineProps {
   booking: Booking;
   compRequest?: CompRequestData | null;
+  /** When the payment was actually recorded (latest verified booking_payments row).
+   *  booking.updated_at moves on any edit — including a payment-method correction —
+   *  so it is only a fallback for bookings without payment rows. */
+  paymentReceivedAt?: string | null;
+  /** Used to word the "due" line when a UPI payment is reported but not yet verified. */
+  payments?: BookingPayment[];
 }
 
-export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecycleTimelineProps) {
+export function BookingLifecycleTimeline({ booking, compRequest, paymentReceivedAt, payments }: BookingLifecycleTimelineProps) {
   const status = booking.status;
   const scheduledStart = slotDateTime(booking.booking_date, booking.start_time);
   const scheduledEnd   = slotDateTime(booking.booking_date, booking.end_time);
@@ -270,6 +294,7 @@ export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecy
     }
   })();
   const totalDue = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
+  const reportedState = reportedPaymentState(totalDue, payments ?? []);
   const paymentLabel = (() => {
     switch (booking.payment_status) {
       case "paid":           return "Payment Received";
@@ -282,8 +307,10 @@ export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecy
       }
       case "posted_to_bill": return "Post-paid (Monthly Invoice)";
       case "pending":
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      default:               return (booking as any).razorpay_payment_link_id
+      default:
+        if (reportedState.coveredByReport) return "Payment reported — awaiting verification";
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (booking as any).razorpay_payment_link_id
         ? "Payment Link Sent — Awaiting Customer"
         : "Payment Pending";
     }
@@ -320,6 +347,11 @@ export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecy
       case "posted_to_bill": return `${inr(totalDue)} will appear on the next monthly invoice`;
       case "pending":
       default:
+        if (reportedState.reported > 0) {
+          return reportedState.coveredByReport
+            ? `${inr(reportedState.reported)} reported, waiting for accounts to verify — nothing left to collect`
+            : `${inr(reportedState.reported)} reported, waiting for accounts — ${inr(reportedState.left)} left to collect`;
+        }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return (booking as any).razorpay_payment_link_id
           ? `${inr(totalDue)} due — customer has the payment link`
@@ -428,7 +460,7 @@ export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecy
         icon={<CalendarCheck className="h-3.5 w-3.5" />}
         label="Booked"
         timestamp={formatTs(booking.created_at)}
-        sublabel={`${formatTime12(booking.start_time)} – ${formatTime12(booking.end_time)} · ${Number(booking.duration_hours)}h slot`}
+        sublabel={`${formatTime12(booking.start_time)} – ${formatTime12(booking.end_time)} · ${slotDurationLabel(booking)}`}
         actorName={booking.created_by_name}
       />
 
@@ -516,7 +548,7 @@ export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecy
         label={paymentLabel}
         timestamp={
           booking.payment_status === "paid"
-            ? formatTs(booking.updated_at)
+            ? formatTs(paymentReceivedAt || booking.updated_at)
             : paymentState === "active"
               ? "Sent — waiting for customer"
               : paymentState === "pending"

@@ -3,6 +3,8 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
+import { flagTransferLine } from "@/lib/procurement/transfer-line-flags";
+import { CENTER_SCOPED_DEPARTMENTS } from "@/lib/constants";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -252,13 +254,19 @@ async function computeApprovalIntelligence(
 const patchTransferSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit") }),
   z.object({
-    action: z.literal("approve_line"),
-    transfer_item_id: z.string().uuid(),
-    quantity_approved: z.number().min(0),
-  }),
-  z.object({
     action: z.literal("approve"),
     notes: z.string().optional(),
+    // Explicit per-line decisions — required for any line the flagging
+    // heuristic considers suspect (see flagTransferLine); lines omitted
+    // here are auto-confirmed at their requested quantity.
+    lines: z
+      .array(
+        z.object({
+          transfer_item_id: z.string().uuid(),
+          quantity_approved: z.number().min(0),
+        })
+      )
+      .optional(),
   }),
   z.object({ action: z.literal("reject"), notes: z.string().min(1, "Rejection notes are required") }),
   z.object({
@@ -321,7 +329,7 @@ export async function GET(
   const { data: transfer, error } = await supabase
     .from("stock_transfers")
     .select(
-      `*, stock_transfer_items(*, procurement_items(id, name)), stock_transfer_issues(*, resolver:users!stock_transfer_issues_resolved_by_fkey(id, full_name)), stock_transfer_attachments(*, uploader:users!stock_transfer_attachments_uploaded_by_fkey(id, full_name)), from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), approver:users!stock_transfers_approved_by_fkey(id, full_name), receiver:users!stock_transfers_received_by_fkey(id, full_name)`
+      `*, stock_transfer_items(*, procurement_items(id, name, department)), stock_transfer_issues(*, resolver:users!stock_transfer_issues_resolved_by_fkey(id, full_name)), stock_transfer_attachments(*, uploader:users!stock_transfer_attachments_uploaded_by_fkey(id, full_name)), from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code, is_hub), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), approver:users!stock_transfers_approved_by_fkey(id, full_name), receiver:users!stock_transfers_received_by_fkey(id, full_name)`
     )
     .eq("id", id)
     .single();
@@ -349,6 +357,60 @@ export async function GET(
 
   const approvalIntelligence = await computeApprovalIntelligence(supabase, itemIds, transfer.to_location_id);
 
+  // ── Destination center budget context — awareness only for the approver ──
+  // Not a gate: the actual budget check already happened when the MRs behind
+  // this stock were approved. Skipped for the hidden HQ replenishment hub,
+  // which isn't a real consuming center.
+  let centerBudgets: unknown[] = [];
+  const toLocationIsHub = (transfer.to_location as { is_hub?: boolean } | null)?.is_hub === true;
+  if (transfer.status === "pending_approval" && !toLocationIsHub) {
+    const itemDepartments = new Set(
+      (transfer.stock_transfer_items as Array<{ procurement_items: { department: string | null } | null }>)
+        .map((i) => i.procurement_items?.department)
+        .filter((d): d is string => !!d && (CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(d))
+    );
+
+    if (itemDepartments.size > 0) {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+
+      centerBudgets = await Promise.all(
+        Array.from(itemDepartments).map(async (dept) => {
+          const { data: budget } = await supabase
+            .from("department_budgets")
+            .select("monthly_budget, is_active")
+            .eq("department", dept)
+            .eq("budget_period", "monthly")
+            .eq("location_id", transfer.to_location_id)
+            .maybeSingle();
+
+          if (!budget?.is_active || !budget.monthly_budget) return null;
+
+          const monthlyBudget = Number(budget.monthly_budget);
+          const { data: committed } = await supabase
+            .from("purchase_requests")
+            .select("total_estimated_amount")
+            .eq("department", dept)
+            .eq("location_id", transfer.to_location_id)
+            .eq("expenditure_type", "operational")
+            .gte("created_at", monthStart)
+            .lte("created_at", monthEnd)
+            .in("status", ["approved", "partially_ordered", "po_created"]);
+
+          const spent = (committed ?? []).reduce((s, mr) => s + Number(mr.total_estimated_amount ?? 0), 0);
+          return {
+            department: dept,
+            monthly_budget: monthlyBudget,
+            spent_this_month: spent,
+            utilisation_pct: Math.round((spent / monthlyBudget) * 100),
+            is_over_budget: spent > monthlyBudget,
+          };
+        })
+      ).then((rows) => rows.filter(Boolean));
+    }
+  }
+
   // Audit trail — full who/what/when for this transfer. Read with the admin
   // client so it's visible to anyone allowed to view the transfer (the
   // audit_trail table is otherwise admin-only via RLS).
@@ -368,6 +430,7 @@ export async function GET(
     audit_trail: auditTrail ?? [],
     approval_intelligence: approvalIntelligence.items,
     open_issues_count: approvalIntelligence.openIssuesCount,
+    center_budgets: centerBudgets,
   });
 }
 
@@ -416,52 +479,6 @@ export async function PATCH(
   }>;
 
   switch (action) {
-    // ── APPROVE LINE ─────────────────────────────────────────────────────────
-    // Saves a single item's approval decision immediately, independent of the
-    // transfer-level approve action — lets an approver work through a long
-    // transfer item by item, closing and reopening across sessions.
-    case "approve_line": {
-      if (transfer.status !== "pending_approval") {
-        return NextResponse.json({ error: "Only pending_approval transfers can have lines approved" }, { status: 422 });
-      }
-      if (!["admin", "manager"].includes(dbUser.role)) {
-        return NextResponse.json({ error: "Only admins and managers can approve transfer lines" }, { status: 403 });
-      }
-
-      const { transfer_item_id, quantity_approved } = parsed.data;
-      const item = transferItems.find((ti) => ti.id === transfer_item_id);
-      if (!item) {
-        return NextResponse.json({ error: "Transfer item not found" }, { status: 404 });
-      }
-      if (quantity_approved > item.quantity_requested) {
-        return NextResponse.json({
-          error: `"${item.item_name}": approved quantity (${quantity_approved}) cannot exceed requested (${item.quantity_requested})`,
-        }, { status: 422 });
-      }
-
-      const { error: itemUpdateError } = await supabase
-        .from("stock_transfer_items")
-        .update({
-          quantity_approved,
-          approval_confirmed_at: new Date().toISOString(),
-          approval_confirmed_by: dbUser.id,
-        })
-        .eq("id", item.id);
-      if (itemUpdateError) return NextResponse.json({ error: itemUpdateError.message }, { status: 500 });
-
-      await logAudit(supabase, {
-        entityType: "stock_transfer",
-        entityId: id,
-        action: "update",
-        performedBy: dbUser.id,
-        changes: {
-          line_approved: { old: null, new: { item: item.item_name, qty: quantity_approved } },
-        },
-      });
-
-      return NextResponse.json({ data: { id: item.id, quantity_approved } });
-    }
-
     // ── SUBMIT ──────────────────────────────────────────────────────────────
     case "submit": {
       if (transfer.status !== "draft") {
@@ -495,22 +512,56 @@ export async function PATCH(
         return NextResponse.json({ error: "Only admins and managers can approve transfers" }, { status: 403 });
       }
 
-      // Every line must already carry an explicit approve_line decision —
-      // half-reviewed transfers don't silently default to "approve as
-      // requested" for whatever's left untouched.
-      const unconfirmed = transferItems.filter((item) => !item.approval_confirmed_at);
-      if (unconfirmed.length > 0) {
+      const submittedLines = new Map((parsed.data.lines ?? []).map((l) => [l.transfer_item_id, l.quantity_approved]));
+
+      // Re-derive the same "suspect" signal the approve screen showed —
+      // enforced server-side so it can't be skipped by calling the API
+      // directly. Non-suspect lines never need to appear in `lines`.
+      const itemIds = transferItems.map((item) => item.item_id).filter(Boolean) as string[];
+      const { items: intelItems } = await computeApprovalIntelligence(supabase, itemIds, transfer.to_location_id);
+      const intelByItemId = new Map(intelItems.map((i) => [i.item_id, i]));
+
+      const missingReview = transferItems.filter((item) => {
+        if (submittedLines.has(item.id)) return false;
+        const flag = flagTransferLine(item.quantity_requested, item.item_id ? intelByItemId.get(item.item_id) : undefined);
+        return flag.suspect;
+      });
+      if (missingReview.length > 0) {
         return NextResponse.json({
-          error: `${unconfirmed.length} item${unconfirmed.length === 1 ? "" : "s"} still need a decision before this transfer can be approved: ${unconfirmed.map((i) => i.item_name).join(", ")}`,
+          error: `${missingReview.length} item${missingReview.length === 1 ? "" : "s"} flagged for review and still need a decision: ${missingReview.map((i) => i.item_name).join(", ")}`,
         }, { status: 422 });
       }
 
       // Shortfall is final, not a block — no stock check here; that happens
       // at dispatch, where the issuer confirms what's actually physically sent.
-      const resolvedApprovals = transferItems.map((item) => ({
-        item,
-        approvedQty: item.quantity_approved ?? item.quantity_requested,
-      }));
+      // Lines not explicitly submitted are bulk-confirmed at their requested
+      // quantity (only reachable here for non-suspect lines, per the gate above).
+      const resolvedApprovals = transferItems.map((item) => {
+        const submittedQty = submittedLines.get(item.id);
+        const approvedQty = submittedQty ?? item.quantity_requested;
+        const method: "manual" | "bulk" = submittedLines.has(item.id) ? "manual" : "bulk";
+        return { item, approvedQty, method };
+      });
+
+      for (const { item, approvedQty } of resolvedApprovals) {
+        if (approvedQty > item.quantity_requested) {
+          return NextResponse.json({
+            error: `"${item.item_name}": approved quantity (${approvedQty}) cannot exceed requested (${item.quantity_requested})`,
+          }, { status: 422 });
+        }
+      }
+
+      for (const { item, approvedQty } of resolvedApprovals) {
+        const { error: itemUpdateError } = await supabase
+          .from("stock_transfer_items")
+          .update({
+            quantity_approved: approvedQty,
+            approval_confirmed_at: new Date().toISOString(),
+            approval_confirmed_by: dbUser.id,
+          })
+          .eq("id", item.id);
+        if (itemUpdateError) return NextResponse.json({ error: itemUpdateError.message }, { status: 500 });
+      }
 
       const { count: transferApprovalCount } = await supabase
         .from("stock_transfers")
@@ -530,6 +581,21 @@ export async function PATCH(
         .eq("id", id);
 
       if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+      // One audit row per line, tagged by how it was approved — lets the
+      // audit trail distinguish an approver's explicit decision from a
+      // bulk auto-confirmation at the requested quantity.
+      for (const { item, approvedQty, method } of resolvedApprovals) {
+        await logAudit(supabase, {
+          entityType: "stock_transfer",
+          entityId: id,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: {
+            line_approved: { old: null, new: { item: item.item_name, qty: approvedQty, method } },
+          },
+        });
+      }
 
       await logAudit(supabase, {
         entityType: "stock_transfer",

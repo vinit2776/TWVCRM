@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { TASK_PRIORITIES, TASK_PRIORITY_LABELS } from "@/lib/constants";
+import { preventEnterSubmit } from "@/lib/utils";
 import { toast } from "sonner";
 import type { User as UserType } from "@/types";
 
@@ -136,7 +137,7 @@ export function CreateTaskDialog({
         <DialogHeader>
           <DialogTitle>Create Task</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label>Title *</Label>
             <Input

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
+import { bookingChargeView } from "@/lib/booking-usage-line";
 
 export const maxDuration = 30;
 
@@ -17,7 +18,7 @@ export async function GET(
   const { data: statement, error } = await supabase
     .from("billing_statements")
     .select(
-      "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company)"
+      "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company), case:cases!billing_statements_case_id_fkey(id, case_number, client_name, client_company_name, client_email, client_phone, client_gst_number, bill_to, aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)), aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number), written_off_by_user:users!billing_statements_written_off_by_fkey(full_name), held_by_user:users!billing_statements_held_by_fkey(full_name)"
     )
     .eq("id", id)
     .single();
@@ -28,7 +29,7 @@ export async function GET(
   // Fetch associated usage charges — include waiver fields and the waivers' user name
   const { data: usageCharges } = await supabase
     .from("usage_charges")
-    .select("*, waived_by_user:users!usage_charges_waived_by_fkey(full_name)")
+    .select("*, waived_by_user:users!usage_charges_waived_by_fkey(full_name), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name)")
     .eq("billing_statement_id", id)
     .order("charge_date", { ascending: true });
 
@@ -46,9 +47,15 @@ export async function GET(
     billable_quantity: number;
     unit_price: number;
     total_charge: number;
+    waived_at: string | null;
+    waive_reason: string | null;
   }> = [];
 
-  if (statement.accounting_period_id && statement.contract_id) {
+  // Scoped by billing_statement_id (see 00563_usage_billing_engine.sql) —
+  // previously this had to fall back to accounting_period_id + contract_id
+  // since there was no direct link, which could pull in rows belonging to a
+  // different statement for the same period (e.g. a supplemental).
+  {
     const { data: facRecords } = await supabase
       .from("facility_usage_records")
       .select(`
@@ -58,10 +65,11 @@ export async function GET(
         billable_quantity,
         unit_price,
         total_charge,
+        waived_at,
+        waive_reason,
         contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(name, unit)
       `)
-      .eq("accounting_period_id", statement.accounting_period_id)
-      .eq("contract_id", statement.contract_id)
+      .eq("billing_statement_id", id)
       .gt("total_charge", 0)
       .order("created_at", { ascending: true });
 
@@ -77,6 +85,8 @@ export async function GET(
         billable_quantity: Number(r.billable_quantity || 0),
         unit_price: Number(r.unit_price || 0),
         total_charge: Number(r.total_charge || 0),
+        waived_at: r.waived_at ?? null,
+        waive_reason: r.waive_reason ?? null,
       };
     });
   }
@@ -90,22 +100,17 @@ export async function GET(
     overage: number;
     rate: number;
     amount: number;
+    waived_at: string | null;
+    waive_reason: string | null;
   }> = [];
 
   if (statement.contract_id) {
-    const periodStart = new Date(statement.period_start);
-    const pYear = periodStart.getFullYear();
-    const pMonth = periodStart.getMonth() + 1;
-
     const { data: svcRecords } = await supabase
       .from("service_usage_records")
       .select(`
-        id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount,
+        id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, waived_at, waive_reason,
         service:service_catalog!service_usage_records_service_id_fkey(name)
       `)
-      .eq("contract_id", statement.contract_id)
-      .eq("period_year", pYear)
-      .eq("period_month", pMonth)
       .eq("billing_statement_id", id);
 
     serviceCharges = (svcRecords || []).map((r) => {
@@ -119,6 +124,8 @@ export async function GET(
         overage: Number(r.overage_quantity || 0),
         rate: Number(r.overage_rate_snapshot || 0),
         amount: Number(r.amount || 0),
+        waived_at: r.waived_at ?? null,
+        waive_reason: r.waive_reason ?? null,
       };
     });
   }
@@ -160,10 +167,31 @@ export async function GET(
     .eq("billing_statement_id", id)
     .order("payment_date", { ascending: true });
 
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "billing_statement", entityId: id, performedBy: dbUser.id });
+  }
+
+  // supplements_statement_id -> statement_number: a plain follow-up query
+  // rather than a PostgREST embed, since billing_statements self-references
+  // via two FKs (this one and voided_statement_id) and the embed syntax
+  // can't disambiguate which relationship "billing_statements!..." means.
+  let supplementsOriginal: { statement_number: string } | null = null;
+  if (statement.supplements_statement_id) {
+    const { data: original } = await supabase
+      .from("billing_statements")
+      .select("statement_number")
+      .eq("id", statement.supplements_statement_id)
+      .maybeSingle();
+    supplementsOriginal = original ?? null;
+  }
+
   return NextResponse.json({
     data: {
       ...statement,
-      usage_charges: usageCharges || [],
+      supplements: supplementsOriginal,
+      // booking_view is null for anything that is not a booking charge; the statement view then keeps its single-line rendering.
+      usage_charges: (usageCharges || []).map((c) => ({ ...c, booking_view: bookingChargeView(c) })),
       facility_charges: facilityCharges,
       service_charges: serviceCharges,
       booking_charges: bookingCharges,

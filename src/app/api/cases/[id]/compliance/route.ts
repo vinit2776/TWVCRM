@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { updateComplianceCheckSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import { advanceCaseStage } from "@/lib/case-status-events";
 
 /**
  * GET: List all compliance checks for a case
@@ -148,6 +149,8 @@ export async function PATCH(
         compliance_passed_at: new Date().toISOString(),
       })
       .eq("id", caseId);
+
+    await advanceCaseStage(supabase, caseId, "internal_approved");
   }
 
   // Audit log

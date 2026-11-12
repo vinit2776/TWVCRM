@@ -1,0 +1,123 @@
+import { describe, it, expect } from "vitest";
+import {
+  canOverrideDepositFloor,
+  canRequestDepositInstalment,
+  checkAsk,
+  depositPosition,
+  instalmentErrorMessage,
+  livePartNumbers,
+  minFirstPart,
+  requiredDeposit,
+} from "../deposit-instalments";
+
+describe("requiredDeposit", () => {
+  it("nets credit and exception", () => {
+    expect(requiredDeposit({ security_deposit_amount: 60000 })).toBe(60000);
+    expect(requiredDeposit({ security_deposit_amount: 60000, deposit_credit_amount: 10000 })).toBe(50000);
+    expect(requiredDeposit({ security_deposit_amount: 60000, deposit_exception_amount: -5000 })).toBe(55000);
+    expect(requiredDeposit({ security_deposit_amount: "36000.00" })).toBe(36000);
+  });
+  it("never goes negative", () => {
+    expect(requiredDeposit({ security_deposit_amount: 1000, deposit_credit_amount: 5000 })).toBe(0);
+  });
+});
+
+describe("depositPosition", () => {
+  it("matches the worked example: ₹20k paid, ₹15k awaiting, of ₹60k", () => {
+    const pos = depositPosition(60000, [
+      { amount: 20000, status: "paid", paid_amount: 20000 },
+      { amount: 15000, status: "requested" },
+    ]);
+    expect(pos).toMatchObject({ required: 60000, requested: 35000, paid: 20000, awaiting: 15000, notYetAsked: 25000, balance: 40000, partsPaid: 1 });
+  });
+  it("ties out: required − paid = balance, requested − paid = awaiting", () => {
+    const pos = depositPosition(60000, [
+      { amount: 20000, status: "paid", paid_amount: 20000 },
+      { amount: 15000, status: "requested" },
+    ]);
+    expect(pos.required - pos.paid).toBe(pos.balance);
+    expect(pos.requested - pos.paid).toBe(pos.awaiting);
+    expect(pos.required - pos.requested).toBe(pos.notYetAsked);
+  });
+  it("ignores cancelled asks, so the amount returns to not-yet-asked", () => {
+    const pos = depositPosition(60000, [{ amount: 15000, status: "cancelled" }]);
+    expect(pos.requested).toBe(0);
+    expect(pos.notYetAsked).toBe(60000);
+  });
+  it("counts a late payment on a cancelled ask as paid", () => {
+    const pos = depositPosition(60000, [{ amount: 15000, status: "paid", paid_amount: 15000 }]);
+    expect(pos.paid).toBe(15000);
+  });
+  it("does not report a negative balance on over-payment", () => {
+    const pos = depositPosition(60000, [{ amount: 70000, status: "paid", paid_amount: 70000 }]);
+    expect(pos.balance).toBe(0);
+    expect(pos.notYetAsked).toBe(0);
+  });
+});
+
+describe("minFirstPart / checkAsk", () => {
+  it("rounds the 25% floor up", () => {
+    expect(minFirstPart(60000)).toBe(15000);
+    expect(minFirstPart(36000)).toBe(9000);
+    expect(minFirstPart(13650)).toBe(3413);
+  });
+  const fresh = depositPosition(60000, []);
+  it("flags a first part below the floor as needing an override", () => {
+    expect(checkAsk(10000, fresh)).toEqual({ ok: true, needsOverride: true });
+    expect(checkAsk(15000, fresh)).toEqual({ ok: true, needsOverride: false });
+  });
+  it("lets the whole balance through even if the floor were higher", () => {
+    expect(checkAsk(60000, fresh, 100)).toEqual({ ok: true, needsOverride: false });
+  });
+  it("applies no floor to later parts", () => {
+    const later = depositPosition(60000, [{ amount: 15000, status: "paid", paid_amount: 15000 }]);
+    expect(checkAsk(500, later)).toEqual({ ok: true, needsOverride: false });
+  });
+  it("refuses more than the balance and non-positive amounts", () => {
+    const later = depositPosition(60000, [{ amount: 15000, status: "paid", paid_amount: 15000 }]);
+    expect(checkAsk(50000, later)).toMatchObject({ ok: false, code: "amount_exceeds_balance", balance: 45000 });
+    expect(checkAsk(0, later)).toMatchObject({ ok: false, code: "amount_invalid" });
+  });
+  it("allows a second request while the first is still unpaid, up to what is not yet asked", () => {
+    const out = depositPosition(60000, [{ amount: 40000, status: "requested", paid_amount: null }]);
+    expect(checkAsk(20000, out)).toEqual({ ok: true, needsOverride: false });
+    expect(checkAsk(20001, out)).toMatchObject({ ok: false, code: "amount_exceeds_balance", balance: 20000 });
+  });
+  it("applies the first-ask minimum only when nothing has been requested or paid", () => {
+    const out = depositPosition(60000, [{ amount: 40000, status: "requested", paid_amount: null }]);
+    expect(checkAsk(5000, out)).toEqual({ ok: true, needsOverride: false });
+  });
+});
+
+describe("roles and wording", () => {
+  it("lets admin, manager and sales rep ask; only admin and manager override", () => {
+    expect(["admin", "manager", "sales_rep"].every(canRequestDepositInstalment)).toBe(true);
+    expect(canRequestDepositInstalment("accounts")).toBe(false);
+    expect(canOverrideDepositFloor("sales_rep")).toBe(false);
+    expect(canOverrideDepositFloor("manager")).toBe(true);
+  });
+  it("explains the floor in rupees", () => {
+    expect(instalmentErrorMessage("below_floor", { floor: 15000, percent: 25 })).toContain("₹15,000");
+  });
+});
+
+describe("livePartNumbers", () => {
+  it("numbers only live parts, so a cancelled first request does not use up Part 1", () => {
+    const n = livePartNumbers([
+      { id: "a", seq: 1, status: "cancelled", paid_amount: null },
+      { id: "b", seq: 2, status: "requested", paid_amount: null },
+    ]);
+    expect(n.has("a")).toBe(false);
+    expect(n.get("b")).toBe(1);
+  });
+  it("numbers in the order asked and keeps a cancelled request that was paid", () => {
+    const n = livePartNumbers([
+      { id: "c", seq: 3, status: "requested", paid_amount: null },
+      { id: "a", seq: 1, status: "paid", paid_amount: 10000 },
+      { id: "x", seq: 2, status: "cancelled", paid_amount: 5000 },
+      { id: "z", seq: 4, status: "cancelled", paid_amount: null },
+    ]);
+    expect([n.get("a"), n.get("x"), n.get("c")]).toEqual([1, 2, 3]);
+    expect(n.has("z")).toBe(false);
+  });
+});

@@ -4,7 +4,7 @@ import { dispatchProforma } from "@/lib/send-proforma";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { logAudit } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 
 export const maxDuration = 30;
 
@@ -153,7 +153,7 @@ export async function POST(
         currency: "INR",
         description,
         reference_id: refId,
-        expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
+        expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
         notify: { sms: !!customerPhone, email: !!customerEmail },
         reminder_enable: true,
         notes: {

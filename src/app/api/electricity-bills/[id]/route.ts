@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { invoiceCheckRecordSchema } from "@/lib/procurement/invoice-check";
 
 const lineSchema = z.object({
   line_type: z.enum(["utility", "generator", "other"]),
@@ -30,6 +31,9 @@ const updateSchema = z.object({
   lines: z.array(lineSchema).min(1, "At least one line is required"),
   landlord_gst_applicable: z.boolean().default(false),
   landlord_gst_rate: z.number().min(0).nullish(),
+  // A corrected landlord invoice replaces the one on the vendor bill; omitted keeps the current file.
+  invoice_file_url: z.string().url().nullish(),
+  invoice_check: invoiceCheckRecordSchema.nullish(),
 });
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -62,13 +66,15 @@ export async function PATCH(
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (dbUser.role !== "admin") {
-    return NextResponse.json({ error: "Admin role required" }, { status: 403 });
+  if (!["admin", "accounts"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Admin or accounts role required" }, { status: 403 });
   }
 
   const { data: bill, error: billErr } = await supabase
     .from("electricity_bills")
-    .select("id, bill_side, status, vendor_bill_id, location_id, landlord_total_amount, landlord_gst_amount")
+    // "*" rather than a column list: source_vendor_bill_id exists only once migration 00588 is applied,
+    // and an edit of an ordinary bill must keep working before then.
+    .select("*")
     .eq("id", id)
     .single();
 
@@ -77,6 +83,12 @@ export async function PATCH(
   }
   if (bill.bill_side !== "landlord") {
     return NextResponse.json({ error: "Only landlord bills can be edited here" }, { status: 422 });
+  }
+  if ((bill as { source_vendor_bill_id?: string | null }).source_vendor_bill_id) {
+    return NextResponse.json(
+      { error: "This record was linked from an uploaded vendor bill, so its lines must match that bill. Unlink it and link the bill again to change anything." },
+      { status: 422 },
+    );
   }
   if (bill.status !== "draft") {
     return NextResponse.json(
@@ -89,14 +101,24 @@ export async function PATCH(
   // already approved or paid against it, that number is no longer safe to
   // silently rewrite.
   let vendorBillId: string | null = null;
+  let vendorWasRejected = false;
   if (bill.vendor_bill_id) {
     const { data: vb } = await supabase
       .from("vendor_bills")
-      .select("id, approval_status, amount_paid")
+      .select("id, approval_status, amount_paid, payment_status")
       .eq("id", bill.vendor_bill_id)
       .single();
+    vendorWasRejected = vb?.approval_status === "rejected";
 
-    if (vb && (vb.approval_status !== "pending" || Number(vb.amount_paid ?? 0) > 0)) {
+    // A rejected vendor bill is the case this edit exists for: the landlord figures were entered
+    // wrongly, rejection put this bill back to draft, and the corrected numbers resubmit it.
+    if (vb && (vb.payment_status === "paid" || Number(vb.amount_paid ?? 0) > 0)) {
+      return NextResponse.json(
+        { error: "Cannot edit — the landlord invoice has payments recorded, so this bill is locked." },
+        { status: 422 },
+      );
+    }
+    if (vb && (!["pending", "rejected"].includes(vb.approval_status) || Number(vb.amount_paid ?? 0) > 0)) {
       return NextResponse.json(
         {
           error:
@@ -114,7 +136,7 @@ export async function PATCH(
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
-  const { landlord_bill_number, landlord_bill_date, notes, lines, landlord_gst_applicable, landlord_gst_rate } = parsed.data;
+  const { landlord_bill_number, landlord_bill_date, notes, lines, landlord_gst_applicable, landlord_gst_rate, invoice_file_url, invoice_check } = parsed.data;
 
   if (landlord_bill_number) {
     const { count: dupeNumber } = await supabase
@@ -192,6 +214,16 @@ export async function PATCH(
         gst_amount: landlordGstAmount,
         base_amount: landlordTotal,
         notes: notes ?? null,
+        ...(invoice_file_url ? { invoice_file_url, invoice_check: invoice_check ?? null } : {}),
+        ...(vendorWasRejected
+          ? {
+              approval_status: "pending",
+              approved_by: null,
+              approved_at: null,
+              rejection_reason: null,
+              rejection_outcome: null,
+            }
+          : {}),
       })
       .eq("id", vendorBillId);
     if (vbUpdateErr) {
@@ -202,12 +234,28 @@ export async function PATCH(
     }
   }
 
+  // Keep the vendor bill's Supporting Documents row pointing at the replaced file.
+  if (vendorBillId && invoice_file_url) {
+    const fileName = invoice_file_url.split("/").pop() || "invoice";
+    const { data: invoiceDoc } = await supabase
+      .from("vendor_bill_documents")
+      .select("id")
+      .eq("bill_id", vendorBillId)
+      .eq("doc_type", "invoice")
+      .maybeSingle();
+    const docResult = invoiceDoc
+      ? await supabase.from("vendor_bill_documents").update({ file_url: invoice_file_url, file_name: fileName }).eq("id", invoiceDoc.id)
+      : await supabase.from("vendor_bill_documents").insert({ bill_id: vendorBillId, file_url: invoice_file_url, file_name: fileName, doc_type: "invoice", uploaded_by: dbUser.id });
+    if (docResult.error) console.error("[eb] invoice document sync failed:", docResult.error.message);
+  }
+
   await logAudit(supabase, {
     entityType: "electricity_bill",
     entityId: id,
     action: "update",
     performedBy: dbUser.id,
     changes: {
+      ...(invoice_file_url ? { invoice_replaced: { old: null, new: invoice_file_url } } : {}),
       landlord_total: { old: bill.landlord_total_amount, new: landlordTotal },
       landlord_gst_amount: { old: bill.landlord_gst_amount, new: landlordGstAmount },
     },

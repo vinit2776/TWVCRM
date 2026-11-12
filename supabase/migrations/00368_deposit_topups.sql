@@ -70,6 +70,33 @@ CREATE INDEX IF NOT EXISTS idx_deposit_topups_status ON deposit_topups(status);
 CREATE INDEX IF NOT EXISTS idx_deposit_topups_razorpay_link
   ON deposit_topups(razorpay_payment_link_id) WHERE razorpay_payment_link_id IS NOT NULL;
 
+-- Moved here from 00363_deposit_accounting_inbox.sql: the accounting-inbox proof
+-- columns for deposit top-ups, which that migration couldn't create because this
+-- table didn't exist yet in a from-scratch migration run.
+ALTER TABLE deposit_topups
+  ADD COLUMN IF NOT EXISTS accounted BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS accounted_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS accounted_by UUID REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS accounted_proof_path TEXT;
+
+ALTER TABLE deposit_topups
+  DROP CONSTRAINT IF EXISTS deposit_topup_accounted_requires_proof;
+ALTER TABLE deposit_topups
+  ADD CONSTRAINT deposit_topup_accounted_requires_proof
+  CHECK (accounted IS NOT TRUE OR accounted_proof_path IS NOT NULL);
+
+-- Moved here from 00364_receivables_followup_and_settlement.sql: the payment
+-- follow-up ladder columns for deposit top-ups, same reason as above.
+ALTER TABLE deposit_topups
+  ADD COLUMN IF NOT EXISTS due_date DATE,
+  ADD COLUMN IF NOT EXISTS reminder_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS settlement_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_deposit_topups_due
+  ON deposit_topups(due_date) WHERE status = 'pending';
+
 ALTER TABLE deposit_topups ENABLE ROW LEVEL SECURITY;
 
 -- RLS stays wide-open for authenticated users, same convention as

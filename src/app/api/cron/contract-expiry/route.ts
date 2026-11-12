@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { revokeUnifiVoucher } from "@/lib/unifi";
+import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
+import { revokeUnifiIssuances } from "@/lib/contract-lifecycle";
 import { setUserActive } from "@/lib/cosec";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/cron/contract-expiry
@@ -16,10 +18,12 @@ import { setUserActive } from "@/lib/cosec";
  *   3. No existing renewal (parent_contract_id pointing to it) in
  *      draft/active status
  *
- * The cron only marks the status; it does NOT create renewal drafts
- * or block anything. That's handled by the renewal flow.
+ * Besides the status flip, it releases the contract's active space
+ * allocations (so the cabin/desk becomes available for re-allocation) and
+ * revokes WiFi/access. It does NOT create renewal drafts — that's handled
+ * by the renewal flow.
  */
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   // Verify cron secret (Vercel sets this header)
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -37,7 +41,7 @@ export async function GET(request: NextRequest) {
   // Find active contracts whose end_date has passed
   const { data: expiring, error: fetchErr } = await admin
     .from("contracts")
-    .select("id, contract_number, end_date, lead_id, location_id, unifi_voucher_id, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email), location:locations!contracts_location_id_fkey(name)")
+    .select("id, contract_number, end_date, lead_id, location_id, unifi_voucher_id, unifi_voucher_console_id, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email), location:locations!contracts_location_id_fkey(name)")
     .eq("status", "active")
     .lt("end_date", todayIST);
 
@@ -83,6 +87,20 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: updateErr.message }, { status: 500 });
   }
 
+  // ── Release space allocations so units are available for re-allocation ────
+  // Mirrors the termination path in /api/contracts/[id] — expiry must free up
+  // the space the same way termination does, or a cabin/desk stays blocked
+  // indefinitely after its contract lapses.
+  const { error: releaseErr } = await admin
+    .from("contract_space_allocations")
+    .update({ status: "ended", updated_at: new Date().toISOString() })
+    .in("contract_id", expireIds)
+    .eq("status", "active");
+
+  if (releaseErr) {
+    console.error("[contract-expiry] space allocation release failed:", releaseErr);
+  }
+
   // ── Voucher revocation for expired contracts ──────────────────────────────
   // Non-fatal: runs after status update so expiry always succeeds even if
   // revocation has a transient failure.
@@ -92,11 +110,11 @@ export async function GET(request: NextRequest) {
   // Previously this was a per-contract query inside the loop (N+1).
   const { data: allIssuances } = await admin
     .from("voucher_issuances")
-    .select("id, voucher_id, contract_id")
+    .select("id, voucher_id, contract_id, unifi_voucher_id, unifi_console_id")
     .in("contract_id", expireIds)
     .eq("is_active", true);
 
-  type IssuanceRow = { id: string; voucher_id: string | null; contract_id: string };
+  type IssuanceRow = { id: string; voucher_id: string | null; contract_id: string; unifi_voucher_id: string | null; unifi_console_id: string | null };
   const issuancesByContractId = new Map<string, IssuanceRow[]>();
   for (const issuance of (allIssuances ?? []) as IssuanceRow[]) {
     const list = issuancesByContractId.get(issuance.contract_id) ?? [];
@@ -105,9 +123,10 @@ export async function GET(request: NextRequest) {
   }
 
   for (const contract of toExpire) {
-    // 1. UniFi API voucher (Nungambakkam LGF — direct device revocation)
+    // 1. UniFi API voucher (direct device revocation on the contract's own site console)
     if (contract.unifi_voucher_id) {
-      revokeUnifiVoucher(contract.unifi_voucher_id)
+      siteConfigForStoredVoucher({ consoleId: contract.unifi_voucher_console_id, locationId: contract.location_id })
+        .then((cfg) => revokeUnifiVoucher(contract.unifi_voucher_id as string, cfg))
         .catch((err) => console.error(`[contract-expiry] UniFi revoke failed for ${contract.contract_number}:`, err));
     }
 
@@ -116,6 +135,11 @@ export async function GET(request: NextRequest) {
       const issuances = issuancesByContractId.get(contract.id) ?? [];
 
       if (issuances.length > 0) {
+        // Per-seat UniFi vouchers must be deleted on the controller too, not
+        // just marked inactive here — otherwise the codes stay usable.
+        const unifiRevoked = await revokeUnifiIssuances(issuances, contract.location_id, contract.contract_number);
+        if (unifiRevoked > 0) console.log(`[contract-expiry] Revoked ${unifiRevoked} per-seat UniFi voucher(s) for ${contract.contract_number}`);
+
         const issuanceIds = issuances.map((i) => i.id);
         await admin
           .from("voucher_issuances")
@@ -242,3 +266,5 @@ export async function GET(request: NextRequest) {
     contracts: toExpire.map((c) => c.contract_number),
   });
 }
+
+export const GET = withCronHealth("cron/contract-expiry", handler);

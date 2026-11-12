@@ -12,7 +12,7 @@ export async function GET(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager", "office_admin", "accounts"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator", "accounts"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -26,6 +26,7 @@ export async function GET(
       gst_setter:users!vendor_bills_gst_set_by_fkey(id, full_name),
       gst_zero_confirmer:users!vendor_bills_gst_zero_confirmed_by_fkey(id, full_name),
       vendor_bill_payments(*, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name)),
+      vendor_bill_documents(id, file_url, file_name, doc_type, created_at, uploader:users!vendor_bill_documents_uploaded_by_fkey(id, full_name)),
       electricity_bill:electricity_bills!vendor_bills_electricity_bill_id_fkey(bill_month, bill_year, landlord_total_amount, landlord_gst_applicable, landlord_gst_rate, landlord_gst_amount, electricity_bill_lines(line_type, meter_label, label, units, rate, amount, sort_order))
     `)
     .eq("id", id)
@@ -52,6 +53,7 @@ export async function GET(
       .select(`
         id, po_number, status, po_type, created_at, total_ordered_amount,
         expected_delivery_date, actual_delivery_date, notes,
+        billing_cycle, cycle_count, unit_cost_per_cycle,
         payment_terms, terms_and_conditions,
         advance_amount, advance_status, advance_payment_mode,
         advance_payment_reference, advance_payment_date,
@@ -182,7 +184,7 @@ export async function GET(
     .from("audit_trail")
     .select(`
       id, entity_type, entity_id, action, changes, created_at,
-      performer:users!audit_trail_performed_by_fkey(id, full_name)
+      performer:users!audit_trail_performed_by_fkey(id, full_name, role)
     `)
     .in("entity_id", entityIds)
     .order("created_at", { ascending: true });

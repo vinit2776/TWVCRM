@@ -3,11 +3,20 @@ import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 import { generateRentProformas, generateUsageStatements } from "@/lib/billing";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 
-const BATCH_SIZE = 5;
+// Claim one job at a time. Each job can involve several sequential SMTP
+// sends plus PDF/B2/Razorpay/Tally calls (observed 5-15s), so claiming a
+// batch of several jobs risked the loop still being mid-batch when Vercel's
+// 55s hard limit killed the invocation — orphaning the rest of that batch in
+// 'processing' with no way to finish or hand off, since a hard kill also
+// prevents the after() continuation from firing. Claiming 1 at a time keeps
+// the "how much more work is safely startable" check aligned with what's
+// actually in flight.
+const BATCH_SIZE = 1;
 // Leaves headroom under Vercel's 55s function limit (see maxDuration in the
-// cron route) for the final batch's in-flight requests to finish cleanly.
-const TIME_BUDGET_MS = 45_000;
-const MAX_CHAIN_DEPTH = 30; // ~22 min of continuous processing at worst; the
+// cron route) for the in-flight job to finish cleanly before the loop's own
+// check would otherwise start another one.
+const TIME_BUDGET_MS = 30_000;
+const MAX_CHAIN_DEPTH = 30; // ~15 min of continuous processing at worst; the
 // scheduled cron tick is the fallback safety net if this is ever exceeded.
 
 /**
@@ -134,12 +143,32 @@ export async function processDispatchRun(runId: string): Promise<DispatchProcess
             continue;
           }
 
+          // Advance-billed contract that isn't due this run. Previously this
+          // fell through and the job was marked "sent" with nothing dispatched,
+          // which read as a successful send in the run panel.
+          if (genResult.cycleSkipped?.includes(job.contract_number as string)) {
+            await admin.from("billing_dispatch_jobs").update({
+              status: "skipped",
+              completed_at: new Date().toISOString(),
+              error_suggestion: "Bills in advance — not due this month.",
+            }).eq("id", jid);
+            batch.skipped++;
+            continue;
+          }
+
           if (genResult.errors?.length > 0) {
             throw new Error(genResult.errors[0]);
           }
 
           if (genResult.noContact?.includes(job.contract_number as string)) {
             throw new Error("No contact info — no email or phone on file");
+          }
+
+          // Statement was raised and finalized but never reached the client.
+          // Fail the job so it retries and stays visible in the run panel
+          // rather than reporting as a successful send.
+          if (genResult.notDelivered?.includes(job.contract_number as string)) {
+            throw new Error("Statement raised but dispatch failed — client never received it");
           }
 
           statementId = genResult.statementIds?.[0] ?? null;

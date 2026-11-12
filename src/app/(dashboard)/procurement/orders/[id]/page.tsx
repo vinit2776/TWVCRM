@@ -1,5 +1,8 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
+import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
+import { RollbackDialog } from "@/components/procurement/rollback-dialog";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
@@ -9,7 +12,7 @@ import {
   FileText, PackageOpen, Receipt, Download, CreditCard,
   Clock, Paperclip, X, CheckCircle2, Package, ClipboardList, Info,
   AlertTriangle, Undo2, Mail, Wrench, Phone, CalendarDays,
-  XCircle, Edit3, Save,
+  XCircle, Edit3, Save, ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,19 +26,31 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 // Type-only import — compiles away, no runtime cost. Keeps Parameters<typeof ...> working.
-import type { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
+import type { generatePurchaseOrderPDF, CompanyForPdf } from "@/lib/po-pdf-generator";
+import { TWV_LOGO_BASE64, MEDWORKS_LOGO_BASE64 } from "@/lib/logo-data";
 import {
   PO_STATUS_LABELS, PO_STATUS_COLORS, BILLING_CYCLE_LABELS,
   PO_ADVANCE_STATUS_LABELS, PO_ADVANCE_STATUS_COLORS, PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { ServiceCyclesCard, type CycleBill } from "@/components/procurement/service-cycles-card";
+import { poKind, PO_KIND_STYLES } from "@/lib/procurement/po-type";
+import { PoTypeChip } from "@/components/procurement/po-type-chip";
+import { ConvertToServiceDialog, type ConvertBill } from "@/components/procurement/convert-to-service-dialog";
+import { CONVERTIBLE_STATUSES } from "@/lib/procurement/convert-to-service";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStatus } from "@/types";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
+import { countedVisitsByAsset } from "@/lib/procurement/amc-lines";
 import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
 import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { QueryButton } from "@/components/queries/query-button";
 
 const ACCEPTED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -51,7 +66,6 @@ type ActionType =
   | "reject_delivery"
   | "edit_delivery"
   | "edit_invoice"
-  | "process_advance"
   | "approve_advance"
   | "reject_advance"
   | "terminate_amc"
@@ -116,7 +130,7 @@ function buildTimeline(
         id: ev.id,
         ts: ev.created_at,
         type: "status",
-        title: "Partially Cancelled",
+        title: "Closed Short — undelivered qty released",
         subtitle: performer?.full_name ?? "—",
       });
     }
@@ -128,9 +142,7 @@ function buildTimeline(
       id: `dr-${dr.id}`,
       ts: dr.received_at,
       type: "delivery",
-      title: dr.dc_number
-        ? `Delivery Received — ${dr.dc_number}`
-        : "Delivery Received",
+      title: `${dr.dc_number ? `Delivery Received — ${dr.dc_number}` : "Delivery Received"}${dr.reversed_at ? " (reversed — stock taken back out)" : ""}`,
       subtitle: dr.receiver?.full_name ?? "—",
       fileUrl: dr.file_url,
       fileLabel: "View Challan",
@@ -170,7 +182,7 @@ function buildTimeline(
       ts: bill.created_at,
       type: "invoice",
       title: `Invoice — ${bill.bill_number}`,
-      subtitle: `${formatCurrency(bill.total_amount)}${bill.approval_status === "approved" ? " · Approved for Payment" : bill.approval_status === "rejected" ? " · Rejected" : " · Pending Payment Approval"}${bill.creator?.full_name ? ` · by ${bill.creator.full_name}` : ""}`,
+      subtitle: `${formatCurrency(bill.total_amount)}${bill.approval_status === "approved" ? " · Approved for Payment" : bill.approval_status === "rejected" ? " · Rejected" : bill.approval_status === "withdrawn" ? " · Withdrawn" : " · Pending Payment Approval"}${bill.creator?.full_name ? ` · by ${bill.creator.full_name}` : ""}`,
       fileUrl: bill.invoice_file_url,
       fileLabel: "View Invoice",
       billId: bill.id,
@@ -201,6 +213,31 @@ function validateFile(file: File): string | null {
     return "File size must be under 10 MB";
   }
   return null;
+}
+
+// ─── PO PDF company helper ─────────────────────────────────────────────────────
+// po.companies is joined server-side by GET /api/procurement/orders/[id] and is NOT NULL
+// in the DB, but the type allows null — guard defensively rather than crash on a stale/bad fetch.
+function getCompanyForPdf(po: PurchaseOrder): CompanyForPdf | null {
+  const company = po.companies;
+  if (!company) return null;
+  const isWorkvilla = company.brand_name === "Workvilla";
+  return {
+    name: company.name,
+    brand_name: company.brand_name,
+    gstin: company.gstin ?? null,
+    address: company.address ?? null,
+    city: company.city ?? null,
+    state: company.state ?? null,
+    pincode: company.pincode ?? null,
+    phone: company.phone ?? null,
+    email: company.email ?? null,
+    logoBase64: isWorkvilla ? TWV_LOGO_BASE64 : MEDWORKS_LOGO_BASE64,
+    // Workvilla's source is a wide wordmark (52x13 default in the generator);
+    // MedWorks Plus's is a square icon lockup — render it as a square so it
+    // doesn't stretch.
+    ...(isWorkvilla ? {} : { logoWidth: 13, logoHeight: 13 }),
+  };
 }
 
 // ─── File upload helper ───────────────────────────────────────────────────────
@@ -282,6 +319,7 @@ function FileDropzone({
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { chain: cycle, locked, reload: reloadChain } = useChainState({ poId: id });
   const router = useRouter();
   const { user, loading: userLoading } = useCurrentUser();
   const currentUserRole = user?.role ?? null;
@@ -310,6 +348,7 @@ export default function PurchaseOrderDetailPage() {
   // Partial Cancel
   const [partialCancelQtys, setPartialCancelQtys] = useState<Record<string, string>>({});
   const [hasBill, setHasBill] = useState(false);
+  const [showConvert, setShowConvert] = useState(false);
 
   // Record Delivery
   const [dcNumber, setDcNumber] = useState("");
@@ -331,6 +370,9 @@ export default function PurchaseOrderDetailPage() {
   const invFileRef = useRef<HTMLInputElement>(null);
   // Service PO invoice: which service report this invoice covers
   const [invServiceReportId, setInvServiceReportId] = useState("");
+  // AMC contracts auto-approve every invoice after the first — this opts a
+  // specific one back into manual review (e.g. amount or date looks off).
+  const [invAmcManualReview, setInvAmcManualReview] = useState(false);
 
   // Edit Delivery (correct a wrong DC upload — file/number/date/notes only, no qty changes)
   const [editDeliveryId, setEditDeliveryId] = useState<string | null>(null);
@@ -355,8 +397,6 @@ export default function PurchaseOrderDetailPage() {
   const [editInvSaving, setEditInvSaving] = useState(false);
   const editInvFileRef = useRef<HTMLInputElement>(null);
 
-  // Process Advance
-  const [advancePaymentDate, setAdvancePaymentDate] = useState("");
 
   // Record Service Report
   const [srCycleNumber, setSrCycleNumber] = useState("");
@@ -371,6 +411,7 @@ export default function PurchaseOrderDetailPage() {
   const [amcEvents, setAmcEvents] = useState<AmcServiceEvent[]>([]);
   const [amcEventsLoaded, setAmcEventsLoaded] = useState(false);
   const [amcEventsLoading, setAmcEventsLoading] = useState(false);
+  const [voidEvent, setVoidEvent] = useState<AmcServiceEvent | null>(null);
   const [showAmcEventDialog, setShowAmcEventDialog] = useState(false);
   // AMC contact edit mode
   const [amcEditMode, setAmcEditMode] = useState(false);
@@ -475,8 +516,7 @@ export default function PurchaseOrderDetailPage() {
       const msgs: Partial<Record<ActionType, string>> = {
         mark_ordered: "Order marked as ordered",
         cancel: "Order cancelled",
-        partial_cancel: "Order partially cancelled — remaining qty released back to PR",
-        process_advance: "Advance payment marked as processed",
+        partial_cancel: "Order closed short — undelivered qty released back to PR",
         approve_advance: "Advance payment approved — accounts can now process payment",
         reject_advance: "Advance payment rejected",
         terminate_amc: "AMC terminated — events history preserved",
@@ -690,6 +730,7 @@ export default function PurchaseOrderDetailPage() {
 
   // ── Add Invoice (inline) ───────────────────────────────────────────────────
   const submitInvoice = async () => {
+    if (invUploading) return;
     if (!invDate) { toast.error("Invoice date is required"); return; }
     if (invDate < today) { toast.error("Invoice date cannot be in the past. Please select today or a future date."); return; }
     const amount = parseFloat(invAmount);
@@ -755,6 +796,7 @@ export default function PurchaseOrderDetailPage() {
           notes: invNotes.trim() || null,
           invoice_file_url: fileUrl,
           service_report_id: invServiceReportId || null,
+          amc_manual_review_requested: invAmcManualReview,
         }),
       });
       const json = await res.json();
@@ -763,7 +805,11 @@ export default function PurchaseOrderDetailPage() {
         return;
       }
 
-      toast.success(`Vendor invoice recorded — ${json.data.bill_number}`);
+      toast.success(
+        json.data.auto_approved
+          ? `Vendor invoice recorded and auto-approved — ${json.data.bill_number} is ready for Acc Payables`
+          : `Vendor invoice recorded — ${json.data.bill_number}`
+      );
       setActionDialog(null);
       setInvFile(null);
       setInvNumber("");
@@ -772,6 +818,7 @@ export default function PurchaseOrderDetailPage() {
       setInvAmount("");
       setInvNotes("");
       setInvServiceReportId("");
+      setInvAmcManualReview(false);
       if (invFileRef.current) invFileRef.current.value = "";
       await fetchPo();
     } finally {
@@ -891,41 +938,99 @@ export default function PurchaseOrderDetailPage() {
     terminated: "bg-rose-100 text-rose-700",
   };
 
+  // Releasing undelivered quantity is a goods-PO concept: it needs an invoice on
+  // file (the API requires invoice_received) and something still undelivered.
+  const canReleaseItems =
+    po.po_type !== "service" &&
+    po.status === "invoice_received" &&
+    (po.purchase_order_items ?? []).some((i) => Number(i.quantity_received ?? 0) < Number(i.quantity_ordered));
+  // Admin only: an AMC raised as a goods PO can't log reports or bill by cycle until converted.
+  const canConvertToService =
+    currentUserRole === "admin" &&
+    po.po_type === "goods" &&
+    isAmcPo &&
+    !po.amc_terminated_at &&
+    (CONVERTIBLE_STATUSES as readonly string[]).includes(po.status);
+  const canCancelOrder = ["pending", "ordered", "partially_received", "received"].includes(po.status);
+
+  const kind = poKind(po);
+  const accent = PO_KIND_STYLES[kind];
+
   const amcStatus = (po.amc_status ?? "inactive") as AmcStatus;
   const amcVisitsUsed = po.amc_visits_used ?? 0;
   const amcVisitsCoveredNum = po.amc_visits_covered ?? null;
   const amcVisitPct = amcVisitsCoveredNum ? Math.min(100, Math.round((amcVisitsUsed / amcVisitsCoveredNum) * 100)) : 0;
+  // Assets this PO covers: one per PO line on a combined PO. POs created before that
+  // only have the PO-level asset, so fall back to it.
+  const poAssets: Array<{ id: string; name: string; asset_code: string }> = (() => {
+    const seen = new Map<string, { id: string; name: string; asset_code: string }>();
+    for (const it of (po.purchase_order_items ?? []) as Array<{ linked_asset?: { id: string; name: string; asset_code: string | null } | null }>) {
+      if (it.linked_asset) seen.set(it.linked_asset.id, { id: it.linked_asset.id, name: it.linked_asset.name, asset_code: it.linked_asset.asset_code ?? "" });
+    }
+    return Array.from(seen.values());
+  })();
+  const perAssetUsed = countedVisitsByAsset(amcEvents, poAssets.map((a) => a.id));
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: po.po_number }}
+        fallbackParent={{ href: "/procurement/orders", label: "Purchase Orders" }}
+      />
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="relative flex items-start justify-between gap-4 pt-4">
+        <span aria-hidden className={`absolute inset-x-0 top-0 h-1 rounded-full ${accent.bar}`} />
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.push("/procurement/orders")}>
             <ChevronLeft className="h-5 w-5" />
           </Button>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-bold font-mono">{po.po_number}</h1>
+              <PoTypeChip kind={kind} />
               <Badge variant="secondary" className={PO_STATUS_COLORS[po.status]}>
                 {PO_STATUS_LABELS[po.status]}
               </Badge>
+              {po.po_type !== "service" && (po.tolerance_percent ?? 0) > 0 && (
+                <Badge variant="outline" title="Invoice may differ from the PO value by this much without special approval">
+                  ± {po.tolerance_percent}% flexible
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground mt-0.5">
               {vendor?.name ?? "Unknown vendor"}
             </p>
+            <div className="mt-2">
+              <QueryButton entityType="purchase_order" entityId={po.id} />
+            </div>
           </div>
         </div>
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
+          <PoCorrectMenu
+            poId={po.id}
+            poNumber={po.po_number}
+            status={po.status}
+            advanceStatus={po.advance_status ?? null}
+            advanceApprovalStatus={po.advance_approval_status ?? null}
+            amcTerminated={!!po.amc_terminated_at}
+            locked={locked}
+            isAdmin={currentUserRole === "admin"}
+            onDone={() => { fetchPo(); reloadChain(); }}
+          />
           {!["cancelled", "partially_cancelled"].includes(po.status) && (
             <Button
               variant="outline"
               size="sm"
               onClick={async () => {
+                const company = getCompanyForPdf(po);
+                if (!company) {
+                  toast.error("Missing company details for this purchase order");
+                  return;
+                }
                 const { generatePurchaseOrderPDF: gen } = await import("@/lib/po-pdf-generator");
-                const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0], company);
                 pdf.save(`${po.po_number}.pdf`);
               }}
             >
@@ -972,26 +1077,10 @@ export default function PurchaseOrderDetailPage() {
               <Package className="h-4 w-4 mr-1" /> Record Delivery
             </Button>
           )}
-          {po.po_type === "service" && po.status === "ordered" && !po.amc_terminated_at && (
-            <Button
-              size="sm"
-              className="bg-teal-600 hover:bg-teal-700"
-              onClick={() => {
-                const nextCycle = (po.po_service_reports?.length ?? 0) + 1;
-                setSrCycleNumber(String(nextCycle));
-                setSrPeriodFrom("");
-                setSrPeriodTo("");
-                setActionDialog("record_service_report");
-              }}
-              disabled={actionLoading}
-            >
-              <ClipboardList className="h-4 w-4 mr-1" /> Record Service Report
-            </Button>
-          )}
           {isAmcPo && po.status === "ordered" && !po.amc_terminated_at && (
             <Button
               size="sm"
-              className="bg-blue-600 hover:bg-blue-700"
+              variant="outline"
               onClick={() => setShowAmcEventDialog(true)}
               disabled={actionLoading}
             >
@@ -1013,56 +1102,57 @@ export default function PurchaseOrderDetailPage() {
               <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
             </Button>
           )}
-          {po.po_type === "service" && po.status === "ordered" && (() => {
-            const invoicedIds = new Set((po.vendor_bills ?? []).map((b) => b.service_report_id).filter(Boolean));
-            const uninvoiced = (po.po_service_reports ?? []).filter((sr) => !invoicedIds.has(sr.id));
-            return (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setInvDate(today);
-                  setInvAmount(String(po.unit_cost_per_cycle || ""));
-                  setActionDialog("add_invoice");
-                }}
-                disabled={uninvoiced.length === 0}
-                title={uninvoiced.length === 0 ? "Record a service report before uploading an invoice" : undefined}
-              >
-                <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
-              </Button>
-            );
-          })()}
-          {po.status === "invoice_received" && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-orange-600 hover:text-orange-700"
-              onClick={() => {
-                const initial: Record<string, string> = {};
-                for (const item of po.purchase_order_items ?? []) {
-                  initial[item.id] = String(item.quantity_ordered);
-                }
-                setPartialCancelQtys(initial);
-                setActionDialog("partial_cancel");
-              }}
-              disabled={actionLoading}
-            >
-              Partial Cancel
-            </Button>
-          )}
-          {["pending", "ordered", "partially_received", "received"].includes(po.status) && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-muted-foreground"
-              onClick={() => { setForceCancelStep(1); setActionDialog("cancel"); }}
-              disabled={actionLoading}
-            >
-              Cancel Order
-            </Button>
+          {(canReleaseItems || canCancelOrder) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" disabled={actionLoading}>
+                  More <ChevronDown className="h-4 w-4 ml-1" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {canReleaseItems && (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      const initial: Record<string, string> = {};
+                      for (const item of po.purchase_order_items ?? []) {
+                        initial[item.id] = String(item.quantity_ordered);
+                      }
+                      setPartialCancelQtys(initial);
+                      setActionDialog("partial_cancel");
+                    }}
+                  >
+                    Release unreceived items
+                  </DropdownMenuItem>
+                )}
+                {canCancelOrder && (
+                  <DropdownMenuItem
+                    className="text-destructive"
+                    onClick={() => { setForceCancelStep(1); setActionDialog("cancel"); }}
+                  >
+                    Cancel order
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>
+
+      <ChainLockBanner chain={cycle} ref={{ poId: id }} isAdmin={currentUserRole === "admin"} onChanged={() => { fetchPo(); reloadChain(); }} />
+
+      {canConvertToService && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-amber-900">This AMC was raised as a goods PO</p>
+            <p className="text-xs text-amber-800 mt-0.5">
+              It can&apos;t record service reports or invoice by cycle. Convert it to a service contract to get the cycle billing flow.
+            </p>
+          </div>
+          <Button size="sm" className="bg-amber-600 hover:bg-amber-700" onClick={() => setShowConvert(true)}>
+            Convert to service contract
+          </Button>
+        </div>
+      )}
 
       {/* Details grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1192,7 +1282,8 @@ export default function PurchaseOrderDetailPage() {
 
       {/* Service Contract Info */}
       {po.po_type === "service" && (
-        <Card>
+        <Card className="relative overflow-hidden">
+          <span aria-hidden className={`absolute inset-y-0 left-0 w-1 ${accent.bar}`} />
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <ClipboardList className="h-4 w-4 text-muted-foreground" />
@@ -1202,8 +1293,12 @@ export default function PurchaseOrderDetailPage() {
           <CardContent>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
               <div>
-                <p className="text-muted-foreground mb-0.5">Service</p>
-                <p className="font-medium">{po.purchase_order_items?.[0]?.item_name ?? "—"}</p>
+                <p className="text-muted-foreground mb-0.5">{poAssets.length > 1 ? "Assets covered" : "Service"}</p>
+                <p className="font-medium">
+                  {poAssets.length > 1
+                    ? poAssets.map((a) => a.asset_code ?? a.name).join(", ")
+                    : po.purchase_order_items?.[0]?.item_name ?? "—"}
+                </p>
               </div>
               <div>
                 <p className="text-muted-foreground mb-0.5">Start Date</p>
@@ -1231,7 +1326,7 @@ export default function PurchaseOrderDetailPage() {
               </div>
               <div>
                 <p className="text-muted-foreground mb-0.5">Invoices Filed</p>
-                <p className="font-medium">{po.vendor_bills?.length ?? 0} / {po.cycle_count ?? "?"}</p>
+                <p className="font-medium">{(po.vendor_bills ?? []).filter((b) => b.service_report_id).length} / {po.cycle_count ?? "?"}</p>
               </div>
             </div>
           </CardContent>
@@ -1254,13 +1349,14 @@ export default function PurchaseOrderDetailPage() {
           amc_terminated_at: po.amc_terminated_at,
         });
         const isTerminated = !!po.amc_terminated_at;
+        // Any live AMC can be retired, whatever its date state or how it was raised.
         const canTerminate = !isTerminated
-          && po.po_type === "service"
-          && (currentUserRole === "admin" || currentUserRole === "manager")
-          && (liveLc.status === "active" || liveLc.status === "expiring");
+          && po.status !== "cancelled"
+          && (currentUserRole === "admin" || currentUserRole === "manager");
 
         return (
-          <Card className="border-blue-200">
+          <Card className="relative overflow-hidden">
+            <span aria-hidden className={`absolute inset-y-0 left-0 w-1 ${accent.bar}`} />
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1434,7 +1530,19 @@ export default function PurchaseOrderDetailPage() {
                     <div className="flex items-start gap-2.5">
                       <Wrench className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                       <div className="flex-1">
-                        <p className="text-xs text-muted-foreground mb-1">Visits / Calls</p>
+                        <p className="text-xs text-muted-foreground mb-1">Preventive visits <span className="font-normal">(breakdowns are unlimited)</span></p>
+                        {poAssets.length > 1 && (
+                          <div className="mb-2 space-y-0.5">
+                            {poAssets.map((a) => (
+                              <div key={a.id} className="flex justify-between text-xs">
+                                <span>{a.asset_code ?? a.name}</span>
+                                <span className="font-medium">
+                                  {perAssetUsed[a.id] ?? 0}{amcVisitsCoveredNum !== null ? ` / ${amcVisitsCoveredNum}` : ""} used
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {amcVisitsCoveredNum === null ? (
                           <p className="text-sm font-medium">
                             {amcVisitsUsed} used · <span className="text-blue-600">∞ unlimited</span>
@@ -1502,7 +1610,9 @@ export default function PurchaseOrderDetailPage() {
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-sm font-medium">Service Events</p>
                   {amcEventsLoaded && (
-                    <span className="text-xs text-muted-foreground">{amcEvents.length} event{amcEvents.length !== 1 ? "s" : ""} logged</span>
+                    <span className="text-xs text-muted-foreground">
+                      {amcEvents.filter((e) => !e.voided_at).length} event{amcEvents.filter((e) => !e.voided_at).length !== 1 ? "s" : ""} logged
+                    </span>
                   )}
                 </div>
 
@@ -1534,13 +1644,18 @@ export default function PurchaseOrderDetailPage() {
                         annual_service: "Annual Service",
                       };
                       return (
-                        <div key={ev.id} className="relative flex gap-3">
+                        <div key={ev.id} className={`relative flex gap-3 ${ev.voided_at ? "opacity-60" : ""}`}>
                           <div className={`absolute -left-5 mt-1 h-3.5 w-3.5 rounded-full border-2 border-background ${typeColors[ev.event_type] ?? "bg-gray-400"}`} />
                           <div className="ml-1 min-w-0 flex-1">
                             <div className="flex items-start justify-between gap-2">
                               <div>
-                                <p className="text-sm font-medium leading-snug">
+                                <p className={`text-sm font-medium leading-snug ${ev.voided_at ? "line-through" : ""}`}>
                                   #{ev.event_number} · {typeLabels[ev.event_type] ?? ev.event_type}
+                                  {ev.voided_at && (
+                                    <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-medium no-underline">
+                                      Voided
+                                    </span>
+                                  )}
                                 </p>
                                 <p className="text-xs text-muted-foreground mt-0.5">
                                   {formatDate(ev.event_date)}
@@ -1560,6 +1675,19 @@ export default function PurchaseOrderDetailPage() {
                               )}
                             </div>
                             <p className="text-sm text-muted-foreground mt-1">{ev.issue_description}</p>
+                            {ev.voided_at ? (
+                              <p className="text-xs text-red-700 mt-0.5">Voided: {ev.void_reason ?? "—"}</p>
+                            ) : (
+                              currentUserRole === "admin" && !locked && (
+                                <button
+                                  type="button"
+                                  className="text-xs text-red-700 underline underline-offset-2 mt-0.5 hover:text-red-800"
+                                  onClick={() => setVoidEvent(ev)}
+                                >
+                                  Void visit
+                                </button>
+                              )
+                            )}
                             {ev.resolution_notes && (
                               <p className="text-xs text-muted-foreground mt-0.5 italic">{ev.resolution_notes}</p>
                             )}
@@ -1579,6 +1707,29 @@ export default function PurchaseOrderDetailPage() {
           </Card>
         );
       })()}
+
+      {voidEvent && (
+        <RollbackDialog
+          open
+          onOpenChange={(o) => { if (!o) setVoidEvent(null); }}
+          title={`Void visit #${voidEvent.event_number} — ${po.po_number}`}
+          description="Use this for a visit logged in error. It stays on the timeline, marked voided."
+          impact={[
+            "A preventive or annual visit gives its covered visit back to the contract",
+            "An Exhausted contract that is back under its limit returns to Active",
+            "Breakdown and remote-support calls don't use a covered visit, so the count stays",
+          ]}
+          confirmLabel="Void visit"
+          successMessage="Visit voided"
+          url={`/api/procurement/amc/${id}/events/${voidEvent.id}/void`}
+          onDone={async () => {
+            const res = await fetch(`/api/procurement/amc/${id}/events`);
+            const json = await res.json().catch(() => ({}));
+            setAmcEvents(json.data ?? []);
+            fetchPo();
+          }}
+        />
+      )}
 
       {/* Advance Payment */}
       {(po.advance_amount ?? 0) > 0 && (
@@ -1656,17 +1807,16 @@ export default function PurchaseOrderDetailPage() {
                     <p className="text-xs text-amber-600 font-medium">Awaiting admin approval before payment can be processed</p>
                   )}
                   {isApproved && !po.amc_terminated_at && (
-                    <Button
-                      size="sm"
-                      className="bg-orange-600 hover:bg-orange-700"
-                      onClick={() => {
-                        setAdvancePaymentDate(today);
-                        setActionDialog("process_advance");
-                      }}
-                      disabled={actionLoading}
-                    >
-                      <CheckCircle2 className="h-4 w-4 mr-1.5" /> Process Advance Payment
-                    </Button>
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        Approved. Finance releases this advance, with the payment mode and reference, from Acc Payables.
+                      </p>
+                      {["admin", "accounts", "office_admin"].includes(currentUserRole ?? "") && (
+                        <Button asChild size="sm" className="bg-orange-600 hover:bg-orange-700">
+                          <Link href="/accounting?tab=vendor-payments">Release in Finance</Link>
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
               );
@@ -1687,91 +1837,40 @@ export default function PurchaseOrderDetailPage() {
         </Card>
       )}
 
-      {/* Service Reports */}
+      {/* Service billing: next step + one row per cycle */}
       {po.po_type === "service" && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ClipboardList className="h-4 w-4 text-muted-foreground" />
-                <CardTitle className="text-base">Service Reports</CardTitle>
-              </div>
-              {po.status === "ordered" && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    const nextCycle = (po.po_service_reports?.length ?? 0) + 1;
-                    setSrCycleNumber(String(nextCycle));
-                    setSrPeriodFrom("");
-                    setSrPeriodTo("");
-                    setActionDialog("record_service_report");
-                  }}
-                >
-                  <ClipboardList className="h-4 w-4 mr-1" /> Record Report
-                </Button>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {!(po.po_service_reports?.length) ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Info className="h-4 w-4 flex-shrink-0" />
-                No service reports filed yet. Record a report at the end of each cycle to unlock vendor invoicing.
-              </div>
-            ) : (
-              <div className="rounded-md border overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th className="px-3 py-2.5 text-left font-medium">Cycle</th>
-                      <th className="px-3 py-2.5 text-left font-medium">Period</th>
-                      <th className="px-3 py-2.5 text-left font-medium hidden sm:table-cell">Recorded by</th>
-                      <th className="px-3 py-2.5 text-center font-medium">Report</th>
-                      <th className="px-3 py-2.5 text-center font-medium">Invoice</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(po.po_service_reports as PoServiceReport[]).map((sr) => {
-                      const bill = (po.vendor_bills ?? []).find((b) => b.service_report_id === sr.id);
-                      return (
-                        <tr key={sr.id} className="border-b last:border-0">
-                          <td className="px-3 py-2.5 font-medium">Cycle {sr.cycle_number}</td>
-                          <td className="px-3 py-2.5 text-muted-foreground text-xs">
-                            {formatDate(sr.period_from)} – {formatDate(sr.period_to)}
-                          </td>
-                          <td className="px-3 py-2.5 text-muted-foreground hidden sm:table-cell">
-                            {sr.recorder?.full_name ?? "—"}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            {sr.report_file_url ? (
-                              <a href={sr.report_file_url} target="_blank" rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-                                <Paperclip className="h-3 w-3" /> View
-                              </a>
-                            ) : "—"}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            {bill ? (
-                              <div className="flex items-center justify-center gap-1">
-                                <Badge variant="secondary" className="text-xs font-mono">{bill.bill_number}</Badge>
-                                <Badge variant="secondary" className={`text-[10px] ${bill.approval_status === "approved" ? "bg-green-100 text-green-800" : bill.approval_status === "rejected" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"}`}>
-                                  {bill.approval_status === "approved" ? "OK" : bill.approval_status === "rejected" ? "Rejected" : "Pending"}
-                                </Badge>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-amber-600">Pending</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <ServiceCyclesCard
+          accentBar={accent.bar}
+          status={po.status}
+          terminated={!!po.amc_terminated_at}
+          billingCycle={po.billing_cycle ?? null}
+          cycleCount={po.cycle_count ?? null}
+          openingCycles={po.opening_cycles ?? 0}
+          unitCostPerCycle={po.unit_cost_per_cycle ?? null}
+          reports={(po.po_service_reports as PoServiceReport[] | undefined) ?? []}
+          bills={(po.vendor_bills ?? []) as CycleBill[]}
+          onRecordReport={() => {
+            setSrCycleNumber(String((po.opening_cycles ?? 0) + (po.po_service_reports?.length ?? 0) + 1));
+            setSrPeriodFrom("");
+            setSrPeriodTo("");
+            setActionDialog("record_service_report");
+          }}
+          onUploadInvoice={() => {
+            // The banner only offers this when a report is waiting for its invoice,
+            // so preselect the oldest one instead of making the user pick it.
+            const invoiced = new Set((po.vendor_bills ?? []).map((bl) => bl.service_report_id).filter(Boolean));
+            const open = [...((po.po_service_reports as PoServiceReport[] | undefined) ?? [])]
+              .sort((x, y) => x.cycle_number - y.cycle_number)
+              .find((sr) => !invoiced.has(sr.id));
+            setInvServiceReportId(open?.id ?? "");
+            setInvDate(today);
+            setInvAmount(String(po.unit_cost_per_cycle || ""));
+            setActionDialog("add_invoice");
+          }}
+          onEditInvoice={openEditInvoice}
+          canTie={user?.role === "admin"}
+          onChanged={fetchPo}
+        />
       )}
 
       {/* Line Items */}
@@ -2022,47 +2121,6 @@ export default function PurchaseOrderDetailPage() {
             >
               {srUploading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Record Report
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Process Advance dialog ────────────────────────────────────────── */}
-      <Dialog
-        open={actionDialog === "process_advance"}
-        onOpenChange={() => { setActionDialog(null); setAdvancePaymentDate(today); }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Process Advance Payment</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              Confirm that the advance of <strong>{formatCurrency(po.advance_amount ?? 0)}</strong> has
-              been transferred to <strong>{vendor?.name}</strong>.
-            </p>
-            <div className="space-y-1.5">
-              <Label htmlFor="adv_date">Payment Date <span className="text-red-500">*</span></Label>
-              <Input
-                id="adv_date"
-                type="date"
-                value={advancePaymentDate}
-                onChange={(e) => setAdvancePaymentDate(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setActionDialog(null)}>Cancel</Button>
-            <Button
-              className="bg-orange-600 hover:bg-orange-700"
-              onClick={() => {
-                if (!advancePaymentDate) { toast.error("Payment date is required"); return; }
-                performAction("process_advance", { advance_payment_date: advancePaymentDate });
-              }}
-              disabled={actionLoading}
-            >
-              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Confirm Payment
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2348,6 +2406,7 @@ export default function PurchaseOrderDetailPage() {
           setInvAmount("");
           setInvNotes("");
           setInvServiceReportId("");
+          setInvAmcManualReview(false);
           if (invFileRef.current) invFileRef.current.value = "";
         }}
       >
@@ -2361,6 +2420,25 @@ export default function PurchaseOrderDetailPage() {
                 {po.po_type === "service"
                   ? <>Cycle cost: <strong>{formatCurrency(po.unit_cost_per_cycle ?? 0)}</strong> — invoice must not exceed this amount.</>
                   : <>PO value: <strong>{formatCurrency(po.total_ordered_amount)}</strong> — invoice must not exceed this amount.</>}
+              </div>
+            )}
+
+            {isAmcPo && (po?.vendor_bills ?? []).some((b) => b.approval_status === "approved") && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 space-y-2">
+                <p className="text-sm text-emerald-800">
+                  This AMC contract already has an approved invoice — this one will
+                  auto-approve on save and go straight to Acc Payables, no separate
+                  sign-off needed.
+                </p>
+                <label className="flex items-start gap-2 text-xs text-emerald-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={invAmcManualReview}
+                    onChange={(e) => setInvAmcManualReview(e.target.checked)}
+                  />
+                  <span>Something&apos;s off this cycle (amount, date, etc.) — send for manual review instead</span>
+                </label>
               </div>
             )}
 
@@ -2757,7 +2835,8 @@ export default function PurchaseOrderDetailPage() {
                       </table>
                     </div>
                     <p className="text-xs text-amber-700">
-                      Rejecting deliveries first is recommended to avoid inventory imbalance.
+                      Cancelling takes these goods back out of stock (never below zero). The delivery challans stay on
+                      record, marked reversed. To remove a single wrong delivery instead, reject that delivery.
                     </p>
                   </div>
                   <DialogFooter>
@@ -2785,10 +2864,11 @@ export default function PurchaseOrderDetailPage() {
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
                     <div className="space-y-1">
-                      <p className="text-sm font-medium text-red-800">Inventory imbalance warning</p>
+                      <p className="text-sm font-medium text-red-800">Stock will be reversed</p>
                       <p className="text-xs text-red-700">
-                        Cancelling with received goods means you have inventory that will never be billed.
-                        This creates an accounting discrepancy that must be resolved manually.
+                        The received quantities are taken back out of inventory. If some of the goods have already
+                        been used, only what is still in stock is removed. An admin can restore the PO afterwards
+                        (Correct → Restore cancelled PO), which puts the stock back.
                       </p>
                     </div>
                   </div>
@@ -2862,10 +2942,15 @@ export default function PurchaseOrderDetailPage() {
                   toast.error("Please enter a valid email address");
                   return;
                 }
+                const company = getCompanyForPdf(po);
+                if (!company) {
+                  toast.error("Missing company details for this purchase order");
+                  return;
+                }
                 setEmailSending(true);
                 try {
                   const { generatePurchaseOrderPDF: gen } = await import("@/lib/po-pdf-generator");
-                  const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                  const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0], company);
                   const pdfBlob = pdf.output("blob");
                   const formData = new FormData();
                   formData.append("recipients", JSON.stringify([email]));
@@ -2935,7 +3020,7 @@ export default function PurchaseOrderDetailPage() {
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Partial Cancel — {po?.po_number}</DialogTitle>
+            <DialogTitle>Release unreceived items — {po?.po_number}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
@@ -2943,7 +3028,7 @@ export default function PurchaseOrderDetailPage() {
             </p>
             {hasBill && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                A vendor bill exists for this PO. Partial cancellation does not modify the bill — adjust it separately.
+                A vendor bill exists for this PO. Releasing items does not modify the bill — adjust it separately.
               </p>
             )}
             <div className="rounded-md border overflow-x-auto">
@@ -2980,7 +3065,7 @@ export default function PurchaseOrderDetailPage() {
               </table>
             </div>
             <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
-              Once partially cancelled, this PO cannot be reissued.
+              Only an admin can reverse this afterwards (Correct → Restore partial cancellation).
             </p>
           </div>
           <DialogFooter>
@@ -3008,11 +3093,30 @@ export default function PurchaseOrderDetailPage() {
               }}
             >
               {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Confirm Partial Cancel
+              Release items
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {canConvertToService && (
+        <ConvertToServiceDialog
+          open={showConvert}
+          onOpenChange={setShowConvert}
+          po={{
+            id: po.id,
+            po_number: po.po_number,
+            po_type: po.po_type,
+            status: po.status,
+            total_ordered_amount: Number(po.total_ordered_amount),
+            amc_start_date: po.amc_start_date,
+            amc_end_date: po.amc_end_date,
+            amc_terminated_at: po.amc_terminated_at,
+          }}
+          bills={((po.vendor_bills ?? []) as unknown as ConvertBill[])}
+          onDone={fetchPo}
+        />
+      )}
 
       {/* AMC Service Event Dialog */}
       {isAmcPo && (
@@ -3023,7 +3127,9 @@ export default function PurchaseOrderDetailPage() {
           eventNumber={(amcEvents.length) + 1}
           visitsCovered={amcVisitsCoveredNum}
           visitsUsed={amcVisitsUsed}
-          defaultAssetId={po.linked_asset_id ?? null}
+          defaultAssetId={poAssets.length > 1 ? null : po.linked_asset_id ?? null}
+          poAssets={poAssets}
+          perAssetUsed={perAssetUsed}
           onSuccess={() => {
             setAmcEventsLoaded(false);
             fetchAmcEvents();

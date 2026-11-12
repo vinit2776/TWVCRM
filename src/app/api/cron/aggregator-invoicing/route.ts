@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { generateConsolidatedInvoice } from "@/lib/aggregator-invoicing";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * Aggregator invoicing cron — runs at 9:30 AM IST (4:00 AM UTC) on the 1st of
@@ -10,7 +11,7 @@ import { generateConsolidatedInvoice } from "@/lib/aggregator-invoicing";
  * Staff can still generate ad-hoc/off-cycle invoices manually from the
  * aggregator's Billing tab at any time — this cron only covers the monthly case.
  */
-export async function GET(request: Request) {
+async function handler(request: Request) {
   const authHeader = request.headers.get("Authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -73,3 +74,5 @@ export async function GET(request: Request) {
     ...results,
   });
 }
+
+export const GET = withCronHealth("cron/aggregator-invoicing", handler);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { isInboxRole } from "@/lib/tally-handoff";
 import type { DepositInboxRow, DepositTopupCategory } from "@/types";
+import { requiredDeposit } from "@/lib/deposit-instalments";
 
 /**
  * GET /api/accounting/inbox/deposits?tab=open|closed&q=<search>
@@ -43,26 +44,53 @@ export async function GET(request: NextRequest) {
   const q = (request.nextUrl.searchParams.get("q") || "").trim().toLowerCase();
   const admin = createAdminClient();
 
-  const { data: deposits } = await admin
+  // A deposit collected in parts is booked one row per part (below). Its proposal
+  // also flips to deposit_payment_status='paid' when the parts add up, so it must
+  // be kept out of the single-deposit rows or the same money is listed twice.
+  const { data: partRows } = await admin
+    .from("proposal_deposit_instalments")
+    .select(`
+      id, proposal_id, seq, amount, status, paid_amount, paid_at, payment_reference, payment_medium,
+      payment_screenshot_url, razorpay_link_id, razorpay_link_url, internal_note, settled_at, settlement_id,
+      accounted, accounted_at, accounted_by, accounted_proof_path
+    `)
+    .in("status", ["paid", "requested"]);
+  const partProposalIds = Array.from(new Set((partRows || []).filter((r) => r.status === "paid").map((r) => r.proposal_id)));
+  const knownByProposal = new Map<string, number>();
+  for (const r of partRows || []) knownByProposal.set(r.proposal_id, (knownByProposal.get(r.proposal_id) ?? 0) + 1);
+  // partRows holds only live parts (paid or still requested), so a part's number
+  // is its place among them in the order asked — cancelled requests take none.
+  const partNo = new Map<string, number>();
+  const seen = new Map<string, number>();
+  for (const r of [...(partRows || [])].sort((a, b) => a.seq - b.seq)) {
+    const n = (seen.get(r.proposal_id) ?? 0) + 1;
+    seen.set(r.proposal_id, n);
+    partNo.set(r.id, n);
+  }
+
+  const { data: depositsAll } = await admin
     .from("proposals")
     .select(`
       id, proposal_number, security_deposit_amount,
+      deposit_credit_amount, deposit_credit_reason,
+      deposit_exception_amount, deposit_exception_reason,
       deposit_payment_amount, deposit_payment_reference,
       deposit_payment_medium, deposit_payment_received_at,
       deposit_payment_screenshot_url, deposit_razorpay_link_id, deposit_razorpay_link_url,
-      deposit_settled_at, deposit_settlement_id,
+      deposit_settled_at, deposit_settlement_id, deposit_internal_notes,
       deposit_accounted, deposit_accounted_at, deposit_accounted_by, deposit_accounted_proof_path,
       lead:leads!proposals_lead_id_fkey(first_name, last_name, company),
       contract:contracts!contracts_proposal_id_fkey(contract_number)
     `)
     .eq("deposit_payment_status", "paid")
     .eq("deposit_accounted", tab === "closed");
+  const deposits = (depositsAll || []).filter((d) => !partProposalIds.includes(d.id));
 
   const { data: topups } = await admin
     .from("deposit_topups")
     .select(`
       id, amount, category, payment_mode, payment_reference, paid_at,
-      collection_method, proof_path, settled_at, settlement_id,
+      collection_method, proof_path, settled_at, settlement_id, category_note,
       razorpay_payment_link_id, razorpay_payment_link_url,
       accounted, accounted_at, accounted_by, accounted_proof_path,
       contract:contracts!deposit_topups_contract_id_fkey(
@@ -71,11 +99,15 @@ export async function GET(request: NextRequest) {
       )
     `)
     .eq("status", "paid")
+    // Credits created from an already-accounted ad-hoc invoice (legacy deposit
+    // attribution) are not new money to account for.
+    .is("source_invoice_id", null)
     .eq("accounted", tab === "closed");
 
   const accountedByIds = Array.from(new Set([
     ...(deposits || []).map((d) => d.deposit_accounted_by).filter(Boolean),
     ...(topups || []).map((t) => t.accounted_by).filter(Boolean),
+    ...(partRows || []).map((r) => r.accounted_by).filter(Boolean),
   ])) as string[];
 
   let namesById = new Map<string, string>();
@@ -84,7 +116,67 @@ export async function GET(request: NextRequest) {
     namesById = new Map((users || []).map((u) => [u.id, u.full_name]));
   }
 
+  // Per-part rows. Only paid parts are money to book; "requested" rows are read
+  // above just to count how many parts are known so far.
+  const paidParts = (partRows || []).filter((r) => r.status === "paid");
+  const partProposals = partProposalIds.length
+    ? (await admin
+        .from("proposals")
+        .select(`id, proposal_number, security_deposit_amount, deposit_exception_amount, deposit_credit_amount, deposit_internal_notes,
+          lead:leads!proposals_lead_id_fkey(first_name, last_name, company),
+          contract:contracts!contracts_proposal_id_fkey(contract_number)`)
+        .in("id", partProposalIds)).data || []
+    : [];
+  const proposalById = new Map(partProposals.map((p) => [p.id, p]));
+  const paidSoFar = new Map<string, number>();
+  const partDisplay: DepositInboxRow[] = [...paidParts]
+    .sort((a, b) => new Date(a.paid_at || 0).getTime() - new Date(b.paid_at || 0).getTime() || a.seq - b.seq)
+    .map((r): DepositInboxRow | null => {
+      const p = proposalById.get(r.proposal_id);
+      if (!p) return null;
+      const received = Number(r.paid_amount ?? r.amount);
+      const toDate = Math.round(((paidSoFar.get(r.proposal_id) ?? 0) + received) * 100) / 100;
+      paidSoFar.set(r.proposal_id, toDate);
+      const required = requiredDeposit(p);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const lead = p.lead as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contract = p.contract as any;
+      const viaRazorpay = r.payment_medium === "razorpay" || !!r.razorpay_link_id || /^(pay|plink)_/.test(r.payment_reference || "");
+      return {
+        id: r.id,
+        kind: "part",
+        proposal_id: r.proposal_id,
+        party_name: partyName(lead),
+        contract_number: contract?.contract_number ?? null,
+        proposal_number: p.proposal_number,
+        part_seq: partNo.get(r.id) ?? r.seq,
+        parts_known: knownByProposal.get(r.proposal_id) ?? 1,
+        amount: received,
+        expected_amount: required,
+        received_to_date: toDate,
+        balance_after: Math.max(0, Math.round((required - toDate) * 100) / 100),
+        is_final: toDate >= required,
+        payment_reference: r.payment_reference,
+        payment_medium: r.payment_medium,
+        paid_at: r.paid_at,
+        collection_method: viaRazorpay ? "razorpay" : "manual",
+        payment_proof_url: r.payment_screenshot_url,
+        razorpay_link_id: r.razorpay_link_id,
+        razorpay_link_url: r.razorpay_link_url,
+        settled_at: r.settled_at,
+        settlement_id: r.settlement_id,
+        internal_note: r.internal_note,
+        accounted: !!r.accounted,
+        accounted_at: r.accounted_at,
+        accounted_by_name: r.accounted_by ? namesById.get(r.accounted_by) || null : null,
+        proof_path: r.accounted_proof_path,
+      };
+    })
+    .filter((x): x is DepositInboxRow => !!x && x.accounted === (tab === "closed"));
+
   const rows: DepositInboxRow[] = [
+    ...partDisplay,
     ...(deposits || []).filter(hasMoneyToAccount).map((d): DepositInboxRow => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = d.lead as any;
@@ -105,7 +197,12 @@ export async function GET(request: NextRequest) {
         contract_number: contract?.contract_number ?? null,
         proposal_number: d.proposal_number,
         amount: d.deposit_payment_amount == null ? null : Number(d.deposit_payment_amount),
-        expected_amount: d.security_deposit_amount == null ? null : Number(d.security_deposit_amount),
+        expected_amount: d.security_deposit_amount == null ? null : Math.max(0,
+          Number(d.security_deposit_amount || 0) + Number(d.deposit_exception_amount || 0) - Number(d.deposit_credit_amount || 0)),
+        credit_amount: Number(d.deposit_credit_amount || 0) > 0 ? Number(d.deposit_credit_amount) : null,
+        credit_reason: d.deposit_credit_reason,
+        exception_amount: Number(d.deposit_exception_amount || 0) !== 0 ? Number(d.deposit_exception_amount) : null,
+        exception_reason: d.deposit_exception_reason,
         payment_reference: d.deposit_payment_reference,
         payment_medium: d.deposit_payment_medium,
         paid_at: d.deposit_payment_received_at,
@@ -115,6 +212,7 @@ export async function GET(request: NextRequest) {
         razorpay_link_url: d.deposit_razorpay_link_url,
         settled_at: d.deposit_settled_at,
         settlement_id: d.deposit_settlement_id,
+        internal_note: d.deposit_internal_notes,
         accounted: !!d.deposit_accounted,
         accounted_at: d.deposit_accounted_at,
         accounted_by_name: d.deposit_accounted_by ? namesById.get(d.deposit_accounted_by) || null : null,
@@ -130,6 +228,7 @@ export async function GET(request: NextRequest) {
         party_name: partyName(contract?.lead ?? null),
         contract_number: contract?.contract_number ?? null,
         category: t.category as DepositTopupCategory,
+        internal_note: t.category_note,
         amount: t.amount == null ? null : Number(t.amount),
         payment_reference: t.payment_reference,
         payment_medium: t.payment_mode,
@@ -159,13 +258,51 @@ export async function GET(request: NextRequest) {
   // sub-tab is showing or what the user has searched for.
   const { data: openDeposits } = await admin
     .from("proposals")
-    .select("security_deposit_amount, deposit_payment_amount")
+    .select("id, security_deposit_amount, deposit_payment_amount")
     .eq("deposit_payment_status", "paid")
     .eq("deposit_accounted", false);
   const { count: openTopups } = await admin
     .from("deposit_topups").select("id", { count: "exact", head: true })
+    .eq("status", "paid").is("source_invoice_id", null).eq("accounted", false);
+  const { count: openParts } = await admin
+    .from("proposal_deposit_instalments").select("id", { count: "exact", head: true })
     .eq("status", "paid").eq("accounted", false);
-  const openCount = (openDeposits || []).filter(hasMoneyToAccount).length + (openTopups ?? 0);
+  const openCount = (openDeposits || []).filter((d) => !partProposalIds.includes(d.id)).filter(hasMoneyToAccount).length
+    + (openTopups ?? 0) + (openParts ?? 0);
+
+  // Open query counts, one grouped query per entity type rather than a fetch
+  // per row. A deposit row is a proposal (kind 'deposit') or a deposit_topup
+  // (kind 'topup'), so the two are counted separately and matched back by
+  // kind — the ids come from different tables and could otherwise collide.
+  const partProposalOf = new Map(rows.filter((r) => r.kind === "part").map((r) => [r.id, r.proposal_id as string]));
+  // A part has no query thread of its own: questions about a staged deposit live on its proposal.
+  const depositIds = [...rows.filter((r) => r.kind === "deposit").map((r) => r.id), ...partProposalOf.values()];
+  const topupIds = rows.filter((r) => r.kind === "topup").map((r) => r.id);
+
+  const [depositQueries, topupQueries] = await Promise.all([
+    depositIds.length
+      ? admin.from("queries").select("entity_id")
+          .eq("entity_type", "proposal_deposit").eq("status", "open").in("entity_id", depositIds)
+      : Promise.resolve({ data: [] as { entity_id: string }[] }),
+    topupIds.length
+      ? admin.from("queries").select("entity_id")
+          .eq("entity_type", "deposit_topup").eq("status", "open").in("entity_id", topupIds)
+      : Promise.resolve({ data: [] as { entity_id: string }[] }),
+  ]);
+
+  const countBy = (data: { entity_id: string }[] | null) => {
+    const map = new Map<string, number>();
+    for (const r of data || []) map.set(r.entity_id, (map.get(r.entity_id) ?? 0) + 1);
+    return map;
+  };
+  const depositCounts = countBy(depositQueries.data as { entity_id: string }[] | null);
+  const topupCounts = countBy(topupQueries.data as { entity_id: string }[] | null);
+
+  for (const row of rows) {
+    row.open_query_count = row.kind === "topup"
+      ? topupCounts.get(row.id) ?? 0
+      : depositCounts.get(row.kind === "part" ? (row.proposal_id as string) : row.id) ?? 0;
+  }
 
   return NextResponse.json({ tab, rows, open_count: openCount });
 }

@@ -15,6 +15,8 @@ import {
   LEASE_PAYMENT_STATUS_COLORS, LEASE_PAYMENT_STATUS_LABELS,
 } from "@/lib/constants";
 import type { PropertyLease, LeasePayment } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface DashboardData {
   activeLeases: number;
@@ -95,6 +97,7 @@ export default function RentManagementDashboard() {
 
   return (
     <div className="p-6 space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Rent Management" }} />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -178,7 +181,11 @@ export default function RentManagementDashboard() {
                   </span>
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-red-700">{formatCurrency(p.gross_rent_amount)}</span>
-                    <Link href={`/rent-management/leases/${p.lease_id}`} className="text-red-600 hover:underline">
+                    <Link
+                      href={`/rent-management/leases/${p.lease_id}`}
+                      className="text-red-600 hover:underline"
+                      onClick={() => pushTrailEntry({ href: `/rent-management/leases/${p.lease_id}`, label: p.lease?.location?.name ?? "Lease" })}
+                    >
                       <ArrowRight className="h-3 w-3" />
                     </Link>
                   </div>

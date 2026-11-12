@@ -30,6 +30,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, getValidityLabel } from "@/lib/utils";
 import type { VoucherInventoryGroup } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Voucher {
   id: string;
@@ -154,6 +155,7 @@ export default function VouchersPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Vouchers" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>

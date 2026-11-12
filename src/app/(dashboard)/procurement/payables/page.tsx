@@ -29,6 +29,8 @@ import { computeBatchDate, formatBatchDate, batchDateLabel } from "@/lib/payment
 import { toast } from "sonner";
 import type { VendorBill, PurchaseOrder, PaymentBatchType } from "@/types";
 import type { GapAlertItem } from "@/app/api/finance-intelligence/gap-alerts/route";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const today = new Date().toISOString().split("T")[0];
 
@@ -256,6 +258,7 @@ export default function PayablesPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Payables" }} />
       <div>
         <h1 className="text-2xl font-bold">Payables</h1>
         <p className="text-sm text-muted-foreground">
@@ -478,13 +481,19 @@ export default function PayablesPage() {
                           "border-b hover:bg-muted/30 transition-colors cursor-pointer",
                           isOverdue(bill) && "bg-amber-50/60",
                         )}
-                        onClick={() => router.push(`/procurement/bills/${bill.id}`)}
+                        onClick={() => {
+                          pushTrailEntry({ href: `/procurement/bills/${bill.id}`, label: bill.bill_number });
+                          router.push(`/procurement/bills/${bill.id}`);
+                        }}
                       >
                         <td className="px-4 py-3 font-mono text-xs font-medium">
                           <Link
                             href={`/procurement/bills/${bill.id}`}
                             className="text-primary hover:underline"
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              pushTrailEntry({ href: `/procurement/bills/${bill.id}`, label: bill.bill_number });
+                            }}
                           >
                             {bill.bill_number}
                           </Link>
@@ -663,13 +672,19 @@ export default function PayablesPage() {
                       <tr
                         key={po.id}
                         className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                        onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                        onClick={() => {
+                          pushTrailEntry({ href: `/procurement/orders/${po.id}`, label: po.po_number });
+                          router.push(`/procurement/orders/${po.id}`);
+                        }}
                       >
                         <td className="px-4 py-3 font-mono text-xs font-medium">
                           <Link
                             href={`/procurement/orders/${po.id}`}
                             className="text-primary hover:underline"
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              pushTrailEntry({ href: `/procurement/orders/${po.id}`, label: po.po_number });
+                            }}
                           >
                             {po.po_number}
                           </Link>

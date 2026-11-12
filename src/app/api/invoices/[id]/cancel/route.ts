@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { canCancelInvoice } from "@/lib/invoice-cancel";
 
 /**
  * POST /api/invoices/[id]/cancel
@@ -16,7 +17,11 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
  *     Receivable and stops being dunned by the reminder cron.
  *
  * Body (JSON): { reason?: string }
+ *
+ * Roles: admin, manager — cancelling withdraws a document the client has
+ * already received. Accounts only acts on credit notes, never starts a cancel.
  */
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -26,7 +31,14 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
+  if (!dbUser || !canCancelInvoice(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Only admin or manager can cancel an invoice" },
+      { status: 403 }
+    );
+  }
 
   const body = await request.json().catch(() => ({}));
   const reason = (body.reason as string | undefined)?.trim() || null;

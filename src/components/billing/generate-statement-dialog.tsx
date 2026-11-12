@@ -24,7 +24,7 @@ import {
   Plus, Trash2, Eye, EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatCurrency, preventEnterSubmit } from "@/lib/utils";
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 // ─── Local types ──────────────────────────────────────────────────────────────
@@ -321,7 +321,7 @@ export function GenerateStatementDialog({
         <DialogHeader>
           <DialogTitle>Generate Billing Statement</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-5">
 
           {/* ── Mode toggle ── */}
           {!contractId && !bookingId && (

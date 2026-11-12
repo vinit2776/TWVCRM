@@ -1,7 +1,17 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
+import type { InvoiceCheckRecord } from "@/lib/procurement/invoice-check";
 
-export interface CreateVendorBillInput {
+/** Price-tolerance columns (migration 00610). Only passed for a bill whose PO is flexible and the invoice went past the PO value. */
+export interface ToleranceFacts {
+  variance_amount: number;
+  variance_percent: number;
+  out_of_tolerance: boolean;
+  tolerance_exception_reason: string | null;
+}
+
+export interface CreateVendorBillInput extends Partial<ToleranceFacts> {
+  company_id: string;
   vendor_id: string;
   invoice_number?: string | null;
   invoice_date: string;
@@ -10,10 +20,18 @@ export interface CreateVendorBillInput {
   gst_amount?: number;
   notes?: string | null;
   invoice_file_url?: string | null;
+  /** Advisory invoice check made on the form (migration 00676). Only passed when a check ran. */
+  invoice_check?: InvoiceCheckRecord | null;
   po_id?: string | null;
   service_report_id?: string | null;
   replaces_bill_id?: string | null;
   electricity_bill_id?: string | null;
+  // Electricity-provider bills only (migration 00587). Never passed for any other bill, so ordinary
+  // bills never reference these columns and keep working whether or not the migration has run.
+  location_id?: string | null;
+  connection_id?: string | null;
+  electricity_consumer_number?: string | null;
+  electricity_printed_name?: string | null;
   amount_paid?: number;
   payment_status?: string;
   created_by: string;
@@ -24,29 +42,19 @@ export interface CreateVendorBillResult {
   bill_number: string;
 }
 
-function generateBillNumber(count: number): string {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const seq = String(count + 1).padStart(3, "0");
-  return `BILL-${yy}${mm}-${seq}`;
-}
-
 export async function createVendorBill(
   supabase: SupabaseClient,
   input: CreateVendorBillInput
 ): Promise<CreateVendorBillResult> {
-  const { count: existingCount } = await supabase
-    .from("vendor_bills")
-    .select("*", { count: "exact", head: true });
-
-  const billNumber = generateBillNumber(existingCount ?? 0);
-
+  // bill_number is generated atomically by the trg_generate_vendor_bill_number
+  // DB trigger (00397_fix_vendor_bill_number_race.sql) — computing it here
+  // via SELECT COUNT(*) raced under concurrent/double-submitted requests.
   const gstAmount = Math.round((input.gst_amount ?? 0) * 100) / 100;
 
   const { data: bill, error: billError } = await supabase
     .from("vendor_bills")
     .insert({
+      company_id: input.company_id,
       po_id: input.po_id ?? null,
       vendor_id: input.vendor_id,
       invoice_number: input.invoice_number ?? null,
@@ -59,8 +67,24 @@ export async function createVendorBill(
       notes: input.notes ?? null,
       invoice_file_url: input.invoice_file_url ?? null,
       service_report_id: input.service_report_id ?? null,
+      ...(input.invoice_check ? { invoice_check: input.invoice_check } : {}),
       electricity_bill_id: input.electricity_bill_id ?? null,
-      bill_number: billNumber,
+      ...(input.location_id
+        ? {
+            location_id: input.location_id,
+            connection_id: input.connection_id ?? null,
+            electricity_consumer_number: input.electricity_consumer_number ?? null,
+            electricity_printed_name: input.electricity_printed_name ?? null,
+          }
+        : {}),
+      ...(input.variance_amount !== undefined
+        ? {
+            variance_amount: input.variance_amount,
+            variance_percent: input.variance_percent ?? null,
+            out_of_tolerance: input.out_of_tolerance ?? false,
+            tolerance_exception_reason: input.tolerance_exception_reason ?? null,
+          }
+        : {}),
       amount_paid: input.amount_paid ?? 0,
       payment_status: input.payment_status ?? "unpaid",
       approval_status: "pending",
@@ -76,10 +100,16 @@ export async function createVendorBill(
   if (input.po_id && input.invoice_file_url) {
     const { data: linkedPo } = await supabase
       .from("purchase_orders")
-      .select("po_type")
+      .select("po_type, status")
       .eq("id", input.po_id)
       .single();
     if (linkedPo?.po_type !== "service") {
+      // Remember where the PO was so an admin withdrawing this bill can put it
+      // back. Skipped when another bill already moved it (status is then an
+      // invoice_* value and says nothing about receiving).
+      if (linkedPo && !["invoice_received", "invoice_approved", "cancelled"].includes(linkedPo.status)) {
+        await supabase.from("vendor_bills").update({ po_status_before_bill: linkedPo.status }).eq("id", bill.id);
+      }
       await supabase
         .from("purchase_orders")
         .update({ status: "invoice_received" })
@@ -101,6 +131,15 @@ export async function createVendorBill(
       invoice_file_uploaded: { old: null, new: !!input.invoice_file_url },
       ...(input.electricity_bill_id
         ? { electricity_bill_id: { old: null, new: input.electricity_bill_id } }
+        : {}),
+      ...(input.variance_amount !== undefined
+        ? {
+            variance_percent: { old: null, new: input.variance_percent ?? null },
+            out_of_tolerance: { old: null, new: input.out_of_tolerance ?? false },
+            ...(input.tolerance_exception_reason
+              ? { tolerance_exception_reason: { old: null, new: input.tolerance_exception_reason } }
+              : {}),
+          }
         : {}),
     },
   });

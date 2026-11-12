@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -21,6 +22,9 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { VENDOR_CATEGORIES, VENDOR_CATEGORY_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
 import type { ProcurementVendor, VendorCategory } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
+import { useCurrentUser } from "@/providers/current-user-provider";
 
 const CATEGORY_COLORS: Record<string, string> = {
   pantry: "bg-orange-100 text-orange-800",
@@ -40,6 +44,8 @@ const emptyForm = {
   payment_terms: "",
   notes: "",
   terms_and_conditions: "",
+  is_service_provider: false,
+  is_electricity_provider: false,
   // Bank details
   bank_name: "",
   bank_account_holder: "",
@@ -154,6 +160,8 @@ export default function VendorsPage() {
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const { user } = useCurrentUser();
+  const isAdmin = user?.role === "admin";
   const [categoryFilter, setCategoryFilter] = useState("");
   const [includeInactive, setIncludeInactive] = useState(false);
 
@@ -199,6 +207,8 @@ export default function VendorsPage() {
       payment_terms: vendor.payment_terms || "",
       notes: vendor.notes || "",
       terms_and_conditions: vendor.terms_and_conditions || "",
+      is_service_provider: vendor.is_service_provider ?? false,
+      is_electricity_provider: vendor.is_electricity_provider ?? false,
       bank_name: vendor.bank_name || "",
       bank_account_holder: vendor.bank_account_holder || "",
       bank_account_number: vendor.bank_account_number || "",
@@ -223,11 +233,18 @@ export default function VendorsPage() {
       ? `/api/procurement/vendors/${editVendor.id}`
       : "/api/procurement/vendors";
     const method = editVendor ? "PATCH" : "POST";
+    const electricityChanged = editVendor
+      ? form.is_electricity_provider !== (editVendor.is_electricity_provider ?? false)
+      : form.is_electricity_provider === true;
     const res = await fetch(url, {
       method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...form,
+        // Only an admin can change this switch, and it is sent only when it actually changed (or is
+        // being switched on for a new vendor). An ordinary save must not carry it: before migration
+        // 00586 is applied the column does not exist, and a value in the body makes the server read it.
+        is_electricity_provider: isAdmin && electricityChanged ? form.is_electricity_provider : undefined,
         contact_email: form.contact_email || undefined,
         bank_name: form.bank_name || undefined,
         bank_account_holder: form.bank_account_holder || undefined,
@@ -281,6 +298,7 @@ export default function VendorsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Vendors" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -349,7 +367,11 @@ export default function VendorsPage() {
                   {vendors.map((v) => (
                     <tr key={v.id} className="border-b last:border-0 hover:bg-muted/30">
                       <td className="px-4 py-3">
-                        <Link href={`/procurement/vendors/${v.id}`} className="hover:underline">
+                        <Link
+                          href={`/procurement/vendors/${v.id}`}
+                          className="hover:underline"
+                          onClick={() => pushTrailEntry({ href: `/procurement/vendors/${v.id}`, label: v.name })}
+                        >
                           <p className="font-medium">{v.name}</p>
                         </Link>
                         {v.gstin && <p className="text-xs text-muted-foreground">GST: {v.gstin}</p>}
@@ -363,6 +385,12 @@ export default function VendorsPage() {
                         <Badge className={CATEGORY_COLORS[v.category]}>
                           {VENDOR_CATEGORY_LABELS[v.category]}
                         </Badge>
+                        {v.is_service_provider && (
+                          <Badge variant="outline" className="ml-1 text-xs">Service provider</Badge>
+                        )}
+                        {v.is_electricity_provider && (
+                          <Badge variant="outline" className="ml-1 text-xs">Electricity</Badge>
+                        )}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
                         {v.contact_name || "—"}
@@ -443,6 +471,28 @@ export default function VendorsPage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="col-span-2 flex items-start gap-2">
+                <Checkbox
+                  id="is_service_provider"
+                  checked={form.is_service_provider}
+                  onCheckedChange={(c) => setForm((f) => ({ ...f, is_service_provider: c === true }))}
+                />
+                <Label htmlFor="is_service_provider" className="font-normal leading-snug">
+                  Service provider (internet, AMC, security…) — orders go through the service PO flow, not goods POs
+                </Label>
+              </div>
+              <div className="col-span-2 flex items-start gap-2">
+                <Checkbox
+                  id="is_electricity_provider"
+                  checked={form.is_electricity_provider}
+                  disabled={!isAdmin}
+                  onCheckedChange={(c) => setForm((f) => ({ ...f, is_electricity_provider: c === true }))}
+                />
+                <Label htmlFor="is_electricity_provider" className="font-normal leading-snug">
+                  Electricity provider (utility or landlord) — their bills must name a location
+                  {!isAdmin && <span className="block text-xs text-muted-foreground">Only an admin can change this.</span>}
+                </Label>
               </div>
               <div className="space-y-1">
                 <Label>Payment Terms</Label>

@@ -7,7 +7,7 @@ export async function GET() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const PUBLIC_KEYS = ["razorpay_enabled", "razorpay_key_id", "upi_id", "upi_qr_code_path", "crm_gst_enabled", "tally_sync_enabled", "tally_handoff_v2_enabled", "facility_classifier_ui_enabled"];
+  const PUBLIC_KEYS = ["razorpay_enabled", "razorpay_key_id", "upi_id", "upi_qr_code_path", "crm_gst_enabled", "tally_sync_enabled", "tally_handoff_v2_enabled", "facility_classifier_ui_enabled", "leegality_enabled"];
 
   const { data: settings } = await supabase
     .from("app_settings")

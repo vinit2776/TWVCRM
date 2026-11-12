@@ -2,6 +2,12 @@
 
 All notable changes to TWV CRM are documented here.
 
+## [1.0.98.258] - 2026-08-06
+
+### Added
+- **Recurring bill auto-approval**: admin can set up a recurring bill rule for a vendor (Vendors → [vendor] → Recurring Bills tab), seeded from an existing manually-approved bill. Future bills from that vendor skip the manual approval queue automatically when they clear four guardrails — variance tolerance (default ±10%), a hard rupee cap, a duplicate-invoice check, and a first-bill-after-rule confirmation. Auto-approved bills carry a distinct violet "Auto-approved" badge (separate from a human "Approved for Payment") plus a human-readable reasoning note, on both the Vendor Bills list and the bill detail page. Admin can pause/resume a rule at any time; a paused rule's next bill falls back to manual.
+- Migration `00388_procurement_recurring_bill_rules.sql` — new `procurement_recurring_bill_rules` table; `vendor_bills` gains `auto_approved`, `recurring_rule_id`, `auto_approval_note`.
+
 ## [1.0.98.1] - 2026-06-26
 
 ### Changed

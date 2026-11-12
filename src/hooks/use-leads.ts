@@ -17,6 +17,8 @@ interface UseLeadsOptions {
   sort_by?: string;
   sort_order?: "asc" | "desc";
   include_archived?: boolean;
+  view?: "overdue" | "all" | "ids";
+  pinned?: boolean;
 }
 
 export function useLeads(options: UseLeadsOptions = {}) {
@@ -33,6 +35,8 @@ export function useLeads(options: UseLeadsOptions = {}) {
       sort_by: options.sort_by,
       sort_order: options.sort_order,
       include_archived: options.include_archived || undefined,
+      view: options.view,
+      pinned: options.pinned || undefined,
     },
   });
 }
@@ -43,7 +47,7 @@ export function useLead(id: string) {
 
 export function useUsers() {
   const [users, setUsers] = useState<
-    { id: string; full_name: string; email: string }[]
+    { id: string; full_name: string; email: string; role: string }[]
   >([]);
   const [loading, setLoading] = useState(true);
 
@@ -51,7 +55,7 @@ export function useUsers() {
     const supabase = createClient();
     const { data } = await supabase
       .from("users")
-      .select("id, full_name, email")
+      .select("id, full_name, email, role")
       .eq("is_active", true)
       .order("full_name");
     setUsers(data || []);

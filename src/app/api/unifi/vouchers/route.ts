@@ -9,7 +9,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigFromLocation, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 import type { UnifiVoucher } from "@/lib/unifi";
 
 /**
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest) {
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  const allowed = ["admin", "manager", "sales_rep", "floor_manager", "office_admin", "it_manager"];
+  const allowed = ["admin", "manager", "sales_rep", "floor_manager", "office_admin", "coordinator", "it_manager"];
   if (!allowed.includes(dbUser.role)) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
@@ -53,7 +54,7 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient();
   const { data: location } = await admin
     .from("locations")
-    .select("id, name, code, unifi_site_id")
+    .select("id, name, code, unifi_site_id, unifi_console_id")
     .eq("id", locationId)
     .single();
 
@@ -61,10 +62,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "This location is not managed via the UniFi API" }, { status: 400 });
   }
 
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = siteConfigFromLocation(location);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
+  }
+
   try {
     // Use cached full list (60s TTL) — avoids re-fetching 19 MB on every request.
     // Cache key is stable since we always fetch the full list and filter server-side.
-    const vouchers = await cachedUnifiRequest<UnifiVoucher[]>("/stat/voucher", {}, 60);
+    const vouchers = await cachedUnifiRequest<UnifiVoucher[]>("/stat/voucher", {}, 60, siteCfg);
 
     // Compute summary stats from full list
     const stats = {

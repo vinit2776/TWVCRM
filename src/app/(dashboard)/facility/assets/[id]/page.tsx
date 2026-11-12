@@ -13,10 +13,14 @@ import { Button } from "@/components/ui/button";
 import { cn, formatDate, formatCurrency } from "@/lib/utils";
 import { PRIORITY_STYLES, STATUS_STYLES, timeAgo } from "@/lib/facility-ui";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
+import { AssetCredentialsCard } from "@/components/facility/asset-credentials-card";
 import { AssetEventDialog, type OpenIssue } from "@/components/facility/asset-event-dialog";
 import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
 import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
+import { BILLING_CYCLE_LABELS, type ServicePoBillingCycle } from "@/lib/constants";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 import type { FacilityAsset, FacilityIssue, FacilityAssetEvent, FacilityAssetEventType, FacilityLifecycleStage, CategoryCustomField, AmcStatus, AssetDocument, AssetDocumentTier } from "@/types";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
@@ -95,6 +99,9 @@ interface AmcContract {
   total_ordered_amount: number;
   created_at: string;
   status: string; // PO status — needed to gate "Log Breakdown Visit"
+  billing_cycle: ServicePoBillingCycle | null;
+  cycle_count: number | null;
+  unit_cost_per_cycle: number | null;
   procurement_vendors: { id: string; name: string } | null;
 }
 
@@ -225,6 +232,10 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
+      <PageBreadcrumb
+        current={{ label: asset.name }}
+        fallbackParent={{ href: "/facility/assets", label: "Assets" }}
+      />
       {/* Header */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="flex items-center gap-2 min-w-0">
@@ -254,7 +265,14 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
           <Button size="sm" onClick={() => setEventDialogOpen(true)}>
             <Plus className="h-4 w-4 mr-1" /> Log Event
           </Button>
-          <Button size="sm" variant="outline" onClick={() => window.open(`/facility/assets/${id}/print`, "_blank")}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              pushTrailEntry({ href: `/facility/assets/${id}/print`, label: "Print" });
+              window.open(`/facility/assets/${id}/print`, "_blank");
+            }}
+          >
             <Printer className="h-4 w-4 mr-1" /> Print QR
           </Button>
           <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
@@ -347,6 +365,8 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
             </aside>
           </div>
 
+          <AssetCredentialsCard assetId={id} userRole={userRole} />
+
           <section className="rounded-lg border bg-card p-4 space-y-2">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Issue history</div>
             {asset.issue_history.length === 0 ? (
@@ -354,7 +374,12 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
             ) : (
               <div className="space-y-1.5">
                 {asset.issue_history.map((i) => (
-                  <Link key={i.id} href={`/facility/issues/${i.id}`} className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/40 text-sm">
+                  <Link
+                    key={i.id}
+                    href={`/facility/issues/${i.id}`}
+                    className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/40 text-sm"
+                    onClick={() => pushTrailEntry({ href: `/facility/issues/${i.id}`, label: i.title })}
+                  >
                     <span className={cn("h-2 w-2 rounded-full shrink-0", PRIORITY_STYLES[i.priority].dot)} />
                     <code className="text-[11px] font-mono text-muted-foreground">{i.issue_number}</code>
                     <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[i.status].chip)}>
@@ -391,12 +416,19 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                         <span className="text-xs text-muted-foreground">{timeAgo(ev.created_at)}</span>
                         {ev.logger && <span className="text-xs text-muted-foreground">· {ev.logger.full_name}</span>}
                       </div>
-                      {ev.issue && (
-                        <Link href={`/facility/issues/${ev.issue.id}`} className="inline-flex items-center gap-1 text-[11px] text-[#015E65] hover:underline mt-0.5">
-                          <code className="font-mono">{ev.issue.issue_number}</code>
-                          <span className="truncate max-w-[180px]">{ev.issue.title}</span>
-                        </Link>
-                      )}
+                      {ev.issue && (() => {
+                        const issue = ev.issue;
+                        return (
+                          <Link
+                            href={`/facility/issues/${issue.id}`}
+                            className="inline-flex items-center gap-1 text-[11px] text-[#015E65] hover:underline mt-0.5"
+                            onClick={() => pushTrailEntry({ href: `/facility/issues/${issue.id}`, label: issue.title })}
+                          >
+                            <code className="font-mono">{issue.issue_number}</code>
+                            <span className="truncate max-w-[180px]">{issue.title}</span>
+                          </Link>
+                        );
+                      })()}
                       {ev.note && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{ev.note}</p>}
                       {ev.photo_urls?.length > 0 && (
                         <div className="flex gap-1.5 mt-1">
@@ -564,12 +596,17 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
 
               {/* Contracts */}
               <section className="space-y-3">
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">AMC Contracts</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">AMC Contracts</div>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/procurement/requests/new?department=amc&asset_id=${asset.id}`}>Set up AMC</Link>
+                  </Button>
+                </div>
                 {amcContracts.length === 0 ? (
                   <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
                     <Wrench className="h-6 w-6 mx-auto mb-2 opacity-30" />
                     <p>No AMC contract linked to this asset yet.</p>
-                    <p className="text-xs mt-1">Link this asset from Procurement &gt; AMC when creating or editing a service PO.</p>
+                    <p className="text-xs mt-1">Use &quot;Set up AMC&quot; above to start a request with this asset already picked.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -602,6 +639,12 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             <div className="text-sm">{c.procurement_vendors?.name || "—"}</div>
                             <div className="text-xs text-muted-foreground">
                               {c.amc_start_date && <>{formatDate(c.amc_start_date)} — {c.amc_end_date ? formatDate(c.amc_end_date) : "Open"}</>}
+                              {c.billing_cycle && (
+                                <>
+                                  {" · "}{BILLING_CYCLE_LABELS[c.billing_cycle]}
+                                  {c.cycle_count && c.cycle_count > 1 && ` (${c.cycle_count} cycles${c.unit_cost_per_cycle ? ` of ${formatCurrency(c.unit_cost_per_cycle)}` : ""})`}
+                                </>
+                              )}
                             </div>
                             {(c.amc_scope_covered || c.amc_scope_exclusions) && (
                               <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
@@ -617,9 +660,13 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                           <div className="text-right shrink-0 space-y-1">
                             <div className="text-sm font-semibold">{formatCurrency(c.total_ordered_amount)}</div>
                             <div className="text-xs text-muted-foreground">
-                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} visits
+                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} preventive visits
                             </div>
-                            <Link href={`/procurement/orders/${c.id}`} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                            <Link
+                              href={`/procurement/orders/${c.id}`}
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              onClick={() => pushTrailEntry({ href: `/procurement/orders/${c.id}`, label: c.po_number })}
+                            >
                               View PO <ExternalLink className="h-3 w-3" />
                             </Link>
                           </div>
@@ -859,14 +906,24 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             <div className="text-sm">{c.procurement_vendors?.name || "—"}</div>
                             <div className="text-xs text-muted-foreground">
                               {c.amc_start_date && <>{formatDate(c.amc_start_date)} — {c.amc_end_date ? formatDate(c.amc_end_date) : "Open"}</>}
+                              {c.billing_cycle && (
+                                <>
+                                  {" · "}{BILLING_CYCLE_LABELS[c.billing_cycle]}
+                                  {c.cycle_count && c.cycle_count > 1 && ` (${c.cycle_count} cycles${c.unit_cost_per_cycle ? ` of ${formatCurrency(c.unit_cost_per_cycle)}` : ""})`}
+                                </>
+                              )}
                             </div>
                           </div>
                           <div className="text-right shrink-0 space-y-1">
                             <div className="text-sm font-semibold">{formatCurrency(c.total_ordered_amount)}</div>
                             <div className="text-xs text-muted-foreground">
-                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} visits
+                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} preventive visits
                             </div>
-                            <Link href={`/procurement/orders/${c.id}`} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                            <Link
+                              href={`/procurement/orders/${c.id}`}
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              onClick={() => pushTrailEntry({ href: `/procurement/orders/${c.id}`, label: c.po_number })}
+                            >
                               View PO <ExternalLink className="h-3 w-3" />
                             </Link>
                           </div>
@@ -1246,7 +1303,7 @@ function DocumentsSection({
   const [file, setFile] = useState<File | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
-  const canUpload = ["admin", "manager", "fms", "accounts", "office_admin", "it_manager"].includes(userRole);
+  const canUpload = ["admin", "manager", "fms", "accounts", "office_admin", "coordinator", "it_manager"].includes(userRole);
   const canDelete = ["admin", "manager"].includes(userRole);
 
   async function handleUpload() {

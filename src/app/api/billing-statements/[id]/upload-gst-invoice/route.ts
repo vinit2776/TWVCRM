@@ -4,7 +4,14 @@ import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/norm
 import { stampSignatureOnPdf } from "@/lib/uploads/stamp-pdf-signature";
 import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
+import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
+import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
+import { annexureFromSections } from "@/lib/electricity-annexure";
+import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
+import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
+import { extractFromPdf } from "@/lib/tally-pdf-extract";
+import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 
 /**
  * POST /api/billing-statements/[id]/upload-gst-invoice
@@ -27,6 +34,8 @@ import { COMPANY_BANK_DETAILS } from "@/lib/constants";
  *   - B-series upload with IRN → 422
  *   - Customer has GSTIN but B-series uploaded → 422
  *   - Customer has no GSTIN but A-series uploaded → 422
+ *   - Period printed on the PDF shares no month with the statement's → 422 without acknowledge_period_mismatch
+ *   - Invoice date outside the period's months without acknowledge_off_period_date → 422
  */
 export const dynamic = "force-dynamic";
 
@@ -40,6 +49,10 @@ interface UploadBody {
   autofill_source: "qr" | "pdf_text" | "bridge_match" | "manual";
   qr_payload: Record<string, unknown> | null;
   nic_signature_verified: boolean;
+  /** Accounts confirmed an invoice date outside the billing period is intended. */
+  acknowledge_off_period_date?: boolean;
+  /** Accounts confirmed the period printed on the PDF differs from the statement's on purpose. */
+  acknowledge_period_mismatch?: boolean;
 }
 
 function badRequest(reason: string) {
@@ -62,7 +75,6 @@ export async function POST(
     .eq("auth_id", user.id)
     .maybeSingle();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
-  const authUserId = user.id;
   if (!["accounts", "admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -103,19 +115,24 @@ export async function POST(
     .from("billing_statements")
     .select(`
       id, total_amount, payment_status, handoff_state, issuance_channel,
-      statement_number, period_start, period_end,
+      statement_number, period_start, period_end, statement_type, line_items, razorpay_payment_link_url,
       contract:contracts!billing_statements_contract_id_fkey(
         id, billing_mode, contract_number,
-        lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
+        lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
       ),
       proposal:proposals!billing_statements_proposal_id_fkey(
         id, proposal_number,
-        lead:leads!proposals_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
+        lead:leads!proposals_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         id, invoice_number,
-        lead:leads!proforma_invoices_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
-      )
+        lead:leads!proforma_invoices_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
     `)
     .eq("id", id)
     .maybeSingle();
@@ -133,6 +150,9 @@ export async function POST(
     statement_number: string | null;
     period_start: string | null;
     period_end: string | null;
+    statement_type: string | null;
+    line_items: unknown;
+    razorpay_payment_link_url: string | null;
     contract: {
       id: string;
       billing_mode: "proforma_first" | "gst_direct" | null;
@@ -144,6 +164,7 @@ export async function POST(
         last_name: string | null;
         company: string | null;
         email: string | null;
+        billing_emails: string[] | null;
         mobile: string | null;
         phone: string | null;
       } | null;
@@ -158,6 +179,7 @@ export async function POST(
         last_name: string | null;
         company: string | null;
         email: string | null;
+        billing_emails: string[] | null;
         mobile: string | null;
         phone: string | null;
       } | null;
@@ -172,15 +194,60 @@ export async function POST(
         last_name: string | null;
         company: string | null;
         email: string | null;
+        billing_emails: string[] | null;
         mobile: string | null;
         phone: string | null;
       } | null;
     } | null;
+    case: {
+      id: string;
+      case_number: string;
+      bill_to: "aggregator" | "client" | null;
+      client_name: string;
+      client_company_name: string | null;
+      client_email: string | null;
+      client_phone: string | null;
+      client_gst_number: string | null;
+      aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null; gst_number: string | null } | null;
+    } | null;
+    aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null; gst_number: string | null } | null;
   };
 
-  const partyId = statement.contract?.id ?? statement.proposal?.id ?? statement.invoice?.id ?? "unknown";
-  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "";
-  const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead;
+  /** Synthesizes the same lead-like shape (email/company/name/mobile/gst_number)
+   *  used elsewhere in this route from a VO case or aggregator-consolidated
+   *  statement, so the rest of the function doesn't need a branch per source. */
+  function leadFromVoSource(s: typeof statement) {
+    if (s.case) {
+      const billToAggregator = s.case.bill_to === "aggregator" ? s.case.aggregator : null;
+      if (billToAggregator) {
+        return {
+          id: billToAggregator.id, gst_number: billToAggregator.gst_number,
+          first_name: null, last_name: null, company: billToAggregator.name,
+          email: billToAggregator.primary_email, billing_emails: null,
+          mobile: billToAggregator.primary_phone, phone: null,
+        };
+      }
+      return {
+        id: s.case.id, gst_number: s.case.client_gst_number,
+        first_name: null, last_name: null, company: s.case.client_company_name || s.case.client_name,
+        email: s.case.client_email, billing_emails: null,
+        mobile: s.case.client_phone, phone: null,
+      };
+    }
+    if (s.aggregator) {
+      return {
+        id: s.aggregator.id, gst_number: s.aggregator.gst_number,
+        first_name: null, last_name: null, company: s.aggregator.name,
+        email: s.aggregator.primary_email, billing_emails: null,
+        mobile: s.aggregator.primary_phone, phone: null,
+      };
+    }
+    return null;
+  }
+
+  const partyId = statement.contract?.id ?? statement.proposal?.id ?? statement.invoice?.id ?? statement.case?.id ?? statement.aggregator?.id ?? "unknown";
+  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? statement.case?.case_number ?? statement.aggregator?.name ?? "";
+  const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead ?? leadFromVoSource(statement);
 
   // ── Hard-block rules ──────────────────────────────────────────────────────
   // Compare at whole-rupee level — Razorpay collects in paise and the stored
@@ -191,6 +258,29 @@ export async function POST(
       `Tally amount ₹${meta.invoice_amount} does not match statement total ₹${statement.total_amount}. ` +
       `Fix the Tally voucher or void+reissue the statement; no override is allowed.`,
     );
+  }
+
+  if (
+    isInvoiceDateOffPeriod(meta.invoice_date, statement.period_start, statement.period_end) &&
+    meta.acknowledge_off_period_date !== true
+  ) {
+    return badRequest(
+      `Invoice date ${meta.invoice_date} doesn't fit the billing period ` +
+      `${statement.period_start} → ${statement.period_end}. Confirm the date is intended to upload anyway.`,
+    );
+  }
+
+  // The period printed on the PDF is re-read here rather than trusted from the
+  // client, so the form's warning can't be skipped by leaving the field out.
+  // Unreadable PDFs and PDFs naming no period pass: absence of evidence isn't a mismatch.
+  if (file.type === "application/pdf" && meta.acknowledge_period_mismatch !== true) {
+    const { invoice_period_months } = await extractFromPdf(Buffer.from(await file.arrayBuffer()));
+    if (invoicePeriodMismatch(invoice_period_months, statement.period_start, statement.period_end)) {
+      return badRequest(
+        `This invoice says it bills ${invoice_period_months.join(", ")}, but the statement covers ` +
+        `${statement.period_start} → ${statement.period_end}. Confirm the period is correct to upload anyway.`,
+      );
+    }
   }
 
   const customerHasGstin = !!partyLead?.gst_number;
@@ -244,6 +334,28 @@ export async function POST(
 
   if (normalized.mimeType === "application/pdf") {
     normalized.buffer = await stampSignatureOnPdf(normalized.buffer);
+
+    // Reimbursement invoices carry customer-facing proof (receipts, vendor
+    // bills) — append them here so the merged PDF, once stored below, is the
+    // one file every downstream view/resend/email route reads from. Merging
+    // per-route instead would risk double-appending pages on a resend.
+    if (statement.statement_type === "reimbursement") {
+      const supportingDocs = await fetchSupportingDocuments(adminClient, statement.id);
+      if (supportingDocs.length > 0) {
+        normalized.buffer = await mergeSupportingDocuments(adminClient, Buffer.from(normalized.buffer), supportingDocs);
+      }
+    }
+
+    // Electricity re-bills: the customer receives this Tally PDF, not a CRM
+    // one, so the frozen Annexure A page is appended here (once, before
+    // storing) rather than in the view/resend routes. Fails soft.
+    if (statement.statement_type === "electricity") {
+      normalized.buffer = await appendElectricityAnnexure(normalized.buffer, {
+        invoiceNumber: meta.tally_invoice_number,
+        contractNumber: statement.contract?.contract_number ?? "",
+        annexure: annexureFromSections(statement.line_items),
+      });
+    }
   }
 
   const timestamp = Date.now();
@@ -263,7 +375,7 @@ export async function POST(
     .from("gst_invoice_uploads")
     .insert({
       billing_statement_id: statement.id,
-      uploaded_by: authUserId,
+      uploaded_by: dbUser.id,
       tally_invoice_number: meta.tally_invoice_number,
       tally_invoice_series: meta.tally_invoice_series,
       irn: meta.irn,
@@ -274,7 +386,7 @@ export async function POST(
       autofill_source: meta.autofill_source,
       nic_signature_verified: meta.nic_signature_verified,
       name_check_status: "approved",
-      name_check_decided_by: authUserId,
+      name_check_decided_by: dbUser.id,
       name_check_decided_at: new Date().toISOString(),
     })
     .select("id")
@@ -307,6 +419,22 @@ export async function POST(
       { error: `Invoice saved (id: ${insertedUpload.id}) but mirroring onto the statement failed: ${mirrorErr.message}. Refresh and check statement state.` },
       { status: 500 },
     );
+  }
+
+  // ── Also mirror the GST invoice number onto the linked ad-hoc invoice ─────
+  // (proforma_invoices) so it shows on the lead page. The mirror above only
+  // updates the accounting-side statement row — nothing previously kept the
+  // customer-facing invoice's gst_invoice_number in sync. Non-fatal: the
+  // upload itself already succeeded (PDF stored, statement updated); a failure
+  // here just means the lead page won't show the GST number until retried.
+  if (statement.invoice) {
+    const { error: invoiceMirrorErr } = await adminClient
+      .from("proforma_invoices")
+      .update({ gst_invoice_number: meta.tally_invoice_number })
+      .eq("id", statement.invoice.id);
+    if (invoiceMirrorErr) {
+      console.error("[upload-gst-invoice] proforma_invoices mirror failed (non-fatal):", invoiceMirrorErr);
+    }
   }
 
   // ── Transition handoff_state ─────────────────────────────────────────────
@@ -345,13 +473,12 @@ export async function POST(
     if (rzpAuth) {
       try {
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
-        const refId = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-gst`;
-        const payload: Record<string, unknown> = {
+        const payload: Record<string, unknown> & { reference_id: string; amount: number } = {
           amount: Math.round(totalAmount * 100),
           currency: "INR",
           description: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
-          reference_id: refId,
-          expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+          reference_id: gstLinkReferenceId(invoiceNumber),
+          expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
           notify: { sms: !!customerPhone, email: !!customerEmail },
           reminder_enable: true,
           notes: {
@@ -369,17 +496,10 @@ export async function POST(
             ...(customerPhone ? { contact: customerPhone } : {}),
           };
         }
-        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
-          method: "POST",
-          headers: { Authorization: `Basic ${rzpAuth}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (rzpRes.ok) {
-          const linkData = await rzpRes.json() as { id: string; short_url: string };
-          rzpLinkId = linkData.id;
-          rzpLinkUrl = linkData.short_url;
-        } else {
-          console.error("[upload-gst-invoice] Razorpay link failed:", await rzpRes.text());
+        const link = await createOrRecoverGstLink({ rzpAuth, payload, logTag: "upload-gst-invoice" });
+        if (link) {
+          rzpLinkId = link.id;
+          rzpLinkUrl = link.url;
         }
       } catch (err) {
         console.error("[upload-gst-invoice] Razorpay link threw:", err);
@@ -399,14 +519,28 @@ export async function POST(
       console.error("[upload-gst-invoice] PDF download for attachment failed (non-blocking):", err);
     }
 
+    // No new link: the email still carries the one already on the statement
+    // rather than going out with nothing to click.
+    const emailLinkUrl = rzpLinkUrl ?? statement.razorpay_payment_link_url ?? null;
+
     const nowIso = new Date().toISOString();
     const nowYmd = nowIso.slice(0, 10);
 
     // ── Persist Razorpay link + due date ─────────────────────────────────────
+    // Resetting the ladder alongside due_date is load-bearing, not tidiness:
+    // the reminder cron picks a stage from days-overdue against due_date but
+    // gates it on reminder_count, so a stale count behind a fresh due date
+    // reads as "stage already sent" for every rung already fired and the
+    // statement stops being chased until days-overdue catches back up.
+    // The link columns are only written when a link was obtained: a failed
+    // attempt used to overwrite a stored link with null.
     await adminSupabase.from("billing_statements").update({
-      razorpay_payment_link_id: rzpLinkId,
-      razorpay_payment_link_url: rzpLinkUrl,
+      ...(rzpLinkId && rzpLinkUrl
+        ? { razorpay_payment_link_id: rzpLinkId, razorpay_payment_link_url: rzpLinkUrl }
+        : {}),
       due_date: nowYmd,
+      reminder_count: 0,
+      last_reminder_sent_at: null,
     }).eq("id", id);
 
     // ── Send email to customer ────────────────────────────────────────────────
@@ -437,15 +571,15 @@ export async function POST(
               <tr><td style="padding:6px 0;color:#666;">Invoice Date</td><td style="padding:6px 0;">${invoiceDateFormatted}</td></tr>
               <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${amountFormatted}</td></tr>
             </table>
-            ${rzpLinkUrl ? `
+            ${emailLinkUrl ? `
             <h3 style="color:#015E65;font-size:14px;margin:20px 0 10px;">Payment Options</h3>
             <table style="width:100%;border-collapse:collapse;font-size:13px;">
               <tr><td style="padding:4px 0;color:#666;">Bank Transfer</td><td style="padding:4px 0;">${COMPANY_BANK_DETAILS.accountName}<br/>${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}<br/>A/C: ${COMPANY_BANK_DETAILS.accountNumber} | IFSC: ${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
               ${upiId ? `<tr><td style="padding:4px 0;color:#666;">UPI</td><td style="padding:4px 0;">${upiId}</td></tr>` : ""}
-              <tr><td style="padding:4px 0;color:#666;">Pay Online</td><td style="padding:4px 0;"><a href="${rzpLinkUrl}" style="color:#015E65;font-weight:bold;">${rzpLinkUrl}</a></td></tr>
+              <tr><td style="padding:4px 0;color:#666;">Pay Online</td><td style="padding:4px 0;"><a href="${emailLinkUrl}" style="color:#015E65;font-weight:bold;">${emailLinkUrl}</a></td></tr>
             </table>
             <div style="text-align:center;margin:24px 0;">
-              <a href="${rzpLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
+              <a href="${emailLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
             </div>
             ` : ""}
             <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
@@ -457,13 +591,23 @@ export async function POST(
         </div>
       `;
 
+      // CC every additional billing contact on file — the primary "email" field
+      // is only one of potentially several finance-team recipients the customer
+      // registered (leads.billing_emails). Missing these silently drops the
+      // invoice for everyone but the primary contact.
+      const ccEmails = Array.from(
+        new Set((lead?.billing_emails ?? []).filter((e) => e && e !== customerEmail)),
+      );
+
       let emailWarning: string | null = null;
       try {
         const safeFilename = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
         const sendResult = await resend.emails.send({
+          patient: true,
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
           to: [customerEmail],
+          cc: ccEmails.length > 0 ? ccEmails : undefined,
           bcc: [EMAIL_REPLY_TO],
           subject: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
           html: emailHtml,
@@ -474,9 +618,38 @@ export async function POST(
         if (sendResult.error) throw new Error(sendResult.error.message);
         await adminSupabase.from("billing_statements").update({
           gst_invoice_sent_at: nowIso,
-          gst_invoice_sent_to: customerEmail,
+          gst_invoice_sent_to: [customerEmail, ...ccEmails].join(", "),
+          // Stamp the same delivery-bookkeeping fields dispatchTallyInvoice uses
+          // (tally_delivered_at, lifecycle_stage). Without this, the payment-reminder
+          // cron's "never dun an undelivered Tally invoice" gate treats this
+          // statement as permanently undelivered even though it was just emailed —
+          // see docs/tally-integration-status.md for the incident this fixed.
+          tally_delivered_at: nowIso,
+          lifecycle_stage: "sent",
+          emailed_at: nowIso,
+          emailed_to: customerEmail,
         }).eq("id", id);
+        if (statement.invoice) {
+          await adminSupabase.from("proforma_invoices").update({
+            gst_invoice_sent_at: nowIso,
+            gst_invoice_sent_to: [customerEmail, ...ccEmails].join(", "),
+          }).eq("id", statement.invoice.id);
+        }
         await setHandoffState(adminSupabase, id, "gst_sent_awaiting_payment", "gst_invoice_email_sent");
+        // Log every recipient to billing_send_log — this is what actually feeds
+        // the "Communications" timeline on the lead page (GET
+        // /api/leads/[id]/billing-communications). Without this, the auto-send
+        // that just happened is invisible there even though it succeeded.
+        await adminSupabase.from("billing_send_log").insert(
+          [customerEmail, ...ccEmails].map((recipient) => ({
+            billing_statement_id: id,
+            send_type: "gst_invoice" as const,
+            recipient,
+            status: "sent" as const,
+            triggered_by: "manual" as const,
+            triggered_by_user_id: dbUser.id,
+          })),
+        );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         emailWarning = `Email delivery failed: ${errMsg}. Invoice uploaded — use Save & send from the inbox to retry.`;
@@ -487,6 +660,17 @@ export async function POST(
           performed_by: null,
           changes: { error: errMsg, recipient: customerEmail, trigger: "upload_gst_invoice" },
         });
+        await adminSupabase.from("billing_send_log").insert(
+          [customerEmail, ...ccEmails].map((recipient) => ({
+            billing_statement_id: id,
+            send_type: "gst_invoice" as const,
+            recipient,
+            status: "failed" as const,
+            error: errMsg,
+            triggered_by: "manual" as const,
+            triggered_by_user_id: dbUser.id,
+          })),
+        );
       }
 
       return NextResponse.json({

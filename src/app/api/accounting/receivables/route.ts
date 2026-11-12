@@ -1,9 +1,101 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
+import { loadPartReceivableState } from "@/lib/deposit-instalment-server";
+import { requiredDeposit } from "@/lib/deposit-instalments";
 import {
-  daysOverdue, isStale, depositIsChaseable, type ReceivableRow,
+  daysOverdue, isStale, depositIsChaseable, todayIst, type ReceivableRow,
 } from "@/lib/receivables";
+import { invoiceParty } from "@/lib/invoice-party";
+
+/**
+ * Average payment days per customer — amount-weighted (payment_date −
+ * due_date) across every payment made in the trailing 12 months, rolled up
+ * by customer rather than by contract. A customer with several contracts
+ * gets one consistent number instead of a different figure on each of their
+ * rows — keyed the same way the page's own partyOf() resolves a customer:
+ * the lead behind a contract/proposal/ad-hoc invoice, or (since there's no
+ * shared customer id across multiple VO cases) the case/aggregator itself.
+ *
+ * Windowed by payment_date, not due_date — a statement due 18 months ago but
+ * paid last week still reflects this customer's *current* behavior.
+ */
+async function computeAvgPaymentDays(
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<Record<string, number>> {
+  const cutoff = new Date(Date.parse(todayIst() + "T00:00:00Z") - 365 * 86400000)
+    .toISOString().slice(0, 10);
+
+  const { data: payments } = await supabase
+    .from("billing_payments")
+    .select(`
+      amount, tds_amount, payment_date,
+      billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
+        due_date, voided_at, contract_id, proposal_id, invoice_id, case_id, aggregator_id
+      )
+    `)
+    .gte("payment_date", cutoff);
+
+  interface PayRow {
+    amount: number;
+    tds_amount: number | null;
+    payment_date: string;
+    billing_statement: {
+      due_date: string | null;
+      voided_at: string | null;
+      contract_id: string | null;
+      proposal_id: string | null;
+      invoice_id: string | null;
+      case_id: string | null;
+      aggregator_id: string | null;
+    } | null;
+  }
+
+  const rows = ((payments || []) as unknown as PayRow[]).filter(
+    (p) => p.billing_statement?.due_date && !p.billing_statement.voided_at
+  );
+
+  const contractIds = [...new Set(rows.map((r) => r.billing_statement!.contract_id).filter((x): x is string => !!x))];
+  const proposalIds = [...new Set(rows.map((r) => r.billing_statement!.proposal_id).filter((x): x is string => !!x))];
+  const invoiceIds = [...new Set(rows.map((r) => r.billing_statement!.invoice_id).filter((x): x is string => !!x))];
+
+  const [{ data: contractLeads }, { data: proposalLeads }, { data: invoiceLeads }] = await Promise.all([
+    contractIds.length ? supabase.from("contracts").select("id, lead_id").in("id", contractIds) : Promise.resolve({ data: [] }),
+    proposalIds.length ? supabase.from("proposals").select("id, lead_id").in("id", proposalIds) : Promise.resolve({ data: [] }),
+    invoiceIds.length ? supabase.from("proforma_invoices").select("id, lead_id").in("id", invoiceIds) : Promise.resolve({ data: [] }),
+  ]);
+  const contractLeadMap = new Map((contractLeads || []).map((c: { id: string; lead_id: string | null }) => [c.id, c.lead_id]));
+  const proposalLeadMap = new Map((proposalLeads || []).map((p: { id: string; lead_id: string | null }) => [p.id, p.lead_id]));
+  const invoiceLeadMap = new Map((invoiceLeads || []).map((i: { id: string; lead_id: string | null }) => [i.id, i.lead_id]));
+
+  const weightedSum = new Map<string, number>();
+  const weightedAmount = new Map<string, number>();
+
+  for (const r of rows) {
+    const s = r.billing_statement!;
+    const customerKey =
+      (s.contract_id && contractLeadMap.get(s.contract_id)) ||
+      (s.proposal_id && proposalLeadMap.get(s.proposal_id)) ||
+      (s.invoice_id && invoiceLeadMap.get(s.invoice_id)) ||
+      s.case_id ||
+      s.aggregator_id ||
+      null;
+    if (!customerKey) continue;
+
+    const amount = paymentCredit({ amount: r.amount, tds_amount: r.tds_amount });
+    if (amount <= 0) continue;
+    const daysDiff = (Date.parse(r.payment_date + "T00:00:00Z") - Date.parse(s.due_date! + "T00:00:00Z")) / 86400000;
+
+    weightedSum.set(customerKey, (weightedSum.get(customerKey) || 0) + amount * daysDiff);
+    weightedAmount.set(customerKey, (weightedAmount.get(customerKey) || 0) + amount);
+  }
+
+  const avgDays: Record<string, number> = {};
+  for (const [key, amt] of weightedAmount) {
+    avgDays[key] = Math.round((weightedSum.get(key)! / amt) * 10) / 10;
+  }
+  return avgDays;
+}
 
 /**
  * GET /api/accounting/receivables
@@ -39,6 +131,9 @@ export async function GET(_req: NextRequest) {
       razorpay_payment_link_url, razorpay_payment_link_id,
       last_reminder_sent_at, reminder_count, voided_at, created_at,
       gst_invoice_number, pi_cancelled_at, accounted,
+      cancellation_requested_at, cancellation_reason,
+      cancellation_requested_by_user:users!billing_statements_cancellation_requested_by_fkey(full_name),
+      tally_invoice_number, issuance_channel, proposal_id, case_id, aggregator_id,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
@@ -48,9 +143,15 @@ export async function GET(_req: NextRequest) {
         lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
-        id, invoice_number,
-        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
-      )
+        id, invoice_number, primary_head, internal_notes, attribution_purpose,
+        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails),
+        attributed_contract:contracts!proforma_invoices_contract_id_fkey(id, contract_number)
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, client_name, client_company_name, client_email, client_phone, client_gst_number, bill_to,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
     `)
     .in("status", ["finalized", "exported"])
     .in("payment_status", ["unpaid", "partially_paid"])
@@ -63,16 +164,88 @@ export async function GET(_req: NextRequest) {
   // One round-trip to sum payments per statement instead of N selects.
   // Paid-to-date includes TDS (same settlement definition as the payment
   // route) — a TDS-bearing partial payment must not inflate balance_due.
+  // Also collects the payment detail rows themselves (reference, mode, who
+  // recorded it) — powers the "Payment received" dialog on partially-paid
+  // rows, same shape as the Paid tab.
   let paidByStatement = new Map<string, number>();
+  const paymentsByStatement = new Map<string, Array<{
+    id: string; amount: number; payment_date: string; created_at: string; payment_mode: string;
+    payment_reference: string | null; razorpay_payment_id: string | null;
+    notes: string | null; recorded_by_user: { id: string; full_name: string } | null;
+  }>>();
   if (statementIds.length > 0) {
     const { data: pays } = await supabase
       .from("billing_payments")
-      .select("billing_statement_id, amount, tds_amount")
-      .in("billing_statement_id", statementIds);
+      .select(`
+        billing_statement_id, id, amount, tds_amount, payment_date, payment_mode, created_at,
+        payment_reference, razorpay_payment_id, notes,
+        recorded_by_user:users!billing_payments_recorded_by_fkey(id, full_name)
+      `)
+      .in("billing_statement_id", statementIds)
+      .order("created_at", { ascending: false });
     paidByStatement = (pays || []).reduce((map, p: { billing_statement_id: string; amount: number; tds_amount: number | null }) => {
       map.set(p.billing_statement_id, (map.get(p.billing_statement_id) || 0) + paymentCredit(p));
       return map;
     }, new Map<string, number>());
+    for (const p of pays || []) {
+      const sid = p.billing_statement_id as string;
+      if (!paymentsByStatement.has(sid)) paymentsByStatement.set(sid, []);
+      paymentsByStatement.get(sid)!.push({
+        id: p.id as string,
+        amount: p.amount as number,
+        payment_date: p.payment_date as string,
+        created_at: p.created_at as string,
+        payment_mode: p.payment_mode as string,
+        payment_reference: p.payment_reference as string | null,
+        razorpay_payment_id: p.razorpay_payment_id as string | null,
+        notes: p.notes as string | null,
+        recorded_by_user: (p.recorded_by_user as unknown as { id: string; full_name: string } | null) ?? null,
+      });
+    }
+  }
+
+  // Open query count per statement — one grouped query for the page rather
+  // than a fetch per row, same as the Tally Inbox badges. Scoped by
+  // entity_type since `queries` spans every module.
+  const openQueriesByStatement = new Map<string, number>();
+  if (statementIds.length > 0) {
+    const { data: openQueries } = await supabase
+      .from("queries")
+      .select("entity_id")
+      .eq("entity_type", "billing_statement")
+      .in("entity_id", statementIds)
+      .eq("status", "open");
+    for (const q of openQueries || []) {
+      const id = (q as { entity_id: string }).entity_id;
+      openQueriesByStatement.set(id, (openQueriesByStatement.get(id) ?? 0) + 1);
+    }
+  }
+
+  // Pending deposit-adjustment requests per statement — surfaces on the row
+  // so accounts/admin don't see a plain "unpaid/partially paid" balance and
+  // conclude nothing is happening, when in fact an adjustment is already
+  // sitting in someone's approval queue for that exact amount (the confusion
+  // that motivated this: TWV-C-0079's two invoices looked untouched here
+  // even though Prema had already requested adjustments against both).
+  const depositAdjustmentsByStatement = new Map<string, Array<{
+    id: string; amount: number; requested_at: string; requested_by_name: string | null;
+  }>>();
+  if (statementIds.length > 0) {
+    const { data: adjustments } = await supabase
+      .from("deposit_adjustments")
+      .select("id, billing_statement_id, amount, requested_at, requester:users!deposit_adjustments_requested_by_fkey(full_name)")
+      .in("billing_statement_id", statementIds)
+      .eq("status", "pending_approval");
+    for (const a of adjustments || []) {
+      const sid = a.billing_statement_id as string;
+      if (!depositAdjustmentsByStatement.has(sid)) depositAdjustmentsByStatement.set(sid, []);
+      depositAdjustmentsByStatement.get(sid)!.push({
+        id: a.id as string,
+        amount: Number(a.amount),
+        requested_at: a.requested_at as string,
+        requested_by_name: (a.requester as unknown as { full_name: string } | null)?.full_name ?? null,
+      });
+    }
   }
 
   // Today in IST as a YYYY-MM-DD anchor for daysOverdue.
@@ -93,6 +266,9 @@ export async function GET(_req: NextRequest) {
       amount_paid: Math.round(paid),
       balance_due: Math.round(balance),
       days_overdue: daysOverdue,
+      open_query_count: openQueriesByStatement.get(s.id as string) ?? 0,
+      payments: paymentsByStatement.get(s.id as string) ?? [],
+      pending_deposit_adjustments: depositAdjustmentsByStatement.get(s.id as string) ?? [],
     };
   });
 
@@ -114,7 +290,9 @@ export async function GET(_req: NextRequest) {
     stale: otherRows.filter((r) => r.is_stale).length,
   };
 
-  return NextResponse.json({ rows, summary, other_rows: otherRows, other_summary: otherSummary });
+  const avgDays = await computeAvgPaymentDays(supabase);
+
+  return NextResponse.json({ rows, summary, other_rows: otherRows, other_summary: otherSummary, avgDays });
 }
 
 /**
@@ -124,7 +302,7 @@ export async function GET(_req: NextRequest) {
  * bound tightly to the billing_statements shape, and these carry different
  * fields (no GST, no proforma lifecycle, no partial payments).
  */
-async function fetchOtherReceivables(
+export async function fetchOtherReceivables(
   supabase: Awaited<ReturnType<typeof createClient>>
 ): Promise<ReceivableRow[]> {
   const out: ReceivableRow[] = [];
@@ -148,34 +326,80 @@ async function fetchOtherReceivables(
     .from("proposals")
     .select(`
       id, proposal_number, status, security_deposit_amount, deposit_credit_amount,
-      deposit_due_date, deposit_razorpay_link_url,
+      deposit_exception_amount, deposit_due_date, deposit_razorpay_link_url, deposit_razorpay_link_id,
+      deposit_link_cancelled_at,
       deposit_reminder_count, deposit_last_reminder_sent_at,
       lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email)
     `)
     .eq("deposit_payment_status", "pending")
     .gt("security_deposit_amount", 0);
 
+  const partState = await loadPartReceivableState(supabase, (deposits || []).map((d) => d.id as string));
+
   for (const d of deposits || []) {
-    if (!depositIsChaseable(d.status as string)) continue;
+    // Starting parts withdraws the proposal's own full-deposit link, which is
+    // what depositIsChaseable reads as "no live link, don't chase". A deposit in
+    // parts is listed for its parts instead, as long as the proposal is still open.
+    const inParts = partState.has(d.id as string);
+    const listed = inParts
+      ? ["accepted", "sent", "viewed"].includes(d.status as string)
+      : depositIsChaseable({
+          status: d.status as string,
+          deposit_razorpay_link_id: d.deposit_razorpay_link_id as string | null,
+          deposit_link_cancelled_at: d.deposit_link_cancelled_at as string | null,
+        });
+    if (!listed) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = d.lead as any;
-    const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);
+    // The deposit actually owed: deposit plus any exception (negative when waived
+    // in part) minus any carried-forward credit — the same figure the payment
+    // link, the deposits inbox and the report balance use.
+    const owed = requiredDeposit(d as { security_deposit_amount?: number; deposit_exception_amount?: number; deposit_credit_amount?: number });
     if (owed <= 0) continue; // fully covered by a carried-forward deposit
-    out.push(finish({
-      id: d.id,
-      kind: "deposit",
-      reference: d.proposal_number,
+    // Collected in parts: show what is received and the part that is out. The
+    // reminder ladder stays off — it would chase the whole amount.
+    const parts = partState.get(d.id as string);
+    const base = {
+      id: d.id as string,
+      kind: "deposit" as const,
+      reference: d.proposal_number as string,
       party_name: partyOf(lead),
       lead_id: lead?.id ?? null,
       lead_email: lead?.email ?? null,
-      total_amount: owed,
-      amount_paid: 0,
-      due_date: d.deposit_due_date,
-      payment_link_url: d.deposit_razorpay_link_url,
-      followup_enabled: true,
       reminder_count: d.deposit_reminder_count || 0,
-      last_reminder_sent_at: d.deposit_last_reminder_sent_at,
+      last_reminder_sent_at: d.deposit_last_reminder_sent_at as string | null,
       href: `/proposals/${d.id}`,
+    };
+    const paidSoFar = parts?.paid ?? 0;
+    const open = parts?.open ?? [];
+    if (open.length > 0) {
+      // One line per part that is out, each for what that part asks. The whole
+      // deposit stays visible in the label; showing it as the amount due made
+      // the receivable read ₹60,000 when ₹40,000 had been requested.
+      const asked = open.reduce((s, o) => s + o.amount, 0);
+      const notAsked = Math.max(0, Math.round((owed - paidSoFar - asked) * 100) / 100);
+      for (const o of open) {
+        out.push(finish({
+          ...base,
+          part_id: o.id,
+          part_label: `Part ${o.no} of the ₹${owed.toLocaleString("en-IN")} deposit · ₹${paidSoFar.toLocaleString("en-IN")} received${notAsked > 0 ? ` · ₹${notAsked.toLocaleString("en-IN")} not yet asked` : ""}`,
+          total_amount: o.amount,
+          amount_paid: 0,
+          due_date: o.due_date,
+          payment_link_url: o.link_url,
+          followup_enabled: false,
+        }));
+      }
+      continue;
+    }
+    out.push(finish({
+      ...base,
+      total_amount: owed,
+      amount_paid: paidSoFar,
+      due_date: d.deposit_due_date as string | null,
+      payment_link_url: d.deposit_razorpay_link_url as string | null,
+      followup_enabled: !parts,
+      ...(parts ? { part_label: `Deposit in parts · ₹${paidSoFar.toLocaleString("en-IN")} received · nothing requested right now` } : {}),
     }));
   }
 
@@ -215,25 +439,59 @@ async function fetchOtherReceivables(
   }
 
   // ── Ad-hoc / proforma invoices ─────────────────────────────────────────
+  // Can be raised against a lead OR a Virtual Office case (migration 00532)
+  // — a case has no lead, so the buyer has to be resolved the same way
+  // POST /api/cases/[id]/adhoc-invoices does: via invoiceParty(), which
+  // reads the case's billing route (aggregator vs. direct client). Without
+  // this, a case-billed invoice showed up here as "(unnamed)".
   const { data: invoices } = await supabase
     .from("proforma_invoices")
     .select(`
-      id, invoice_number, title, total_amount, due_date, status,
+      id, invoice_number, title, total_amount, due_date, status, case_id,
       razorpay_link_url, followup_enabled, reminder_count, last_reminder_sent_at,
-      lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email)
+      lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email),
+      case:cases!proforma_invoices_case_id_fkey(
+        id, case_number, client_name, client_company_name, client_email, client_phone,
+        client_gst_number, aggregator_id, bill_to,
+        aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone, gst_number)
+      )
     `)
     .not("status", "in", "(paid,cancelled)");
 
+  // Sending an invoice mirrors it into billing_statements specifically so it
+  // flows through the same AR ladder and Tally handoff every other invoice
+  // type uses (see /api/invoices/[id]/email) — that mirror, not this raw
+  // proforma_invoices row, is the tracked receivable from that point on. Skip
+  // any invoice that already has one, or it shows up twice on this page: once
+  // here and once in the Detail view via its statement, under two different
+  // ids with two different action sets. Only a still-draft invoice (never
+  // sent, no mirror yet) belongs in this card.
+  const invoiceIds = (invoices || []).map((inv) => inv.id);
+  const invoicesWithStatement = new Set<string>();
+  if (invoiceIds.length > 0) {
+    const { data: linkedStatements } = await supabase
+      .from("billing_statements")
+      .select("invoice_id")
+      .in("invoice_id", invoiceIds);
+    for (const s of linkedStatements || []) {
+      if (s.invoice_id) invoicesWithStatement.add(s.invoice_id as string);
+    }
+  }
+
   for (const inv of invoices || []) {
+    if (invoicesWithStatement.has(inv.id)) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = inv.lead as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const caseRow = inv.case as any;
+    const party = !lead && caseRow ? invoiceParty({ case: caseRow }) : null;
     out.push(finish({
       id: inv.id,
       kind: "adhoc_invoice",
       reference: inv.invoice_number,
-      party_name: partyOf(lead),
+      party_name: lead ? partyOf(lead) : (party?.name || "(unnamed)"),
       lead_id: lead?.id ?? null,
-      lead_email: lead?.email ?? null,
+      lead_email: lead?.email ?? party?.email ?? null,
       total_amount: Number(inv.total_amount || 0),
       amount_paid: 0,
       due_date: inv.due_date,

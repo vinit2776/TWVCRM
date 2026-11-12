@@ -6,7 +6,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigForLocationId, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 
 interface UnifiStatBucket {
   time: number;
@@ -43,11 +44,11 @@ export async function GET(request: NextRequest) {
   const days = Math.min(Math.max(isNaN(daysParam) ? 7 : daysParam, 1), 90);
 
   const locationId = searchParams.get("location_id");
-  let siteCfg = undefined;
-  if (locationId) {
-    const { data: loc } = await supabase
-      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", locationId).single();
-    if (loc) siteCfg = siteConfigFromLocation(loc);
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = await siteConfigForLocationId(locationId);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
   }
 
   const now = Date.now();

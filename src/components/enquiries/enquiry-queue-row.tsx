@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Check, UserCheck, X, RefreshCw } from "lucide-react";
+import { Check, UserCheck, X, RefreshCw, Ban, Phone } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,17 +10,25 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import type { EnquiryItem, ResolutionOutcome } from "@/providers/enquiry-notifications-provider";
+import type { EnquiryOutcome } from "@/lib/enquiries";
+import { NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
+import { EnquiryNameControl } from "@/components/enquiries/enquiry-name";
+import { NUMBER_LABELS, NUMBER_LABEL_TEXT } from "@/lib/whatsapp-gate";
 
-const OUTCOME_LABEL: Record<ResolutionOutcome, string> = {
+const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {
   converted: "Converted to lead",
   not_interested: "Not interested / no fit",
   no_response: "Followed up — no response",
+  superseded: "Superseded by a later enquiry",
+  spam: "Spam",
 };
 
-const OUTCOME_BG: Record<ResolutionOutcome, string> = {
+const OUTCOME_BG: Record<EnquiryOutcome, string> = {
   converted: "bg-emerald-100 text-emerald-800",
   not_interested: "bg-slate-100 text-slate-700",
   no_response: "bg-amber-100 text-amber-800",
+  superseded: "bg-slate-50 text-slate-500 border border-dashed border-slate-300",
+  spam: "bg-red-50 text-red-700 border border-dashed border-red-200",
 };
 
 function timeAgo(iso: string): string {
@@ -31,11 +39,16 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
+// An unclaimed enquiry this old is long past "needs a reply in hours" — calling it
+// "Overdue ≥4h" is misleading, so it reads Stale instead.
+const STALE_AFTER_MS = 7 * 24 * 3600 * 1000;
+
 function urgency(item: EnquiryItem): "red" | "yellow" | "stale" | "ok" {
   if (item.resolvedAt) return "ok";
   const now = Date.now();
   if (!item.claimedAt) {
     const ageMs = now - new Date(item.attentionResetAt).getTime();
+    if (ageMs >= STALE_AFTER_MS) return "stale";
     if (ageMs >= 4 * 3600 * 1000) return "red";
     if (ageMs >= 2 * 3600 * 1000) return "yellow";
     return "ok";
@@ -53,7 +66,7 @@ interface Props {
 
 export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
   const router = useRouter();
-  const { claim, unclaim, resolve } = useEnquiryNotifications();
+  const { claim, unclaim, resolve, markNotALead } = useEnquiryNotifications();
 
   const u = urgency(item);
   const isResolved = !!item.resolvedAt;
@@ -95,8 +108,16 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
             {item.source}
             {!compact && item.mobile && <> · +91 {item.mobile}</>}
             {" · "}
-            <span className="font-mono">#{item.leadId.slice(0, 6)}</span>
+            <span className="font-mono">{item.reference}</span>
           </p>
+          {item.message && (
+            <p className="mt-0.5 line-clamp-2 text-xs text-foreground/80" title={item.message}>
+              “{item.message}”
+              {(item.messageCount ?? 0) > 1 && (
+                <span className="ml-1 text-[10px] text-muted-foreground">+{(item.messageCount ?? 1) - 1} earlier</span>
+              )}
+            </p>
+          )}
         </button>
 
         <div className="shrink-0 flex flex-col items-end gap-0.5 text-right">
@@ -126,11 +147,38 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
         </div>
       </div>
 
+      {!isResolved && item.namePlaceholder && (
+        <div className="mt-1">
+          <EnquiryNameControl
+            enquiryId={item.enquiryId}
+            name={item.name}
+            placeholder
+            suggestedName={item.suggestedName}
+            onChanged={() => {}}
+          />
+        </div>
+      )}
+
+      {isResolved && (item.claimerName || item.resolverName) && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {item.claimerName && <>Claimed by {item.claimerName}</>}
+          {item.claimerName && item.resolverName && " · "}
+          {item.resolverName && <>Resolved by {item.resolverName}</>}
+        </p>
+      )}
+
+      {!isResolved && (item.nextStep || (item.stage && item.stage.key !== "new" && item.stage.key !== "contacted")) && (
+        <div className="mt-1.5 space-y-1">
+          {item.stage && item.stage.key !== "new" && item.stage.key !== "contacted" && <StageChip stage={item.stage} />}
+          <NextStepLine nextStep={item.nextStep} followUpAt={item.followUpAt} />
+        </div>
+      )}
+
       {!isResolved && (
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">
           {item.claimedAt ? (
             <button
-              onClick={() => unclaim(item.leadId)}
+              onClick={() => unclaim(item.enquiryId)}
               className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-200 transition-colors"
               title="Release this claim"
             >
@@ -140,7 +188,7 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
             </button>
           ) : (
             <button
-              onClick={() => claim(item.leadId)}
+              onClick={() => claim(item.enquiryId)}
               className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 transition-colors"
             >
               <UserCheck className="h-3 w-3" />
@@ -156,20 +204,52 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem onClick={() => resolve(item.leadId, "converted")}>
+              <DropdownMenuItem onClick={() => resolve(item.enquiryId, "converted")}>
                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-2" />
                 Converted to lead
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => resolve(item.leadId, "not_interested")}>
+              <DropdownMenuItem onClick={() => resolve(item.enquiryId, "not_interested")}>
                 <span className="inline-block w-2 h-2 rounded-full bg-slate-400 mr-2" />
                 Not interested / no fit
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => resolve(item.leadId, "no_response")}>
+              <DropdownMenuItem onClick={() => resolve(item.enquiryId, "no_response")}>
                 <span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-2" />
                 Followed up — no response
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {item.sourceTag === "whatsapp" && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 transition-colors"
+                  title="Staff, a vendor or anyone who is not a prospect: their messages stop opening enquiries"
+                >
+                  <Ban className="h-3 w-3" />
+                  Not a lead
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64">
+                {NUMBER_LABELS.map((label) => (
+                  <DropdownMenuItem key={label} onClick={() => markNotALead(item.enquiryId, label)}>
+                    {NUMBER_LABEL_TEXT[label]}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          <button
+            onClick={() => {
+              onNavigate?.();
+              router.push(`/leads/contact-back/${item.enquiryId}`);
+            }}
+            className="inline-flex items-center gap-1 rounded-md border border-primary/40 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/5 transition-colors"
+          >
+            <Phone className="h-3 w-3" />
+            Call back
+          </button>
 
           <button
             onClick={goToLead}

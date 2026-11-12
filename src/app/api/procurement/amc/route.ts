@@ -1,5 +1,7 @@
+import { isDeadBillStatus } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { computeAmcCommitted } from "@/lib/procurement/amc-budget";
 
 function getCurrentFY(date = new Date()): number {
   const month = date.getMonth() + 1;
@@ -30,12 +32,14 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const amcStatus   = searchParams.get("amc_status");
   const locationId  = searchParams.get("location_id");
+  const companyId   = searchParams.get("company_id");
 
   // ── Fetch AMC service POs with vendor bill payment info ──────────────────
-  const query = supabase
+  let query = supabase
     .from("purchase_orders")
     .select(`
-      id, po_number, po_type, status, amc_status,
+      id, po_number, po_type, status, amc_status, amc_terminated_at,
+      billing_cycle, cycle_count, opening_cycles, unit_cost_per_cycle,
       amc_start_date, amc_end_date,
       amc_visits_covered, amc_visits_used,
       amc_contact_name, amc_helpline_number, amc_contact_email,
@@ -43,40 +47,52 @@ export async function GET(request: NextRequest) {
       total_ordered_amount, created_at,
       procurement_vendors(id, name),
       locations(id, name),
+      companies(id, name, brand_name),
       purchase_requests(id, pr_number, department, expenditure_type),
-      purchase_order_items(id, item_name, unit),
-      vendor_bills(id, payment_status),
+      purchase_order_items(id, item_name, unit, linked_asset_id, linked_asset:facility_assets(id, name, asset_code)),
+      vendor_bills(id, payment_status, approval_status),
       linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code)
     `)
-    .eq("po_type", "service")
     .order("created_at", { ascending: false });
+
+  if (companyId) query = query.eq("company_id", companyId);
 
   const { data: rows, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // ── Filter to AMC POs with at least one paid/partially_paid bill ─────────
-  // An AMC contract is "live" in the register only once payment has been made.
+  // ── Filter to AMC contracts ──────────────────────────────────────────────
+  // Identity comes from the linked material request (expenditure_type = 'amc'),
+  // not from po_type: AMC POs raised before the service-PO flow existed
+  // (commit eefcf4e0, 2026-06-20) are still typed 'goods' but are real contracts.
+  // Payment state no longer gates visibility — a signed, ordered AMC is a live
+  // commitment worth tracking, so it is surfaced and flagged instead of hidden.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let amcRows = (rows ?? []).filter((r: any) => {
-    const isAmcPo = r.purchase_requests?.expenditure_type === "amc";
-    if (!isAmcPo) return false;
-
-    const bills: Array<{ payment_status: string }> = r.vendor_bills ?? [];
-    return bills.some(
-      (b) => b.payment_status === "paid" || b.payment_status === "partially_paid"
-    );
+    if (r.purchase_requests?.expenditure_type !== "amc") return false;
+    if (r.status === "cancelled") return false;
+    return Boolean(r.amc_start_date);
   });
 
   // Recompute live amc_status for each row
   const today = new Date();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   amcRows = amcRows.map((r: any) => {
-    const computed = computeAmcStatus(
-      r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today
+    // A termination overrides the date maths, as it does on the contract page.
+    const computed = r.amc_terminated_at
+      ? "terminated"
+      : computeAmcStatus(r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today);
+    const { vendor_bills: bills, ...rest } = r;
+    // Rejected bills do not consume a billing cycle — that cycle is still unbilled.
+    // Matches the cap enforced when a bill is created.
+    const liveBills = (bills ?? []).filter(
+      (b: { approval_status?: string | null }) => !isDeadBillStatus(b.approval_status)
     );
-    // Strip vendor_bills from the response (internal filter only)
-    const { vendor_bills: _vb, ...rest } = r;
-    return { ...rest, amc_status: computed };
+    return {
+      ...rest,
+      amc_status: computed,
+      payment_state: computePaymentState(liveBills),
+      bills_raised: liveBills.length,
+    };
   });
 
   // Apply filters
@@ -90,32 +106,30 @@ export async function GET(request: NextRequest) {
   }
 
   // ── AMC annual budget summary (for budget banner on the page) ────────────
-  const canSeeBudget = ["admin", "manager"].includes(dbUser.role);
+  // Budget is company-scoped — only computed when a single company is selected,
+  // since a combined AMC budget across two separate legal entities is meaningless.
+  const canSeeBudget = ["admin", "manager"].includes(dbUser.role) && !!companyId;
   let budgetSummary = null;
 
   if (canSeeBudget) {
     const currentFY = getCurrentFY();
     const { fyStart, fyEnd } = getFYWindow(currentFY);
 
-    const [{ data: budgetRow }, { data: committed }, { data: provisional }] = await Promise.all([
+    const [{ data: budgetRow }, committedTotal, { data: provisional }] = await Promise.all([
       supabase
         .from("department_budgets")
         .select("monthly_budget, is_active, notes")
+        .eq("company_id", companyId!)
         .eq("department", "amc")
         .eq("budget_period", "annual")
         .eq("financial_year", currentFY)
         .is("location_id", null)
         .maybeSingle(),
+      computeAmcCommitted(supabase, fyStart, fyEnd, companyId!),
       supabase
         .from("purchase_requests")
         .select("total_estimated_amount")
-        .eq("expenditure_type", "amc")
-        .gte("created_at", fyStart)
-        .lte("created_at", fyEnd)
-        .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]),
-      supabase
-        .from("purchase_requests")
-        .select("total_estimated_amount")
+        .eq("company_id", companyId!)
         .eq("expenditure_type", "amc")
         .gte("created_at", fyStart)
         .lte("created_at", fyEnd)
@@ -123,7 +137,6 @@ export async function GET(request: NextRequest) {
     ]);
 
     const annualBudget = budgetRow?.monthly_budget ? Number(budgetRow.monthly_budget) : null;
-    const committedTotal = (committed ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
     const provisionalTotal = (provisional ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
 
     budgetSummary = {
@@ -138,6 +151,21 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({ data: amcRows, budget: budgetSummary });
+}
+
+/**
+ * Payment state of an AMC contract, derived from its vendor bills.
+ * Contracts are listed regardless of payment; this drives the UI badge so the
+ * paid/unpaid distinction stays visible without hiding live commitments.
+ */
+function computePaymentState(
+  bills: Array<{ payment_status: string | null }> | null | undefined
+): "paid" | "partially_paid" | "unpaid" | "no_bill" {
+  const rows = bills ?? [];
+  if (rows.length === 0) return "no_bill";
+  if (rows.some((b) => b.payment_status === "paid")) return "paid";
+  if (rows.some((b) => b.payment_status === "partially_paid")) return "partially_paid";
+  return "unpaid";
 }
 
 function computeAmcStatus(

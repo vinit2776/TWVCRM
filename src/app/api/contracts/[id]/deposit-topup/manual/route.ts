@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { canRecordPayments } from "@/lib/constants";
 
-const ALLOWED_ROLES = ["admin", "manager", "accounts"];
+// Recording money already received — same gate as every other payment.
 const VALID_CATEGORIES = ["seat_expansion", "risk_buffer", "customer_requested", "renewal_escalation", "other"];
 
 /**
@@ -25,8 +26,11 @@ export async function POST(
 
   const { data: actor } = await supabase
     .from("users").select("id, full_name, role").eq("auth_id", user.id).single();
-  if (!actor || !ALLOWED_ROLES.includes(actor.role)) {
-    return NextResponse.json({ error: "Not authorised to record an additional deposit" }, { status: 403 });
+  if (!actor || !canRecordPayments(actor.role)) {
+    return NextResponse.json(
+      { error: "Only admin or accounts can record an additional deposit" },
+      { status: 403 },
+    );
   }
 
   const formData = await request.formData();
@@ -44,8 +48,8 @@ export async function POST(
   if (!VALID_CATEGORIES.includes(category)) {
     return NextResponse.json({ error: "A valid category is required" }, { status: 400 });
   }
-  if (category === "other" && !categoryNote) {
-    return NextResponse.json({ error: "A note is required when category is 'Other'" }, { status: 400 });
+  if (!categoryNote || categoryNote.length < 10) {
+    return NextResponse.json({ error: "Add an internal note (at least 10 characters) so accounts can book this correctly" }, { status: 400 });
   }
   if (!paymentMode) {
     return NextResponse.json({ error: "Payment mode is required" }, { status: 400 });

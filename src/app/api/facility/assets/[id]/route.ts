@@ -55,7 +55,7 @@ export async function PUT(
   const body = await request.json();
   const updates: Record<string, unknown> = {};
   const allowed = [
-    "floor_id", "space_unit_id", "category_id", "name", "asset_code",
+    "location_id", "floor_id", "space_unit_id", "category_id", "name", "asset_code",
     "make", "model", "serial_number", "mac_address", "ip_address",
     "purchase_date", "warranty_expiry", "vendor", "status",
     "lifecycle_stage", "installation_date", "commissioned_at", "commissioned_by",

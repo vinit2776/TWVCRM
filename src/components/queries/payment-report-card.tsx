@@ -1,0 +1,633 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
+import { AlertTriangle, Check, Link2, Loader2, Search, X, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
+import { livePartNumbers } from "@/lib/deposit-instalments";
+import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import { statementReference } from "@/lib/receivables";
+import { formatRecordedOn } from "@/lib/payment-dates";
+import { STATEMENT_PAYMENT_MODE_LABELS, USER_ROLE_LABELS } from "@/lib/constants";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import {
+  PAYMENT_REPORT_STATUS_COLORS,
+  PAYMENT_REPORT_STATUS_LABELS,
+  canReviewPaymentReport,
+  matchingRecordedPayments,
+  closedReportSummary,
+} from "@/lib/queries/payment-reports";
+import type { QueryPaymentReport } from "@/lib/queries/types";
+
+/**
+ * The structured half of a reported payment, shown at the top of its thread.
+ *
+ * Everyone authorized on the thread sees the claim; only accounts and admins
+ * see the three action buttons, because only they can look at the bank.
+ *
+ * Verification deliberately routes through the ordinary Record Payment
+ * dialog rather than recording a payment from here. That dialog owns TDS
+ * capture, deposit adjustment and the Tally receipt hook — a shortcut that
+ * wrote a billing_payments row directly would quietly skip all three, which
+ * is how the AR page once ended up with its own payment form that silently
+ * lacked TDS.
+ */
+interface Props {
+  report: QueryPaymentReport;
+  entityType: string;
+  entityId: string;
+  /**
+   * Display fields from the thread's entity summary. Only used to label the
+   * deposit-recording dialog, which shows who and how much rather than
+   * making accounts look it up again.
+   */
+  entityTitle?: string | null;
+  entityReference?: string | null;
+  /** The deposit required (or already received). Drives the shortfall check. */
+  entityAmount?: number | null;
+  /** Refresh the thread after any outcome. */
+  onChanged: () => void;
+}
+
+/** A payment already recorded on the statement the report points at. */
+interface RecordedPayment {
+  id: string;
+  amount: number | string;
+  tds_amount: number | string | null;
+  payment_date: string;
+  created_at?: string;
+  payment_mode: string;
+  payment_reference: string | null;
+}
+
+interface StatementOption {
+  id: string;
+  statement_number: string | null;
+  /** What the invoice is called on screen — GST number once one exists. */
+  reference: string;
+  total_amount: number;
+  balance_due: number;
+}
+
+export function PaymentReportCard({
+  report, entityType, entityId, entityTitle, entityReference, entityAmount, onChanged,
+}: Props) {
+  // A deposit is recorded on the proposal itself, so there is no invoice to
+  // allocate to and no billing_payments row to link. Verification proves
+  // itself differently — see the verify route.
+  const isDeposit = report.target_kind === "deposit";
+  // A booking payment is already a pending row on the booking, so there is no
+  // invoice to allocate to and nothing to record: verifying just settles that
+  // row. See settleBookingPayment.
+  const isBooking = report.target_kind === "booking";
+  const { user } = useCurrentUser();
+  const canReview = canReviewPaymentReport(user?.role) && report.status === "reported";
+
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isDeposit || entityType !== "proposal_deposit" || report.status !== "reported") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/proposals/${entityId}/deposit-instalments`);
+        if (!res.ok) return;
+        const rows = ((await res.json()).data?.instalments ?? []) as Array<{ id: string; seq: number; amount: number | string; status: string; paid_amount?: number | string | null }>;
+        const numbers = livePartNumbers(rows);
+        if (cancelled) return;
+        const live = rows.filter((r) => r.status !== "cancelled");
+        setDepositHasParts(live.length > 0);
+        const open = live.filter((r) => r.status === "requested");
+        // The part whose amount the customer reported; the only open one if just one is out.
+        const match = open.find((r) => Math.abs(Number(r.amount) - Number(report.amount)) <= 1) ?? (open.length === 1 ? open[0] : null);
+        setDepositPart(match ? { id: match.id, seq: numbers.get(match.id) ?? match.seq, amount: Number(match.amount) } : null);
+      } catch {
+        // Falls back to the single-deposit dialog, which explains itself if parts exist.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isDeposit, entityType, entityId, report.status, report.amount]);
+  const [mode, setMode] = useState<"idle" | "not_found" | "rejected">("idle");
+  const [note, setNote] = useState("");
+
+  // Statement allocation — only needed when the report hangs off a contract,
+  // which is the common case: the reporter knew the customer, not the invoice.
+  const [statements, setStatements] = useState<StatementOption[] | null>(null);
+  // Pre-selected from what the reporter was told. Accounts only ever see a
+  // bank credit with no invoice reference, so asking them to choose from
+  // scratch asks the one person in the loop who cannot know. Still editable:
+  // customers do name the wrong invoice.
+  const [statementId, setStatementId] = useState<string | null>(
+    report.claimed_statement_id ?? (entityType === "billing_statement" ? entityId : null),
+  );
+  const [recordOpen, setRecordOpen] = useState(false);
+  // A deposit collected in parts is recorded against the part it pays, not the
+  // proposal. `undefined` = not looked up yet, `null` = no matching open part.
+  const [depositPart, setDepositPart] = useState<{ id: string; seq: number; amount: number } | null | undefined>(undefined);
+  const [depositHasParts, setDepositHasParts] = useState(false);
+  // Payments already on the chosen invoice. The usual way a report ends up
+  // double-counted is accounts recording the receipt first, then verifying the
+  // report with "Verify and record" — which would record it again. Showing
+  // what's already there lets them link it instead.
+  const [recorded, setRecorded] = useState<RecordedPayment[]>([]);
+
+  const needsAllocation = entityType === "contract" && !isDeposit;
+
+  useEffect(() => {
+    if (!canReview || !needsAllocation) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/contracts/${encodeURIComponent(entityId)}/open-statements`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) throw new Error();
+        const json = (await res.json()) as { data?: StatementOption[] };
+        if (cancelled) return;
+        const rows = json.data ?? [];
+        setStatements(rows);
+        // Only fall back to "the only open invoice" when the reporter didn't
+        // say. Their answer always wins over the guess.
+        if (rows.length === 1 && !report.claimed_statement_id) setStatementId(rows[0].id);
+      } catch {
+        if (!cancelled) setStatements([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canReview, needsAllocation, entityId, report.claimed_statement_id]);
+
+  useEffect(() => {
+    if (!canReview || isDeposit || !statementId) {
+      setRecorded([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/billing-statements/${encodeURIComponent(statementId)}/payment`, { cache: "no-store" });
+        if (!res.ok) throw new Error();
+        const json = (await res.json()) as { data?: RecordedPayment[] };
+        if (!cancelled) setRecorded(json.data ?? []);
+      } catch {
+        if (!cancelled) setRecorded([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canReview, isDeposit, statementId]);
+
+  // Recorded payments that match what was reported, to the rupee. Exactly one
+  // is the common case (the same receipt entered before anyone verified the
+  // report) and earns a one-click accept; zero or several fall back to the
+  // list below, where a person chooses.
+  // A deposit adjustment moves money from the security deposit onto the
+  // invoice. There is no bank credit behind it to check or to match against
+  // the reported amount, so it is shown on its own rather than offered as a
+  // payment to confirm.
+  const adjustments = recorded.filter((p) => p.payment_mode === "deposit_adjustment");
+  const bankRecorded = recorded.filter((p) => p.payment_mode !== "deposit_adjustment");
+  const acceptable = matchingRecordedPayments(bankRecorded, report.amount);
+  // One exact match is a single obvious answer: link it. Recording the report
+  // as a second payment is how receipts get double-counted, so that path sits
+  // behind a deliberate click instead of beside the safe one.
+  const exactMatch = acceptable.length === 1 ? acceptable[0] : null;
+  const [recordAsNew, setRecordAsNew] = useState(false);
+  const showVerifyAndRecord = !exactMatch || recordAsNew;
+
+  const settle = useCallback(
+    async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string, noteOverride?: string) => {
+      setBusy(true);
+      const res = await fetch(`/api/queries/payment-reports/${report.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          outcome,
+          billing_payment_id: billingPaymentId,
+          note: noteOverride ?? (note.trim() || undefined),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      setBusy(false);
+      if (!res.ok) {
+        toast.error(json.error || "Could not update this report");
+        return;
+      }
+      toast.success(
+        outcome === "verified"
+          ? "Payment verified and recorded"
+          : outcome === "rejected"
+            ? "Report closed as no such payment"
+            : "Reporter told it isn't in the bank yet",
+      );
+      setMode("idle");
+      setNote("");
+      onChanged();
+    },
+    [report.id, note, onChanged],
+  );
+
+  const modeLabel = STATEMENT_PAYMENT_MODE_LABELS[report.payment_mode] ?? report.payment_mode;
+  const tone = PAYMENT_REPORT_STATUS_COLORS[report.status];
+
+  // A settled report is a record of who told accounts, not a payment. Drawn as
+  // a green card with a big amount it read as a second receipt next to the real
+  // payment, so once closed it becomes a plain note that points at the payment.
+  if (report.status !== "reported") {
+    const summary = closedReportSummary({
+      status: report.status,
+      targetKind: report.target_kind,
+      reportedAmount: report.amount,
+      reportedMode: report.payment_mode,
+      reportedOn: report.paid_on,
+      linkedPayment: report.linked_payment,
+      modeLabel: (m) => STATEMENT_PAYMENT_MODE_LABELS[m] ?? m,
+    });
+    const Icon = report.status === "rejected" || report.status === "withdrawn" ? XCircle : Link2;
+    return (
+      <div className="rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground flex gap-2 items-start leading-relaxed">
+        <Icon className="h-3.5 w-3.5 mt-0.5 flex-none" aria-hidden />
+        <div className="min-w-0">
+          <p>
+            <span className="font-medium text-foreground">{summary.headline}</span>
+            {report.reviewed_by && report.reviewed_at
+              ? ` · ${report.status === "verified" ? "verified" : report.status === "withdrawn" ? "withdrawn" : "closed"} by ${report.reviewed_by.full_name}, ${formatDate(report.reviewed_at)}`
+              : ""}
+          </p>
+          <p>
+            Reported by {report.created_by.full_name} ({USER_ROLE_LABELS[report.created_by.role] ?? report.created_by.role}):{" "}
+            {formatCurrency(report.amount)}, {modeLabel}, {formatDate(report.paid_on)}
+          </p>
+          {summary.linkLine && <p>{summary.linkLine}</p>}
+          {(report.status === "rejected" || report.status === "withdrawn") && report.resolution_note && (
+            <p className="italic">{report.resolution_note}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className={`rounded-md border p-3 space-y-2.5 ${tone}`}>
+        <div className="flex items-baseline justify-between gap-2 flex-wrap">
+          <span className="text-lg font-semibold tabular-nums">{formatCurrency(report.amount)}</span>
+          <span className="text-[11px] px-2 py-0.5 rounded-full border bg-background/70">
+            {PAYMENT_REPORT_STATUS_LABELS[report.status]}
+          </span>
+        </div>
+
+        <dl className="text-xs space-y-0.5">
+          <Row label="Paid on" value={`${formatDate(report.paid_on)} · ${modeLabel}`} />
+          {report.payment_reference && <Row label="Reference" value={report.payment_reference} mono />}
+          {report.payer_differs && report.payer_name && (
+            <Row label="Remitter" value={report.payer_name} emphasis />
+          )}
+          {report.claimed_statement && (
+            <Row
+              label="Against invoice"
+              // Same rule as the AR row, so the invoice is called one thing
+              // everywhere rather than two.
+              value={statementReference(report.claimed_statement)}
+              emphasis
+            />
+          )}
+          <Row
+            label="Reported by"
+            value={`${report.created_by.full_name} (${USER_ROLE_LABELS[report.created_by.role] ?? report.created_by.role})`}
+          />
+        </dl>
+
+        {report.payer_differs && report.payer_name && (
+          <p className="text-[11px] flex items-start gap-1.5">
+            <AlertTriangle className="h-3 w-3 mt-0.5 flex-none" />
+            The bank credit will show <span className="font-medium">{report.payer_name}</span>, not the
+            contracting entity.
+          </p>
+        )}
+
+        {canReview && (
+          <div className="space-y-2 border-t pt-2.5">
+            {needsAllocation && (
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium">
+                  {report.claimed_statement_id ? "Allocate to invoice — as reported" : "Allocate to invoice"}
+                </label>
+                {statements === null ? (
+                  <div className="text-[11px] flex items-center gap-1.5 opacity-80">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Loading outstanding invoices…
+                  </div>
+                ) : statements.length === 0 ? (
+                  <p className="text-[11px] opacity-80">
+                    No outstanding invoices on this contract. Record it against the right statement from
+                    the Billing page, then come back and verify.
+                  </p>
+                ) : (
+                  <Select value={statementId ?? ""} onValueChange={setStatementId}>
+                    <SelectTrigger className="h-8 text-xs bg-background">
+                      <SelectValue placeholder="Which invoice does this pay?" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statements.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.reference} · {formatCurrency(s.balance_due)} due
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
+
+            {mode === "idle" && adjustments.length > 0 && (
+              <div className="space-y-1.5 rounded border border-slate-300 bg-slate-50 p-2 text-slate-900">
+                <p className="text-[11px] font-medium">This invoice was settled by deposit adjustment</p>
+                <p className="text-[11px] text-slate-700">
+                  The security deposit was applied to it, so there is no bank credit to check. If this report was
+                  asking for that adjustment, close it here.
+                </p>
+                {adjustments.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span>
+                      {formatCurrency(Number(a.amount))} · deposit adjustment · {formatDate(a.payment_date)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 text-[11px] bg-background flex-none"
+                      disabled={busy}
+                      onClick={() =>
+                        void settle(
+                          "verified",
+                          a.id,
+                          `Settled by deposit adjustment of ${formatCurrency(Number(a.amount))} (${formatDate(a.payment_date)}). No bank credit to verify.`,
+                        )
+                      }
+                    >
+                      Close: settled by deposit adjustment
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {mode === "idle" && exactMatch && (
+              <div className="space-y-1.5 rounded border border-green-300 bg-green-50 p-2">
+                <p className="text-[11px] font-medium text-green-900">
+                  Matches a payment already recorded on this invoice
+                </p>
+                <p className="text-[11px] text-green-900/80">
+                  {Number(exactMatch.tds_amount ?? 0) > 0
+                    ? `${formatCurrency(Number(exactMatch.amount))} + ${formatCurrency(Number(exactMatch.tds_amount))} TDS = `
+                    : ""}
+                  {formatCurrency(Number(exactMatch.amount) + Number(exactMatch.tds_amount ?? 0))}
+                  {" · "}
+                  {STATEMENT_PAYMENT_MODE_LABELS[exactMatch.payment_mode] ?? exactMatch.payment_mode}
+                  {exactMatch.payment_reference ? ` · ref ${exactMatch.payment_reference}` : ""}
+                  {" · received "}
+                  {formatDate(exactMatch.payment_date)}
+                </p>
+                <p className="text-[11px] text-green-900/80">
+                  Matched on amount only. Check the bank statement before confirming.
+                </p>
+                {exactMatch.payment_mode !== report.payment_mode && (
+                  <p className="text-[11px] font-medium text-amber-800">
+                    Mode differs: reported {modeLabel}, recorded{" "}
+                    {STATEMENT_PAYMENT_MODE_LABELS[exactMatch.payment_mode] ?? exactMatch.payment_mode}.
+                  </p>
+                )}
+                <Button
+                  size="sm"
+                  className="h-7 text-xs bg-green-600 hover:bg-green-700"
+                  disabled={busy}
+                  onClick={() => void settle("verified", exactMatch.id)}
+                >
+                  <Link2 className="h-3 w-3 mr-1" /> Confirm payment already recorded
+                </Button>
+              </div>
+            )}
+
+            {mode === "idle" && bankRecorded.length > 0 && !exactMatch && (
+              <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
+                <p className="text-[11px] font-medium">Already recorded on this invoice</p>
+                <p className="text-[11px] opacity-80">
+                  {acceptable.length > 0
+                    ? "More than one of these matches the amount reported. Confirm the one that is the same payment."
+                    : "None of these matches the amount reported, so this report stays open. Use Not found yet or No such payment."}
+                </p>
+                {bankRecorded.map((p) => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span>
+                      <span className="font-medium tabular-nums">{formatCurrency(Number(p.amount))}</span>
+                      {" · "}
+                      {STATEMENT_PAYMENT_MODE_LABELS[p.payment_mode] ?? p.payment_mode}
+                      {p.payment_reference ? ` · ${p.payment_reference}` : ""}
+                      {" · received "}
+                      {formatDate(p.payment_date)}
+                      {p.created_at ? ` · recorded ${formatRecordedOn(p.created_at)}` : ""}
+                    </span>
+                    {acceptable.some((a) => a.id === p.id) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[11px] bg-background flex-none"
+                        disabled={busy}
+                        onClick={() => void settle("verified", p.id)}
+                      >
+                        Confirm payment already recorded
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {mode !== "idle" && (
+              <Textarea
+                rows={2}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder={
+                  mode === "rejected"
+                    ? "Why is this not a real payment? The reporter has to go back to the customer with this."
+                    : "What did you check? e.g. not on the 12–14 Aug statements."
+                }
+                className="text-xs bg-background"
+              />
+            )}
+
+            <div className="flex flex-wrap gap-1.5">
+              {mode === "idle" ? (
+                <>
+                  {showVerifyAndRecord && (
+                  <Button
+                    size="sm"
+                    variant={bankRecorded.length > 0 ? "outline" : "default"}
+                    className={bankRecorded.length > 0 ? "h-7 text-xs bg-background" : "h-7 text-xs bg-green-600 hover:bg-green-700"}
+                    disabled={busy || (!isDeposit && !isBooking && !statementId) || (isDeposit && depositHasParts && !depositPart)}
+                    title={
+                      isBooking
+                        ? "Mark this booking payment verified — the booking becomes paid"
+                        : isDeposit && depositHasParts && !depositPart
+                          ? "No open part matches this report — ask sales to request the part on the proposal first"
+                        : isDeposit
+                          ? "Record this deposit against the proposal"
+                          : statementId
+                            ? "Record this payment against the invoice"
+                            : "Pick which invoice this pays first"
+                    }
+                    onClick={() => (isBooking ? void settle("verified") : setRecordOpen(true))}
+                  >
+                    {busy && isBooking ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Check className="h-3 w-3 mr-1" />
+                    )}
+                    {isBooking ? "Credit found — verify" : "Record payment"}
+                  </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs bg-background"
+                    disabled={busy}
+                    onClick={() => setMode("not_found")}
+                  >
+                    <Search className="h-3 w-3 mr-1" /> Not found yet
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs bg-background text-red-700 border-red-200 hover:bg-red-50"
+                    disabled={busy}
+                    onClick={() => setMode("rejected")}
+                  >
+                    <X className="h-3 w-3 mr-1" /> No such payment
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={busy || (mode === "rejected" && !note.trim())}
+                    onClick={() => settle(mode)}
+                  >
+                    {busy && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                    {mode === "rejected" ? "Close as no such payment" : "Send update to reporter"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs"
+                    disabled={busy}
+                    onClick={() => { setMode("idle"); setNote(""); }}
+                  >
+                    Cancel
+                  </Button>
+                </>
+              )}
+            </div>
+
+            {mode === "idle" && exactMatch && !recordAsNew && (
+              <button
+                type="button"
+                className="text-[11px] underline underline-offset-2 opacity-80 hover:opacity-100"
+                onClick={() => setRecordAsNew(true)}
+              >
+                It isn&apos;t recorded yet. Record it as a new payment
+              </button>
+            )}
+
+            {mode === "idle" && (
+              <p className="text-[11px] opacity-80">
+                &ldquo;Not found yet&rdquo; keeps this open and chasing. Only close it if the payment
+                genuinely doesn&apos;t exist.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {isDeposit && recordOpen && (
+        <RecordOtherPaymentDialog
+          row={{
+            id: entityId,
+            kind: "deposit",
+            reference: entityReference ?? "Deposit",
+            party_name: entityTitle ?? "",
+            total_amount: depositPart?.amount ?? entityAmount ?? report.amount,
+            balance_due: depositPart?.amount ?? entityAmount ?? report.amount,
+            part_id: depositPart?.id ?? null,
+            part_label: depositPart ? `Part ${depositPart.seq} — recorded for exactly what was asked` : null,
+            due_date: null,
+            days_overdue: null,
+            payment_link_url: null,
+            is_stale: false,
+            followup_enabled: false,
+            reminder_count: 0,
+            href: null,
+          }}
+          onClose={() => setRecordOpen(false)}
+          onDone={() => {
+            setRecordOpen(false);
+            // The route re-reads the proposal and refuses unless its
+            // deposit_payment_status is actually 'paid', so this can't mark a
+            // report verified off the back of a dialog that only looked like
+            // it worked.
+            void settle("verified");
+          }}
+        />
+      )}
+
+      {!isDeposit && (
+      <RecordPaymentDialog
+        open={recordOpen}
+        onOpenChange={setRecordOpen}
+        statementId={statementId}
+        balanceDue={null}
+        partyLabel={`Verifying a payment reported by ${report.created_by.full_name}`}
+        requireDateEntry
+        prefill={{
+          amount: report.amount,
+          date: report.paid_on,
+          mode: report.payment_mode,
+          reference: report.payment_reference,
+        }}
+        onSuccess={(paymentId) => {
+          if (!paymentId) {
+            // The deposit-adjustment route creates no payment, so there is
+            // nothing to verify against. Say so rather than marking the
+            // report verified with a dangling reference.
+            toast.warning(
+              "That went through as a deposit adjustment, so there's no payment to verify against yet. " +
+              "The report is still open.",
+            );
+            onChanged();
+            return;
+          }
+          void settle("verified", paymentId);
+        }}
+      />
+      )}
+    </>
+  );
+}
+
+function Row({ label, value, mono, emphasis }: {
+  label: string; value: string; mono?: boolean; emphasis?: boolean;
+}) {
+  return (
+    <div className="flex justify-between gap-3">
+      <dt className="opacity-75 flex-none">{label}</dt>
+      <dd className={`text-right ${mono ? "font-mono text-[11px]" : ""} ${emphasis ? "font-medium" : ""}`}>
+        {value}
+      </dd>
+    </div>
+  );
+}

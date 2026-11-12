@@ -10,15 +10,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ITEM_UNITS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS } from "@/lib/constants";
+import { ITEM_UNIT_GROUPS, ITEM_UNIT_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, Location, PurchaseRequest, ItemUnit } from "@/types";
+import Link from "next/link";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface LineItem {
   id: string;
@@ -77,6 +79,10 @@ function NewPurchaseOrderForm() {
   if (!prId) {
     return (
       <div className="space-y-6 max-w-2xl mx-auto">
+        <PageBreadcrumb
+          current={{ label: "New Purchase Order" }}
+          fallbackParent={{ href: "/procurement/orders", label: "Purchase Orders" }}
+        />
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.back()}>
             <ChevronLeft className="h-5 w-5" />
@@ -149,6 +155,15 @@ function NewPurchaseOrderFormWithPr({
     });
   }, [setVendors, setLocations]);
 
+  // Once the PR (and its company) has loaded, narrow the location list down to
+  // that company's locations — the two companies have separate location lists.
+  useEffect(() => {
+    if (!prData?.company_id) return;
+    fetch(`/api/locations?company_id=${prData.company_id}`)
+      .then((r) => r.json())
+      .then((l) => setLocations(l.data || []));
+  }, [prData?.company_id, setLocations]);
+
   // Pre-populate from PR
   useEffect(() => {
     setLoadingPr(true);
@@ -157,6 +172,13 @@ function NewPurchaseOrderFormWithPr({
       .then((json) => {
         const pr = json.data;
         if (!pr) return;
+        // An AMC request is ordered on the service PO form — send the user there
+        // instead of letting them fill in a goods form the server will reject.
+        if (pr.department === "amc") {
+          toast.info("This is an AMC request — opening the service PO form.");
+          router.replace(`/procurement/orders/new-service?from_mr=${prId}`);
+          return;
+        }
         setPrData(pr);
         setLocationId(pr.location_id ?? "");
         // Carry forward PR-level notes to PO
@@ -198,7 +220,7 @@ function NewPurchaseOrderFormWithPr({
         }
       })
       .finally(() => setLoadingPr(false));
-  }, [prId, setPrData, setLocationId, setItems, setLoadingPr]);
+  }, [prId, router, setPrData, setLocationId, setItems, setLoadingPr]);
 
   const [paymentTerms, setPaymentTerms] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState("");
@@ -217,6 +239,11 @@ function NewPurchaseOrderFormWithPr({
   // Blank-price warning dialog
   const [showPriceWarning, setShowPriceWarning] = useState(false);
   const [missingPriceItems, setMissingPriceItems] = useState<string[]>([]);
+
+  const selectedVendor = vendors.find((v) => v.id === vendorId);
+  // Mirrors the server rule in POST /api/procurement/orders — services can't be
+  // ordered on a goods PO because they would never get cycle billing.
+  const isServiceOrder = prData?.department === "amc" || !!selectedVendor?.is_service_provider;
 
   const handleVendorChange = async (newVendorId: string) => {
     const actualId = newVendorId === "__none__" ? "" : newVendorId;
@@ -415,6 +442,10 @@ function NewPurchaseOrderFormWithPr({
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: "New Purchase Order" }}
+        fallbackParent={{ href: "/procurement/orders", label: "Purchase Orders" }}
+      />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => router.back()}>
@@ -431,9 +462,22 @@ function NewPurchaseOrderFormWithPr({
       {/* PR context banner */}
       {prData && (
         <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 text-sm text-blue-800">
+          <span className="mr-2 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium">
+            Goods PO · {PROCUREMENT_DEPARTMENT_LABELS[prData.department] ?? prData.department}
+          </span>
           Items pre-populated from <strong>{prData.pr_number}</strong>. Quantities and prices cannot exceed approved values.
           {prData.approval_code && (
             <span className="ml-2 font-mono text-xs">Approval: {prData.approval_code}</span>
+          )}
+          {prData.companies && (
+            <div className="mt-1 text-xs text-blue-700">
+              Company: <span className="font-medium">{prData.companies.brand_name}</span>
+            </div>
+          )}
+          {!isServiceOrder && (prData.tolerance_percent ?? 0) > 0 && (
+            <div className="mt-1 text-xs text-blue-700">
+              Price flexibility: <span className="font-medium">± {prData.tolerance_percent}%</span> on the final invoice (set when the request was approved)
+            </div>
           )}
         </div>
       )}
@@ -465,6 +509,28 @@ function NewPurchaseOrderFormWithPr({
                 ))}
               </SelectContent>
             </Select>
+            {isServiceOrder && (
+              <div className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <p>
+                  {selectedVendor?.is_service_provider
+                    ? <><strong>{selectedVendor.name}</strong> is a service provider.</>
+                    : <>This is an AMC request.</>}{" "}
+                  Services can&apos;t be ordered on a goods PO — they need a service PO so each cycle gets a
+                  service report and one invoice.{" "}
+                  {prData?.department === "amc" && prId ? (
+                    <Link href={`/procurement/orders/new-service?from_mr=${prId}`} className="font-medium underline">
+                      Create a service PO instead
+                    </Link>
+                  ) : (
+                    <>
+                      A service PO for services that aren&apos;t AMCs isn&apos;t available yet. Pick a different vendor,
+                      or raise an AMC request if this is a maintenance contract on an asset.
+                    </>
+                  )}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -717,8 +783,13 @@ function NewPurchaseOrderFormWithPr({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {ITEM_UNITS.map((u) => (
-                            <SelectItem key={u} value={u}>{u}</SelectItem>
+                          {ITEM_UNIT_GROUPS.map((g) => (
+                            <SelectGroup key={g.label}>
+                              <SelectLabel>{g.label}</SelectLabel>
+                              {g.units.map((u) => (
+                                <SelectItem key={u} value={u}>{ITEM_UNIT_LABELS[u]}</SelectItem>
+                              ))}
+                            </SelectGroup>
                           ))}
                         </SelectContent>
                       </Select>
@@ -814,7 +885,7 @@ function NewPurchaseOrderFormWithPr({
               Total: {totalOrdered > 0 ? formatCurrency(totalOrdered + totalGst) : "—"}
             </p>
           </div>
-          <Button onClick={handleSubmit} disabled={submitting || allItemsFullyOrdered} size="lg">
+          <Button onClick={handleSubmit} disabled={submitting || allItemsFullyOrdered || isServiceOrder} size="lg">
             {submitting ? (
               <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Creating…</>
             ) : allItemsFullyOrdered ? (

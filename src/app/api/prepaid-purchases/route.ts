@@ -1,3 +1,4 @@
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 
@@ -136,7 +137,7 @@ export async function POST(request: NextRequest) {
       if (creds.razorpay_enabled === "true" && creds.razorpay_key_id && creds.razorpay_key_secret) {
         const auth = Buffer.from(`${creds.razorpay_key_id}:${creds.razorpay_key_secret}`).toString("base64");
         const amountInPaise = Math.round(Number(pkg.price) * 100);
-        const expireBy = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60; // 30 days
+        const expireBy = Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
 
         // Resolve lead contact details for notification
         const lead = data.lead as Record<string, unknown> | null;

@@ -3,11 +3,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   ClipboardList, Phone, Mail, AlertTriangle, CheckCircle2,
   XCircle, Clock, Loader2, Search, ChevronRight, RefreshCw,
   CalendarDays, Wrench, IndianRupee, Settings, ChevronDown, ChevronUp,
-  Zap, ShieldCheck, Headphones, Star, User,
+  Zap, ShieldCheck, Headphones, Star, User, Receipt,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +17,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import type { AmcStatus } from "@/types";
+import type { ServicePoBillingCycle } from "@/lib/constants";
+import { billingProgress, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
+import type { AmcStatus, Company } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface ServiceEvent {
   id: string;
@@ -47,10 +52,16 @@ interface AmcRow {
   procurement_vendors: { id: string; name: string } | null;
   locations: { id: string; name: string } | null;
   purchase_requests: { id: string; pr_number: string; department: string; expenditure_type: string } | null;
-  purchase_order_items: Array<{ id: string; item_name: string; unit: string }>;
+  purchase_order_items: Array<{ id: string; item_name: string; unit: string; linked_asset?: { id: string; name: string; asset_code: string } | null }>;
   linked_asset: { id: string; name: string; asset_code: string } | null;
   amc_scope_covered: string | null;
   amc_scope_exclusions: string | null;
+  payment_state: "paid" | "partially_paid" | "unpaid" | "no_bill";
+  billing_cycle: ServicePoBillingCycle | null;
+  cycle_count: number | null;
+  opening_cycles?: number;
+  unit_cost_per_cycle: number | null;
+  bills_raised: number;
 }
 
 const EVENT_TYPE_LABEL: Record<ServiceEvent["event_type"], string> = {
@@ -101,10 +112,26 @@ const AMC_STATUS_ICON: Record<AmcStatus, React.ReactNode> = {
   terminated:<XCircle className="h-3.5 w-3.5" />,
 };
 
+// Contracts are listed regardless of payment state, so the unpaid cases carry a
+// badge — a signed AMC still needs tracking, but finance should see what is owed.
+const PAYMENT_STATE_BADGE: Record<AmcRow["payment_state"], { label: string; className: string } | null> = {
+  paid:           null,
+  partially_paid: { label: "Partially paid",  className: "bg-blue-50 text-blue-700 border-blue-200" },
+  unpaid:         { label: "Payment pending", className: "bg-amber-50 text-amber-700 border-amber-200" },
+  no_bill:        { label: "No bill yet",     className: "bg-gray-50 text-gray-600 border-gray-200" },
+};
+
 function daysRemaining(endDate: string | null): number | null {
   if (!endDate) return null;
   const diff = new Date(endDate).getTime() - Date.now();
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+// A combined PO has one asset per PO line; otherwise it is the PO-level asset.
+function coveredAssets(row: { purchase_order_items: Array<{ linked_asset?: { id: string; name: string; asset_code: string } | null }> }) {
+  const seen = new Map<string, { id: string; name: string; asset_code: string }>();
+  for (const it of row.purchase_order_items ?? []) if (it.linked_asset) seen.set(it.linked_asset.id, it.linked_asset);
+  return Array.from(seen.values());
 }
 
 function VisitsBar({ used, covered }: { used: number; covered: number | null }) {
@@ -124,7 +151,7 @@ function VisitsBar({ used, covered }: { used: number; covered: number | null }) 
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">{used} / {covered} visits used</span>
+        <span className="text-muted-foreground">{used} / {covered} preventive visits used</span>
         <span className={pct >= 100 ? "text-red-600 font-medium" : "text-muted-foreground"}>{pct}%</span>
       </div>
       <div className="h-1.5 bg-muted rounded-full overflow-hidden">
@@ -146,11 +173,15 @@ type AmcBudget = {
 
 export default function AmcRegisterPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const canSeeBudget = ["admin", "manager"].includes(user?.role ?? "");
   const [rows, setRows] = useState<AmcRow[]>([]);
   const [budget, setBudget] = useState<AmcBudget | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<AmcStatus | "all">("all");
   const [search, setSearch] = useState("");
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyId, setCompanyId] = useState<string>(""); // "" = all companies
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [eventsCache, setEventsCache] = useState<Map<string, ServiceEvent[]>>(new Map());
   const [eventsLoading, setEventsLoading] = useState<Set<string>>(new Set());
@@ -180,18 +211,30 @@ export default function AmcRegisterPage() {
     try {
       const params = new URLSearchParams();
       if (statusFilter !== "all") params.set("amc_status", statusFilter);
+      if (companyId) params.set("company_id", companyId);
       const res = await fetch(`/api/procurement/amc?${params}`);
       const json = await res.json();
       setRows(json.data ?? []);
-      if (json.budget) setBudget(json.budget);
+      // budgetSummary is only computed server-side when company_id is set —
+      // clear any stale figure from a previous selection rather than keep
+      // showing it once "All companies" is chosen.
+      setBudget(json.budget ?? null);
     } catch {
       toast.error("Failed to load AMC contracts");
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, companyId]);
 
   useEffect(() => { fetchAmc(); }, [fetchAmc]);
+
+  // Companies — for the optional company filter, default is "All companies".
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => setCompanies(j.data || []))
+      .catch(() => setCompanies([]));
+  }, []);
 
   const filtered = rows.filter((r) => {
     if (!search) return true;
@@ -211,6 +254,7 @@ export default function AmcRegisterPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "AMC Contracts" }} />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -226,6 +270,15 @@ export default function AmcRegisterPage() {
       </div>
 
       {/* ── AMC Annual Budget Banner ─────────────────────────────────────── */}
+      {/* A combined AMC budget across two separate legal entities doesn't make
+          sense, so the server only computes budgetSummary when a single
+          company is selected — this fallback replaces the banner rather than
+          rendering blank while budget is null and no company is picked. */}
+      {!budget && !companyId && canSeeBudget && (
+        <div className="rounded-xl border border-dashed border-purple-200 bg-purple-50/30 px-4 py-3 text-sm text-purple-800">
+          Select a company below to see its AMC annual budget — budgets are tracked per company.
+        </div>
+      )}
       {budget && (
         <div className={`rounded-xl border px-4 py-3 ${budget.is_over_budget ? "border-red-200 bg-red-50" : "border-purple-200 bg-purple-50/50"}`}>
           <div className="flex items-center justify-between gap-3 mb-2">
@@ -317,15 +370,28 @@ export default function AmcRegisterPage() {
         })}
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search by vendor, PO, or item..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-9"
-        />
+      {/* Search + company filter */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative max-w-sm flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search by vendor, PO, or item..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <Select value={companyId || "__all__"} onValueChange={(v) => setCompanyId(v === "__all__" ? "" : v)}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="All companies" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All companies</SelectItem>
+            {companies.map((c) => (
+              <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* List */}
@@ -364,7 +430,10 @@ export default function AmcRegisterPage() {
               <div
                 key={row.id}
                 className="border rounded-lg bg-card hover:bg-accent/30 cursor-pointer transition-colors"
-                onClick={() => router.push(`/procurement/orders/${row.id}`)}
+                onClick={() => {
+                  pushTrailEntry({ href: `/procurement/orders/${row.id}`, label: row.po_number });
+                  router.push(`/procurement/orders/${row.id}`);
+                }}
               >
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-4">
@@ -378,6 +447,14 @@ export default function AmcRegisterPage() {
                           {AMC_STATUS_ICON[row.amc_status]}
                           {AMC_STATUS_LABELS[row.amc_status]}
                         </span>
+                        {PAYMENT_STATE_BADGE[row.payment_state] && (
+                          <span
+                            className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border font-medium ${PAYMENT_STATE_BADGE[row.payment_state]!.className}`}
+                          >
+                            <IndianRupee className="h-3 w-3" />
+                            {PAYMENT_STATE_BADGE[row.payment_state]!.label}
+                          </span>
+                        )}
                         {(missingContact || missingDates) && row.amc_status !== "expired" && (
                           <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                             <AlertTriangle className="h-3 w-3" />
@@ -402,7 +479,16 @@ export default function AmcRegisterPage() {
                             <span className="capitalize">{row.purchase_requests.department}</span>
                           </>
                         )}
-                        {row.linked_asset && (
+                        {coveredAssets(row).length > 1 && (
+                          <>
+                            <span>·</span>
+                            <span title={coveredAssets(row).map((a) => `${a.asset_code} ${a.name}`).join("\n")}>
+                              {coveredAssets(row).length} assets ·{" "}
+                              <span className="font-mono">{coveredAssets(row).map((a) => a.asset_code).join(", ")}</span>
+                            </span>
+                          </>
+                        )}
+                        {coveredAssets(row).length <= 1 && row.linked_asset && (
                           <>
                             <span>·</span>
                             <Link
@@ -416,6 +502,26 @@ export default function AmcRegisterPage() {
                           </>
                         )}
                       </div>
+
+                      {/* Billing progress — only meaningful for multi-cycle contracts */}
+                      {(() => {
+                        const progress = billingProgress(row.bills_raised, row.cycle_count, row.unit_cost_per_cycle, row.opening_cycles);
+                        if (!progress || !row.billing_cycle) return null;
+                        const unit = CYCLE_UNIT_LABEL[row.billing_cycle];
+                        return (
+                          <div className="flex items-center gap-1.5 mt-2 text-xs">
+                            <Receipt className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className={progress.isComplete ? "text-emerald-700" : "text-muted-foreground"}>
+                              {progress.billed} of {progress.total} {unit}s billed
+                            </span>
+                            {!progress.isComplete && progress.remainingAmount > 0 && (
+                              <span className="text-muted-foreground">
+                                · {formatCurrency(progress.remainingAmount)} remaining
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {/* Contract period */}
                       {(row.amc_start_date || row.amc_end_date) && (
@@ -443,6 +549,13 @@ export default function AmcRegisterPage() {
                       <div className="text-sm font-semibold">
                         {formatCurrency(row.total_ordered_amount)}
                       </div>
+                      {/* A monthly contract reads as a lump sum without this. */}
+                      {row.billing_cycle && row.cycle_count && row.cycle_count > 1 && (
+                        <div className="text-xs text-muted-foreground">
+                          {formatCurrency(Number(row.unit_cost_per_cycle ?? 0))}/
+                          {CYCLE_UNIT_LABEL[row.billing_cycle]}
+                        </div>
+                      )}
                       <VisitsBar used={row.amc_visits_used} covered={row.amc_visits_covered} />
                     </div>
                   </div>
@@ -509,13 +622,16 @@ export default function AmcRegisterPage() {
                       <ChevronDown className="h-3.5 w-3.5" />
                     )}
                     {row.amc_visits_used > 0
-                      ? `${row.amc_visits_used} event${row.amc_visits_used !== 1 ? "s" : ""} logged`
-                      : "No events yet"}
+                      ? `${row.amc_visits_used} preventive visit${row.amc_visits_used !== 1 ? "s" : ""} · view all`
+                      : "View visits"}
                   </button>
                   <Link
                     href={`/procurement/orders/${row.id}`}
                     className="flex items-center gap-1 text-primary font-medium hover:underline"
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      pushTrailEntry({ href: `/procurement/orders/${row.id}`, label: row.po_number });
+                    }}
                   >
                     View & Log Events <ChevronRight className="h-3.5 w-3.5" />
                   </Link>
@@ -576,7 +692,7 @@ export default function AmcRegisterPage() {
 
       {/* Help note */}
       <p className="text-xs text-muted-foreground">
-        AMC contracts are service POs linked to an{" "}
+        AMC contracts are purchase orders linked to an{" "}
         <Link href="/procurement/requests" className="underline">AMC Material Request</Link>.
         Open any contract to log service events or update contact details.
       </p>

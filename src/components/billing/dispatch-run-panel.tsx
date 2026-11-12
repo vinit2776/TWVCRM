@@ -41,6 +41,11 @@ interface DispatchRun {
 interface Props {
   runId: string;
   onClose?: () => void;
+  /** Fires once, as soon as the run reaches a terminal status — while the
+   *  panel is still open, before the user clicks Close. Lets the parent
+   *  refresh its lists (e.g. the Billed table) as soon as the data is
+   *  actually there, instead of only on manual dismiss. */
+  onTerminal?: () => void;
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -142,10 +147,11 @@ function JobRow({ job, onRetry }: { job: DispatchJob; onRetry: (jobId: string) =
   );
 }
 
-export function DispatchRunPanel({ runId, onClose }: Props) {
+export function DispatchRunPanel({ runId, onClose, onTerminal }: Props) {
   const [run, setRun] = useState<DispatchRun | null>(null);
   const [jobs, setJobs] = useState<DispatchJob[]>([]);
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const poll = async () => {
@@ -154,6 +160,7 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
     const data = await res.json();
     if (data.run) setRun(data.run as DispatchRun);
     if (data.jobs) setJobs(data.jobs as DispatchJob[]);
+    setLastCheckedAt(new Date());
   };
 
   useEffect(() => {
@@ -176,6 +183,20 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
       pollRef.current = null;
     }
   }, [run]);
+
+  // Let the parent refresh its lists (e.g. the Billed table) as soon as the
+  // run finishes, rather than only when the user manually clicks Close —
+  // the underlying statements already exist at this point, but nothing
+  // that fetched them earlier knows to look again. Depending on run.status
+  // (not the whole run object) means this fires once per terminal
+  // transition — including a second time after a Retry brings a
+  // partial/failed run back to "running" and then terminal again.
+  useEffect(() => {
+    if (run && TERMINAL_STATUSES.has(run.status)) {
+      onTerminal?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.status]);
 
   const handleRetry = async (jobId: string) => {
     setRetrying((prev) => new Set([...prev, jobId]));
@@ -226,6 +247,11 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
           <Badge className={`text-xs capitalize ${RUN_STATUS_BADGE[run.status] || ""}`}>
             {run.status}
           </Badge>
+          {isRunning && lastCheckedAt && (
+            <span className="text-xs text-muted-foreground">
+              · last checked {lastCheckedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            </span>
+          )}
         </div>
         {onClose && (
           <Button size="sm" variant="ghost" onClick={onClose} className="h-7 px-2 text-xs">
