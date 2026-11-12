@@ -4,7 +4,7 @@
  * Confirm partner renewal — for a case billed monthly to a postpaid partner.
  * There is no renewal bill or payment link: the partner already pays monthly
  * for all their cases. A person records that the partner is continuing, the
- * length of the next term and the monthly fee from that term. Nothing is sent.
+ * length of the next term and the fee from that term. Nothing is sent.
  *
  * The case moves into its new term on that term's first day (the partner is
  * invoiced by case status and the current rate for the month, so rolling
@@ -34,6 +34,7 @@ import {
   type RenewalEscalationMode,
 } from "@/lib/vo-renewal-offer";
 import { partnerRenewalOffer } from "@/lib/vo-renewal-reminders";
+import { termFee } from "@/lib/vo-term-fee";
 
 interface Setup {
   caseNumber: string;
@@ -41,6 +42,7 @@ interface Setup {
   status: string;
   endDate: string;
   currentFee: number;
+  tenureMonths: number;
   agreedEscalationPercentage: number;
   billing: { name: string };
   postpaid: boolean;
@@ -96,7 +98,7 @@ export function PartnerRenewalDialog({
   const offer = useMemo(() => {
     if (!setup) return null;
     return partnerRenewalOffer({
-      currentMonthlyRate: setup.currentFee,
+      currentRate: setup.currentFee,
       agreedEscalationPercentage: setup.agreedEscalationPercentage,
       currentEnd: setup.endDate,
       durationMonths: duration,
@@ -166,7 +168,7 @@ export function PartnerRenewalDialog({
               <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:bg-red-950/30 dark:text-red-200">
                 {noPartner
                   ? "This case isn't billed monthly to a postpaid partner. Use Start renewal instead."
-                  : "This case has no monthly fee on record. Set its rate first."}
+                  : "This case has no rate on record. Set its rate first."}
               </div>
             )}
 
@@ -190,7 +192,7 @@ export function PartnerRenewalDialog({
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Escalation on the monthly fee</Label>
+                <Label className="text-xs">Escalation on the rate</Label>
                 <Select value={mode} onValueChange={(v) => setMode(v as RenewalEscalationMode)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -220,11 +222,14 @@ export function PartnerRenewalDialog({
             )}
 
             <div className="rounded-md border p-3 space-y-1.5 text-xs">
-              <div className="flex justify-between"><span className="text-muted-foreground">Monthly fee now</span><span className="tabular-nums">{formatCurrency(offer.currentRate)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Fee now ({setup.tenureMonths} months)</span><span className="tabular-nums">{formatCurrency(termFee(offer.currentRate, setup.tenureMonths))}</span></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Escalation</span><span className="tabular-nums">{offer.escalationPercentage}%</span></div>
-              <div className="flex justify-between text-sm font-semibold"><span>Monthly fee from the new term</span><span className="tabular-nums">{formatCurrency(offer.newRate)}</span></div>
+              <div className="flex justify-between text-sm font-semibold"><span>Fee for the new term ({offer.durationMonths} months)</span><span className="tabular-nums">{formatCurrency(offer.newTermFee)}</span></div>
+              {offer.durationMonths > 12 && (
+                <div className="flex justify-between"><span className="text-muted-foreground">Annual rate</span><span className="tabular-nums">{formatCurrency(offer.newRate)}</span></div>
+              )}
               <div className="flex justify-between"><span className="text-muted-foreground">New term</span><span>{formatDate(offer.term.start)} to {formatDate(offer.term.end)}</span></div>
-              <p className="pt-1 text-muted-foreground">Excluding GST. The partner is invoiced the new fee with their other cases from the month the term starts.</p>
+              <p className="pt-1 text-muted-foreground">Excluding GST. The partner is invoiced at the new rate with their other cases from the month the term starts.</p>
             </div>
 
             <div className="space-y-1.5">

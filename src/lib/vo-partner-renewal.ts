@@ -4,7 +4,7 @@
  * A postpaid partner is billed monthly in arrears for all their cases, so a
  * partner case has no renewal bill and no payment link, and nothing to wait
  * for at the term boundary. What staff record instead is that the partner is
- * continuing (cases.metadata.partner_renewal: the term, the monthly rate and
+ * continuing (cases.metadata.partner_renewal: the term, the rate and
  * how they confirmed). The next term starts only when that term's first day
  * arrives, because partner invoices choose cases by status and bill the
  * current rate for the month: rolling early would charge the new rate before
@@ -14,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { rollCaseToNextTerm } from "@/lib/vo-renewal-completion";
 import { partnerRenewalIsCurrent, partnerRenewalRecord } from "@/lib/vo-renewal-reminders";
 import { addMonthsEndAnchored } from "@/lib/vo-renewal-term";
+import { annualRateFor, termFee } from "@/lib/vo-term-fee";
 
 export type PartnerRollOutcome =
   | { outcome: "renewed"; successorId: string }
@@ -70,7 +71,10 @@ export async function rollPartnerRenewal(
     caseRow: previous as Record<string, unknown> & { id: string; end_date: string; status: string },
     term: { start: rec.term_start, end: rec.term_end },
     months: rec.duration_months,
-    rate: rec.new_rate,
+    // Stored with the direct-case meaning: the term fee up to 12 months, the
+    // annual rate beyond. Derived from the confirmed term's fee so a tenure
+    // change can't carry a rate that means something else.
+    rate: annualRateFor(rec.new_term_fee ?? termFee(rec.new_rate, rec.duration_months), rec.duration_months),
     statementId: null,
     performedBy,
     auditAction: "partner_renewal_rolled",

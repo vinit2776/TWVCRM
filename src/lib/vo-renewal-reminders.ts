@@ -13,9 +13,10 @@
  *   bill, on the same link, and only if the first notice actually went out.
  * - It never moves a case to grace or lapse that nobody has been told about.
  * - It never touches a postpaid partner case's status. Those are billed
- *   monthly and have no renewal bill; a person confirms with the partner.
+ *   in arrears and have no renewal bill; a person confirms with the partner.
  */
 import { addDays, nextRenewalTerm } from "@/lib/vo-renewal-term";
+import { termFee } from "@/lib/vo-term-fee";
 import { escalationFor, type RenewalEscalationMode } from "@/lib/vo-renewal-offer";
 
 // ---------------------------------------------------------------------------
@@ -206,19 +207,25 @@ export function classifyRenewalCase(c: CronCaseFacts, today: string, nowIso: str
 export interface PartnerRenewalOffer {
   term: { start: string; end: string };
   durationMonths: number;
+  /** cases.rate as stored: the term fee up to 12 months, the annual rate beyond. */
   currentRate: number;
   escalationPercentage: number;
-  /** The monthly fee from the new term's first billing month. */
+  /** The escalated rate, same meaning as cases.rate (annual above 12 months). */
   newRate: number;
+  /** What the new term costs in full, before GST: termFee(newRate, durationMonths). */
+  newTermFee: number;
 }
 
 /**
- * A postpaid partner's case is billed monthly from `rate`, so escalation
- * applies to the monthly figure and the duration only sets the term. Whole
- * rupees, as renewalRate() does.
+ * A partner case's `rate` follows the same rule as a direct case: the fee for
+ * the term when it is 12 months or less, the ANNUAL rate when longer. Escalation
+ * applies to the stored rate (whole rupees, as renewalRate() does); the new
+ * term's fee is then termFee(newRate, durationMonths), so an annual rate of
+ * 18000 quotes 18000 for 12 months and 36000 for 24. Terms of 12 months or
+ * less do not scale with duration.
  */
 export function partnerRenewalOffer(input: {
-  currentMonthlyRate: number;
+  currentRate: number;
   agreedEscalationPercentage: number | null | undefined;
   currentEnd: string;
   durationMonths: number;
@@ -230,12 +237,14 @@ export function partnerRenewalOffer(input: {
     input.agreedEscalationPercentage,
     input.customPercentage,
   );
+  const newRate = Math.round(input.currentRate * (1 + escalationPercentage / 100));
   return {
     term: nextRenewalTerm(input.currentEnd, input.durationMonths),
     durationMonths: input.durationMonths,
-    currentRate: input.currentMonthlyRate,
+    currentRate: input.currentRate,
     escalationPercentage,
-    newRate: Math.round(input.currentMonthlyRate * (1 + escalationPercentage / 100)),
+    newRate,
+    newTermFee: termFee(newRate, input.durationMonths),
   };
 }
 
@@ -246,7 +255,10 @@ export interface PartnerRenewalRecord extends PartnerRenewalIntent {
   escalation_percentage: number;
   escalation_reason: string | null;
   current_rate: number;
+  /** Stored-rate meaning (annual above 12 months). */
   new_rate: number;
+  /** Full fee of the confirmed term; absent on confirmations recorded before this was kept. */
+  new_term_fee?: number;
   note: string;
   by: string;
   by_name: string | null;

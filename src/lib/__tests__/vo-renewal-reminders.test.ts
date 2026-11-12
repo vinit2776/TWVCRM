@@ -139,7 +139,7 @@ describe("classifyRenewalCase", () => {
 });
 
 describe("partnerRenewalOffer", () => {
-  const input = { currentMonthlyRate: 2500, agreedEscalationPercentage: 5, currentEnd: "2026-11-30", durationMonths: 12 };
+  const input = { currentRate: 2500, agreedEscalationPercentage: 5, currentEnd: "2026-11-30", durationMonths: 12 };
 
   it("escalates the monthly rate and sets the next term", () => {
     const o = partnerRenewalOffer({ ...input, mode: "agreed" });
@@ -147,8 +147,26 @@ describe("partnerRenewalOffer", () => {
     expect(o.term).toEqual({ start: "2026-12-01", end: "2027-11-30" });
   });
 
-  it("does not scale the monthly rate by duration", () => {
-    expect(partnerRenewalOffer({ ...input, mode: "none", durationMonths: 6 }).newRate).toBe(2500);
+  it("does not scale a term of 12 months or less by duration", () => {
+    const o = partnerRenewalOffer({ ...input, mode: "none", durationMonths: 6 });
+    expect(o.newRate).toBe(2500);
+    expect(o.newTermFee).toBe(2500);
+    expect(partnerRenewalOffer({ ...input, mode: "agreed" }).newTermFee).toBe(2625);
+  });
+
+  it("treats the rate as annual above 12 months: 18000 a year is 36000 for 24 months", () => {
+    const annual = { ...input, currentRate: 18000, mode: "none" as const };
+    expect(partnerRenewalOffer({ ...annual, durationMonths: 12 }).newTermFee).toBe(18000);
+    const two = partnerRenewalOffer({ ...annual, durationMonths: 24 });
+    expect(two.newTermFee).toBe(36000);
+    expect(two.newRate).toBe(18000);
+    expect(partnerRenewalOffer({ ...annual, durationMonths: 36 }).newTermFee).toBe(54000);
+  });
+
+  it("escalates the annual rate, then scales it to the term", () => {
+    const o = partnerRenewalOffer({ ...input, currentRate: 18000, mode: "agreed", durationMonths: 24 });
+    expect(o.newRate).toBe(18900);
+    expect(o.newTermFee).toBe(37800);
   });
 
   it("applies a custom percentage and rounds to whole rupees", () => {
