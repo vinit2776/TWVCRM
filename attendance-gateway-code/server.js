@@ -5411,6 +5411,38 @@ async function getSessionUser(req) {
 // exported to CSV, so a password that lands in it cannot be taken back out. Trying to
 // tell a password from a username by its shape doesn't work either — an API key and an
 // employee id are both just short printable strings. Matching against the users table is
+// --- Read-only JSON API (/api/employees, /api/attendance) ---
+// These two predate the login system and were open to the public internet until
+// 2026-11-12: /api/employees answered SELECT * for every employee (including the
+// biometric device_pin, mobile and email) and /api/attendance would then compute any
+// of those people's day for any date. Nothing in this repo or the CRM calls either
+// one, and neither is documented, so the fix is the same two trust levels /api/punch
+// already uses rather than deleting them: a machine with the punch API key, or a
+// logged-in session. An employee session is confined to its own record, matching how
+// every page in here already treats a logged-in employee.
+//
+// device_pin is deliberately not in the field list. It is the credential the device
+// authenticates a person by, so it belongs only to /admin/device-pins, never in a
+// JSON payload — see API_EMPLOYEE_FIELDS.
+const API_EMPLOYEE_FIELDS = 'id, name, shift_start, shift_end, shift_custom, onsite_enabled, date_joined, role, designation, reports_to, branch, mobile, email';
+
+// null means "no read at all" (401). { all: true } is every employee; { employeeId }
+// is that one only. Kept separate from the route so it can be unit-tested.
+function apiReadScope({ authorizedViaApiKey = false, user = null } = {}) {
+  if (authorizedViaApiKey) return { all: true };
+  if (!user) return null;
+  if (isManagementRole(user)) return { all: true };
+  if (user.employeeId) return { employeeId: user.employeeId };
+  return null;
+}
+
+// Same key and header as /api/punch: one shared secret for the device side of this
+// gateway. A request carrying it is never looked up as a session.
+async function apiReadAuth(req) {
+  const authorizedViaApiKey = req.headers['x-api-key'] === CONFIG.PUNCH_API_KEY;
+  return { authorizedViaApiKey, user: authorizedViaApiKey ? null : await getSessionUser(req) };
+}
+
 // the only test that can't be fooled, and a miss tells us all we need: someone tried an
 // account that doesn't exist. The IP, device and time are still recorded, so a real
 // intrusion attempt stays just as visible.
@@ -5723,14 +5755,33 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/api/employees' && req.method === 'GET') {
-    return sendJson(res, 200, await db.prepare('SELECT * FROM employees').all());
+    const scope = apiReadScope(await apiReadAuth(req));
+    if (!scope) {
+      logSecurityEvent('api_read_auth_failed', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+    const rows = scope.all
+      ? await db.prepare(`SELECT ${API_EMPLOYEE_FIELDS} FROM employees`).all()
+      : await db.prepare(`SELECT ${API_EMPLOYEE_FIELDS} FROM employees WHERE id = ?`).all(scope.employeeId);
+    return sendJson(res, 200, rows);
   }
 
   // GET /api/attendance?employee_id=EMP-001&date=2026-07-28
   if (parsed.pathname === '/api/attendance' && req.method === 'GET') {
-    const employee_id = parsed.searchParams.get('employee_id');
+    const scope = apiReadScope(await apiReadAuth(req));
+    if (!scope) {
+      logSecurityEvent('api_read_auth_failed', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+    const employee_id = parsed.searchParams.get('employee_id') || (scope.all ? '' : scope.employeeId);
     const date = parsed.searchParams.get('date');
     if (!employee_id) return sendJson(res, 400, { error: 'employee_id is required' });
+    // 404, not 403: an employee asking about a colleague learns nothing about whether
+    // that id exists, which is the same answer they get for a typo.
+    if (!scope.all && employee_id !== scope.employeeId) {
+      logSecurityEvent('api_read_scope_denied', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
+    }
     const status = await computeDayStatus(employee_id, date || todayStr());
     if (!status) return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
     return sendJson(res, 200, status);
@@ -7237,6 +7288,8 @@ module.exports.safeLoginUsername = safeLoginUsername;
 module.exports.sendCsv = sendCsv;
 // Exported for the unit tests — the settings' own parse/validate are pure.
 module.exports.SETTING_DEFS_BY_KEY = SETTING_DEFS_BY_KEY;
+module.exports.apiReadScope = apiReadScope;
+module.exports.API_EMPLOYEE_FIELDS = API_EMPLOYEE_FIELDS;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped
