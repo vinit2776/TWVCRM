@@ -16,6 +16,7 @@ const {
   LAUNCH_DATE,
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
   effectivePunches, autoCheckoutDue, dayEndTimestamp, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, BRANCH_SHIFT_RULES_FROM, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
+  countLeaveDaysInRange,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const {
@@ -1407,7 +1408,7 @@ async function getLeaveBalanceDisplay(employeeId) {
     for (const r of requests) {
       const clippedStart = r.start_date < monthStart ? monthStart : r.start_date;
       const clippedEnd = r.end_date > monthEnd ? monthEnd : r.end_date;
-      takenThisMonth += countLeaveDays(clippedStart, clippedEnd);
+      takenThisMonth += await countLeaveDays(clippedStart, clippedEnd);
     }
     const unpaidThisMonth = Math.max(0, takenThisMonth - MONTHLY_PAID_LEAVE_CAP);
     result.push({
@@ -1431,10 +1432,17 @@ async function getLeaveRequests(employeeId) {
 async function getAllLeaveRequests() {
   return await db.prepare('SELECT * FROM leave_requests ORDER BY requested_at DESC').all();
 }
-function countLeaveDays(startDate, endDate) {
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  return Math.round((end - start) / 86400000) + 1;
+// Days of leave actually taken across a span: Sundays and declared holidays inside it
+// are not leave days, because nobody was due to work them. The rule and the reasoning
+// live in countLeaveDaysInRange; this only fetches the holidays it needs.
+//
+// Until 2026-11-12 this counted raw calendar days, so a Mon-Sun Casual Leave was
+// reported as 7 days (6 of them unpaid past the monthly cap) while the Calendar and
+// every status-derived figure saw 6 On Leave days and one Week Off. The status is the
+// one the employee is shown, so the count moved to match it, not the other way round.
+async function countLeaveDays(startDate, endDate) {
+  const holidays = await db.prepare('SELECT date FROM holidays WHERE date BETWEEN ? AND ?').all(startDate, endDate);
+  return countLeaveDaysInRange(startDate, endDate, new Set(holidays.map(h => h.date)));
 }
 async function getPermissionRequests(employeeId) {
   return await db.prepare('SELECT * FROM permission_requests WHERE employee_id = ? ORDER BY requested_at DESC').all(employeeId);
@@ -1819,7 +1827,7 @@ async function computeLeaveReport(year, month) {
       // count days that fall outside the month being reported.
       const clippedStart = r.start_date < monthStart ? monthStart : r.start_date;
       const clippedEnd = r.end_date > monthEnd ? monthEnd : r.end_date;
-      perType[r.leave_type] = (perType[r.leave_type] || 0) + countLeaveDays(clippedStart, clippedEnd);
+      perType[r.leave_type] = (perType[r.leave_type] || 0) + await countLeaveDays(clippedStart, clippedEnd);
     }
     const totalDays = Object.values(perType).reduce((sum, v) => sum + v, 0);
     // Casual/Sick beyond the monthly paid cap is unpaid — see MONTHLY_PAID_LEAVE_TYPES.
@@ -6042,7 +6050,7 @@ async function handleRequest(req, res) {
         .run(formatTimestamp(new Date()), id);
       // Casual/Sick no longer draw from a balance — see MONTHLY_PAID_LEAVE_TYPES.
       if (BALANCE_POOL_LEAVE_TYPES.includes(request.leave_type)) {
-        const days = countLeaveDays(request.start_date, request.end_date);
+        const days = await countLeaveDays(request.start_date, request.end_date);
         await db.prepare('UPDATE leave_balances SET balance = balance - ? WHERE employee_id = ? AND leave_type = ?')
           .run(days, request.employee_id, request.leave_type);
       }
