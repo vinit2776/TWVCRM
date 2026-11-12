@@ -155,17 +155,10 @@ holidays or Sundays, and at most one of each per day (`daily_report_runs`).
 `/admin/daily-report?kind=morning&date=YYYY-MM-DD` shows any day's email without
 sending it.
 
-**Punch-in reminders.** `/internal/punchin-reminder` (same `CRON_SECRET`) emails each
-employee who hasn't punched in 10 minutes after their own shift starts, 5 minutes
-before the 15-minute grace ends. It is off until **Punch-in reminder emails** is set
-to On at `/admin/settings`, and needs each employee's email on their profile. The
-**Punch-in reminder window** setting picks when it may send: Fixed (9:30 to 10:00
-AM) or Follow shift timings (earliest shift start to latest grace end). It is not in
-`vercel.json`: Hobby cron can't run every 5 minutes, so an outside scheduler has to
-call it every 5 minutes (it only sends what is due, once per person per day,
-`punchin_reminder_runs`). That schedule is the only thing that triggers it: with no
-caller set up, no reminder is ever sent, and auto punch-outs only happen at the
-daily safety runs or when someone opens their dashboard.
+**`/internal/punchin-reminder`** (same `CRON_SECRET`) is called every 5 minutes by
+the CRM's cron (`/api/cron/attendance-punchin-reminder`), since Hobby cron can't run
+that often. It used to email punch-in reminders; those were removed, and it now only
+runs the auto punch-out (see below).
 
 **Shift timings** are set per branch at `/admin/settings` → Branches: a weekday
 shift, and whether the branch has half Saturdays (2nd and 4th Saturday, with their
@@ -194,8 +187,7 @@ Saturdays, custom timings and which branch a day counts as worked at are unaffec
 
 **Auto punch-out.** Anyone still punched in is auto punched-out 15 minutes after that
 day's shift end, stamped at exactly that time however late the run is. It gets its
-timing from the same outside every-5-minute schedule as the punch-in reminders
-(`/internal/punchin-reminder` runs it first, before any email), plus the daily Vercel
+timing from the CRM's every-5-minute call to `/internal/punchin-reminder`, plus the daily Vercel
 crons above and whenever an employee opens their dashboard. It never waits for the
 biometric device: a real punch-out the device uploads later replaces the auto one.
 Until midnight the dashboard offers **Punch Out** again; a real punch-out made then
