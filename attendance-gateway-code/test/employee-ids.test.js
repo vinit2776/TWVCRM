@@ -48,6 +48,7 @@ function setup() {
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, updated_by TEXT NOT NULL DEFAULT '');
     CREATE TABLE activity_log (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT 'other', action TEXT NOT NULL DEFAULT 'login', employee_id TEXT, actor_username TEXT NOT NULL DEFAULT '');
     CREATE TABLE deviation_reviews (employee_id TEXT NOT NULL, date TEXT NOT NULL, decision TEXT NOT NULL, reviewed_by TEXT NOT NULL, PRIMARY KEY (employee_id, date));
+    CREATE TABLE employee_salaries (employee_id TEXT PRIMARY KEY, monthly_salary INTEGER NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL);
   `);
   return db;
 }
@@ -93,6 +94,7 @@ test('renaming moves every record and the login to the new id, leaving nothing b
     INSERT INTO app_settings VALUES ('office_radius', 'EMP-001');
     INSERT INTO employee_documents (employee_id, uploaded_by) VALUES ('EMP-002', 'EMP-001');
     INSERT INTO deviation_reviews VALUES ('EMP-001', '2026-10-14', 'absent', 'EMP-001');
+    INSERT INTO employee_salaries VALUES ('EMP-001', 30000, 'admin', '2026-11-11 10:00:00');
     INSERT INTO activity_log (employee_id, actor_username) VALUES ('EMP-001', 'EMP-001');
   `);
   for (const table of EMPLOYEE_TABLES) db.prepare(`INSERT INTO ${table} (employee_id) VALUES ('EMP-001')`).run();
@@ -116,6 +118,8 @@ test('renaming moves every record and the login to the new id, leaving nothing b
   // A manager's decision on a deviation day must follow the employee: left behind, the
   // day silently loses its Absent/Half Day status and returns to the pending queue.
   assert.equal(db.prepare("SELECT decision FROM deviation_reviews WHERE employee_id = 'EMP-027'").get().decision, 'absent');
+  // Left behind, the renamed employee's Salary Wallet card would silently disappear.
+  assert.equal(db.prepare("SELECT monthly_salary FROM employee_salaries WHERE employee_id = 'EMP-027'").get().monthly_salary, 30000);
 
   // Both halves of an activity entry follow the employee. Moving only employee_id makes
   // the Activity Log read "EMP-027 ... by EMP-001" for their own login — the page decides
