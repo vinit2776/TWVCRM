@@ -211,13 +211,32 @@ that, an approved correction fixes the times but the day stays a Half Day. They
 also get 1 full-day correction a month for a day with no punches at all; any
 other such day stays Absent. The limits live in `attendance-logic.js`.
 
+## Field trips
+
+An employee adds every place they went, in order, and can tick "Return to first
+stop" for a round trip. Their own branch is filled in as the starting point. The
+server sends all the stops to LocationIQ's driving directions in one call and stores
+the road distance of each leg and the total. Whatever distance the browser showed
+is ignored: the route is worked out again when the trip is submitted. Up to 6 photos
+(receipts, parking slips) can be attached; the phone shrinks them to a 1000px JPEG
+first and they are stored in `field_trip_photos`.
+
+The amount is the distance times `FIELD_TRIP_RATE_PER_KM`. The rate and amount are
+saved on the trip when it is submitted, so changing the rate never changes a trip
+already submitted, and a rejected trip submitted again keeps its original rate.
+Managers see each leg's km and a "Check in Google Maps" link through the same
+points. Rules and limits live in `field-trip.js`.
+
 ## Configuration
 
 Operational settings live in the database, editable by an admin at
 **/admin/settings** — office public IPs, the biometric device serial, the device
 clock correction, the punch API key, the LocationIQ key, address-search
-biasing, and the medical certificate check (`CERTIFICATE_CHECK`, off by default,
-with its `ANTHROPIC_API_KEY`). Each resolves in this order:
+biasing, the field trip rate per km (`FIELD_TRIP_RATE_PER_KM`, 0 by default, which
+shows distance only), whether a trip needs a photo (`FIELD_TRIP_PHOTO_REQUIRED`) and
+the most stops a trip can have (`FIELD_TRIP_MAX_STOPS`), and the medical certificate
+check (`CERTIFICATE_CHECK`, off by default, with its `ANTHROPIC_API_KEY`). Each
+resolves in this order:
 
 1. the `app_settings` table (the admin UI)
 2. the environment variable of the same name (a deploy-time default)
