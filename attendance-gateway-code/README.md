@@ -245,3 +245,10 @@ clearing one is an explicit checkbox.
 - `POST` bodies are capped at 64KB (`MAX_BODY_BYTES`), returning 413.
 - Login is rate-limited on username **and** IP together, so nobody can lock a
   real user out from an arbitrary network.
+- `GET /api/employees` and `GET /api/attendance` need either the `X-API-Key` punch
+  key or a logged-in session. An employee session sees only its own record and its
+  own attendance; admins and managers see everyone. Neither route ever returns
+  `device_pin` — that is the credential the biometric device identifies a person by,
+  and it belongs only to `/admin/device-pins`. **Both were open to the public
+  internet until 2026-11-12**, `/api/employees` answering `SELECT *` (name, mobile,
+  email, device PIN, branch, shift, join date) for every employee.
