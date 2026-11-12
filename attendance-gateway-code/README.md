@@ -155,10 +155,11 @@ holidays or Sundays, and at most one of each per day (`daily_report_runs`).
 `/admin/daily-report?kind=morning&date=YYYY-MM-DD` shows any day's email without
 sending it.
 
-**`/internal/punchin-reminder`** (same `CRON_SECRET`) is called every 5 minutes by
-the CRM's cron (`/api/cron/attendance-punchin-reminder`), since Hobby cron can't run
-that often. It used to email punch-in reminders; those were removed, and it now only
-runs the auto punch-out (see below).
+**`/internal/punchin-reminder`** (same `CRON_SECRET`) once emailed punch-in
+reminders, driven by an every-5-minute cron in the CRM. The reminders were removed,
+and so was that cron: the endpoint now only runs the auto punch-out, and nothing
+calls it on a schedule. It is kept as a manual trigger and should be folded into
+`/internal/auto-checkout`, which does the same job under an accurate name.
 
 **Shift timings** are set per branch at `/admin/settings` → Branches: a weekday
 shift, and whether the branch has half Saturdays (2nd and 4th Saturday, with their
@@ -187,8 +188,10 @@ Saturdays, custom timings and which branch a day counts as worked at are unaffec
 
 **Auto punch-out.** Anyone still punched in is auto punched-out 15 minutes after that
 day's shift end, stamped at exactly that time however late the run is. It gets its
-timing from the CRM's every-5-minute call to `/internal/punchin-reminder`, plus the daily Vercel
-crons above and whenever an employee opens their dashboard. It never waits for the
+timing from the daily Vercel crons above (19:00, 21:00 and 23:45 IST, which between
+them cover every shift end) and from an employee opening their dashboard; the due time
+is fixed in advance, so a late run still stamps the right one, and each run also sweeps
+the previous `AUTO_CHECKOUT_CATCHUP_DAYS` days. It never waits for the
 biometric device: a real punch-out the device uploads later replaces the auto one.
 Until midnight the dashboard offers **Punch Out** again; a real punch-out made then
 replaces the auto one, so the day isn't a Missed Checkout and any time past the shift
