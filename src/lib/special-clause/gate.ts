@@ -1,6 +1,8 @@
 // Pure rules for the special-clause approval gate. No I/O, so the API routes,
 // the contract page and the unit tests all share one definition.
 
+import { composeSpecialClause } from "@/lib/vo-terms-assemble";
+
 export type SpecialClauseStatus = "pending_approval" | "changes_requested" | "approved";
 
 export const SPECIAL_CLAUSE_APPROVER_ROLES = ["admin", "manager"] as const;
@@ -64,10 +66,13 @@ export function agreementClauseGate(params: {
   caseText: string | null | undefined;
   agreementText: string | null | undefined;
   submittedAt?: string | null;
+  /** Library terms the agreement was generated with (VO terms wiring); appended after the clause. */
+  termsText?: string | null;
 }): SpecialClauseGate {
   const base = specialClauseGate(params.caseStatus, params.submittedAt);
   if (base.blocked) return base;
-  const wanted = params.caseStatus === "approved" ? norm(params.caseText) : "";
+  const clause = params.caseStatus === "approved" ? params.caseText : "";
+  const wanted = norm(composeSpecialClause(clause, params.termsText));
   if (wanted !== norm(params.agreementText)) {
     return {
       blocked: true,

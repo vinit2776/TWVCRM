@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAgreementPdf, type AgreementTemplateKey, type AgreementVariables } from "@/lib/agreement-generator";
 import { generateLeaveLicensePdf, type LeaveLicenseVariables } from "@/lib/leave-license-generator";
+import { composeSpecialClause } from "@/lib/vo-terms-assemble";
 import { caseAddressText } from "@/lib/agreement-address-gate";
 
 // A VO case's agreements are stored PDFs built from `variables`. When the
@@ -23,7 +24,7 @@ export async function regenerateCaseAgreementPdfs(admin: SupabaseClient, caseId:
     client_address: string | null; client_city: string | null; client_state: string | null; client_pincode: string | null;
   } | null;
   if (!k) return;
-  const text = k.special_clause_status === "approved" ? k.special_clause_text : null;
+  const caseText = k.special_clause_status === "approved" ? k.special_clause_text : null;
   // One source for the address: the case. An empty case address leaves the agreement's as is.
   const address = caseAddressText(k);
 
@@ -33,6 +34,9 @@ export async function regenerateCaseAgreementPdfs(admin: SupabaseClient, caseId:
 
   for (const a of (agreements ?? []) as { id: string; type: string; template_key: string; variables: Record<string, unknown> | null }[]) {
     try {
+      // Library terms frozen on the agreement at generation ride along; absent for every other agreement.
+      const frozenTerms = typeof a.variables?.vo_terms_text === "string" ? a.variables.vo_terms_text : null;
+      const text = composeSpecialClause(caseText, frozenTerms);
       const vars = { ...(a.variables ?? {}), special_clause_text: text } as Record<string, unknown>;
       if (address) vars.client_address = address;
       const clauseSame = norm(a.variables?.special_clause_text) === norm(text);
