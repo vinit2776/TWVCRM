@@ -96,13 +96,19 @@ export async function GET(request: NextRequest) {
   });
 
   // Apply filters
-  if (amcStatus) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    amcRows = amcRows.filter((r: any) => r.amc_status === amcStatus);
-  }
   if (locationId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     amcRows = amcRows.filter((r: any) => r.location_id === locationId);
+  }
+  // Terminated AMCs live on their own tab: the default list is the contracts still in use.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const terminatedCount = amcRows.filter((r: any) => r.amc_status === "terminated").length;
+  if (amcStatus) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    amcRows = amcRows.filter((r: any) => r.amc_status === amcStatus);
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    amcRows = amcRows.filter((r: any) => r.amc_status !== "terminated");
   }
 
   // ── AMC annual budget summary (for budget banner on the page) ────────────
@@ -150,7 +156,7 @@ export async function GET(request: NextRequest) {
     };
   }
 
-  return NextResponse.json({ data: amcRows, budget: budgetSummary });
+  return NextResponse.json({ data: amcRows, budget: budgetSummary, terminated_count: terminatedCount });
 }
 
 /**

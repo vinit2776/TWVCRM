@@ -176,6 +176,7 @@ export default function AmcRegisterPage() {
   const { user } = useCurrentUser();
   const canSeeBudget = ["admin", "manager"].includes(user?.role ?? "");
   const [rows, setRows] = useState<AmcRow[]>([]);
+  const [terminatedCount, setTerminatedCount] = useState(0);
   const [budget, setBudget] = useState<AmcBudget | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<AmcStatus | "all">("all");
@@ -215,6 +216,7 @@ export default function AmcRegisterPage() {
       const res = await fetch(`/api/procurement/amc?${params}`);
       const json = await res.json();
       setRows(json.data ?? []);
+      setTerminatedCount(json.terminated_count ?? 0);
       // budgetSummary is only computed server-side when company_id is set —
       // clear any stale figure from a previous selection rather than keep
       // showing it once "All companies" is chosen.
@@ -348,10 +350,10 @@ export default function AmcRegisterPage() {
 
       {/* Status filter chips */}
       <div className="flex items-center gap-2 flex-wrap">
-        {(["all", "active", "expiring", "exhausted", "expired", "inactive"] as const).map((s) => {
+        {(["all", "active", "expiring", "exhausted", "expired", "inactive", "terminated"] as const).map((s) => {
           const isAll = s === "all";
           const active = statusFilter === s;
-          const count = isAll ? rows.length : (counts[s] ?? 0);
+          const count = s === "terminated" ? terminatedCount : isAll ? rows.length : (counts[s] ?? 0);
           return (
             <button
               key={s}
