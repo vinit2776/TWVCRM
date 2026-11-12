@@ -163,7 +163,7 @@ export async function GET(request: NextRequest) {
       }
     };
     const vendorBillRows = await Promise.all(
-      ((vendorBillsRes.data ?? []) as Record<string, unknown>[]).map(async (v) => {
+      ((vendorBillsRes.data ?? []) as Record<string, unknown>[]).map(async (v): Promise<Record<string, unknown>> => {
         const docs = (v.documents as { file_url: string; doc_type: string }[] | null) ?? [];
         const stored = docs.find((d) => d.doc_type === "invoice")?.file_url ?? (v.invoice_file_url as string | null);
         const { documents: _documents, invoice_file_url: _file, ...rest } = v;
