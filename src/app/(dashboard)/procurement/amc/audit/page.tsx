@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Download, Loader2, RefreshCw } from "lucide-react";
+import { Download, Loader2, RefreshCw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { TERMINATION_REASON_MIN } from "@/lib/procurement/amc-terminate";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -45,6 +48,12 @@ interface AuditData {
   summary: { total: number; byBucket: Record<string, number>; moneyTouched: number; tdsOnChallan: number };
 }
 
+interface TerminatePlan {
+  preview: boolean;
+  results: Array<{ id: string; po_number: string | null; terminated: boolean; skipped_reason: string | null }>;
+  summary: { requested: number; eligible: number; terminated: number; skipped: number };
+}
+
 const BUCKETS: Array<{ key: AuditBucket; label: string; hint: string; tone: string }> = [
   { key: "clean", label: "Clean", hint: "Leave alone", tone: "bg-green-100 text-green-800" },
   { key: "fixable", label: "Fix in place", hint: "Edit, convert or link assets", tone: "bg-amber-100 text-amber-800" },
@@ -60,6 +69,11 @@ export default function AmcAuditPage() {
   const [loading, setLoading] = useState(true);
   const [bucket, setBucket] = useState<AuditBucket | "all">("all");
   const [onlyMoney, setOnlyMoney] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [plan, setPlan] = useState<TerminatePlan | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,6 +97,71 @@ export default function AmcAuditPage() {
     () => (data?.rows ?? []).filter((r) => (bucket === "all" || r.bucket === bucket) && (!onlyMoney || r.money_touched)),
     [data, bucket, onlyMoney]
   );
+
+  const isAdmin = user?.role === "admin";
+  const selectable = shown.filter((r) => !r.terminated && r.bucket !== "retired");
+  const allShownSelected = selectable.length > 0 && selectable.every((r) => selected.has(r.id));
+  const selectedRows = (data?.rows ?? []).filter((r) => selected.has(r.id));
+  const selectedWithMoney = selectedRows.filter((r) => r.money_touched).length;
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAllShown = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allShownSelected) selectable.forEach((r) => next.delete(r.id));
+      else selectable.forEach((r) => next.add(r.id));
+      return next;
+    });
+
+  const callTerminate = async (preview: boolean): Promise<TerminatePlan | null> => {
+    const res = await fetch("/api/procurement/amc/terminate-bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ po_ids: [...selected], reason, preview }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      const err = typeof json.error === "string" ? json.error : "Could not terminate";
+      toast.error(err);
+      return null;
+    }
+    return json.data as TerminatePlan;
+  };
+
+  const openDialog = () => {
+    setPlan(null);
+    setReason("");
+    setDialogOpen(true);
+  };
+
+  const runPreview = async () => {
+    setBusy(true);
+    try {
+      setPlan(await callTerminate(true));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runTerminate = async () => {
+    setBusy(true);
+    try {
+      const done = await callTerminate(false);
+      if (!done) return;
+      toast.success(`Terminated ${done.summary.terminated} AMC${done.summary.terminated === 1 ? "" : "s"}${done.summary.skipped ? `, skipped ${done.summary.skipped}` : ""}`);
+      setDialogOpen(false);
+      setSelected(new Set());
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const exportCsv = () => {
     if (!data) return;
@@ -121,6 +200,11 @@ export default function AmcAuditPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {isAdmin && selected.size > 0 && (
+            <Button variant="destructive" size="sm" onClick={openDialog}>
+              <XCircle className="mr-1.5 h-4 w-4" /> Terminate selected ({selected.size})
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
             <RefreshCw className={`mr-1.5 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
           </Button>
@@ -157,6 +241,11 @@ export default function AmcAuditPage() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
                 <tr>
+                  {isAdmin && (
+                    <th className="w-8 p-2">
+                      <input type="checkbox" aria-label="Select all shown" checked={allShownSelected} onChange={toggleAllShown} />
+                    </th>
+                  )}
                   <th className="p-2">AMC</th>
                   <th className="p-2">Result</th>
                   <th className="p-2">What is wrong</th>
@@ -172,6 +261,13 @@ export default function AmcAuditPage() {
                   const b = BUCKETS.find((x) => x.key === r.bucket)!;
                   return (
                     <tr key={r.id} className="border-t align-top">
+                      {isAdmin && (
+                        <td className="p-2">
+                          {r.terminated || r.bucket === "retired" ? null : (
+                            <input type="checkbox" aria-label={`Select ${r.po_number}`} checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
+                          )}
+                        </td>
+                      )}
                       <td className="p-2">
                         <Link href={`/procurement/orders/${r.id}`} className="font-medium text-primary hover:underline">{r.po_number}</Link>
                         <div className="text-xs text-muted-foreground">{r.vendor ?? "No vendor"} · {r.location ?? "No centre"}</div>
@@ -195,13 +291,54 @@ export default function AmcAuditPage() {
                   );
                 })}
                 {shown.length === 0 && (
-                  <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">No AMCs match.</td></tr>
+                  <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">No AMCs match.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
         </>
       ) : null}
+      <Dialog open={dialogOpen} onOpenChange={(o) => !busy && setDialogOpen(o)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Terminate {selected.size} AMC{selected.size === 1 ? "" : "s"}</DialogTitle>
+            <DialogDescription>
+              Ends each contract going forward. Bills, payments, TDS and visit history stay exactly as they are, and any AMC can be reinstated from its page.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedWithMoney > 0 && (
+            <p className="rounded-md bg-amber-50 p-2 text-xs text-amber-900">
+              {selectedWithMoney} of these have a payment or TDS recorded. If you set the same cover up again, mark the cycles already paid as done, or the running cycle can be billed twice.
+            </p>
+          )}
+          <Textarea
+            value={reason}
+            onChange={(e) => { setReason(e.target.value); setPlan(null); }}
+            placeholder="Reason, kept on every AMC's history (e.g. Set up wrongly; re-creating cleanly)"
+            rows={3}
+          />
+          {plan && (
+            <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2 text-xs">
+              <div className="font-medium">{plan.summary.eligible} will be terminated, {plan.summary.skipped} skipped</div>
+              {plan.results.filter((r) => r.skipped_reason).map((r) => (
+                <div key={r.id} className="text-muted-foreground">{r.po_number ?? r.id}: {r.skipped_reason}</div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={busy}>Cancel</Button>
+            {!plan ? (
+              <Button onClick={runPreview} disabled={busy || reason.trim().length < TERMINATION_REASON_MIN}>
+                {busy && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Check first
+              </Button>
+            ) : (
+              <Button variant="destructive" onClick={runTerminate} disabled={busy || plan.summary.eligible === 0}>
+                {busy && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Terminate {plan.summary.eligible}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

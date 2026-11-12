@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("purchase_orders")
     .select(`
-      id, po_number, po_type, status, amc_status,
+      id, po_number, po_type, status, amc_status, amc_terminated_at,
       billing_cycle, cycle_count, opening_cycles, unit_cost_per_cycle,
       amc_start_date, amc_end_date,
       amc_visits_covered, amc_visits_used,
@@ -77,9 +77,10 @@ export async function GET(request: NextRequest) {
   const today = new Date();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   amcRows = amcRows.map((r: any) => {
-    const computed = computeAmcStatus(
-      r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today
-    );
+    // A termination overrides the date maths, as it does on the contract page.
+    const computed = r.amc_terminated_at
+      ? "terminated"
+      : computeAmcStatus(r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today);
     const { vendor_bills: bills, ...rest } = r;
     // Rejected bills do not consume a billing cycle — that cycle is still unbilled.
     // Matches the cap enforced when a bill is created.

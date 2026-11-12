@@ -6,6 +6,7 @@ import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
 import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
+import { TERMINATE_ROLES, terminateBlocker, terminationPatch } from "@/lib/procurement/amc-terminate";
 import { amcStatusFor, poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
 
 // Admin-only corrections, one step back each. See src/lib/procurement/admin-rollback.ts.
@@ -525,7 +526,7 @@ export async function PATCH(
     }
 
     case "reinstate_amc": {
-      if (po.po_type !== "service" || !po.amc_terminated_at) {
+      if (!po.amc_terminated_at) {
         return NextResponse.json({ error: "This contract has not been terminated" }, { status: 422 });
       }
       if (["cancelled", "partially_cancelled"].includes(po.status)) {
@@ -641,36 +642,20 @@ export async function PATCH(
       // Admin/manager only — terminating an AMC mid-contract is a destructive,
       // irreversible action. Once terminated, no new events can be logged and
       // the only way back is to create a new PO.
-      if (!["admin", "manager"].includes(dbUser.role)) {
+      if (!(TERMINATE_ROLES as readonly string[]).includes(dbUser.role)) {
         return NextResponse.json(
           { error: "Only admin and manager can terminate an AMC" },
           { status: 403 }
         );
       }
-      if (po.po_type !== "service") {
-        return NextResponse.json(
-          { error: "Termination is only available on service / AMC POs" },
-          { status: 422 }
-        );
+      let requestIsAmc = false;
+      if (po.pr_id) {
+        const { data: pr } = await supabase.from("purchase_requests").select("expenditure_type").eq("id", po.pr_id).maybeSingle();
+        requestIsAmc = pr?.expenditure_type === "amc";
       }
-      if (po.amc_terminated_at) {
-        return NextResponse.json(
-          { error: "This AMC has already been terminated" },
-          { status: 422 }
-        );
-      }
-      if (!["active", "expiring"].includes(po.amc_status ?? "")) {
-        return NextResponse.json(
-          { error: `Can only terminate an active or expiring AMC (current state: ${po.amc_status ?? "unknown"})` },
-          { status: 422 }
-        );
-      }
-      updatePayload = {
-        amc_terminated_at: new Date().toISOString(),
-        amc_terminated_by: dbUser.id,
-        amc_termination_reason: parsed.data.termination_reason.trim(),
-        amc_status: "terminated",
-      };
+      const blocker = terminateBlocker(po, requestIsAmc);
+      if (blocker) return NextResponse.json({ error: blocker }, { status: 422 });
+      updatePayload = terminationPatch(dbUser.id, parsed.data.termination_reason);
       break;
     }
   }

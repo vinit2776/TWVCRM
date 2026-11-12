@@ -1349,10 +1349,10 @@ export default function PurchaseOrderDetailPage() {
           amc_terminated_at: po.amc_terminated_at,
         });
         const isTerminated = !!po.amc_terminated_at;
+        // Any live AMC can be retired, whatever its date state or how it was raised.
         const canTerminate = !isTerminated
-          && po.po_type === "service"
-          && (currentUserRole === "admin" || currentUserRole === "manager")
-          && (liveLc.status === "active" || liveLc.status === "expiring");
+          && po.status !== "cancelled"
+          && (currentUserRole === "admin" || currentUserRole === "manager");
 
         return (
           <Card className="relative overflow-hidden">
