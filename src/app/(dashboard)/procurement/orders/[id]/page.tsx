@@ -1,6 +1,6 @@
 "use client";
 
-import { amcNotReceived, assetsNeedingDetails, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
+import { amcNotReceived, assetsNeedingDetails, linesWithoutAsset, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
 import { RollbackDialog } from "@/components/procurement/rollback-dialog";
@@ -1409,14 +1409,19 @@ export default function PurchaseOrderDetailPage() {
                 ...(((po.purchase_order_items ?? []) as Array<{ linked_asset?: AssetForAmc | null }>).map((i) => i.linked_asset).filter(Boolean) as AssetForAmc[]),
                 ...((po as unknown as { linked_asset?: AssetForAmc | null }).linked_asset ? [(po as unknown as { linked_asset: AssetForAmc }).linked_asset] : []),
               ]);
-              if (isTerminated || assetsToFix.length === 0) return null;
+              const noAssetLink = !!(po as unknown as { linked_asset?: unknown }).linked_asset || !!po.linked_asset_id;
+              const notAssets = noAssetLink ? [] : linesWithoutAsset((po.purchase_order_items ?? []) as Array<{ item_name?: string | null; linked_asset_id?: string | null; linked_asset?: unknown }>);
+              if (isTerminated || (assetsToFix.length === 0 && notAssets.length === 0)) return null;
               return (
                 <div className="mx-6 mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                  <div className="mb-1 flex items-center gap-1 font-medium"><AlertTriangle className="h-3.5 w-3.5" /> Complete the asset details for this AMC</div>
+                  <div className="mb-1 flex items-center gap-1 font-medium"><AlertTriangle className="h-3.5 w-3.5" /> Check the assets on this AMC</div>
+                  {notAssets.length > 0 && (
+                    <p className="mb-1">AMC covers assets only. Not linked to an asset: {notAssets.join(", ")}.</p>
+                  )}
                   <ul className="space-y-0.5">
                     {assetsToFix.map(({ asset, gaps }) => (
                       <li key={asset.id ?? asset.asset_code}>
-                        <Link href={`/facility/assets/${asset.id}`} className="font-medium underline">{asset.name || asset.asset_code || "Asset"}</Link> is missing {gaps.join(", ")}
+                        <Link href={`/facility/assets/${asset.id}`} className="font-medium underline">{asset.name || asset.asset_code || "Asset"}</Link>: {gaps.join("; ")}
                       </li>
                     ))}
                   </ul>

@@ -1,6 +1,6 @@
 "use client";
 
-import { amcNotReceived, assetsNeedingDetails, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
+import { amcNotReceived, assetsNeedingDetails, linesWithoutAsset, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -465,6 +465,12 @@ export default function AmcRegisterPage() {
                           <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                             <AlertTriangle className="h-3 w-3" />
                             Asset details missing
+                          </span>
+                        )}
+                        {row.amc_status !== "terminated" && !row.linked_asset && linesWithoutAsset(row.purchase_order_items).length > 0 && (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                            <AlertTriangle className="h-3 w-3" />
+                            Not linked to an asset
                           </span>
                         )}
                         {amcNotReceived(row) && (

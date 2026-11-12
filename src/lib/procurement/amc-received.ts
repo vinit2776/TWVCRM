@@ -13,6 +13,20 @@ export function amcNotReceived(po: { status: string; amc_terminated_at?: string 
   return !po.amc_terminated_at && NOT_RECEIVED.includes(po.status);
 }
 
+/** Where the asset was bought: its purchase PO and how many delivery challans are in. */
+export interface AssetPurchasePo {
+  po_number: string;
+  status: string;
+  dc_count: number;
+}
+
+const RECEIVED_STATUSES = ["received", "invoice_received", "invoice_approved"];
+
+/** Goods count as received once a delivery challan is logged or the PO is marked received. */
+export function purchaseReceived(po: AssetPurchasePo): boolean {
+  return po.dc_count > 0 || RECEIVED_STATUSES.includes(po.status);
+}
+
 export interface AssetForAmc {
   id?: string;
   name?: string | null;
@@ -20,6 +34,9 @@ export interface AssetForAmc {
   serial_number?: string | null;
   location_id?: string | null;
   lifecycle_stage?: string | null;
+  procurement_po_id?: string | null;
+  /** Filled in by the server from procurement_po_id. */
+  purchase_po?: AssetPurchasePo | null;
 }
 
 /** What an asset still lacks before an AMC on it is fully set up. Warn only; never blocks. */
@@ -28,8 +45,14 @@ export function assetGaps(asset: AssetForAmc): string[] {
   if (!asset.name?.trim()) gaps.push("name");
   if (!asset.serial_number?.trim()) gaps.push("serial number");
   if (!asset.location_id) gaps.push("location");
-  // Still "Procured" means it has not been installed at its location, i.e. not received there.
-  if (asset.lifecycle_stage === "procured") gaps.push("receipt at the location (stage is still Procured)");
+  if (asset.purchase_po) {
+    if (!purchaseReceived(asset.purchase_po)) {
+      gaps.push(`delivery challan not received on ${asset.purchase_po.po_number}`);
+    }
+  } else if (asset.lifecycle_stage === "procured") {
+    // No purchase PO to check (older equipment): the lifecycle stage is the only signal left.
+    gaps.push("receipt at the location (stage is still Procured)");
+  }
   return gaps;
 }
 
@@ -45,4 +68,13 @@ export function assetsNeedingDetails(assets: AssetForAmc[]): Array<{ asset: Asse
     if (gaps.length) out.push({ asset, gaps });
   }
   return out;
+}
+
+/** PO lines that are not linked to an asset: an AMC covers assets, not other purchases. */
+export function linesWithoutAsset(
+  items: Array<{ item_name?: string | null; linked_asset_id?: string | null; linked_asset?: unknown }>
+): string[] {
+  return items
+    .filter((i) => !i.linked_asset_id && !i.linked_asset)
+    .map((i) => i.item_name?.trim() || "Unnamed line");
 }

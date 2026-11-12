@@ -15,7 +15,7 @@ describe("amcNotReceived", () => {
   });
 });
 
-import { assetGaps, assetsNeedingDetails } from "@/lib/procurement/amc-received";
+import { assetGaps, assetsNeedingDetails, linesWithoutAsset, purchaseReceived } from "@/lib/procurement/amc-received";
 
 describe("asset details", () => {
   it("lists what an asset lacks", () => {
@@ -33,5 +33,28 @@ describe("asset details", () => {
     const out = assetsNeedingDetails([a, a, { id: "b", name: "UPS", serial_number: "S", location_id: "l" }]);
     expect(out).toHaveLength(1);
     expect(out[0].gaps).toEqual(["serial number"]);
+  });
+});
+
+describe("delivery challan receipt", () => {
+  const base = { id: "a", name: "AC", serial_number: "S", location_id: "l", procurement_po_id: "p" };
+  it("warns until a challan is logged or the PO is received", () => {
+    expect(assetGaps({ ...base, purchase_po: { po_number: "PO-1", status: "ordered", dc_count: 0 } })).toEqual(["delivery challan not received on PO-1"]);
+    expect(assetGaps({ ...base, purchase_po: { po_number: "PO-1", status: "ordered", dc_count: 1 } })).toEqual([]);
+    expect(assetGaps({ ...base, purchase_po: { po_number: "PO-1", status: "received", dc_count: 0 } })).toEqual([]);
+  });
+  it("purchaseReceived treats invoice stages as received", () => {
+    expect(purchaseReceived({ po_number: "P", status: "invoice_approved", dc_count: 0 })).toBe(true);
+    expect(purchaseReceived({ po_number: "P", status: "partially_received", dc_count: 0 })).toBe(false);
+  });
+  it("falls back to the Procured stage only when there is no purchase PO", () => {
+    expect(assetGaps({ id: "a", name: "AC", serial_number: "S", location_id: "l", lifecycle_stage: "procured" })).toHaveLength(1);
+    expect(assetGaps({ ...base, lifecycle_stage: "procured", purchase_po: { po_number: "P", status: "received", dc_count: 1 } })).toEqual([]);
+  });
+});
+
+describe("linesWithoutAsset", () => {
+  it("names lines that are not assets", () => {
+    expect(linesWithoutAsset([{ item_name: "AC", linked_asset_id: "a" }, { item_name: "Toner" }, { item_name: " " }])).toEqual(["Toner", "Unnamed line"]);
   });
 });

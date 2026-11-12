@@ -6,6 +6,8 @@ import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
 import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
+import { attachPurchasePos } from "@/lib/procurement/amc-asset-receipts";
+import type { AssetForAmc } from "@/lib/procurement/amc-received";
 import { TERMINATE_ROLES, terminateBlocker, terminationPatch } from "@/lib/procurement/amc-terminate";
 import { amcStatusFor, poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
 
@@ -89,7 +91,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id, lifecycle_stage), procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), companies(id, name, brand_name, gstin, address, city, state, pincode, phone, email), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id, lifecycle_stage), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
+      `*, purchase_order_items(*, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id), procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), companies(id, name, brand_name, gstin, address, city, state, pincode, phone, email), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -103,6 +105,11 @@ export async function GET(
     .eq("entity_type", "purchase_order")
     .eq("entity_id", id)
     .order("created_at", { ascending: true });
+
+  // Warning data only: where each linked asset was bought and whether its goods arrived.
+  const d = data as { linked_asset?: AssetForAmc | null; purchase_order_items?: Array<{ linked_asset?: AssetForAmc | null }> };
+  const linkedAssets = [d.linked_asset, ...(d.purchase_order_items ?? []).map((i) => i.linked_asset)].filter(Boolean) as AssetForAmc[];
+  await attachPurchasePos(supabase, linkedAssets);
 
   return NextResponse.json({ data, audit_events: auditEvents ?? [] });
 }

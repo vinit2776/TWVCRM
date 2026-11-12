@@ -1,6 +1,8 @@
 import { isDeadBillStatus } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { attachPurchasePos } from "@/lib/procurement/amc-asset-receipts";
+import type { AssetForAmc } from "@/lib/procurement/amc-received";
 import { computeAmcCommitted } from "@/lib/procurement/amc-budget";
 
 function getCurrentFY(date = new Date()): number {
@@ -49,9 +51,9 @@ export async function GET(request: NextRequest) {
       locations(id, name),
       companies(id, name, brand_name),
       purchase_requests(id, pr_number, department, expenditure_type),
-      purchase_order_items(id, item_name, unit, linked_asset_id, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id, lifecycle_stage)),
+      purchase_order_items(id, item_name, unit, linked_asset_id, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id)),
       vendor_bills(id, payment_status, approval_status),
-      linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id, lifecycle_stage)
+      linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id)
     `)
     .order("created_at", { ascending: false });
 
@@ -155,6 +157,12 @@ export async function GET(request: NextRequest) {
       is_over_budget: annualBudget != null && committedTotal > annualBudget,
     };
   }
+
+  // Warning data only: where each linked asset was bought and whether its goods arrived.
+  const linkedAssets = (amcRows as unknown as Array<{ linked_asset?: AssetForAmc | null; purchase_order_items?: Array<{ linked_asset?: AssetForAmc | null }> }>)
+    .flatMap((r) => [r.linked_asset, ...(r.purchase_order_items ?? []).map((i) => i.linked_asset)])
+    .filter(Boolean) as AssetForAmc[];
+  await attachPurchasePos(supabase, linkedAssets);
 
   return NextResponse.json({ data: amcRows, budget: budgetSummary, terminated_count: terminatedCount });
 }
