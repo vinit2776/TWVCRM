@@ -7,22 +7,26 @@
  * for a term billed at this fee" goes through these two functions.
  */
 
-const round2 = (n: number): number => Math.round(n * 100) / 100;
+const roundRupee = (n: number): number => Math.round(n);
 
-/** Fee for the whole term, to 2 decimals. Unknown tenure is treated as <= 12 (rate is the fee). */
+/**
+ * Fee for the whole term. Terms of 12 months or less return the rate as stored; longer terms are
+ * scaled from the annual rate and rounded to the nearest rupee (owner decision). Unknown tenure is
+ * treated as <= 12 (rate is the fee).
+ */
 export function termFee(rate: number | null | undefined, tenureMonths: number | null | undefined): number {
   const r = Number(rate) || 0;
   const months = Number(tenureMonths) || 0;
-  return round2(months > 12 ? (r * months) / 12 : r);
+  return months > 12 ? roundRupee((r * months) / 12) : r;
 }
 
 /**
  * Inverse of termFee: the value to store in cases.rate for a term billed at
  * `fee`. The fee itself for terms of 12 months or less, the annual rate
- * (fee x 12 / months) for longer ones.
+ * (fee x 12 / months, nearest rupee) for longer ones.
  */
 export function annualRateFor(fee: number | null | undefined, tenureMonths: number | null | undefined): number {
   const f = Number(fee) || 0;
   const months = Number(tenureMonths) || 0;
-  return round2(months > 12 ? (f * 12) / months : f);
+  return months > 12 ? roundRupee((f * 12) / months) : f;
 }
