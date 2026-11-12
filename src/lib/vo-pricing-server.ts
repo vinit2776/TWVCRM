@@ -171,5 +171,20 @@ export async function requestFloorApproval(
     .select("id")
     .single();
   if (error || !data) return { error: error?.message ?? "Could not create the approval request" };
+  // Dynamic import keeps the mailer (env-dependent) out of the pure pricing modules and their tests.
+  const { notifyFloorApprovers } = await import("@/lib/vo-floor-notify");
+  await notifyFloorApprovers(admin, {
+    approvalId: data.id as string,
+    proposalId: input.proposalId,
+    proposalNumber: input.proposalNumber,
+    requestedBy: input.requestedBy,
+    reason: input.reason,
+    meta: {
+      quoted_rate: input.snapshot.quoted_rate,
+      floor_rate: input.snapshot.floor_rate,
+      guide_rate: input.snapshot.guide_rate,
+      term_months: input.snapshot.term_months,
+    },
+  });
   return { id: data.id as string };
 }
