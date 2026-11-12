@@ -278,6 +278,15 @@ export default function FacilityAssetsPage() {
                                 {a.name}
                               </Link>
                             )}
+                          {a.invoice_missing && !selectMode && (
+                            <Link
+                              href={`/facility/assets/${a.id}?upload_invoice=1`}
+                              title="No purchase invoice attached. Click to upload it."
+                              className="ml-2 inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 hover:bg-amber-100"
+                            >
+                              Invoice missing
+                            </Link>
+                          )}
                         </td>
                         <td className="px-3 py-2 hidden sm:table-cell text-xs">{a.category?.name ?? "—"}</td>
                         <td className="px-3 py-2 hidden md:table-cell text-xs">{[a.make, a.model].filter(Boolean).join(" ") || "—"}</td>

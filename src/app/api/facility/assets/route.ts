@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { assetIdsWithInvoice } from "@/lib/facility/asset-invoice";
 import { logAudit } from "@/lib/audit";
 import { hasRole, FACILITY_ROLES } from "@/lib/facility";
 
@@ -38,6 +39,12 @@ export async function GET(request: NextRequest) {
 
   const { data: assets, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Flag assets with no purchase invoice attached (informational; never blocks anything).
+  if (assets && assets.length > 0 && format !== "csv") {
+    const withInvoice = await assetIdsWithInvoice(createAdminClient(), assets.map((a) => a.id as string));
+    if (withInvoice) for (const a of assets) a.invoice_missing = !withInvoice.has(a.id as string);
+  }
 
   // Optional: enrich with issue counts
   if (includeStats && assets && assets.length > 0) {
