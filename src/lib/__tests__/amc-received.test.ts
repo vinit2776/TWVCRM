@@ -14,3 +14,18 @@ describe("amcNotReceived", () => {
     expect(amcNotReceived({ status: "ordered", amc_terminated_at: "2026-11-01T00:00:00Z" })).toBe(false);
   });
 });
+
+import { assetGaps, assetsNeedingDetails } from "@/lib/procurement/amc-received";
+
+describe("asset details", () => {
+  it("lists what an asset lacks", () => {
+    expect(assetGaps({ id: "a", name: "AC", serial_number: "S1", location_id: "l" })).toEqual([]);
+    expect(assetGaps({ id: "a", name: " ", serial_number: null, location_id: null })).toEqual(["name", "serial number", "location"]);
+  });
+  it("lists each incomplete asset once", () => {
+    const a = { id: "a", name: "AC", serial_number: null, location_id: "l" };
+    const out = assetsNeedingDetails([a, a, { id: "b", name: "UPS", serial_number: "S", location_id: "l" }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].gaps).toEqual(["serial number"]);
+  });
+});
