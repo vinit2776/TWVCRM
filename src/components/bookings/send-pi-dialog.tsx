@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { RecipientFields, recipientsValid } from "@/components/bookings/recipient-fields";
 import { FileText, Loader2, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
@@ -33,9 +33,10 @@ export function SendPiDialog({
   const [previewing, setPreviewing] = useState(false);
   const [sending, setSending] = useState(false);
   const [recipient, setRecipient] = useState(customerEmail ?? "");
+  const [cc, setCc] = useState("");
   // Starts from the booking's email each time the dialog opens.
-  useEffect(() => { if (open) setRecipient(customerEmail ?? ""); }, [open, customerEmail]);
-  const recipientValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient.trim());
+  useEffect(() => { if (open) { setRecipient(customerEmail ?? ""); setCc(""); } }, [open, customerEmail]);
+  const recipientValid = recipientsValid(recipient, cc);
 
   const preview = async () => {
     setPreviewing(true);
@@ -71,7 +72,7 @@ export function SendPiDialog({
       const res = await fetch(`/api/bookings/${bookingId}/pi`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: recipient.trim() }),
+        body: JSON.stringify({ to: recipient.trim(), cc }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
@@ -104,13 +105,7 @@ export function SendPiDialog({
             <div className="flex justify-between"><span className="text-muted-foreground">PI number</span><span className="font-medium">{piNumber}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Amount payable</span><span className="font-semibold">{formatCurrency(amountDue)}</span></div>
           </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground" htmlFor="pi-recipient">Send to</label>
-            <Input id="pi-recipient" type="email" value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="name@company.com" />
-            <p className="text-[11px] text-muted-foreground">
-              {customerEmail ? `The booking has ${customerEmail}. Change it to send somewhere else, such as your own address to check it.` : "No email on the booking. Enter one to send."}
-            </p>
-          </div>
+          <RecipientFields to={recipient} cc={cc} onTo={setRecipient} onCc={setCc} savedEmail={customerEmail} idPrefix="pi" />
           <p className="text-xs text-muted-foreground">
             The PI is optional. The customer can pay with the link in advance or at the counter on arrival.
             It is not a tax invoice. Over usage and additional facilities are charged as applicable, and the GST invoice is provided on full payment.

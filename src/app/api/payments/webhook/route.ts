@@ -149,7 +149,7 @@ export async function POST(request: NextRequest) {
 
           // Provision COSEC access PIN now that booking is confirmed paid.
           // Called directly (no HTTP self-fetch) to avoid serverless network fragility.
-          provisionBookingAccess(bookingPayment.booking_id).catch((err) =>
+          provisionBookingAccess(bookingPayment.booking_id, { deliver: false }).catch((err) =>
             console.error("[webhook] COSEC provision failed:", err)
           );
         }

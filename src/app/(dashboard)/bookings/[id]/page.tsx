@@ -46,6 +46,7 @@ import { BookingAddonsSection } from "@/components/bookings/booking-addons-secti
 import { BookingPaymentSummary } from "@/components/bookings/booking-payment-summary";
 import { BookingPiSentBanner } from "@/components/bookings/booking-pi-sent-banner";
 import { PaymentLinkStrip } from "@/components/bookings/payment-link-strip";
+import { BookingEmailDialog } from "@/components/bookings/booking-email-dialog";
 import { CorrectPaymentMethodDialog } from "@/components/bookings/correct-payment-method-dialog";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
@@ -117,6 +118,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [getPaymentChooserOpen, setGetPaymentChooserOpen] = useState(false);
   const [sendPiOpen, setSendPiOpen] = useState(false);
+  const [resendConfirmOpen, setResendConfirmOpen] = useState(false);
+  const [resendPinOpen, setResendPinOpen] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [markCompDialogOpen, setMarkCompDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
@@ -511,20 +514,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       body: JSON.stringify({ type: "confirmation" }),
     }).catch(() => {});
   }, [fetchBooking, id]);
-
-  const handleResendEmail = async () => {
-    const res = await fetch(`/api/bookings/${id}/email`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "confirmation" }),
-    });
-    if (res.ok) {
-      toast.success("Confirmation email sent");
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to send email");
-    }
-  };
 
   const handleCopyFeedbackLink = () => {
     if (!booking?.feedback_token) { toast.error("No feedback token"); return; }
@@ -925,7 +914,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Button variant="outline" size="sm" onClick={() => setRescheduleDialogOpen(true)}>
                 <Calendar className="mr-1 h-4 w-4" />Reschedule
               </Button>
-              <Button variant="outline" size="sm" onClick={handleResendEmail}>
+              <Button variant="outline" size="sm" onClick={() => setResendConfirmOpen(true)}>
                 <Mail className="mr-1 h-4 w-4" />Resend Email
               </Button>
               <Button variant="outline" size="sm" onClick={() => handleStatusAction("no_show")} disabled={actionLoading}>
@@ -1634,14 +1623,19 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const existingPin = (booking as any).access_pin as string | null;
 
-          async function provisionPin() {
+          // Returns what actually happened, so a dialog never claims an email went when it did not.
+          async function provisionPinDetailed(to?: string, cc?: string): Promise<{ ok: boolean; message: string | null }> {
             const res = await fetch("/api/cosec/booking-access", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ booking_id: id }),
+              body: JSON.stringify({ booking_id: id, ...(to ? { to } : {}), ...(cc ? { cc } : {}) }),
             });
-            const json = res.ok ? await res.json() : null;
-            if (res.ok && json) {
+            const json = await res.json().catch(() => null);
+            if (!res.ok) return { ok: false, message: json?.error || "Failed to resend PIN" };
+            if (json?.skipped) {
+              return { ok: false, message: "No door devices are set up at this location, so no PIN was provisioned or sent." };
+            }
+            if (json) {
               // Surface per-channel delivery result
               if (json.delivery) setPinDelivery(json.delivery);
               // Refresh booking to pick up new access_pin value
@@ -1651,7 +1645,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               fetch(`/api/cosec/booking-devices?booking_id=${id}`)
                 .then(r => r.json()).then(j => setBookingDevices(j.data || [])).catch(() => {});
             }
-            return res.ok;
+            const emailStatus = json?.delivery?.email;
+            if (to && emailStatus && emailStatus !== "sent") {
+              return { ok: false, message: `The PIN was provisioned but the email to ${to} was not sent (${emailStatus}).` };
+            }
+            return { ok: true, message: null };
+          }
+
+          async function provisionPin() {
+            return (await provisionPinDetailed()).ok;
           }
 
           // Build the shareable PIN message the staff member can copy and send manually
@@ -1690,15 +1692,24 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       <div className="flex flex-col gap-1.5 items-end">
                         <Button
                           variant="outline" size="sm"
-                          onClick={async () => {
-                            setPinDelivery(null);
-                            const ok = await provisionPin();
-                            if (ok) toast.success("Access PIN resent");
-                            else toast.error("Failed to resend PIN");
-                          }}
+                          onClick={() => setResendPinOpen(true)}
                         >
                           <Send size={13} className="mr-1.5" />Resend PIN
                         </Button>
+                        <BookingEmailDialog
+                          open={resendPinOpen}
+                          onOpenChange={setResendPinOpen}
+                          title="Resend access PIN"
+                          // The PIN's own default: the address entered for this booking, then the customer record's.
+                          savedEmail={booking.guest_email || customerEmail || null}
+                          idPrefix="pin"
+                          successMessage={(to) => `Access PIN resent. The email went to ${to}.`}
+                          onSend={async (to, cc) => {
+                            setPinDelivery(null);
+                            const result = await provisionPinDetailed(to, cc);
+                            return result.ok ? null : result.message;
+                          }}
+                        />
                         {/* Copy to share */}
                         <Button
                           variant="ghost" size="sm"
@@ -1716,8 +1727,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       </div>
                     </div>
 
+                    {/* The PIN is not sent automatically; staff send it when it is needed. */}
+                    {(!pinDelivery || [pinDelivery.sms, pinDelivery.email, pinDelivery.whatsapp].every((s) => s === "skipped")) && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Not sent to the customer. Use Resend PIN to email and text it when it is needed.
+                      </p>
+                    )}
+
                     {/* Delivery status — shown after Resend or Generate */}
-                    {pinDelivery && (
+                    {pinDelivery && [pinDelivery.sms, pinDelivery.email, pinDelivery.whatsapp].some((s) => s !== "skipped") && (
                       <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
                         <span className="text-[11px] text-muted-foreground mr-0.5">Sent via:</span>
                         <DeliveryBadge label="WhatsApp" status={pinDelivery.whatsapp} />
@@ -2524,6 +2542,25 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onPickCounter={() => setPaymentDialogOpen(true)}
         onPickLink={() => setPaymentSendDialogOpen(true)}
         onPickPi={() => setSendPiOpen(true)}
+      />
+
+      <BookingEmailDialog
+        open={resendConfirmOpen}
+        onOpenChange={setResendConfirmOpen}
+        title="Resend booking confirmation"
+        savedEmail={customerEmail || null}
+        idPrefix="confirm"
+        successMessage={(to) => `Confirmation sent to ${to}`}
+        onSend={async (to, cc) => {
+          const res = await fetch(`/api/bookings/${booking.id}/email`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "confirmation", to, cc }),
+          });
+          if (res.ok) return null;
+          const err = await res.json().catch(() => null);
+          return err?.error || "Failed to send email";
+        }}
       />
 
       <SendPiDialog
