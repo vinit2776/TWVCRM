@@ -2722,6 +2722,10 @@ export interface AssetDocument {
   mime_type?: string | null;
   notes?: string | null;
   uploaded_by?: string | null;
+  /** 'invoice' marks the asset's purchase invoice. */
+  doc_kind?: "invoice" | null;
+  /** Rows created from one upload share this id (one invoice covering several assets). */
+  invoice_group_id?: string | null;
   created_at: string;
   updated_at: string;
   uploader?: { id: string; full_name: string } | null;
@@ -3586,6 +3590,8 @@ export interface FacilityAsset {
   open_issue_count?: number;
   total_issue_count?: number;
   last_issue_at?: string | null;
+  /** True when no purchase invoice is attached; undefined when it could not be checked. */
+  invoice_missing?: boolean;
 }
 
 // Non-secret fields only — the decrypted password is never part of this

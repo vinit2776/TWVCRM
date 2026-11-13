@@ -146,6 +146,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   const [asset, setAsset] = useState<AssetWithHistory | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("details");
+  const [presetInvoice, setPresetInvoice] = useState(false);
   const [amcContracts, setAmcContracts] = useState<AmcContract[]>([]);
   const [amcEvents, setAmcEvents] = useState<AmcEvent[]>([]);
   const [serviceReports, setServiceReports] = useState<ServiceReport[]>([]);
@@ -222,6 +223,13 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   }, [id]);
   useEffect(() => { if (tab === "amc" && !amcLoaded) fetchAmc(); /* eslint-disable-next-line */ }, [tab]);
   useEffect(() => { if (tab === "documents" && !docsLoaded) fetchDocs(); /* eslint-disable-next-line */ }, [tab]);
+  // The "Invoice missing" chip on the asset list lands straight on the upload form.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("upload_invoice") === "1") {
+      setTab("documents");
+      setPresetInvoice(true);
+    }
+  }, []);
 
   if (!asset) {
     return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
@@ -294,6 +302,21 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
       )}
 
       {/* Tabs */}
+      {asset.invoice_missing && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span>
+            <strong>Purchase invoice not uploaded.</strong> Upload it so the details entered here can be checked against it.
+            This flag stays until an invoice is attached.
+          </span>
+          <button
+            type="button"
+            className="font-medium underline"
+            onClick={() => { setTab("documents"); setPresetInvoice(true); }}
+          >
+            Upload invoice
+          </button>
+        </div>
+      )}
       <div className="flex gap-1 border-b">
         {([
           { key: "details" as Tab, label: "Details & Issues" },
@@ -977,7 +1000,8 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
           docs={docs}
           loaded={docsLoaded}
           userRole={userRole}
-          onRefresh={fetchDocs}
+          presetInvoice={presetInvoice}
+          onRefresh={() => { fetchDocs(); fetchData(); }}
         />
       )}
 
@@ -1290,21 +1314,39 @@ const ACCEPTED = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "im
 const MAX_SIZE = 10 * 1024 * 1024;
 
 function DocumentsSection({
-  assetId, docs, loaded, userRole, onRefresh,
+  assetId, docs, loaded, userRole, presetInvoice, onRefresh,
 }: {
   assetId: string;
   docs: AssetDocument[];
   loaded: boolean;
   userRole: string;
+  presetInvoice: boolean;
   onRefresh: () => void;
 }) {
-  const [showUpload, setShowUpload] = useState(false);
+  const [showUpload, setShowUpload] = useState(presetInvoice);
+  const [alsoCovers, setAlsoCovers] = useState<Set<string>>(new Set());
+  const [assetChoices, setAssetChoices] = useState<Array<{ id: string; name: string; asset_code: string; location?: { name: string } | null }>>([]);
+  const [alsoFilter, setAlsoFilter] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [tier, setTier] = useState<AssetDocumentTier>("operational");
-  const [label, setLabel] = useState("Other");
+  const [tier, setTier] = useState<AssetDocumentTier>(presetInvoice ? "commercial" : "operational");
+  const [label, setLabel] = useState(presetInvoice ? "Purchase Invoice" : "Other");
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+
+  // The banner's "Upload invoice" can be clicked while this tab is already open.
+  useEffect(() => {
+    if (presetInvoice) { setShowUpload(true); setTier("commercial"); setLabel("Purchase Invoice"); }
+  }, [presetInvoice]);
+
+  const isInvoiceLabel = label === "Purchase Invoice" || label === "Tax Invoice";
+  useEffect(() => {
+    if (!showUpload || !isInvoiceLabel || assetChoices.length > 0) return;
+    fetch("/api/facility/assets")
+      .then((r) => r.json())
+      .then((j) => setAssetChoices(((j.data ?? []) as typeof assetChoices).filter((a) => a.id !== assetId)))
+      .catch(() => setAssetChoices([]));
+  }, [showUpload, isInvoiceLabel, assetChoices.length, assetId]);
 
   const canUpload = ["admin", "manager", "fms", "accounts", "office_admin", "coordinator", "it_manager"].includes(userRole);
   const canDelete = ["admin", "manager"].includes(userRole);
@@ -1331,16 +1373,18 @@ function DocumentsSection({
           file_size: file.size,
           mime_type: file.type,
           notes: notes || undefined,
+          also_asset_ids: isInvoiceLabel && alsoCovers.size > 0 ? [...alsoCovers] : undefined,
         }),
       });
       if (!res.ok) {
         const j = await res.json();
         throw new Error(typeof j.error === "string" ? j.error : "Upload failed");
       }
-      toast.success("Document uploaded");
+      toast.success(alsoCovers.size > 0 && isInvoiceLabel ? `Invoice attached to ${alsoCovers.size + 1} assets` : "Document uploaded");
       setShowUpload(false);
       setFile(null);
       setNotes("");
+      setAlsoCovers(new Set());
       onRefresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
@@ -1442,6 +1486,41 @@ function DocumentsSection({
                   />
                 )}
               </div>
+              {isInvoiceLabel && (
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">
+                    This invoice also covers (optional) — tick every other asset listed on it, in any location
+                  </label>
+                  <input
+                    value={alsoFilter}
+                    onChange={(e) => setAlsoFilter(e.target.value)}
+                    placeholder="Search by name, code or location"
+                    className="w-full h-8 px-2 rounded-md border bg-background text-xs"
+                  />
+                  <div className="max-h-40 overflow-y-auto rounded-md border p-1">
+                    {assetChoices
+                      .filter((a) => `${a.name} ${a.asset_code} ${a.location?.name ?? ""}`.toLowerCase().includes(alsoFilter.toLowerCase()))
+                      .slice(0, 100)
+                      .map((a) => (
+                        <label key={a.id} className="flex items-center gap-2 px-1 py-0.5 text-xs hover:bg-muted/50 rounded">
+                          <input
+                            type="checkbox"
+                            checked={alsoCovers.has(a.id)}
+                            onChange={() => setAlsoCovers((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(a.id)) next.delete(a.id); else next.add(a.id);
+                              return next;
+                            })}
+                          />
+                          <span className="font-mono">{a.asset_code}</span>
+                          <span className="truncate">{a.name}</span>
+                          <span className="ml-auto text-muted-foreground">{a.location?.name ?? ""}</span>
+                        </label>
+                      ))}
+                    {assetChoices.length === 0 && <div className="p-2 text-xs text-muted-foreground">No other assets to choose from.</div>}
+                  </div>
+                </div>
+              )}
               <Button size="sm" onClick={handleUpload} disabled={uploading || !file}>
                 {uploading && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
                 Upload
