@@ -29,7 +29,7 @@ const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, report
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
   ACTIVITY_CATEGORIES, categoryOf, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
-  fieldChanges, parseChanges, activitySentence, detailsShown,
+  fieldChanges, activitySentence, changesAndDetails,
 } = require('./activity-log');
 const {
   formatEmployeeId, parseEmployeeNumber, nextEmployeeNumber, renameEmployeeStatements,
@@ -4122,8 +4122,7 @@ async function renderActivityLog(user, filters) {
         : p.kind === 'role' ? `<span style="color:#7C8896;">${escapeHtml(p.text)}</span>`
           : escapeHtml(p.text)
     )).join('');
-    const changes = parseChanges(r.changes);
-    const details = changes ? '' : detailsShown(r);
+    const { changes, details } = changesAndDetails(r);
     return `
     <tr>
       <td style="white-space:nowrap;color:#4C5A68;vertical-align:top;">${escapeHtml(String(r.created_at).slice(0, 10))}<br><span style="color:#7C8896;">${escapeHtml(String(r.created_at).slice(11, 16))}</span></td>
@@ -7218,7 +7217,11 @@ async function handleRequest(req, res) {
       }
     }
     await db.prepare('UPDATE employees SET device_pin = ? WHERE id = ?').run(pin || null, employeeId);
-    await logAdminAction(user.username, 'set_device_pin', 'employee', employeeId, pin || '(cleared)');
+    // The PIN is what the biometric device authenticates a punch with, so it is
+    // recorded as changed and never written down — this log is readable in-app and
+    // exported to CSV, the same reason the API keys in Settings are hidden.
+    await logAdminAction(user.username, 'set_device_pin', 'employee', employeeId, '', employeeId,
+      [pin ? { field: 'Device PIN', hidden: true } : { field: 'Device PIN', note: 'cleared' }]);
     res.writeHead(302, { Location: '/admin/device-pins' });
     return res.end();
   }

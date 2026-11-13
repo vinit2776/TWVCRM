@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { DatabaseSync } = require('node:sqlite');
 const {
   ACTIONS, ACTIVITY_CATEGORIES, activityLabel, categoryOf, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
-  fieldChanges, parseChanges, changesText, activitySentence, sentenceText, detailsShown,
+  fieldChanges, parseChanges, changesText, activitySentence, sentenceText, detailsShown, changesAndDetails,
 } = require('../activity-log');
 
 test('every logged action belongs to a real category', () => {
@@ -200,4 +200,40 @@ test('a failed login never records what was typed when no account matches', () =
   ]) {
     assert.equal(safeLoginUsername(typed, undefined), '', JSON.stringify(typed));
   }
+});
+
+test('a recorded-but-empty change list keeps the summary instead of hiding it', () => {
+  // A settings or branches save can write rows while every field compares equal (a
+  // fresh database, where the value in force came from the default that was already
+  // in the form). The entry must still say what it touched.
+  const row = {
+    category: 'admin', action: 'branches_updated', employee_id: '',
+    actor_username: 'priya', actor_role: 'admin',
+    details: 'LGF half Saturdays on, LGF shift 09:30-18:30', changes: '[]',
+  };
+  assert.deepEqual(parseChanges(row.changes), []);
+  // [] is truthy, so the decision has to test its length. Both the page and the CSV
+  // read it from here, so they cannot disagree about it again.
+  assert.deepEqual(changesAndDetails(row), { changes: null, details: row.details });
+  assert.equal(activityCsvRow(row, {})[2], row.details);
+  // A non-empty list does replace the summary.
+  const edited = { ...row, changes: '[{"field":"LGF shift","from":"09:30–18:30","to":"10:00–19:00"}]' };
+  assert.equal(changesAndDetails(edited).details, '');
+  assert.equal(activityCsvRow(edited, {})[2], 'LGF shift: 09:30–18:30 → 10:00–19:00');
+});
+
+test('a device PIN is never shown or exported, including from older entries', () => {
+  const PIN = '4821';
+  // What the route records now: that it changed, never the PIN itself.
+  const changes = [{ field: 'Device PIN', hidden: true }];
+  const json = JSON.stringify(changes);
+  assert.ok(!json.includes(PIN));
+  assert.equal(changesText(json), 'Device PIN: changed (value hidden)');
+  // Entries written before it was hidden still hold the PIN in details.
+  const old = {
+    category: 'admin', action: 'set_device_pin', employee_id: 'EMP-003',
+    actor_username: 'priya', actor_role: 'admin', details: PIN, changes: '',
+  };
+  assert.equal(detailsShown(old), '');
+  assert.ok(!activityCsvRow(old, { employeeName: () => 'Rahul Sharma' }).some(c => String(c).includes(PIN)));
 });

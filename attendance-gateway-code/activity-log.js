@@ -279,10 +279,23 @@ function sentenceText(parts) {
 }
 
 // Details that only repeat the name already in the sentence aren't shown again.
-const DETAILS_IN_SENTENCE = new Set(['edit_employee', 'reset_password']);
+// set_device_pin is here for a second reason: entries written before the PIN was
+// hidden still hold it in `details`, and it must not be shown or exported now.
+const DETAILS_IN_SENTENCE = new Set(['edit_employee', 'reset_password', 'set_device_pin']);
 function detailsShown(row) {
   if (row.category === 'admin' && DETAILS_IN_SENTENCE.has(row.action)) return '';
   return row.details || '';
+}
+
+// The page and the CSV have to make the same choice here or they drift apart. An
+// empty list means "recorded, and nothing changed", which is not the same as nothing
+// to show: it is truthy, so a save whose fields all compared equal would otherwise
+// hide its own summary on the page while the CSV still printed it.
+// `changes` is the list to render, or null when there is none; `details` is the
+// fallback text, '' when the changes have replaced it.
+function changesAndDetails(row) {
+  const changes = parseChanges(row.changes);
+  return changes && changes.length ? { changes, details: '' } : { changes: null, details: detailsShown(row) };
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -306,10 +319,11 @@ const ACTIVITY_CSV_HEADERS = ['Time', 'What happened', 'Changes / details', 'Emp
 function activityCsvRow(row, lookups = {}) {
   const category = ACTIVITY_CATEGORIES.find(c => c.key === row.category);
   const employeeName = lookups.employeeName || (() => '');
+  const { changes, details } = changesAndDetails(row);
   return [
     row.created_at,
     sentenceText(activitySentence(row, lookups)),
-    changesText(row.changes) || detailsShown(row),
+    changes ? changes.map(changeText).join('; ') : details,
     row.employee_id || '',
     row.employee_id ? (employeeName(row.employee_id) || '') : '',
     row.actor_username || '',
@@ -332,6 +346,7 @@ module.exports = {
   activitySentence,
   sentenceText,
   detailsShown,
+  changesAndDetails,
   describeDevice,
   activityFilterSql,
   ACTIVITY_CSV_HEADERS,
