@@ -1509,6 +1509,7 @@ export interface Booking {
   pi_number?: string | null;
   pi_sent_at?: string | null;
   pi_sent_to?: string | null;
+  pi_sender?: { full_name: string } | null;
   // Prepaid package redemption
   prepaid_purchase_id?: string;
   prepaid_credits_used?: number;

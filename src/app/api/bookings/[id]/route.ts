@@ -15,7 +15,7 @@ import { getCachedSettings } from "@/lib/app-settings-cache";
 
 export const maxDuration = 30;
 
-const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state, wifi_voucher_mode), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, id_proof_path), facilities:booking_facilities(*)";
+const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state, wifi_voucher_mode), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, id_proof_path), facilities:booking_facilities(*), pi_sender:users!bookings_pi_sent_by_fkey(full_name)";
 
 /** Actual duration in hours between two real timestamps, to the minute
  *  (two decimals — the quantity column is DECIMAL(10,2)). Billed exactly:
