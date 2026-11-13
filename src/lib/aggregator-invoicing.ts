@@ -13,7 +13,8 @@ import {
   type BilledTerm,
 } from "@/lib/aggregator-term-billing";
 
-const TABLE_MISSING = "42P01";
+// 42P01 is Postgres; PGRST205 is PostgREST saying the table is not in its schema cache.
+const TABLE_MISSING_CODES = ["42P01", "PGRST205"];
 let warnedTermsTableMissing = false;
 
 export interface GenerateConsolidatedInvoiceParams {
@@ -122,7 +123,7 @@ export async function generateConsolidatedInvoice({
       .from("aggregator_case_terms_billed")
       .select("case_id, term_start")
       .in("case_id", cases.map((c) => c.id));
-    if (billedError?.code === TABLE_MISSING) {
+    if (TABLE_MISSING_CODES.includes(billedError?.code ?? "")) {
       if (!warnedTermsTableMissing) {
         warnedTermsTableMissing = true;
         console.error("[aggregator-invoicing] aggregator_case_terms_billed missing (migration 00686 not applied); using legacy billing");
