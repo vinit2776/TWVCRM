@@ -54,6 +54,12 @@ test('unreadable, non-medical, unsigned or odd documents are flagged', () => {
 test('buildCertificateRequest sends an image or a PDF with the leave details', () => {
   const img = buildCertificateRequest({ employeeName: 'Ravi Kumar', ...LEAVE, contentType: 'image/jpeg', dataBase64: 'AAA' });
   assert.equal(img.model, CERTIFICATE_CHECK_MODEL);
+  // Haiku by preference, and it has no server-side fallback: a list of fallback
+  // models is a 400 on this model, so the request must not carry one.
+  assert.match(CERTIFICATE_CHECK_MODEL, /^claude-haiku-/);
+  assert.equal(img.fallbacks, undefined);
+  assert.equal(img.betas, undefined);
+  assert.equal(img.output_config.effort, 'low');
   assert.equal(img.output_config.format.type, 'json_schema');
   assert.equal(img.messages[0].content[0].type, 'image');
   assert.equal(img.messages[0].content[0].source.media_type, 'image/jpeg');
@@ -63,7 +69,7 @@ test('buildCertificateRequest sends an image or a PDF with the leave details', (
 });
 
 function fakeClient(respond) {
-  return { beta: { messages: { create: async params => respond(params) } } };
+  return { messages: { create: async params => respond(params) } };
 }
 
 test('checkCertificate parses the structured answer', async () => {
