@@ -52,7 +52,7 @@ export async function PUT(
   const {
     name, code, address, city, state, is_active, capacity_config, requires_headcount,
     latitude, longitude, incharge_user_id_1, incharge_user_id_2,
-    unifi_site_id, unifi_console_id, wifi_voucher_mode, proposal_amenity_icons, agreement_terms,
+    unifi_site_id, unifi_console_id, wifi_voucher_mode, wifi_ssid, proposal_amenity_icons, agreement_terms,
   } = body as {
     name?: string;
     code?: string;
@@ -69,6 +69,7 @@ export async function PUT(
     unifi_site_id?: string | null;
     unifi_console_id?: string | null;
     wifi_voucher_mode?: string | null;
+    wifi_ssid?: string | null;
     proposal_amenity_icons?: string[];
     agreement_terms?: unknown;
   };
@@ -105,6 +106,11 @@ export async function PUT(
     }
   }
 
+  // Network name printed in voucher emails: blank puts the location back on the standard name.
+  if (wifi_ssid !== undefined && wifi_ssid !== null && (typeof wifi_ssid !== "string" || wifi_ssid.trim().length > 32)) {
+    return NextResponse.json({ error: "WiFi network name must be 32 characters or fewer" }, { status: 400 });
+  }
+
   // Agreement wording is legal text: admin, manager and sales rep only (the route also admits it_manager).
   // null puts the location back on the standard wording.
   let cleanedTerms: unknown;
@@ -139,6 +145,7 @@ export async function PUT(
   if (unifi_site_id !== undefined) updates.unifi_site_id = unifi_site_id || null;
   if (unifi_console_id !== undefined) updates.unifi_console_id = unifi_console_id || null;
   if (wifi_voucher_mode !== undefined) updates.wifi_voucher_mode = wifi_voucher_mode || null;
+  if (wifi_ssid !== undefined) updates.wifi_ssid = wifi_ssid?.trim() || null;
   if (proposal_amenity_icons !== undefined) updates.proposal_amenity_icons = proposal_amenity_icons;
   if (agreement_terms !== undefined) updates.agreement_terms = cleanedTerms;
 
