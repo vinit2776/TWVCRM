@@ -88,7 +88,13 @@ export function isProofRecorded(checks: { raw?: unknown }[]): boolean {
   return checks.some((c) => findingOf(c) === "deregistration_proof_received");
 }
 
-/** Postgres codes that mean "the migration has not been applied yet". */
+/**
+ * Codes that mean "the migration has not been applied yet": Postgres 42P01 / 42703 / 23514, and the
+ * PostgREST schema-cache misses PGRST205 (table) and PGRST204 (column).
+ */
 export function isMissingSchema(err: { code?: string } | null | undefined): boolean {
-  return !!err && (err.code === "42P01" || err.code === "42703" || err.code === "23514");
+  return (
+    !!err &&
+    (err.code === "42P01" || err.code === "42703" || err.code === "23514" || err.code === "PGRST205" || err.code === "PGRST204")
+  );
 }
