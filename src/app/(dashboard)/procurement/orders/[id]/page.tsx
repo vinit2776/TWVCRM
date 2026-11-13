@@ -1824,6 +1824,24 @@ export default function PurchaseOrderDetailPage() {
             {po.advance_notes && (
               <p className="text-sm text-muted-foreground">{po.advance_notes}</p>
             )}
+            {(() => {
+              const u = (po as unknown as { advance_usage?: { advance: number; applied: number; legacyCredit: number; unused: number } | null }).advance_usage;
+              if (!u || po.advance_status !== "processed") return null;
+              return (
+                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm space-y-1">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Applied to bills</span><span className="font-medium">{formatCurrency(u.applied + u.legacyCredit)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Still unused</span><span className="font-semibold">{formatCurrency(u.unused)}</span></div>
+                  {u.legacyCredit > 0.005 && (
+                    <p className="text-xs text-amber-800">
+                      {formatCurrency(u.legacyCredit)} of this was credited to bills before advances were tracked, with no payment record. Open each bill to see it and ask Accounts to check it against the bank statement.
+                    </p>
+                  )}
+                  {u.unused > 0.01 && (
+                    <p className="text-xs text-muted-foreground">Accounts apply the unused part from an approved bill on this PO, using Apply advance.</p>
+                  )}
+                </div>
+              );
+            })()}
             {po.advance_status === "pending" && (() => {
               // Treat null/undefined as pending_review (schema cache lag or pre-migration rows)
               const approvalStatus = po.advance_approval_status ?? "pending_review";
