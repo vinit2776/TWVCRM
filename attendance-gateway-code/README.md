@@ -230,11 +230,33 @@ Secrets are never rendered back into the page. Saving with a secret field left
 blank keeps the stored value, so editing an unrelated setting cannot wipe a key;
 clearing one is an explicit checkbox.
 
+Saving a setting records its old and new value in the Activity Log, which is
+readable in-app and exported to CSV, so each setting is classified. Two separate
+flags, because they answer different questions:
+
+- `secret: true` — not shown *and* not recorded. For a value nobody needs to read
+  back: the API keys.
+- `logValue: false` — shown, but only ever recorded as "changed". For
+  `ZK_DEVICE_SN`, where a wrong serial silently drops real punches, so an admin has
+  to be able to check the stored one against the device, yet the serial is also the
+  sole credential on `/iclock/*` and must not end up in a downloaded CSV.
+
+`hidesValue(def)` in `server.js` is the one place that decides, and
+`test/setting-value-logging.test.js` lists every setting on one side or the other —
+a new setting fails that test until it is classified.
+
 ## Security notes
 
 - `/iclock/*` is authenticated **only** by the device serial number in the query
   string, so it **fails closed**: while no serial is configured those routes reject
-  every push, rather than accepting any device on the internet.
+  every push, rather than accepting any device on the internet. That makes the
+  serial a credential — anyone holding it can write punches for any employee — so
+  it is treated as one: `logValue: false` keeps it out of the Activity Log and the
+  CSV export even though the settings page still shows it.
+- A device record whose PIN maps to no employee is logged as `adms_unmapped_pin`
+  with its timestamp and **not** the PIN. "Unmapped" means no employee has it
+  *yet*, so it is routinely a real enrollee's live credential waiting to be mapped;
+  `/admin/device-pins` is where the mapping is read.
 - `PUNCH_API_KEY` falls back to a random per-process key when unset, which changes
   on every cold start — unusable by a device, but not guessable by anyone else.
 - `POST` bodies are capped at 64KB (`MAX_BODY_BYTES`), returning 413.

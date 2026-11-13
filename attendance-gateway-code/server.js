@@ -299,6 +299,10 @@ const SETTING_DEFS = [
     label: 'Biometric device serial number',
     help: "The ZKTeco ADMS push protocol has no header authentication — the device is identified only by this serial, which makes it the sole credential on /iclock/*. While it is empty those endpoints reject every push, so leave it blank until the device is installed. Setting it to the wrong value silently drops real punches.",
     fallback: '',
+    // Not `secret`: a wrong serial drops real punches silently, so an admin has to be
+    // able to read the current one back and check it against the device. It is still a
+    // credential, so its value never reaches the activity log or the CSV export.
+    logValue: false,
   },
   {
     key: 'DEVICE_CLOCK_OFFSET_MINUTES',
@@ -386,6 +390,15 @@ const SETTING_DEFS_BY_KEY = Object.fromEntries(SETTING_DEFS.map(d => [d.key, d])
 // environment supplies one, so an unconfigured deployment is unusable by a device
 // rather than open to one — an attacker cannot guess it, and it changes every restart.
 const EPHEMERAL_PUNCH_API_KEY = crypto.randomBytes(24).toString('hex');
+
+// Whether a setting's value may be written into the activity log and its CSV export.
+// Two different properties, deliberately separate: `secret` also hides the value in
+// the form (never pre-filled, cleared by a checkbox), which suits an API key but not
+// a serial an admin has to verify against the device. `logValue: false` keeps a
+// setting readable on the page while still only ever recording that it changed.
+function hidesValue(def) {
+  return !!def.secret || def.logValue === false;
+}
 
 // Resolved settings, refreshed once per request (see loadSettings). Seeded from env
 // and fallbacks so that any code path reached before the first refresh — a crash
@@ -1312,7 +1325,10 @@ async function ingestAttlogText(sn, text, cmdId = null) {
     received++;
     const employee = await getEmployeeByDevicePin(record.pin);
     if (!employee) {
-      logSecurityEvent('adms_unmapped_pin', { pin: record.pin, timestamp: record.timestamp });
+      // Not the PIN itself: "unmapped" only means no employee has it *yet*, so this
+      // is routinely a real enrollee's live credential waiting to be mapped. The
+      // timestamp is what diagnoses the gap; /admin/device-pins has the mapping.
+      logSecurityEvent('adms_unmapped_pin', { timestamp: record.timestamp });
       continue;
     }
     const { inserted } = await ingestBiometricPunch(employee.id, correctDeviceTimestamp(record.timestamp));
@@ -7002,7 +7018,7 @@ async function handleRequest(req, res) {
         if (!existing) continue;
         await db.prepare('DELETE FROM app_settings WHERE key = ?').run(def.key);
         changed.push(`${def.key} cleared`);
-        settingChanges.push(def.secret ? { field: def.label, hidden: true } : { field: def.label, from: existing.value, to: '(cleared)' });
+        settingChanges.push(hidesValue(def) ? { field: def.label, hidden: true } : { field: def.label, from: existing.value, to: '(cleared)' });
         continue;
       }
       // An invalid value is not saved, so the setting keeps working with what it had.
@@ -7018,11 +7034,12 @@ async function handleRequest(req, res) {
       // With nothing saved yet, what was in force came from the environment or the
       // built-in default, which CONFIG already holds.
       const before = existing ? existing.value : (CONFIG[def.key] == null ? '' : String(CONFIG[def.key]));
-      settingChanges.push(...fieldChanges([{ label: def.label, from: before, to: value, hidden: def.secret }]));
+      settingChanges.push(...fieldChanges([{ label: def.label, from: before, to: value, hidden: hidesValue(def) }]));
     }
     if (changed.length) {
-      // Records old and new values, except for secrets (the API keys), which are only
-      // marked as changed — the log is readable in-app and exported to CSV.
+      // Records old and new values, except for the credentials (see hidesValue),
+      // which are only marked as changed — the log is readable in-app and exported
+      // to CSV.
       await logAdminAction(user.username, 'settings_updated', 'app_settings', 'settings', changed.join(', '), null, settingChanges);
     }
     await loadSettings({ force: true });
@@ -7299,6 +7316,8 @@ module.exports.sendCsv = sendCsv;
 // Exported for the unit tests — the settings' own parse/validate are pure.
 module.exports.SETTING_DEFS_BY_KEY = SETTING_DEFS_BY_KEY;
 module.exports.apiReadScope = apiReadScope;
+module.exports.SETTING_DEFS = SETTING_DEFS;
+module.exports.hidesValue = hidesValue;
 module.exports.API_EMPLOYEE_FIELDS = API_EMPLOYEE_FIELDS;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
