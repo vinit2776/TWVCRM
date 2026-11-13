@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Network, Loader2, Inbox } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface AggRow {
   id: string;
@@ -27,7 +28,7 @@ export function AggregatorPerformanceWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/aggregator-performance")
+    dashboardFetch("/api/dashboard/aggregator-performance")
       .then((r) => r.json())
       .then((j) => setData(j.data ?? null))
       .catch(() => setData(null))

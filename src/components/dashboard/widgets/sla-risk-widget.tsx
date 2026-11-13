@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { ShieldAlert, AlertTriangle, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface PriorityBucket {
   open: number;
@@ -105,7 +106,7 @@ export function SlaRiskWidget({ locationFilter }: SlaRiskWidgetProps) {
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/sla-risk?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/sla-risk?${params}`);
       const json = await res.json();
       setData(json.data ?? null);
     } catch {

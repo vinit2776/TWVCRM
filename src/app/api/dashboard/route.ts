@@ -1,17 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getDashboardAuth } from "@/lib/dashboard-auth";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user, dbUser } = await getDashboardAuth();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  // Fetch the DB user to determine role for data scoping
-  const { data: dbUser } = await supabase
-    .from("users")
-    .select("id, role")
-    .eq("auth_id", user.id)
-    .single();
 
   const locationId = request.nextUrl.searchParams.get("location_id");
   const today = new Date().toISOString().split("T")[0];

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Filter, AlertTriangle, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LEAD_STATUS_LABELS } from "@/lib/constants";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface FunnelStage {
   stage: string;
@@ -35,7 +36,7 @@ export function LeadFunnelWidget({ locationFilter }: LeadFunnelWidgetProps) {
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/lead-funnel?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/lead-funnel?${params}`);
       const json = await res.json();
       setData(json.data ?? null);
     } catch {

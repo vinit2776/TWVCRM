@@ -6,6 +6,7 @@ import { CalendarX, Loader2, Inbox, AlertTriangle, CheckCircle2, XCircle, Bell, 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface RenewalItem {
   id: string;
@@ -51,7 +52,7 @@ export function RenewalPipelineWidget({ locationFilter }: RenewalPipelineWidgetP
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/renewals?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/renewals?${params}`);
       const json = await res.json();
       setData(json.data ?? null);
     } catch {

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Home, Loader2, TrendingUp, AlertCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface LocationRentRevenue {
   location_id: string;
@@ -20,7 +21,7 @@ export function RentRevenueWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/rent-revenue")
+    dashboardFetch("/api/dashboard/rent-revenue")
       .then((r) => r.json())
       .then((json) => {
         setData(json.data ?? []);

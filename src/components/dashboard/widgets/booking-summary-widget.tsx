@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CalendarDays, CheckCircle2, XCircle, Users, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface BookingSummary {
   total: number;
@@ -28,7 +29,7 @@ export function BookingSummaryWidget({ locationFilter }: BookingSummaryWidgetPro
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/bookings?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/bookings?${params}`);
       const json = await res.json();
       setData(json.data ?? null);
     } catch {

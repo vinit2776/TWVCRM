@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Wallet, ArrowDownLeft, ArrowUpRight, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface Bucket {
   count: number;
@@ -80,7 +81,7 @@ export function CashAgingWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/cash-aging")
+    dashboardFetch("/api/dashboard/cash-aging")
       .then((r) => r.json())
       .then((j) => setData(j.data ?? null))
       .catch(() => setData(null))
