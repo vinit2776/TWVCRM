@@ -1773,9 +1773,16 @@ async function runCertificateCheck(certificateId) {
   const employee = request && await getEmployee(request.employee_id);
   if (!employee) return null;
   // Take a slot first, atomically, so two uploads at once can't both slip under the limit.
-  const slot = await db.prepare('UPDATE leave_requests SET certificate_checks = certificate_checks + 1 WHERE id = ? AND certificate_checks < ?')
-    .run(request.id, CERTIFICATE_CHECK_LIMIT);
-  if (!slot.changes) return null;
+  // Only when there is a key to call: without one checkCertificate returns straight away
+  // having called nothing, and switching the check on before pasting the key is the
+  // obvious order (the settings page lists them that way). Spending slots on those
+  // no-ops would leave a request with none left by the time the key arrived. The result
+  // is still recorded either way, so the manager reads why it didn't run.
+  if (CONFIG.ANTHROPIC_API_KEY) {
+    const slot = await db.prepare('UPDATE leave_requests SET certificate_checks = certificate_checks + 1 WHERE id = ? AND certificate_checks < ?')
+      .run(request.id, CERTIFICATE_CHECK_LIMIT);
+    if (!slot.changes) return null;
+  }
   const data = Buffer.isBuffer(cert.data) ? cert.data : Buffer.from(cert.data);
   const result = await checkCertificate({
     apiKey: CONFIG.ANTHROPIC_API_KEY,
