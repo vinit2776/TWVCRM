@@ -332,6 +332,7 @@ export async function POST(request: NextRequest) {
       unitCost: parsed.data.unit_cost_per_cycle,
       linkedAssetId: parsed.data.linked_asset_id ?? null,
     };
+    let fromAmcRequest = false;
     let combinedLines: Array<{ id: string; item_name: string; quantity: number; unit: string; estimated_price: number; linked_asset_id: string }> = [];
     if (parsed.data.pr_id) {
       const { data: parentPr, error: parentPrError } = await supabase
@@ -342,6 +343,7 @@ export async function POST(request: NextRequest) {
       if (parentPrError || !parentPr) {
         return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
       }
+      fromAmcRequest = parentPr.department === "amc" || parentPr.expenditure_type === "amc";
       // Mirror of the goods-PO guard: a service PO that points at a request must
       // come from an AMC request, and one that is actually ready to order.
       if (parentPr.department !== "amc" && parentPr.expenditure_type !== "amc") {
@@ -470,7 +472,9 @@ export async function POST(request: NextRequest) {
         total_ordered_amount: totalAmount,
         total_gst_amount: svcGstAmount,
         total_amount_with_gst: totalAmount + svcGstAmount,
-        status: "pending",
+        // An AMC is a standing contract, not goods to order: nothing is placed with the vendor, and the
+        // PO has to be "ordered" before service reports and invoices can be logged against it.
+        status: fromAmcRequest || amcStart ? "ordered" : "pending",
         advance_amount: parsed.data.advance_amount ?? null,
         advance_payment_mode: parsed.data.advance_payment_mode ?? null,
         advance_payment_reference: parsed.data.advance_payment_reference ?? null,
