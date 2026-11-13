@@ -73,6 +73,8 @@ interface AmcLine {
   billingCycle: ServicePoBillingCycle;
   cycleCountOverride: string;
   perCycleCost: string; // pre-GST, INR
+  /** The whole contract value as typed; while set, the cost per cycle follows it divided by the number of cycles. */
+  totalEntry?: string;
   /** Set when the line came from a proposal: its contract total before GST, a ceiling for the value. */
   proposalTotal?: number;
 }
@@ -484,6 +486,24 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     const count = fullCount - Math.min(openingCycles, Math.max(0, fullCount - 1));
     return { derived, count, fullCount, cost, total: fig.remaining, fullTotal: fig.full, paidTotal: fig.paid };
   };
+  // A typed contract total is split over the agreed number of payments; it follows later changes to the dates or frequency.
+  const totalKey = amcLines.map((l) => `${l.totalEntry ?? ""}|${amcLineFull(l).count}`).join(",");
+  useEffect(() => {
+    setAmcLines((prev) => {
+      let changed = false;
+      const next = prev.map((l) => {
+        const total = parseFloat(l.totalEntry ?? "");
+        if (!(total > 0)) return l;
+        const want = String(Math.round((total / amcLineFull(l).count) * 100) / 100);
+        if (want === l.perCycleCost) return l;
+        changed = true;
+        return { ...l, perCycleCost: want };
+      });
+      return changed ? next : prev;
+    });
+    // amcLineFull reads the dates, which totalKey already reflects through each line's cycle count.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalKey]);
   // Set up from a proposal: assets, dates and billing are fixed to it; only the value can change, and only downwards.
   const proposalLocked = department === "amc" && amcLines.some((l) => l.proposalTotal != null);
   const proposalCapError = (): string | null => {
@@ -1320,6 +1340,31 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           </SelectContent>
                         </Select>
                       </div>
+                      {l.billingCycle !== "yearly" && (
+                        <div className="space-y-1.5 sm:col-span-3">
+                          <Label className="text-xs">Total contract value (pre-GST)</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="Enter the whole contract value to split it across the payments"
+                            value={l.totalEntry ?? (c.fullTotal > 0 ? String(Math.round(c.fullTotal * 100) / 100) : "")}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              const n = parseFloat(v);
+                              updateAmcLine(l.id, {
+                                totalEntry: v,
+                                perCycleCost: n > 0 ? String(Math.round((n / c.fullCount) * 100) / 100) : "",
+                              });
+                            }}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {parseFloat(l.totalEntry ?? "") > 0
+                              ? `Split into ${c.fullCount} ${CYCLE_UNIT_LABEL[l.billingCycle]}${c.fullCount === 1 ? "" : "s"}, each ${formatCurrency(c.cost)} before GST.${Math.abs(c.fullTotal - parseFloat(l.totalEntry!)) > 0.01 ? ` It does not divide evenly, so the contract comes to ${formatCurrency(c.fullTotal)}.` : ""}`
+                              : c.derived ? `Divided by the ${c.fullCount} payments in the contract period to fill in the cost below.` : "Set the contract dates first so the payments can be counted."}
+                          </p>
+                        </div>
+                      )}
                       <div className="space-y-1.5">
                         <Label className="text-xs">
                           {CYCLE_COST_LABEL[l.billingCycle]} (pre-GST) <span className="text-red-500">*</span>
@@ -1330,7 +1375,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           step="0.01"
                           placeholder="0.00"
                           value={l.perCycleCost}
-                          onChange={(e) => updateAmcLine(l.id, { perCycleCost: e.target.value })}
+                          onChange={(e) => updateAmcLine(l.id, { perCycleCost: e.target.value, totalEntry: "" })}
                         />
                         {l.proposalTotal != null && (
                           <p className={`text-xs ${c.fullTotal > l.proposalTotal + PROPOSAL_CAP_TOLERANCE ? "text-red-600" : "text-muted-foreground"}`}>
