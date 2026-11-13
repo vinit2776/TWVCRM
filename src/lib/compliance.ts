@@ -1,4 +1,5 @@
 import { DOCUMENT_CHECKLISTS, COMPLIANCE_CHECKLISTS } from "@/lib/constants";
+import { legacyPurposeFor } from "@/lib/vo-purpose";
 import type { VoPurpose, EntityType, CaseDocStatus, ComplianceCheckStatus } from "@/types";
 
 export interface DocumentChecklistItem {
@@ -21,7 +22,7 @@ export function generateDocumentChecklist(
   purpose: VoPurpose,
   entityType: EntityType
 ): DocumentChecklistItem[] {
-  const purposeChecklists = DOCUMENT_CHECKLISTS[purpose];
+  const purposeChecklists = DOCUMENT_CHECKLISTS[legacyPurposeFor(purpose)];
   if (!purposeChecklists) return [];
 
   // Try exact entity type match first
@@ -46,7 +47,7 @@ export function generateDocumentChecklist(
 export function generateComplianceChecklist(
   purpose: VoPurpose
 ): ComplianceChecklistItem[] {
-  return COMPLIANCE_CHECKLISTS[purpose] || [];
+  return COMPLIANCE_CHECKLISTS[legacyPurposeFor(purpose)] || [];
 }
 
 /**
