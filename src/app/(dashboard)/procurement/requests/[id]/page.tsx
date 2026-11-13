@@ -904,7 +904,23 @@ export default function PurchaseRequestDetailPage() {
       </div>
 
       {/* Vendor Quotations / Estimates */}
-      <MaterialRequestQuotations prId={pr.id} prStatus={pr.status} />
+      <MaterialRequestQuotations
+        prId={pr.id}
+        prStatus={pr.status}
+        amc={pr.department === "amc" ? {
+          startDate: pr.amc_start_date ?? null,
+          endDate: pr.amc_end_date ?? null,
+          visitsCovered: pr.amc_visits_covered ?? null,
+          coverage: pr.amc_coverage_type ?? null,
+          openingCycles: pr.opening_cycles ?? 0,
+          lines: (pr.purchase_request_items ?? []).map((l: { quantity: number; estimated_price?: number | null; item_name?: string; linked_asset?: { name?: string; serial_number?: string | null } | null }) => ({
+            quantity: Number(l.quantity),
+            perCycleCost: l.estimated_price != null ? Number(l.estimated_price) : null,
+            assetName: l.linked_asset?.name ?? l.item_name ?? null,
+            assetSerial: l.linked_asset?.serial_number ?? null,
+          })),
+        } : null}
+      />
 
       {/* AMC Service Block — replaces Items Requested when department=amc */}
       {pr.department === "amc" && (

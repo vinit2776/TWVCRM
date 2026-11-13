@@ -159,6 +159,8 @@ export const BillTransactionHistory = memo(function BillTransactionHistory({
   mrId: string | null;
 }) {
   const [filter, setFilter] = useState<TimelineFilter>("key");
+  // Collapsed by default: the history is reference material, so it should not push the approval actions down the page.
+  const [expanded, setExpanded] = useState(false);
   const items = useMemo(
     () =>
       buildTimeline(auditTrail, filter).map((item, i, all) => {
@@ -173,10 +175,20 @@ export const BillTransactionHistory = memo(function BillTransactionHistory({
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base flex items-center gap-2">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          Transaction History
-        </CardTitle>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+        >
+          <CardTitle className="text-base flex items-center gap-2">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            Transaction History
+            <span className="text-xs font-normal text-muted-foreground">{auditTrail.length} {auditTrail.length === 1 ? "entry" : "entries"}</span>
+          </CardTitle>
+          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </button>
+        {expanded && (
         <div className="flex flex-wrap gap-1.5 mt-2" role="tablist" aria-label="History filter">
           {FILTERS.map((f) => (
             <button
@@ -192,7 +204,9 @@ export const BillTransactionHistory = memo(function BillTransactionHistory({
             </button>
           ))}
         </div>
+        )}
       </CardHeader>
+      {expanded && (
       <CardContent>
         {items.length === 0 && <p className="text-sm text-muted-foreground py-2">Nothing to show for this filter.</p>}
         <div>
@@ -216,6 +230,7 @@ export const BillTransactionHistory = memo(function BillTransactionHistory({
           })}
         </div>
       </CardContent>
+      )}
     </Card>
   );
 });

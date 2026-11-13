@@ -7,7 +7,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Camera, ChevronLeft, ChevronRight, Loader2, X } from "lucide-react";
+import { Camera, ChevronLeft, ChevronRight, FileText, Loader2, X } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { compressImageClient } from "@/lib/uploads/compress-image-client";
 import type { FacilityAsset, FacilityAssetCategory, FacilityLifecycleStage, CategoryCustomField } from "@/types";
@@ -92,6 +93,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
   const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
   const [pendingPhotos, setPendingPhotos] = useState<{ file: File; preview: string }[]>([]);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const [pendingInvoice, setPendingInvoice] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
 
   const selectedCategory = useMemo(
@@ -147,6 +149,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     });
     setCustomValues((asset?.custom_field_values as Record<string, unknown>) || {});
     setPendingPhotos([]);
+    setPendingInvoice(null);
     setStep(1);
   }, [open, asset, defaultLocationId, initialValues]);
 
@@ -217,6 +220,34 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     }
   };
 
+  // Not mandatory: the asset is saved either way, and stays flagged until an invoice is attached.
+  const uploadInvoice = async (assetId: string) => {
+    if (!pendingInvoice) return;
+    try {
+      const supabase = createClient();
+      const ext = pendingInvoice.name.split(".").pop() ?? "bin";
+      const path = `asset-docs/${assetId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("procurement-docs").upload(path, pendingInvoice);
+      if (upErr) throw new Error(upErr.message);
+      const { data: urlData } = supabase.storage.from("procurement-docs").getPublicUrl(path);
+      const res = await fetch(`/api/facility/assets/${assetId}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tier: "commercial",
+          label: "Purchase Invoice",
+          file_url: urlData.publicUrl,
+          file_name: pendingInvoice.name,
+          file_size: pendingInvoice.size,
+          mime_type: pendingInvoice.type,
+        }),
+      });
+      if (!res.ok) throw new Error("Upload failed");
+    } catch {
+      toast.warning("Asset saved, but the invoice did not upload. Open the asset and use Upload invoice.");
+    }
+  };
+
   const validateStep1 = () => {
     if (!form.location_id) { toast.error("Select a location first"); return false; }
     if (!form.category_id) { toast.error("Select a category"); return false; }
@@ -265,6 +296,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
       if (pendingPhotos.length > 0) await uploadPhotos(json.data.id);
+      await uploadInvoice(json.data.id);
       // Either of these rewrites the asset_code, which is what's printed on the
       // QR sticker — so both need a history entry explaining why the sticker on
       // the wall no longer matches. Only mention the code when it really moved.
@@ -564,6 +596,35 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           className="mt-1 w-full rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-amber-400"
         />
         <Hint>Use this for recurring issues or safety warnings. Technicians see it highlighted in red every time they open this asset.</Hint>
+      </div>
+
+      {/* Purchase invoice */}
+      <div className="border-t pt-3">
+        <Label className="text-xs flex items-center gap-1">
+          <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+          Purchase invoice
+          <span className="text-muted-foreground font-normal">(optional, but flagged until uploaded)</span>
+        </Label>
+        <Hint>Attach the supplier invoice so the details entered here can be checked against it. If one invoice covers several assets, upload it here and tick the others from the asset&apos;s Documents tab.</Hint>
+        {pendingInvoice ? (
+          <div className="mt-2 flex items-center gap-2 text-sm">
+            <FileText className="h-4 w-4 text-primary" />
+            <span className="truncate">{pendingInvoice.name}</span>
+            <button type="button" onClick={() => setPendingInvoice(null)}><X className="h-3.5 w-3.5 text-muted-foreground" /></button>
+          </div>
+        ) : (
+          <input
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            className="mt-2 text-sm"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              if (f.size > 10 * 1024 * 1024) { toast.error("File too large (max 10 MB)"); return; }
+              setPendingInvoice(f);
+            }}
+          />
+        )}
       </div>
 
       {/* Photos */}

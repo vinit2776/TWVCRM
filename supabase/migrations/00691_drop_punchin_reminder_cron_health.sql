@@ -1,0 +1,15 @@
+-- The /api/cron/attendance-punchin-reminder cron is gone: the punch-in reminder
+-- emails it existed to trigger were removed from the attendance gateway (PR #1183),
+-- and auto punch-out never depended on it — the gateway's own daily crons give that
+-- its timing, and the due moment is fixed in advance so a late run still stamps the
+-- right one.
+--
+-- Its cron_health row has to go with it. /api/health judges every row it finds
+-- against CRON_THRESHOLDS and falls back to 26h for anything unlisted, so a row for
+-- a cron that no longer runs would report stale within a day and stay there — a
+-- permanent false alarm on the endpoint we rely on to notice genuinely dead jobs
+-- (cron/db-backup sat at "error" for four months before anyone looked).
+--
+-- Rollback: none needed. If the cron is ever reinstated it writes a fresh row on its
+-- first run. Deleting this row loses only the last-run timestamp of a retired job.
+DELETE FROM cron_health WHERE job = 'cron/attendance-punchin-reminder';

@@ -63,6 +63,10 @@
       "schedule": "30 4 * * *"
     },
     {
+      "path": "/api/cron/voucher-expiry-alert",
+      "schedule": "45 4 * * *"
+    },
+    {
       "path": "/api/cron/journey-nudge?send=1",
       "schedule": "45 4 * * *"
     },
@@ -133,10 +137,6 @@
     {
       "path": "/api/cron/lead-reminder-whatsapp",
       "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/cron/attendance-punchin-reminder",
-      "schedule": "*/5 3-6 * * 1-6"
     },
     {
       "path": "/api/cron/cosec-booking-cleanup",

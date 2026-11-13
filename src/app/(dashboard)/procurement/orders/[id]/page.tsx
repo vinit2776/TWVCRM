@@ -1,5 +1,8 @@
 "use client";
 
+import { cycleSpan, outsideCycleWarning } from "@/lib/procurement/service-report-period";
+import { CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
+import { amcNotReceived, assetsNeedingDetails, linesWithoutAsset, receiptHref, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
 import { RollbackDialog } from "@/components/procurement/rollback-dialog";
@@ -400,8 +403,7 @@ export default function PurchaseOrderDetailPage() {
 
   // Record Service Report
   const [srCycleNumber, setSrCycleNumber] = useState("");
-  const [srPeriodFrom, setSrPeriodFrom] = useState("");
-  const [srPeriodTo, setSrPeriodTo] = useState("");
+  const [srServiceDate, setSrServiceDate] = useState("");
   const [srFile, setSrFile] = useState<File | null>(null);
   const [srNotes, setSrNotes] = useState("");
   const [srUploading, setSrUploading] = useState(false);
@@ -682,8 +684,7 @@ export default function PurchaseOrderDetailPage() {
     if (!srCycleNumber || isNaN(cycleNum) || cycleNum < 1) {
       toast.error("Cycle number is required"); return;
     }
-    if (!srPeriodFrom) { toast.error("Period start date is required"); return; }
-    if (!srPeriodTo) { toast.error("Period end date is required"); return; }
+    if (!srServiceDate) { toast.error("Enter the date the service visit happened"); return; }
     if (!srFile) { toast.error("Please upload the service report file"); return; }
 
     setSrUploading(true);
@@ -702,8 +703,7 @@ export default function PurchaseOrderDetailPage() {
         body: JSON.stringify({
           po_id: po?.id,
           cycle_number: cycleNum,
-          period_from: srPeriodFrom,
-          period_to: srPeriodTo,
+          service_date: srServiceDate,
           report_file_url: fileUrl,
           notes: srNotes.trim() || null,
         }),
@@ -717,8 +717,7 @@ export default function PurchaseOrderDetailPage() {
       toast.success(`Service report for Cycle ${cycleNum} recorded`);
       setActionDialog(null);
       setSrCycleNumber("");
-      setSrPeriodFrom("");
-      setSrPeriodTo("");
+      setSrServiceDate("");
       setSrFile(null);
       setSrNotes("");
       if (srFileRef.current) srFileRef.current.value = "";
@@ -1154,6 +1153,35 @@ export default function PurchaseOrderDetailPage() {
         </div>
       )}
 
+      {/* Asset warnings sit at the top, where the AMC is first read */}
+      {po.po_type === "service" && (() => {
+        const assetsToFix = assetsNeedingDetails([
+          ...(((po.purchase_order_items ?? []) as Array<{ linked_asset?: AssetForAmc | null }>).map((i) => i.linked_asset).filter(Boolean) as AssetForAmc[]),
+          ...((po as unknown as { linked_asset?: AssetForAmc | null }).linked_asset ? [(po as unknown as { linked_asset: AssetForAmc }).linked_asset] : []),
+        ]);
+        const noAssetLink = !!(po as unknown as { linked_asset?: unknown }).linked_asset || !!po.linked_asset_id;
+        const notAssets = noAssetLink ? [] : linesWithoutAsset((po.purchase_order_items ?? []) as Array<{ item_name?: string | null; linked_asset_id?: string | null; linked_asset?: unknown }>);
+        if (!!po.amc_terminated_at || (assetsToFix.length === 0 && notAssets.length === 0)) return null;
+        return (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+            <div className="mb-1 flex items-center gap-1 font-medium"><AlertTriangle className="h-3.5 w-3.5" /> Check the assets on this AMC</div>
+            {notAssets.length > 0 && (
+              <p className="mb-1">AMC covers assets only. Not linked to an asset: {notAssets.join(", ")}. <Link href="/facility/assets" className="font-medium underline">Add the asset in Facility → Assets</Link>, then use its AMC tab → Set up AMC to cover it.</p>
+            )}
+            <ul className="space-y-0.5">
+              {assetsToFix.map(({ asset, gaps }) => (
+                <li key={asset.id ?? asset.asset_code}>
+                  <Link href={`/facility/assets/${asset.id}`} className="font-medium underline">{asset.name || asset.asset_code || "Asset"}</Link>: {gaps.join("; ")}
+                  {receiptHref(asset) && (
+                    <> — <Link href={receiptHref(asset)!} className="font-medium underline">Record the delivery challan</Link></>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })()}
+
       {/* Details grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
@@ -1349,10 +1377,10 @@ export default function PurchaseOrderDetailPage() {
           amc_terminated_at: po.amc_terminated_at,
         });
         const isTerminated = !!po.amc_terminated_at;
+        // Any live AMC can be retired, whatever its date state or how it was raised.
         const canTerminate = !isTerminated
-          && po.po_type === "service"
-          && (currentUserRole === "admin" || currentUserRole === "manager")
-          && (liveLc.status === "active" || liveLc.status === "expiring");
+          && po.status !== "cancelled"
+          && (currentUserRole === "admin" || currentUserRole === "manager");
 
         return (
           <Card className="relative overflow-hidden">
@@ -1365,6 +1393,28 @@ export default function PurchaseOrderDetailPage() {
                   <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium border ${liveLc.badgeClass}`}>
                     {liveLc.label}
                   </span>
+                  {amcNotReceived(po) && (
+                    <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                      <AlertTriangle className="h-3 w-3" /> {AMC_NOT_RECEIVED_WARNING}
+                      {po.status === "pending" ? (
+                        <span>— mark the PO as ordered (top of the page), then record the delivery.</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="font-medium underline"
+                          onClick={() => {
+                            const initial: Record<string, string> = {};
+                            for (const item of po.purchase_order_items ?? []) initial[item.id] = "";
+                            setDcQtys(initial);
+                            setDcDate(today);
+                            setActionDialog("record_delivery");
+                          }}
+                        >
+                          Record the delivery challan
+                        </button>
+                      )}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {!amcEditMode && !isTerminated && (
@@ -1851,8 +1901,7 @@ export default function PurchaseOrderDetailPage() {
           bills={(po.vendor_bills ?? []) as CycleBill[]}
           onRecordReport={() => {
             setSrCycleNumber(String((po.opening_cycles ?? 0) + (po.po_service_reports?.length ?? 0) + 1));
-            setSrPeriodFrom("");
-            setSrPeriodTo("");
+            setSrServiceDate("");
             setActionDialog("record_service_report");
           }}
           onUploadInvoice={() => {
@@ -2038,8 +2087,7 @@ export default function PurchaseOrderDetailPage() {
           setActionDialog(null);
           setSrFile(null);
           setSrCycleNumber("");
-          setSrPeriodFrom("");
-          setSrPeriodTo("");
+          setSrServiceDate("");
           setSrNotes("");
           if (srFileRef.current) srFileRef.current.value = "";
         }}
@@ -2060,23 +2108,66 @@ export default function PurchaseOrderDetailPage() {
                   onChange={(e) => setSrCycleNumber(e.target.value)}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Period From <span className="text-red-500">*</span></Label>
+              <div className="space-y-1.5 col-span-2">
+                <Label>Service date <span className="text-red-500">*</span></Label>
                 <Input
                   type="date"
-                  value={srPeriodFrom}
-                  onChange={(e) => setSrPeriodFrom(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Period To <span className="text-red-500">*</span></Label>
-                <Input
-                  type="date"
-                  value={srPeriodTo}
-                  onChange={(e) => setSrPeriodTo(e.target.value)}
+                  max={new Date().toISOString().slice(0, 10)}
+                  value={srServiceDate}
+                  onChange={(e) => setSrServiceDate(e.target.value)}
                 />
               </div>
             </div>
+            {po && (() => {
+              const opening = po.opening_cycles ?? 0;
+              const reports = [...((po.po_service_reports as PoServiceReport[] | undefined) ?? [])].sort((x, y) => x.cycle_number - y.cycle_number);
+              const total = (po.cycle_count ?? 0) + opening;
+              const done = opening + reports.length;
+              const unit = po.billing_cycle ? CYCLE_UNIT_LABEL[po.billing_cycle] : "cycle";
+              const billFor = (id: string) => (po.vendor_bills ?? []).find((b) => b.service_report_id === id);
+              return (
+                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm space-y-2">
+                  <p>
+                    <span className="font-medium">{done} of {total} {unit}s serviced</span>
+                    <span className="text-muted-foreground"> · {Math.max(0, total - done)} to go</span>
+                  </p>
+                  <details>
+                    <summary className="cursor-pointer text-xs text-muted-foreground">Previous {unit}s ({done})</summary>
+                    <ul className="mt-2 space-y-1.5 text-xs">
+                      {done === 0 && <li className="text-muted-foreground">None yet. This is the first.</li>}
+                      {opening > 0 && (
+                        <li className="text-muted-foreground">
+                          {opening === 1 ? `${unit} 1` : `${unit}s 1 to ${opening}`}: serviced, invoiced and paid before this contract was entered here.
+                        </li>
+                      )}
+                      {reports.map((r) => {
+                        const bill = billFor(r.id);
+                        return (
+                          <li key={r.id} className="flex flex-wrap justify-between gap-x-3">
+                            <span>
+                              <span className="font-medium">{unit} {r.cycle_number}</span>: serviced {formatDate(r.service_date ?? r.period_to)}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {bill ? `Invoiced ${bill.bill_number} · ${bill.payment_status === "paid" ? "paid" : "not paid yet"}` : "Not invoiced yet"}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </details>
+                </div>
+              );
+            })()}
+            {(() => {
+              const span = po ? cycleSpan(po, parseInt(srCycleNumber) || 0) : null;
+              const warn = srServiceDate ? outsideCycleWarning(srServiceDate, span) : null;
+              return (
+                <div className="space-y-1 -mt-2 text-xs">
+                  {span && <p className="text-muted-foreground">Cycle {srCycleNumber} runs {formatDate(span.from)} – {formatDate(span.to)}. The visit date is the day the technician came.</p>}
+                  {warn && <p className="text-amber-800">{warn}</p>}
+                </div>
+              );
+            })()}
             <div className="space-y-1.5">
               <Label>Service Report File <span className="text-red-500">*</span></Label>
               {srFile ? (
@@ -2107,8 +2198,7 @@ export default function PurchaseOrderDetailPage() {
                 setActionDialog(null);
                 setSrFile(null);
                 setSrCycleNumber("");
-                setSrPeriodFrom("");
-                setSrPeriodTo("");
+                setSrServiceDate("");
                 setSrNotes("");
               }}
             >

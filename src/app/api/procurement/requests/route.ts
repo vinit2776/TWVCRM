@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { exceedsProposalCap, lineContractTotal, proposalCapMessage } from "@/lib/procurement/proposal-cap";
 import { PROCUREMENT_APPROVAL_THRESHOLDS, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS, PRICE_TOLERANCE_MAX_PERCENT } from "@/lib/constants";
 
 const createPrItemSchema = z.object({
@@ -13,6 +14,9 @@ const createPrItemSchema = z.object({
   notes: z.string().optional(),
   // AMC requests: the asset this line covers (one line per asset).
   linked_asset_id: z.string().uuid().optional().nullable(),
+  // AMC set up from a vendor proposal: that line's contract total before GST. The agreed
+  // value may be lowered from it, never raised (see proposal-cap.ts).
+  proposal_line_total: z.number().positive().optional().nullable(),
 });
 
 const createPrSchema = z.object({
@@ -186,6 +190,18 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // A proposal's value can be lowered but never raised.
+  if (prData.department === "amc") {
+    for (const item of items) {
+      if (item.proposal_line_total == null) continue;
+      const over = exceedsProposalCap(
+        { quantity: item.quantity, perCycleCost: item.estimated_price ?? 0, cap: item.proposal_line_total },
+        prData.opening_cycles ?? 0
+      );
+      if (over) return NextResponse.json({ error: proposalCapMessage(item.proposal_line_total) }, { status: 422 });
+    }
+  }
+
   // Compute total estimated
   const totalEstimated = items.reduce((sum, item) => {
     if (item.estimated_price && item.quantity) {
@@ -224,16 +240,26 @@ export async function POST(request: NextRequest) {
     notes: item.notes || null,
     // Only AMC lines are tied to an asset.
     linked_asset_id: prData.department === "amc" ? item.linked_asset_id || null : null,
+    proposal_line_total: prData.department === "amc" ? item.proposal_line_total ?? null : null,
   }));
 
   const { error: itemsError } = await supabase.from("purchase_request_items").insert(lineItems);
   if (itemsError) return NextResponse.json({ error: itemsError.message }, { status: 500 });
 
+  // Record what the proposal said against what was agreed, when it was lowered.
+  const proposalTotal = items.reduce((sum, i) => sum + (i.proposal_line_total ?? 0), 0);
+  const agreedTotal = items.reduce(
+    (sum, i) => sum + (i.proposal_line_total != null ? lineContractTotal(i.quantity, prData.opening_cycles ?? 0, i.estimated_price ?? 0) : 0),
+    0
+  );
   await logAudit(supabase, {
     entityType: "purchase_request",
     entityId: pr.id,
     action: "create",
     performedBy: dbUser.id,
+    ...(proposalTotal > 0 && agreedTotal < proposalTotal - 0.5
+      ? { changes: { proposal_value_lowered: { old: proposalTotal, new: agreedTotal } } }
+      : {}),
   });
 
   return NextResponse.json({ data: { id: pr.id, pr_number: pr.pr_number } }, { status: 201 });

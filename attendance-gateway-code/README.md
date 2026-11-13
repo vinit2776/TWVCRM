@@ -164,10 +164,11 @@ holidays or Sundays, and at most one of each per day (`daily_report_runs`).
 `/admin/daily-report?kind=morning&date=YYYY-MM-DD` shows any day's email without
 sending it.
 
-**`/internal/punchin-reminder`** (same `CRON_SECRET`) is called every 5 minutes by
-the CRM's cron (`/api/cron/attendance-punchin-reminder`), since Hobby cron can't run
-that often. It used to email punch-in reminders; those were removed, and it now only
-runs the auto punch-out (see below).
+**`/internal/punchin-reminder`** (same `CRON_SECRET`) once emailed punch-in
+reminders, driven by an every-5-minute cron in the CRM. The reminders were removed,
+and so was that cron: the endpoint now only runs the auto punch-out, and nothing
+calls it on a schedule. It is kept as a manual trigger and should be folded into
+`/internal/auto-checkout`, which does the same job under an accurate name.
 
 **Shift timings** are set per branch at `/admin/settings` → Branches: a weekday
 shift, and whether the branch has half Saturdays (2nd and 4th Saturday, with their
@@ -196,8 +197,10 @@ Saturdays, custom timings and which branch a day counts as worked at are unaffec
 
 **Auto punch-out.** Anyone still punched in is auto punched-out 15 minutes after that
 day's shift end, stamped at exactly that time however late the run is. It gets its
-timing from the CRM's every-5-minute call to `/internal/punchin-reminder`, plus the daily Vercel
-crons above and whenever an employee opens their dashboard. It never waits for the
+timing from the daily Vercel crons above (19:00, 21:00 and 23:45 IST, which between
+them cover every shift end) and from an employee opening their dashboard; the due time
+is fixed in advance, so a late run still stamps the right one, and each run also sweeps
+the previous `AUTO_CHECKOUT_CATCHUP_DAYS` days. It never waits for the
 biometric device: a real punch-out the device uploads later replaces the auto one.
 Until midnight the dashboard offers **Punch Out** again; a real punch-out made then
 replaces the auto one, so the day isn't a Missed Checkout and any time past the shift
@@ -260,11 +263,33 @@ Secrets are never rendered back into the page. Saving with a secret field left
 blank keeps the stored value, so editing an unrelated setting cannot wipe a key;
 clearing one is an explicit checkbox.
 
+Saving a setting records its old and new value in the Activity Log, which is
+readable in-app and exported to CSV, so each setting is classified. Two separate
+flags, because they answer different questions:
+
+- `secret: true` — not shown *and* not recorded. For a value nobody needs to read
+  back: the API keys.
+- `logValue: false` — shown, but only ever recorded as "changed". For
+  `ZK_DEVICE_SN`, where a wrong serial silently drops real punches, so an admin has
+  to be able to check the stored one against the device, yet the serial is also the
+  sole credential on `/iclock/*` and must not end up in a downloaded CSV.
+
+`hidesValue(def)` in `server.js` is the one place that decides, and
+`test/setting-value-logging.test.js` lists every setting on one side or the other —
+a new setting fails that test until it is classified.
+
 ## Security notes
 
 - `/iclock/*` is authenticated **only** by the device serial number in the query
   string, so it **fails closed**: while no serial is configured those routes reject
-  every push, rather than accepting any device on the internet.
+  every push, rather than accepting any device on the internet. That makes the
+  serial a credential — anyone holding it can write punches for any employee — so
+  it is treated as one: `logValue: false` keeps it out of the Activity Log and the
+  CSV export even though the settings page still shows it.
+- A device record whose PIN maps to no employee is logged as `adms_unmapped_pin`
+  with its timestamp and **not** the PIN. "Unmapped" means no employee has it
+  *yet*, so it is routinely a real enrollee's live credential waiting to be mapped;
+  `/admin/device-pins` is where the mapping is read.
 - `PUNCH_API_KEY` falls back to a random per-process key when unset, which changes
   on every cold start — unusable by a device, but not guessable by anyone else.
 - `POST` bodies are capped at 64KB (`MAX_BODY_BYTES`), returning 413.

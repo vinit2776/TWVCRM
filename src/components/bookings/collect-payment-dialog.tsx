@@ -445,14 +445,14 @@ export function CollectPaymentDialog({
                           View
                         </Button>
                       )}
-                      {p.status === "pending" && p.payment_mode === "upi" && (
+                      {p.status === "pending" && p.payment_mode === "upi" && (me.role === "admin" || me.role === "accounts") && (
                         <Button
                           variant="ghost"
                           size="sm"
                           className="h-6 text-xs px-2"
                           onClick={() => { setVerifyingPayment(p); setVerifyNotes(""); }}
                         >
-                          <Eye className="mr-1 h-3 w-3" />Verify
+                          <Eye className="mr-1 h-3 w-3" />Mark as paid
                         </Button>
                       )}
                       {canCancelReportedPayment(p, me) && (
