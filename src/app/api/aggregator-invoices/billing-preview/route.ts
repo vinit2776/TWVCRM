@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
       .from("aggregator_case_terms_billed")
       .select("case_id, term_start")
       .in("case_id", (cases ?? []).map((c) => c.id));
-    if (billedError?.code === "42P01") {
+    if (billedError?.code === "42P01" || billedError?.code === "PGRST205") {
       ledgerAvailable = false;
     } else if (billedError) {
       return NextResponse.json({ error: billedError.message }, { status: 500 });
