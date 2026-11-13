@@ -45,6 +45,7 @@ const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waive
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
 import { BookingPaymentSummary } from "@/components/bookings/booking-payment-summary";
 import { BookingPiSentBanner } from "@/components/bookings/booking-pi-sent-banner";
+import { PaymentLinkStrip } from "@/components/bookings/payment-link-strip";
 import { CorrectPaymentMethodDialog } from "@/components/bookings/correct-payment-method-dialog";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
@@ -1134,6 +1135,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           paymentStatus={booking.payment_status}
           onResend={() => setSendPiOpen(true)}
         />
+      )}
+
+      {booking.razorpay_payment_link_url && booking.payment_status === "pending" && (
+        <PaymentLinkStrip url={booking.razorpay_payment_link_url} />
       )}
 
       {/* Payment status summary — replaces the bare "posted_to_bill" pill

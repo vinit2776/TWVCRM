@@ -125,11 +125,20 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
  * customer gets one message, this one). Sending records who, when and to whom;
  * it never changes payment_status.
  */
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const loaded = await loadPi(id);
   if (!loaded.ok) return loaded.response;
-  const { booking, input, balanceDue, customerEmail, sender, supabase } = loaded;
+  const { booking, input, balanceDue, sender, supabase } = loaded;
+
+  // Staff can send it to another address (their own, to check it, or one the customer
+  // gave them); otherwise it goes to the email on the booking.
+  const body = (await req.json().catch(() => ({}))) as { to?: unknown };
+  const override = typeof body.to === "string" ? body.to.trim() : "";
+  if (override && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(override)) {
+    return NextResponse.json({ error: "That email address doesn't look right." }, { status: 400 });
+  }
+  const customerEmail = override || loaded.customerEmail;
 
   if (!customerEmail) {
     return NextResponse.json({ error: "No customer email on file. Add one to the customer, or download the PI and share it by hand." }, { status: 400 });
