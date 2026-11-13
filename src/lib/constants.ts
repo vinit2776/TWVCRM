@@ -2926,3 +2926,19 @@ export const KYC_PORTAL_CHECK_RESULT_COLORS: Record<(typeof KYC_PORTAL_CHECK_RES
   not_found: "bg-red-100 text-red-800",
   unavailable: "bg-gray-100 text-gray-800",
 };
+
+// ==========================================
+// Virtual Office terms library
+// ==========================================
+export const VO_TERM_DOCUMENTS = ["proposal", "agreement", "renewal"] as const;
+export const VO_TERM_DOCUMENT_LABELS: Record<string, string> = {
+  proposal: "Proposal",
+  agreement: "Agreement",
+  renewal: "Renewal notice",
+};
+
+export const VO_TERM_PURPOSES = ["gst_new", "gst_existing"] as const;
+export const VO_TERM_PURPOSE_LABELS: Record<string, string> = {
+  gst_new: "New GST registration",
+  gst_existing: "Existing GST registration",
+};
