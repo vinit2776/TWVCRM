@@ -158,6 +158,7 @@ DECLARE
   v_new_paid NUMERIC(12,2);
   v_ceiling  NUMERIC(12,2);
   v_status   TEXT;
+  v_last     vendor_bill_payments%ROWTYPE;
 BEGIN
   IF p_reason IS NULL OR length(btrim(p_reason)) = 0 THEN RAISE EXCEPTION 'REASON_REQUIRED'; END IF;
   SELECT * INTO v_bill FROM vendor_bills WHERE id = p_bill_id FOR UPDATE;
@@ -176,8 +177,18 @@ BEGIN
                   ELSE 'unpaid'
                 END;
 
-  UPDATE vendor_bills SET amount_paid = v_new_paid, payment_status = v_status::bill_payment_status
-   WHERE id = p_bill_id;
+  -- The bill's "last payment" columns point at the newest payment that still stands (none: cleared).
+  SELECT * INTO v_last FROM vendor_bill_payments
+   WHERE bill_id = p_bill_id AND reversed_at IS NULL
+   ORDER BY payment_date DESC, created_at DESC LIMIT 1;
+
+  UPDATE vendor_bills SET
+    amount_paid       = v_new_paid,
+    payment_status    = v_status::bill_payment_status,
+    payment_mode      = v_last.payment_mode,
+    payment_reference = v_last.payment_reference,
+    payment_date      = v_last.payment_date
+  WHERE id = p_bill_id;
 
   RETURN jsonb_build_object(
     'bill_id', p_bill_id, 'credit_removed', v_credit, 'amount_paid', v_new_paid, 'payment_status', v_status,
