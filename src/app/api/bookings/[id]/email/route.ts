@@ -7,6 +7,8 @@ import { logEmailActivity } from "@/lib/audit";
 import { getLocationIncharges, getLocationInchargeUserIds } from "@/lib/location-incharges";
 import { sendPushToUsers } from "@/lib/push";
 import { bookingWindowHours } from "@/lib/utils";
+import { validateRecipients } from "@/lib/email-recipients";
+import { bookingContactEmail } from "@/lib/booking-contact";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 0 }).format(amount);
@@ -100,7 +102,11 @@ export async function POST(
   const customerName = booking.lead
     ? `${booking.lead.first_name} ${booking.lead.last_name}`
     : booking.guest_name || "Guest";
-  const customerEmail = booking.lead?.email || booking.guest_email;
+  // Staff can send to another address or add CCs; otherwise it goes to the saved email.
+  const recipients = validateRecipients({ to: body.to, cc: body.cc });
+  if (!recipients.ok) return NextResponse.json({ error: recipients.error }, { status: 400 });
+  const extraCc = recipients.cc.length > 0 ? recipients.cc : undefined;
+  const customerEmail = recipients.to || bookingContactEmail(booking);
   const spaceName = booking.space?.name || "Conference Room";
   const locationName = booking.location?.name || "";
   const locationAddress = [booking.location?.address, booking.location?.city, booking.location?.state].filter(Boolean).join(", ");
@@ -173,6 +179,7 @@ export async function POST(
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
       to: customerEmail,
+      cc: extraCc,
       subject: `How was your experience? - ${booking.booking_number} - The WorkVilla`,
       html: `
         <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
@@ -236,6 +243,7 @@ export async function POST(
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
       to: customerEmail,
+      cc: extraCc,
       subject: `Payment Link${locationName ? ` [${locationName}]` : ""} - ${booking.booking_number} - ₹${displayAmount.toLocaleString("en-IN")} - The WorkVilla`,
       html: `
         <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
@@ -618,7 +626,7 @@ export async function POST(
 
   const internalBcc = (managers ?? [])
     .map((m) => m.email)
-    .filter((e): e is string => !!e && e !== customerEmail);
+    .filter((e): e is string => !!e && e !== customerEmail && !(extraCc ?? []).includes(e));
 
   // ── Customer confirmation (To: customer, BCC: internal team) ──────────────
   try {
@@ -626,6 +634,7 @@ export async function POST(
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
       to: customerEmail,
+      cc: extraCc,
       bcc: internalBcc.length > 0 ? internalBcc : undefined,
       subject: `Booking Confirmation - ${booking.booking_number} - The WorkVilla`,
       html: confirmationHtml,

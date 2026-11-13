@@ -46,6 +46,7 @@ import { BookingAddonsSection } from "@/components/bookings/booking-addons-secti
 import { BookingPaymentSummary } from "@/components/bookings/booking-payment-summary";
 import { BookingPiSentBanner } from "@/components/bookings/booking-pi-sent-banner";
 import { PaymentLinkStrip } from "@/components/bookings/payment-link-strip";
+import { BookingEmailDialog } from "@/components/bookings/booking-email-dialog";
 import { CorrectPaymentMethodDialog } from "@/components/bookings/correct-payment-method-dialog";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
@@ -117,6 +118,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [getPaymentChooserOpen, setGetPaymentChooserOpen] = useState(false);
   const [sendPiOpen, setSendPiOpen] = useState(false);
+  const [resendConfirmOpen, setResendConfirmOpen] = useState(false);
+  const [resendPinOpen, setResendPinOpen] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [markCompDialogOpen, setMarkCompDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
@@ -925,7 +928,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Button variant="outline" size="sm" onClick={() => setRescheduleDialogOpen(true)}>
                 <Calendar className="mr-1 h-4 w-4" />Reschedule
               </Button>
-              <Button variant="outline" size="sm" onClick={handleResendEmail}>
+              <Button variant="outline" size="sm" onClick={() => setResendConfirmOpen(true)}>
                 <Mail className="mr-1 h-4 w-4" />Resend Email
               </Button>
               <Button variant="outline" size="sm" onClick={() => handleStatusAction("no_show")} disabled={actionLoading}>
@@ -1634,11 +1637,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const existingPin = (booking as any).access_pin as string | null;
 
-          async function provisionPin() {
+          async function provisionPin(to?: string, cc?: string) {
             const res = await fetch("/api/cosec/booking-access", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ booking_id: id }),
+              body: JSON.stringify({ booking_id: id, ...(to ? { to } : {}), ...(cc ? { cc } : {}) }),
             });
             const json = res.ok ? await res.json() : null;
             if (res.ok && json) {
@@ -1690,15 +1693,23 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       <div className="flex flex-col gap-1.5 items-end">
                         <Button
                           variant="outline" size="sm"
-                          onClick={async () => {
-                            setPinDelivery(null);
-                            const ok = await provisionPin();
-                            if (ok) toast.success("Access PIN resent");
-                            else toast.error("Failed to resend PIN");
-                          }}
+                          onClick={() => setResendPinOpen(true)}
                         >
                           <Send size={13} className="mr-1.5" />Resend PIN
                         </Button>
+                        <BookingEmailDialog
+                          open={resendPinOpen}
+                          onOpenChange={setResendPinOpen}
+                          title="Resend access PIN"
+                          savedEmail={customerEmail || null}
+                          idPrefix="pin"
+                          successMessage={(to) => `Access PIN resent. The email went to ${to}.`}
+                          onSend={async (to, cc) => {
+                            setPinDelivery(null);
+                            const ok = await provisionPin(to, cc);
+                            return ok ? null : "Failed to resend PIN";
+                          }}
+                        />
                         {/* Copy to share */}
                         <Button
                           variant="ghost" size="sm"
@@ -2524,6 +2535,25 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onPickCounter={() => setPaymentDialogOpen(true)}
         onPickLink={() => setPaymentSendDialogOpen(true)}
         onPickPi={() => setSendPiOpen(true)}
+      />
+
+      <BookingEmailDialog
+        open={resendConfirmOpen}
+        onOpenChange={setResendConfirmOpen}
+        title="Resend booking confirmation"
+        savedEmail={customerEmail || null}
+        idPrefix="confirm"
+        successMessage={(to) => `Confirmation sent to ${to}`}
+        onSend={async (to, cc) => {
+          const res = await fetch(`/api/bookings/${booking.id}/email`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "confirmation", to, cc }),
+          });
+          if (res.ok) return null;
+          const err = await res.json().catch(() => null);
+          return err?.error || "Failed to send email";
+        }}
       />
 
       <SendPiDialog

@@ -12,6 +12,7 @@
  */
 
 import { createAdminClient } from "@/lib/supabase/server";
+import { bookingContactEmail } from "@/lib/booking-contact";
 import { provisionUser, bookingCosecId, uuidToRefId, generatePin } from "@/lib/cosec";
 import { logAudit } from "@/lib/audit";
 import { dltSms } from "@/lib/whatsapp";
@@ -41,7 +42,11 @@ export interface ProvisionResult {
  * - Sends PIN via WhatsApp → DLT SMS → email (best-effort, logged on failure).
  * - Idempotent: can be called multiple times safely (upsert on device_id,cosec_user_id).
  */
-export async function provisionBookingAccess(booking_id: string): Promise<ProvisionResult> {
+export async function provisionBookingAccess(
+  booking_id: string,
+  // Staff can send the PIN email to another address or copy others on a resend.
+  opts: { emailTo?: string | null; emailCc?: string[] } = {},
+): Promise<ProvisionResult> {
   const admin = createAdminClient();
 
   // Load booking + space + lead
@@ -165,7 +170,7 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = booking.lead as any;
   const contactPhone = (booking.booker_phone as string | null) ?? (booking.guest_phone as string | null) ?? lead?.phone;
-  const contactEmail = (booking.guest_email as string | null) ?? lead?.email;
+  const contactEmail = opts.emailTo || bookingContactEmail({ guest_email: booking.guest_email as string | null, lead });
   const leadFullName = `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim();
   const contactName  = (booking.guest_name as string | null) ?? (leadFullName || "Guest");
 
@@ -207,6 +212,7 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
     const emailResult = await resend.emails.send({
       from: EMAIL_FROM,
       to: contactEmail,
+      cc: opts.emailCc && opts.emailCc.length > 0 ? opts.emailCc : undefined,
       subject: `Your WorkVilla Access PIN — Booking ${bookingRef}`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">

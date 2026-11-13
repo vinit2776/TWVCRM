@@ -6,6 +6,8 @@ import { logAudit } from "@/lib/audit";
 import { BOOKING_PI_NOTES, buildBookingPi, bookingPiNumber, piBalanceDue } from "@/lib/booking-pi";
 import { generateBookingPiPdf, type BookingPiPdfInput } from "@/lib/booking-pi-pdf";
 import { formatCurrency } from "@/lib/utils";
+import { validateRecipients } from "@/lib/email-recipients";
+import { bookingContactEmail } from "@/lib/booking-contact";
 
 export const dynamic = "force-dynamic";
 
@@ -93,7 +95,7 @@ async function loadPi(id: string): Promise<Loaded> {
     booking,
     input,
     balanceDue,
-    customerEmail: lead?.email || booking.guest_email || null,
+    customerEmail: bookingContactEmail(booking),
     sender: { id: sender.id, full_name: sender.full_name },
     supabase,
   };
@@ -133,12 +135,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   // Staff can send it to another address (their own, to check it, or one the customer
   // gave them); otherwise it goes to the email on the booking.
-  const body = (await req.json().catch(() => ({}))) as { to?: unknown };
-  const override = typeof body.to === "string" ? body.to.trim() : "";
-  if (override && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(override)) {
-    return NextResponse.json({ error: "That email address doesn't look right." }, { status: 400 });
-  }
-  const customerEmail = override || loaded.customerEmail;
+  const body = (await req.json().catch(() => ({}))) as { to?: unknown; cc?: unknown };
+  const recipients = validateRecipients({ to: body.to, cc: body.cc });
+  if (!recipients.ok) return NextResponse.json({ error: recipients.error }, { status: 400 });
+  const customerEmail = recipients.to || loaded.customerEmail;
 
   if (!customerEmail) {
     return NextResponse.json({ error: "No customer email on file. Add one to the customer, or download the PI and share it by hand." }, { status: 400 });
@@ -154,6 +154,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     from: EMAIL_FROM,
     replyTo: EMAIL_REPLY_TO,
     to: customerEmail,
+    cc: recipients.cc.length > 0 ? recipients.cc : undefined,
     subject: `Proforma invoice ${input.pi_number} for your booking - The WorkVilla`,
     patient: true,
     html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
@@ -192,7 +193,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     entityId: id,
     action: "update",
     performedBy: sender.id,
-    changes: { pi_number: { old: booking.pi_number ?? null, new: input.pi_number }, pi_sent_to: { old: null, new: customerEmail } },
+    changes: { pi_number: { old: booking.pi_number ?? null, new: input.pi_number }, pi_sent_to: { old: null, new: customerEmail }, ...(recipients.cc.length > 0 ? { pi_cc: { old: null, new: recipients.cc.join(", ") } } : {}) },
   });
 
   return NextResponse.json({ data: { pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_to: customerEmail, statement_id: statementId,
