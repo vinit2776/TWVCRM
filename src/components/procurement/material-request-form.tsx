@@ -1348,7 +1348,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                             min="0"
                             step="0.01"
                             placeholder="Enter the whole contract value to split it across the payments"
-                            value={l.totalEntry ?? (c.fullTotal > 0 ? String(Math.round(c.fullTotal * 100) / 100) : "")}
+                            value={l.totalEntry || (c.fullTotal > 0 ? String(Math.round(c.fullTotal * 100) / 100) : "")}
                             onChange={(e) => {
                               const v = e.target.value;
                               const n = parseFloat(v);
