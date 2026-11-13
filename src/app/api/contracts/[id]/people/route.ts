@@ -63,7 +63,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     memberIds.length
       ? admin
           .from("cosec_access_users")
-          .select("entity_id, enrollment_status, provisioned_at, blocked_at")
+          .select("entity_id, enrollment_status, provisioned_at, blocked_at, valid_until, nfc_card_number, device:cosec_devices(supports_biometric)")
           .eq("user_type", "member")
           .in("entity_id", memberIds)
       : Promise.resolve({ data: [] as never[] }),
@@ -80,9 +80,39 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     if (i.is_active) issuanceByMember.set(i.member_id, i);
     else if (i.revoked_at) revokedAtByMember.set(i.member_id, i.revoked_at);
   }
+  // Door PIN emails are recorded on the contract's audit trail (one row per attempt).
+  type PinChange = { member_id: string; purpose: string; email: string | null; sent: boolean; reason: string | null; valid_until: string | null };
+  const { data: pinRows } = await admin
+    .from("audit_trail")
+    .select("changes, performed_by, created_at")
+    .eq("entity_type", "contract")
+    .eq("entity_id", id)
+    .eq("action", "email_sent")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  const pinByMember = new Map<string, { latest: PinChange; at: string; by: string | null; attempts: number }>();
+  for (const r of (pinRows ?? []) as { changes: { door_pin?: { new?: PinChange } } | null; performed_by: string | null; created_at: string }[]) {
+    const c = r.changes?.door_pin?.new;
+    if (!c?.member_id) continue;
+    const prev = pinByMember.get(c.member_id);
+    if (prev) prev.attempts += 1;
+    else pinByMember.set(c.member_id, { latest: c, at: r.created_at, by: r.performed_by, attempts: 1 });
+  }
+  const byIds = [...new Set([...pinByMember.values()].map((v) => v.by).filter(Boolean))] as string[];
+  const { data: byUsers } = byIds.length
+    ? await admin.from("users").select("id, full_name").in("id", byIds)
+    : { data: [] as { id: string; full_name: string }[] };
+  const userName = new Map((byUsers ?? []).map((u: { id: string; full_name: string }) => [u.id, u.full_name]));
+  const doorValidUntil = new Map<string, string>();
+  const doorHasFingerprintReader = new Set<string>();
+  const doorCardIssued = new Set<string>();
+
   const doorStatuses = new Map<string, string[]>();
   const doorAt = new Map<string, string>();
-  for (const a of (accessRes.data ?? []) as { entity_id: string; enrollment_status: string; provisioned_at: string | null; blocked_at: string | null }[]) {
+  for (const a of (accessRes.data ?? []) as unknown as { entity_id: string; enrollment_status: string; provisioned_at: string | null; blocked_at: string | null; valid_until: string | null; nfc_card_number: string | null; device: { supports_biometric: boolean } | null }[]) {
+    if (a.device?.supports_biometric !== false) doorHasFingerprintReader.add(a.entity_id);
+    if (a.nfc_card_number) doorCardIssued.add(a.entity_id);
+    if (a.valid_until && !doorValidUntil.has(a.entity_id)) doorValidUntil.set(a.entity_id, a.valid_until);
     const list = doorStatuses.get(a.entity_id) ?? [];
     list.push(a.enrollment_status);
     doorStatuses.set(a.entity_id, list);
@@ -119,6 +149,23 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         ? { seatNumber: issuance.seat_number, validUntil: issuance.valid_until, issuedAt: issuance.issued_at, emailedAt: issuance.emailed_at }
         : null,
       doorIssuedAt: c.source_member_id ? (doorAt.get(c.source_member_id) ?? null) : null,
+      doorValidUntil: c.source_member_id ? (doorValidUntil.get(c.source_member_id) ?? null) : null,
+      // Set up only on card-only readers: no PIN applies, staff issue an access card.
+      doorCardOnly: !!c.source_member_id && liveStatuses.length > 0 && !doorHasFingerprintReader.has(c.source_member_id),
+      doorCardIssued: !!c.source_member_id && doorCardIssued.has(c.source_member_id),
+      doorPin: (() => {
+        const v = c.source_member_id ? pinByMember.get(c.source_member_id) : undefined;
+        if (!v) return null;
+        return {
+          at: v.at,
+          by: v.by ? (userName.get(v.by) ?? "A team member") : "System",
+          sent: v.latest.sent,
+          reason: v.latest.reason,
+          email: v.latest.email,
+          purpose: v.latest.purpose,
+          attempts: v.attempts,
+        };
+      })(),
       accessEndedAt: c.source_member_id ? (revokedAtByMember.get(c.source_member_id) ?? null) : null,
       doorEnrolled: liveStatuses.length > 0,
       doorStatuses: liveStatuses,
@@ -179,6 +226,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       case "PHONE_REQUIRED":
         return NextResponse.json(
           { error: "A phone number is needed to give door access", code: result.code },
+          { status: 400 }
+        );
+      case "EMAIL_REQUIRED":
+        return NextResponse.json(
+          { error: "An email address is needed: the door PIN and WiFi voucher are sent by email", code: result.code },
           { status: 400 }
         );
       default:

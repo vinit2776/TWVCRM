@@ -36,6 +36,11 @@ interface Person {
   voucherIssued: boolean;
   voucher: { seatNumber: number; validUntil: string | null; issuedAt: string | null; emailedAt: string | null } | null;
   doorIssuedAt: string | null;
+  doorValidUntil: string | null;
+  doorCardOnly: boolean;
+  doorCardIssued: boolean;
+  /** Latest door PIN email for this person (from the audit trail); null if none recorded. */
+  doorPin: { at: string; by: string; sent: boolean; reason: string | null; email: string | null; purpose: string; attempts: number } | null;
   accessEndedAt: string | null;
   doorEnrolled: boolean;
   doorStatuses: string[];
@@ -117,7 +122,30 @@ function DoorCell({ p }: { p: Person }) {
       ) : (
         <Badge variant="secondary" className="bg-blue-100 text-blue-800">Awaiting enrolment</Badge>
       )}
-      {p.doorIssuedAt && <div className="text-xs text-muted-foreground mt-0.5">Issued {formatDateTime(p.doorIssuedAt)}</div>}
+      {p.doorIssuedAt && <div className="text-xs text-muted-foreground mt-0.5">Door set up {formatDateTime(p.doorIssuedAt)}</div>}
+      {p.doorCardOnly && (
+        <div className={`text-xs mt-0.5 ${p.doorCardIssued ? "text-muted-foreground" : "text-amber-700"}`}>
+          {p.doorCardIssued
+            ? "Card-only reader: access card issued"
+            : "Card-only reader: access card not issued yet, the PIN is their way in until then"}
+        </div>
+      )}
+      {p.doorPin ? (
+        p.doorPin.sent ? (
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {p.doorPin.purpose === "fallback" ? "Fallback PIN" : "PIN"} emailed to {p.doorPin.email} on {formatDateTime(p.doorPin.at)} by {p.doorPin.by}
+            {p.doorPin.attempts > 1 ? ` (${p.doorPin.attempts} sends in total)` : ""}
+          </div>
+        ) : (
+          <div className="text-xs text-red-600 mt-0.5">
+            PIN not sent ({p.doorPin.reason === "no_email" ? "no email on record" : "email failed"}) on {formatDateTime(p.doorPin.at)}, by {p.doorPin.by}.
+            {" "}{p.doorPin.reason === "no_email" ? "Add their email, then use Email PIN again." : "Use Email PIN again."}
+          </div>
+        )
+      ) : (
+        <div className="text-xs text-amber-700 mt-0.5">No PIN email recorded for this person</div>
+      )}
+      {p.doorValidUntil && <div className="text-xs text-muted-foreground mt-0.5">Door access valid until {formatDate(p.doorValidUntil)}</div>}
     </div>
   );
 }
@@ -214,6 +242,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
 
   async function submitAdd(useExisting = false) {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
+    if (form.access && !form.email.trim()) { toast.error("An email is required for anyone who gets door access or a voucher"); return; }
     setSaving(true);
     try {
       const res = await fetch(`/api/contracts/${contractId}/people`, {
@@ -254,6 +283,15 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Something went wrong"); return false; }
       toast.success(success);
+      // Door access can be live while the PIN email failed; say what to fix.
+      const pinEmail = json.data?.pinEmail as { sent: boolean; reason?: string } | null | undefined;
+      if (pinEmail && !pinEmail.sent) {
+        toast.warning(
+          pinEmail.reason === "no_email"
+            ? `${p.name} has no email, so their door PIN was not sent. Add their email, then use "Email PIN again" under the contract's Access section.`
+            : `The door PIN email to ${p.name} could not be sent. Use "Email PIN again" under the contract's Access section.`
+        );
+      }
       await refresh();
       return true;
     } finally {
@@ -428,8 +466,8 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
                 </select>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Email</Label>
-                <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                <Label className="text-xs">Email{form.access ? " *" : ""}</Label>
+                <Input type="email" required={form.access} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Phone</Label>
@@ -497,7 +535,10 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
                               size="sm" variant="outline"
                               disabled={seatsFull || busy[`give_access_${p.contactId}`]}
                               title={seatsFull ? "All seats are in use" : undefined}
-                              onClick={() => personAction(p, { action: "give_access" }, `${p.name} now gets access`)}
+                              onClick={() => {
+                                if (!p.email) { setFixing(p); setFixForm({ email: "", phone: "" }); toast.error(`${p.name} needs an email first. Add it, then give access.`); return; }
+                                personAction(p, { action: "give_access" }, `${p.name} now gets access`);
+                              }}
                             >
                               Give access
                             </Button>
@@ -631,12 +672,12 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
           <DialogHeader>
             <DialogTitle>Issue door access for {doorConfirm?.name}?</DialogTitle>
             <DialogDescription>
-              This adds them to the door devices at this location and texts an enrolment PIN to <b>{doorConfirm?.phone}</b>.
+              This adds them to the door devices at this location and emails an enrolment PIN to <b>{doorConfirm?.email || "(no email on record)"}</b>.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDoorConfirm(null)}>Cancel</Button>
-            <Button onClick={issueDoor} disabled={!!doorConfirm && busy[`issue_door_${doorConfirm.contactId}`]}>Issue and text PIN</Button>
+            <Button onClick={issueDoor} disabled={!!doorConfirm && busy[`issue_door_${doorConfirm.contactId}`]}>Issue and email PIN</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
