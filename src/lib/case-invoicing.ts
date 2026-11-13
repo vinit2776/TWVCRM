@@ -24,6 +24,7 @@ import { dispatchProforma } from "@/lib/send-proforma";
 import { logAudit } from "@/lib/audit";
 import { caseDisplayName } from "@/lib/case-workflow";
 import { advanceCaseStage } from "@/lib/case-status-events";
+import { termFee } from "@/lib/vo-term-fee";
 
 interface CaseForInvoicing {
   id: string;
@@ -133,7 +134,8 @@ export function computeCaseInvoice(caseData: CaseForInvoicing): CaseInvoicePrevi
   const isInterstate = billToAggregator ? !(caseData.aggregator?.same_state_as_twv ?? true) : false;
   const placeOfSupply = "Tamil Nadu";
 
-  const subtotal = caseData.rate;
+  // Whole-term fee: rate for terms of 12 months or less, annual rate x years beyond.
+  const subtotal = termFee(caseData.rate, caseData.tenure_months);
   const gstRate = 18;
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = isInterstate ? 0 : gstAmount / 2;

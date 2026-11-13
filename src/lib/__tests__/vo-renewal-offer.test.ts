@@ -73,3 +73,36 @@ describe("termFee", () => {
     expect(termFee(18000, 48)).toBe(72000);
   });
 });
+
+describe("renewalOffer under the rate-meaning rule", () => {
+  const none = { agreedEscalationPercentage: 0, mode: "none" as const, currentEnd: "2026-12-31" };
+  it("12-month term renewed at any length is unchanged from before", () => {
+    const o = (d: number) => renewalOffer({ currentFee: 18000, currentTenureMonths: 12, durationMonths: d, ...none }).fee;
+    expect(o(6)).toBe(9000);
+    expect(o(11)).toBe(16500);
+    expect(o(12)).toBe(18000);
+  });
+  it("11-month term is unchanged from before", () => {
+    const f = renewalOffer({ currentFee: 18000, currentTenureMonths: 11, durationMonths: 11, ...none }).fee;
+    expect(f).toBe(18000);
+  });
+  it("annual rate 18000 on a 24-month term renews for 12 months at 18000", () => {
+    expect(renewalOffer({ currentFee: 18000, currentTenureMonths: 24, durationMonths: 12, ...none }).fee).toBe(18000);
+  });
+  it("annual rate 18000 on a 24-month term renews for 24 months at 36000 and 6 months at 9000", () => {
+    expect(renewalOffer({ currentFee: 18000, currentTenureMonths: 24, durationMonths: 24, ...none }).fee).toBe(36000);
+    expect(renewalOffer({ currentFee: 18000, currentTenureMonths: 24, durationMonths: 6, ...none }).fee).toBe(9000);
+  });
+  it("12-month 18000 renews for 24, 36, 48 months at rate x years", () => {
+    for (const [d, fee] of [[24, 36000], [36, 54000], [48, 72000]] as const) {
+      expect(renewalOffer({ currentFee: 18000, currentTenureMonths: 12, durationMonths: d, ...none }).fee).toBe(fee);
+    }
+  });
+  it("applies escalation after the term fee and adds GST", () => {
+    const o = renewalOffer({ currentFee: 18000, currentTenureMonths: 24, durationMonths: 24, agreedEscalationPercentage: 10, mode: "agreed", currentEnd: "2026-12-31" });
+    expect(o.baseFee).toBe(36000);
+    expect(o.fee).toBe(39600);
+    expect(o.gst).toBe(7128);
+    expect(o.total).toBe(46728);
+  });
+});
