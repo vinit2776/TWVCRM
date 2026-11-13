@@ -5,11 +5,11 @@ import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
 import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
-import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { attachPurchasePos } from "@/lib/procurement/amc-asset-receipts";
 import type { AssetForAmc } from "@/lib/procurement/amc-received";
 import { TERMINATE_ROLES, terminateBlocker, terminationPatch } from "@/lib/procurement/amc-terminate";
 import { planAdvanceCancel } from "@/lib/procurement/advance-cancel";
+import { loadAdvanceUsage } from "@/lib/procurement/po-advance";
 import { amcStatusFor, poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
 
 // Admin-only corrections, one step back each. See src/lib/procurement/admin-rollback.ts.
@@ -113,7 +113,9 @@ export async function GET(
   const linkedAssets = [d.linked_asset, ...(d.purchase_order_items ?? []).map((i) => i.linked_asset)].filter(Boolean) as AssetForAmc[];
   await attachPurchasePos(supabase, linkedAssets);
 
-  return NextResponse.json({ data, audit_events: auditEvents ?? [] });
+  // What is left of the advance, for the PO page. Only worked out once the advance has been paid.
+  const advance_usage = data.advance_status === "processed" ? await loadAdvanceUsage(createAdminClient(), id) : null;
+  return NextResponse.json({ data: { ...data, advance_usage }, audit_events: auditEvents ?? [] });
 }
 
 export async function PATCH(
@@ -510,16 +512,12 @@ export async function PATCH(
       if (po.advance_status !== "processed") {
         return NextResponse.json({ error: "This advance has not been paid" }, { status: 422 });
       }
-      // New bills on this PO were pre-credited with the advance (amount_paid),
-      // so undoing the advance would leave them showing money that was never paid.
-      const { count: liveBills } = await supabase
-        .from("vendor_bills")
-        .select("id", { count: "exact", head: true })
-        .eq("po_id", id)
-        .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
-      if ((liveBills ?? 0) > 0) {
+      // An advance that has been applied to a bill (or credited to one before payment lines existed)
+      // is money that bill now shows as paid; undoing the advance would leave that standing.
+      const usage = await loadAdvanceUsage(createAdminClient(), id);
+      if (usage.applied + usage.legacyCredit > 0.005) {
         return NextResponse.json(
-          { error: "Bills on this PO were credited with the advance. Withdraw or reject them first." },
+          { error: "This advance has been applied to bills. Reverse those payments on the bills first." },
           { status: 422 }
         );
       }
