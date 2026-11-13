@@ -876,7 +876,11 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   /** Hides a block on every step but its own; unchanged when not in the step-by-step flow. */
   const showStep = (key: string) => (!amcWizard || stepKey === key ? "" : "hidden");
   const goToAmcStep = (n: number) => { setAmcStep(n); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  // A proposal that is being read, or read but not yet used or dismissed, holds the wizard on its first step.
+  const [proposalPending, setProposalPending] = useState(false);
+  const waitingOnProposal = proposalPending && stepKey === "proposal";
   const nextAmcStep = () => {
+    if (waitingOnProposal) return;
     const capErr = proposalCapError();
     if (capErr) { toast.error(capErr); return; }
     const err = validateAmcStep(amcStep, {
@@ -1135,6 +1139,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           defaultLocationId={locationId || undefined}
           onAssetCreated={(a) => setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]))}
           onApply={applyProposalPrefill}
+          onPendingChange={setProposalPending}
           current={{
             serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,
             visitsCovered: amcVisitsCovered, unlimitedVisits: amcUnlimited,
@@ -2029,7 +2034,10 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
               {stepKey === "proposal" && validQuotations.length === 0 && (
                 <span className="text-xs text-muted-foreground">No proposal yet? You can skip.</span>
               )}
-              <Button onClick={nextAmcStep}>{stepKey === "proposal" ? (validQuotations.length === 0 ? "Skip" : "Next →") : "Next →"}</Button>
+              {waitingOnProposal && (
+                <span className="text-xs text-amber-800">Choose &quot;Fill in the steps for me&quot; or &quot;Don&apos;t use it&quot; to continue.</span>
+              )}
+              <Button onClick={nextAmcStep} disabled={waitingOnProposal}>{stepKey === "proposal" ? (validQuotations.length === 0 ? "Skip" : "Next →") : "Next →"}</Button>
             </div>
           )}
         </div>
