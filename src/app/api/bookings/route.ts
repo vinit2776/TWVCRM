@@ -921,7 +921,8 @@ export async function POST(request: NextRequest) {
   // 10a. COSEC access PIN — always fire for every booking so the guest gets
   // entry-door access even when the space has no room device linked.
   // Called directly (no HTTP self-fetch) to avoid serverless network fragility.
-  provisionBookingAccess(booking.id as string).catch((err) =>
+  // Provision only; the PIN is sent from the booking page when staff decide it is needed.
+  provisionBookingAccess(booking.id as string, { deliver: false }).catch((err) =>
     console.error("[booking] COSEC provision failed:", err)
   );
 

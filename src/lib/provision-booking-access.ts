@@ -44,7 +44,9 @@ export interface ProvisionResult {
 export async function provisionBookingAccess(
   booking_id: string,
   // Staff can send the PIN email to another address or copy others on a resend.
-  opts: { emailTo?: string | null; emailCc?: string[] } = {},
+  // deliver: false provisions the PIN on the door devices but sends nothing, so staff send
+  // it from the booking only when it is needed. Defaults to true for the manual button.
+  opts: { emailTo?: string | null; emailCc?: string[]; deliver?: boolean } = {},
 ): Promise<ProvisionResult> {
   const admin = createAdminClient();
 
@@ -182,7 +184,9 @@ export async function provisionBookingAccess(
     email:    "skipped",
   };
 
-  if (contactPhone) {
+  const deliver = opts.deliver !== false;
+
+  if (deliver && contactPhone) {
     // WhatsApp — held pending template approval in MSG91 dashboard.
     // Re-enable by uncommenting once "booking_access_pin" template is approved.
     // messaging.bookingAccessPin(contactPhone, contactName, bookingRef, startFmt, endFmt, pin, booking_id)
@@ -204,12 +208,12 @@ export async function provisionBookingAccess(
       delivery.sms = "failed";
       console.warn("[provision-booking-access] SMS delivery failed:", smsResult.error);
     }
-  } else {
+  } else if (deliver) {
     console.warn("[provision-booking-access] No phone on booking", booking_id, "— SMS skipped.");
   }
 
   // Email (SMTP primary → Resend fallback)
-  if (contactEmail) {
+  if (deliver && contactEmail) {
     const emailResult = await resend.emails.send({
       from: EMAIL_FROM,
       to: contactEmail,
@@ -246,7 +250,7 @@ export async function provisionBookingAccess(
       delivery.email = "sent";
       console.info("[provision-booking-access] Email delivered to", contactEmail);
     }
-  } else {
+  } else if (deliver) {
     console.warn("[provision-booking-access] No email on booking", booking_id, "— email skipped.");
   }
 

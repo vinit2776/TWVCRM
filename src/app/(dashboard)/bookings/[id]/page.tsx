@@ -1727,8 +1727,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       </div>
                     </div>
 
+                    {/* The PIN is not sent automatically; staff send it when it is needed. */}
+                    {(!pinDelivery || [pinDelivery.sms, pinDelivery.email, pinDelivery.whatsapp].every((s) => s === "skipped")) && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Not sent to the customer. Use Resend PIN to email and text it when it is needed.
+                      </p>
+                    )}
+
                     {/* Delivery status — shown after Resend or Generate */}
-                    {pinDelivery && (
+                    {pinDelivery && [pinDelivery.sms, pinDelivery.email, pinDelivery.whatsapp].some((s) => s !== "skipped") && (
                       <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
                         <span className="text-[11px] text-muted-foreground mr-0.5">Sent via:</span>
                         <DeliveryBadge label="WhatsApp" status={pinDelivery.whatsapp} />
