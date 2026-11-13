@@ -4,7 +4,7 @@ Branch under test: `integration/vo-lifecycle` (18 PRs, #1218 to #1235, merged in
 Verified before this script: type check clean, 3,083 tests pass, production build passes.
 **Not yet verified by anyone:** the screens, the routes against a real database, and every PDF. That is what this walkthrough is for.
 
-Use only **staging data and a staging database**. Do not run any step against production, and do not send anything to a real customer: use test emails and test phone numbers you control.
+Use only the **staging preview and the staging database**. Do not run any step against production, and do not send anything to a real customer: use `@example.com` addresses and obviously fake phone numbers, as the existing seed scripts do.
 
 Mark each step Pass / Fail / Blocked in the checklist at the end. A Fail on a step marked **PDF** or **MONEY** blocks the release of that PR.
 
@@ -12,11 +12,13 @@ Mark each step Pass / Fail / Blocked in the checklist at the end. A Fail on a st
 
 ## 0. Before you start
 
-### 0.1 Deploy
-- Deploy `integration/vo-lifecycle` to staging (Vercel preview of the branch, or merge it into the `staging` branch if that is what staging deploys from). **Deploy first, migrate second.**
-- Confirm the app loads and you can sign in as an admin.
+### 0.1 Where staging is
+- Staging is the **Vercel Preview of `integration/vo-lifecycle`**, running against the **staging Supabase project `vmxugqfglajqpskazpdc`** (fake seed data; production is `zlbvadtajetylacxevsm` and must never be touched). There is no separate staging branch or site.
+- Preview URL for the current head of the branch: https://twv-d8zv9wyqv-vinits-projects-6917ea62.vercel.app (each push to the branch creates a new preview URL).
+- **First thing on every page: confirm the amber banner "STAGING, this is test data".** If it is not there, stop: you are on production.
+- Deploy first, migrate second: the preview is already deployed, so apply the migrations next.
 
-### 0.2 Apply migrations, in this order, to the staging database
+### 0.2 Apply migrations, in this order, to the staging database (`vmxugqfglajqpskazpdc` only)
 `00677`, `00678`, `00679`, `00680`, `00681`, `00682`, `00683`, `00684`, `00685`, `00686`, `00687`, `00688`, `00689`, `00690` (all are in `supabase/migrations/`).
 
 Notes:
@@ -44,12 +46,12 @@ Everything new is **off** by default. Set these in `app_settings` on staging (SQ
 Settings are cached briefly. Wait about a minute after changing one, or restart the preview.
 
 ### 0.4 Test data
-Create these before you start. Use obviously fake names (prefix `ZZ TEST`).
-- **Users:** one each of admin, manager, sales_rep, accounts. You will switch between them.
+Staging already has seed scripts (`node scripts/seed-staging.mjs`, `seed-staging-vo-partner.mjs`, `seed-staging-vo-renewal.mjs`; they read `.env.staging.local` and refuse to run against production). Run them first, then add what is missing. Use obviously fake names (prefix `ZZ TEST`) and `@example.com` emails.
+- **Users:** one each of admin, manager, sales_rep, accounts (the seeder creates a working admin login; create the rest as needed).
 - **Locations:** at least two (so you can test the exact-location rate and the "Any" fallback).
-- **Direct lead** "ZZ TEST Direct Co" with a test email you can read.
-- **Aggregator** "ZZ TEST Partner" with billing method postpaid, and a second aggregator "ZZ TEST Prepaid Partner" with prepaid.
-- **Cron secret:** you need `CRON_SECRET` for staging to call cron endpoints with `Authorization: Bearer <secret>`.
+- **Direct lead** "ZZ TEST Direct Co" with an `@example.com` email.
+- **Aggregators:** "ZZ TEST Partner" (postpaid) and "ZZ TEST Prepaid Partner" (prepaid).
+- **Cron secret:** the staging preview's `CRON_SECRET`, to call cron endpoints with `Authorization: Bearer <secret>`.
 
 ---
 
