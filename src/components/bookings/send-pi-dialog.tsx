@@ -69,9 +69,13 @@ export function SendPiDialog({
         toast.error(json?.error || "Couldn't send the PI");
         return;
       }
-      toast.success(`PI emailed to ${json.data.pi_sent_to}`, {
-        description: "Payment status updates by itself when the customer pays.",
-      });
+      if (json.data.warning) {
+        toast.warning(`PI emailed to ${json.data.pi_sent_to}`, { description: json.data.warning, duration: 15000 });
+      } else {
+        toast.success(`PI emailed to ${json.data.pi_sent_to}`, {
+          description: "Payment status updates by itself when the customer pays.",
+        });
+      }
       onSent();
       onOpenChange(false);
     } finally {

@@ -65,6 +65,10 @@ export interface Location {
   proposal_amenity_icons?: string[];
   /** Per-location wording for the agreement Schedule; null = standard wording. See src/lib/agreement-terms.ts. */
   agreement_terms?: import("@/lib/agreement-terms").AgreementTerms | null;
+  /** Terms & conditions a new proposal for this location starts from; null = DEFAULT_PROPOSAL_TERMS. */
+  proposal_terms?: string | null;
+  /** Commitment / validity numbers a new proposal for this location starts from. */
+  proposal_defaults?: import("@/lib/location-proposal-settings").ProposalDefaults | null;
   created_at: string;
   updated_at: string;
 }
@@ -1505,6 +1509,7 @@ export interface Booking {
   pi_number?: string | null;
   pi_sent_at?: string | null;
   pi_sent_to?: string | null;
+  pi_sender?: { full_name: string } | null;
   // Prepaid package redemption
   prepaid_purchase_id?: string;
   prepaid_credits_used?: number;

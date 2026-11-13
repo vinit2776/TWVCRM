@@ -101,11 +101,20 @@ export async function POST(
   // Fetch statement to validate
   const { data: statement } = await supabase
     .from("billing_statements")
-    .select("id, total_amount, status, payment_status, contract_id")
+    .select("id, total_amount, status, payment_status, contract_id, booking_id, created_via")
     .eq("id", id)
     .single();
 
   if (!statement) return NextResponse.json({ error: "Statement not found" }, { status: 404 });
+  // A booking's PI is paid on the booking, which owns the money and the single
+  // Tally handoff. Recording it here would settle the statement and leave the
+  // booking unpaid, and the booking would then be chased and invoiced again.
+  if (statement.booking_id && statement.created_via === "booking_pi") {
+    return NextResponse.json(
+      { error: "This is a booking PI. Record the payment on the booking itself (Collect Payment → At counter), so the booking and its GST invoice stay in step.", booking_id: statement.booking_id },
+      { status: 409 },
+    );
+  }
   if (statement.status === "draft") return NextResponse.json({ error: "Cannot record payment for a draft statement" }, { status: 400 });
 
   // Settling against a customer's deposit must use the deposit-adjustment flow.

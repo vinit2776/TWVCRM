@@ -212,7 +212,6 @@ export async function POST(request: NextRequest) {
 
   // ── PO validation ──────────────────────────────────────────────────────────
   let poTotalAmount: number | null = null;
-  let poAdvanceCredit = 0;
   let toleranceFacts: ToleranceFacts | null = null;
   // Price tolerance (goods POs only): how far past the PO value / received value
   // the invoice may go before it needs a special approval. 0 = firm price.
@@ -398,10 +397,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Pre-credit advance if already processed
-    if (po.advance_status === "processed" && po.advance_amount) {
-      poAdvanceCredit = Math.min(Number(po.advance_amount), parsed.data.total_amount);
-    }
+    // A processed advance is no longer credited here. Accounts apply it to the bill once it is
+    // approved (POST /api/procurement/bills/[id]/apply-advance), so it is counted once and has a payment line.
   }
 
   // ── Hard-block exact duplicate invoices ───────────────────────────────────
@@ -469,11 +466,6 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Create the bill (number generation, insert, PO status update, audit) ───
-  const initialPaymentStatus =
-    poAdvanceCredit >= parsed.data.total_amount ? "paid" :
-    poAdvanceCredit > 0 ? "partially_paid" :
-    "unpaid";
-
   let bill: { id: string; bill_number: string };
   try {
     bill = await createVendorBill(supabase, {
@@ -490,8 +482,8 @@ export async function POST(request: NextRequest) {
       invoice_check: parsed.data.invoice_check ?? null,
       service_report_id: parsed.data.service_report_id ?? null,
       replaces_bill_id: parsed.data.replaces_bill_id ?? null,
-      amount_paid: poAdvanceCredit,
-      payment_status: initialPaymentStatus,
+      amount_paid: 0,
+      payment_status: "unpaid",
       created_by: dbUser.id,
       ...(toleranceFacts ?? {}),
       ...(electricityExtra ?? {}),

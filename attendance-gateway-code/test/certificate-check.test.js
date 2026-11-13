@@ -73,11 +73,27 @@ test('checkCertificate parses the structured answer', async () => {
   assert.equal(result.extracted.patient_name, 'Ravi Kumar');
 });
 
+// runCertificateCheck in server.js leans on this: with no key nothing is called, so
+// that run costs none of the leave request's three check slots.
+test('with no API key nothing is called and the answer says so', async () => {
+  let called = false;
+  const client = fakeClient(() => { called = true; return { stop_reason: 'end_turn', content: [] }; });
+  const result = await checkCertificate({ apiKey: '', employeeName: 'Ravi', ...LEAVE, contentType: 'image/png', dataBase64: 'AAA' });
+  assert.equal(result.status, 'error');
+  assert.match(result.summary, /No Anthropic API key/);
+  assert.deepEqual(result.findings, []);
+  // The guard is on the key alone; an injected client is the test seam, not a bypass.
+  await checkCertificate({ apiKey: 'sk-test', employeeName: 'Ravi', ...LEAVE, contentType: 'image/png', dataBase64: 'AAA' }, { client });
+  assert.equal(called, true);
+});
+
 test('checkCertificate never throws', async () => {
   const args = { employeeName: 'Ravi', ...LEAVE, contentType: 'image/png', dataBase64: 'AAA' };
   assert.equal((await checkCertificate(args)).status, 'error');
   const refused = await checkCertificate(args, { client: fakeClient(() => ({ stop_reason: 'refusal', content: [] })) });
   assert.equal(refused.status, 'error');
+  const cut = await checkCertificate(args, { client: fakeClient(() => ({ stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"is_medical' }] })) });
+  assert.match(cut.summary, /ran out of room/);
   const garbled = await checkCertificate(args, { client: fakeClient(() => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'not json' }] })) });
   assert.match(garbled.summary, /couldn't be read/);
   const offline = await checkCertificate(args, { client: fakeClient(() => { throw new Anthropic.APIConnectionError({ message: 'down' }); }) });

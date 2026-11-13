@@ -231,10 +231,6 @@ function StepPanel({
   const device = group.primaryEntry.device_label;
 
   async function sendPin() {
-    if (!group.phone) {
-      toast.error("No phone number on record");
-      return;
-    }
     setPinLoading(true);
     try {
       const res = await fetch("/api/cosec/send-enrollment-pin", {
@@ -243,7 +239,7 @@ function StepPanel({
         body: JSON.stringify({ member_id: group.entity_id }),
       });
       const json = await res.json();
-      if (res.ok) toast.success(`Enrollment PIN sent to ${group.phone}`);
+      if (res.ok) toast.success(`Enrollment PIN emailed to ${json.email ?? displayName}`);
       else toast.error(json.error ?? "Failed to send PIN");
     } finally {
       setPinLoading(false);
@@ -315,7 +311,6 @@ function StepPanel({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {group.phone && (
             <Button
               size="sm"
               variant="outline"
@@ -328,9 +323,8 @@ function StepPanel({
               ) : (
                 <Send size={12} />
               )}
-              Resend PIN via SMS
+              Email PIN again
             </Button>
-          )}
           <span className="text-xs text-muted-foreground">
             The system will auto-detect when enrollment is complete.
           </span>

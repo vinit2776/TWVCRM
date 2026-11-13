@@ -44,6 +44,7 @@ const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-us
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
 import { BookingPaymentSummary } from "@/components/bookings/booking-payment-summary";
+import { BookingPiSentBanner } from "@/components/bookings/booking-pi-sent-banner";
 import { CorrectPaymentMethodDialog } from "@/components/bookings/correct-payment-method-dialog";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
@@ -1125,6 +1126,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         />
       )}
 
+      {booking.pi_sent_at && (
+        <BookingPiSentBanner
+          sentAt={booking.pi_sent_at}
+          sentTo={booking.pi_sent_to ?? null}
+          sentByName={booking.pi_sender?.full_name ?? null}
+          paymentStatus={booking.payment_status}
+          onResend={() => setSendPiOpen(true)}
+        />
+      )}
+
       {/* Payment status summary — replaces the bare "posted_to_bill" pill
           with a finance-friendly banner that names the contract, the
           target invoice month, the method (when paid), free-quota math
@@ -1356,9 +1367,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
       {/* Quick Action Links */}
       <div className="flex flex-wrap gap-2">
-        <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleDownloadReceipt}>
-          <Download className="mr-1 h-3.5 w-3.5" />Download Receipt
-        </Button>
+        {/* A receipt acknowledges money received, so it only exists once a payment
+            has been verified. Before that it would show an unpaid booking as a receipt. */}
+        {existingPayments.some((p) => p.status === "verified") && (
+          <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleDownloadReceipt}>
+            <Download className="mr-1 h-3.5 w-3.5" />Download Receipt
+          </Button>
+        )}
         {booking.status === "checked_out" && (
           <>
             {booking.feedback_token && (
@@ -1387,11 +1402,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             unified "Collect Payment" chooser above. The payment-link
             flow itself is preserved — it's just one click deeper now,
             chosen via the chooser dialog. */}
-        {booking.pi_sent_at && booking.payment_status === "pending" && (
-          <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 bg-emerald-50">
-            PI sent {formatDate(booking.pi_sent_at)}{booking.pi_sent_to ? ` to ${booking.pi_sent_to}` : ""}
-          </Badge>
-        )}
         {paymentLinkSent && (
           <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700 bg-blue-50 animate-pulse">
             ⏳ Awaiting payment…

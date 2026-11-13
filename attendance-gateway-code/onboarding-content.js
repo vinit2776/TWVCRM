@@ -16,7 +16,7 @@
 //               entry that's only worth teaching a brand-new hire, not announcing to
 //               someone who's already using the app.
 
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 3;
 
 const ENTRIES = [
   { id: 'hours-punch', version: 1, tourStep: { anchor: '#onbHoursCard', key: 'onboarding.step.hours' } },
@@ -33,6 +33,10 @@ const ENTRIES = [
     tourStep: { anchor: '#navDocuments', key: 'onboarding.step.documents' },
     whatsNew: { key: 'onboarding.whatsnew.documents' },
   },
+  // Reasons, manager notes and Apply again; medical certificates on Sick Leave (PR #1184).
+  // Announced to existing employees only — new hires meet both on the request pages.
+  { id: 'apply-again', version: 3, whatsNew: { key: 'onboarding.whatsnew.apply_again' } },
+  { id: 'sick-certificate', version: 3, whatsNew: { key: 'onboarding.whatsnew.certificate' } },
 ];
 
 module.exports = { CURRENT_VERSION, ENTRIES };

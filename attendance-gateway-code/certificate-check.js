@@ -66,7 +66,9 @@ function buildCertificateRequest({ employeeName, leaveStart, leaveEnd, today, co
     : { type: 'image', source: { type: 'base64', media_type: contentType, data: dataBase64 } };
   return {
     model: CERTIFICATE_CHECK_MODEL,
-    max_tokens: 4000,
+    // Thinking can't be turned off on this model and its tokens count against this cap,
+    // so leave plenty of room for it before the JSON answer.
+    max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
     system: SYSTEM_PROMPT,
@@ -138,6 +140,7 @@ async function checkCertificate({ apiKey, employeeName, leaveStart, leaveEnd, to
       buildCertificateRequest({ employeeName, leaveStart, leaveEnd, today, contentType, dataBase64 })
     );
     if (response.stop_reason === 'refusal') return { status: 'error', summary: 'The check declined to read this document.', findings: [] };
+    if (response.stop_reason === 'max_tokens') return { status: 'error', summary: 'The check ran out of room before it finished its answer. Try again.', findings: [] };
     const text = (response.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
     const extracted = JSON.parse(text);
     return { ...evaluateCertificate(extracted, { leaveStart, leaveEnd, today }), extracted };
