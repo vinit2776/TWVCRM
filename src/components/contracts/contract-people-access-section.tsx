@@ -254,6 +254,15 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Something went wrong"); return false; }
       toast.success(success);
+      // Door access can be live while the PIN email failed; say what to fix.
+      const pinEmail = json.data?.pinEmail as { sent: boolean; reason?: string } | null | undefined;
+      if (pinEmail && !pinEmail.sent) {
+        toast.warning(
+          pinEmail.reason === "no_email"
+            ? `${p.name} has no email, so their door PIN was not sent. Add their email, then use "Email PIN again" under the contract's Access section.`
+            : `The door PIN email to ${p.name} could not be sent. Use "Email PIN again" under the contract's Access section.`
+        );
+      }
       await refresh();
       return true;
     } finally {
@@ -631,12 +640,12 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
           <DialogHeader>
             <DialogTitle>Issue door access for {doorConfirm?.name}?</DialogTitle>
             <DialogDescription>
-              This adds them to the door devices at this location and texts an enrolment PIN to <b>{doorConfirm?.phone}</b>.
+              This adds them to the door devices at this location and emails an enrolment PIN to <b>{doorConfirm?.email || "(no email on record)"}</b>.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDoorConfirm(null)}>Cancel</Button>
-            <Button onClick={issueDoor} disabled={!!doorConfirm && busy[`issue_door_${doorConfirm.contactId}`]}>Issue and text PIN</Button>
+            <Button onClick={issueDoor} disabled={!!doorConfirm && busy[`issue_door_${doorConfirm.contactId}`]}>Issue and email PIN</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

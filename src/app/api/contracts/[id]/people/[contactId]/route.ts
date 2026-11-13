@@ -110,7 +110,7 @@ export async function POST(
 
   const { data: member } = await admin
     .from("contract_members")
-    .select("id, name, phone, is_active, needs_door")
+    .select("id, name, phone, email, is_active, needs_door")
     .eq("id", memberId)
     .maybeSingle();
   if (!member) return NextResponse.json({ error: "Member record not found" }, { status: 404 });
@@ -133,7 +133,7 @@ export async function POST(
     const result = await provisionMemberDoor(
       admin,
       { id: contract.id, location_id: contract.location_id, end_date: contract.end_date },
-      { id: member.id, name: member.name, phone: member.phone }
+      { id: member.id, name: member.name, email: member.email }
     );
     if (result.devices === 0) {
       return NextResponse.json({ error: "No door devices are set up for this location, so nothing was provisioned" }, { status: 422 });

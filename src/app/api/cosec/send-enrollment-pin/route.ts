@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
+import { sendDoorPinEmail, doorPinEmailProblem } from "@/lib/door-pin-email";
 
 const schema = z.object({
   member_id: z.string().uuid(),
@@ -9,7 +10,7 @@ const schema = z.object({
 
 /**
  * POST /api/cosec/send-enrollment-pin
- * Resends the enrollment PIN for a contract member via SMS + WhatsApp.
+ * Resends the enrollment PIN for a contract member by email.
  * Reads the PIN from cosec_access_users (same PIN on all devices for this member).
  */
 export async function POST(request: NextRequest) {
@@ -23,7 +24,7 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
 
   const [{ data: member }, { data: accessUser }] = await Promise.all([
-    admin.from("contract_members").select("name, phone").eq("id", parsed.data.member_id).single(),
+    admin.from("contract_members").select("name, email").eq("id", parsed.data.member_id).single(),
     admin.from("cosec_access_users")
       .select("access_pin")
       .eq("entity_id", parsed.data.member_id)
@@ -38,9 +39,10 @@ export async function POST(request: NextRequest) {
 
   const pin = accessUser.access_pin;
 
-  // Send PIN via SMS (fire-and-forget)
-  const { dltSms } = await import("@/lib/whatsapp");
-  dltSms.otp(member.phone, pin, parsed.data.member_id).catch(() => null);
+  const emailed = await sendDoorPinEmail({ to: member.email, name: member.name, pin, purpose: "enrollment" });
+  if (!emailed.sent) {
+    return NextResponse.json({ error: doorPinEmailProblem(emailed.reason, member.name) }, { status: emailed.reason === "no_email" ? 422 : 502 });
+  }
 
-  return NextResponse.json({ ok: true, pin });
+  return NextResponse.json({ ok: true, email: member.email });
 }

@@ -4,6 +4,7 @@ import { provisionUser, memberCosecId, uuidToRefId, generatePin } from "@/lib/co
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
 import { isContractOperational } from "@/lib/constants";
+import { sendDoorPinEmail } from "@/lib/door-pin-email";
 
 const addSchema = z.object({
   name:  z.string().min(1).max(80),
@@ -166,9 +167,9 @@ export async function POST(
           }
         }));
 
-        // Send enrollment PIN via WhatsApp + SMS
-        const { dltSms } = await import("@/lib/whatsapp");
-        dltSms.otp(parsed.data.phone, pin, member.id).catch(() => null);
+        // Email the enrollment PIN. Not SMS: the only SMS template that fits is the
+        // OTP one, which told tenants' staff "Your OTP … do not share" for a door PIN.
+        await sendDoorPinEmail({ to: parsed.data.email, name: parsed.data.name, pin, purpose: "enrollment" });
 
       } catch (err) {
         console.error("[members] COSEC provision error:", err);

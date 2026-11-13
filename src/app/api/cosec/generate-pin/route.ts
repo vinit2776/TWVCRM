@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { setUserPin } from "@/lib/cosec";
 import { logAudit } from "@/lib/audit";
-import { dltSms } from "@/lib/whatsapp";
+import { sendDoorPinEmail, doorPinEmailProblem } from "@/lib/door-pin-email";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
 
@@ -14,8 +14,9 @@ const schema = z.object({
  * POST /api/cosec/generate-pin
  *
  * Generates a fresh 4-digit PIN for a provisioned cosec_access_users row,
- * pushes it to the device, stores it in access_pin, and SMSs it to the
- * user's phone number. Intended as a card-fallback: user forgot card →
+ * pushes it to the device, stores it in access_pin, and emails it to the
+ * user (not SMS: the only registered SMS template that carried a bare number is the
+ * OTP one, which misled recipients — see src/lib/door-pin-email.ts). Intended as a card-fallback: user forgot card →
  * reception hits this → user can enter with PIN instead.
  */
 export async function POST(request: NextRequest) {
@@ -76,13 +77,9 @@ export async function POST(request: NextRequest) {
       .eq("id", parsed.data.access_user_id);
   }
 
-  // Resolve entity name + phone for SMS
-  const { name, phone } = await resolveEntityContact(admin, accessUser.user_type, accessUser.entity_id);
-
-  // SMS the PIN (fire-and-forget)
-  if (phone) {
-    dltSms.otp(phone, pin, parsed.data.access_user_id).catch(() => null);
-  }
+  // Resolve entity name + email for the PIN email
+  const { name, email } = await resolveEntityContact(admin, accessUser.user_type, accessUser.entity_id);
+  const emailed = await sendDoorPinEmail({ to: email, name, pin, purpose: "fallback" });
 
   logAudit(admin, {
     entityType: accessUser.user_type,
@@ -93,7 +90,14 @@ export async function POST(request: NextRequest) {
   });
 
   // Never return the PIN value — staff only see the issued timestamp
-  return NextResponse.json({ ok: true, name, sms_sent: !!phone, pin_issued_at: now });
+  return NextResponse.json({
+    ok: true,
+    name,
+    email_sent: emailed.sent,
+    // Set when the PIN is live on the device but nobody was told it; says what to fix.
+    email_problem: emailed.sent ? null : doorPinEmailProblem(emailed.reason, name),
+    pin_issued_at: now,
+  });
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -103,53 +107,52 @@ async function resolveEntityContact(
   admin: any,
   userType: string,
   entityId: string
-): Promise<{ name: string; phone: string | null }> {
+): Promise<{ name: string; email: string | null }> {
   try {
     if (userType === "employee") {
       const { data } = await admin
         .from("employees")
-        .select("full_name, phone")
+        .select("full_name, email")
         .eq("id", entityId)
         .single();
-      return { name: data?.full_name ?? "Employee", phone: data?.phone ?? null };
+      return { name: data?.full_name ?? "Employee", email: data?.email ?? null };
     }
 
     if (userType === "member") {
       const { data } = await admin
         .from("contract_members")
-        .select("name, phone")
+        .select("name, email")
         .eq("id", entityId)
         .single();
-      return { name: data?.name ?? "Member", phone: data?.phone ?? null };
+      return { name: data?.name ?? "Member", email: data?.email ?? null };
     }
 
     if (userType === "contract") {
       const { data } = await admin
         .from("contracts")
-        .select("lead:leads!contracts_lead_id_fkey(first_name, last_name, company, phone, mobile)")
+        .select("lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email)")
         .eq("id", entityId)
         .single();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = data?.lead as any;
       const name = lead?.company || `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim() || "Client";
-      const phone = lead?.mobile || lead?.phone || null;
-      return { name, phone };
+      return { name, email: lead?.email || null };
     }
 
     if (userType === "booking") {
       const { data } = await admin
         .from("bookings")
-        .select("guest_name, guest_phone, booker_phone")
+        .select("guest_name, guest_email, booker_email")
         .eq("id", entityId)
         .single();
       return {
         name: data?.guest_name ?? "Guest",
-        phone: data?.guest_phone || data?.booker_phone || null,
+        email: data?.guest_email || data?.booker_email || null,
       };
     }
   } catch {
     // non-fatal — PIN is already pushed to device
   }
 
-  return { name: "User", phone: null };
+  return { name: "User", email: null };
 }
