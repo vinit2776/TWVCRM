@@ -4,6 +4,12 @@
  * still comes from the Tally Inbox after checkout.
  */
 
+/** Terms printed on the PI and repeated in the email. */
+export const BOOKING_PI_NOTES = [
+  "Over usage and additional facilities will be charged as applicable.",
+  "GST invoice will be provided on full payment.",
+] as const;
+
 export interface BookingPiAddon {
   description: string;
   quantity: number | string;
@@ -64,10 +70,10 @@ export function buildBookingPi(input: BookingPiInput): BookingPiTotals {
     gst_rate: n(a.gst_rate),
     gst_amount: n(a.gst_amount),
   }));
-  const addonSubtotal = addonLines.reduce((s, l) => s + l.amount, 0);
-
+  // bookings.total_amount is the room charge only; add-ons are kept beside it and
+  // only folded into total_amount_with_gst.
   const gstRate = n(input.gst_rate);
-  const roomAmount = round2(n(input.total_amount) - addonSubtotal);
+  const roomAmount = round2(n(input.total_amount));
   const hours = n(input.duration_hours);
   const roomLine: BookingPiLine = {
     description: input.space_name,

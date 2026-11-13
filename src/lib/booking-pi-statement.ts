@@ -107,3 +107,15 @@ export function bookingPiChaseable(args: {
   if (!args.emailedAt && !args.proformaSentAt) return false;
   return args.balance > 0;
 }
+
+/**
+ * Receivables records a bank receipt as neft/rtgs/imps/upi/cheque/cash; a booking
+ * only knows cash, upi, card and razorpay (its labels, receipts and Tally rows).
+ * Any bank transfer is a UPI-style payment on the booking; a mode the booking has
+ * no word for is kept as typed rather than mislabelled.
+ */
+export function bookingModeForStatementPayment(mode: string): string {
+  const m = mode.trim().toLowerCase();
+  if (["neft", "rtgs", "imps", "upi", "bank_transfer", "bank"].includes(m)) return "upi";
+  return m;
+}

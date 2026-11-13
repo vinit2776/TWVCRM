@@ -98,7 +98,7 @@ export function SendPiDialog({
           </div>
           <p className="text-xs text-muted-foreground">
             The PI is optional. The customer can pay with the link in advance or at the counter on arrival.
-            It is not a tax invoice; the GST invoice still follows after checkout.
+            It is not a tax invoice. Over usage and additional facilities are charged as applicable, and the GST invoice is provided on full payment.
           </p>
           {!customerEmail && (
             <p className="text-xs text-amber-700">

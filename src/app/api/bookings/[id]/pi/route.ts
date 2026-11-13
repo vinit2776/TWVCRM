@@ -3,7 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { upsertBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
-import { buildBookingPi, bookingPiNumber, piBalanceDue } from "@/lib/booking-pi";
+import { BOOKING_PI_NOTES, buildBookingPi, bookingPiNumber, piBalanceDue } from "@/lib/booking-pi";
 import { generateBookingPiPdf, type BookingPiPdfInput } from "@/lib/booking-pi-pdf";
 import { formatCurrency } from "@/lib/utils";
 
@@ -152,7 +152,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       <p>Your booking <b>${input.booking_number ?? ""}</b> (${input.space_name}, ${input.location_name}) is confirmed. The proforma invoice is attached.</p>
       <p>You can pay <b>${formatCurrency(balanceDue)}</b> in advance with this secure link, or at the counter when you arrive:</p>
       <p><a href="${input.payment_link_url}">${input.payment_link_url}</a></p>
-      <p>This is not a tax invoice. A GST invoice follows after your visit.</p>
+      <p>This is not a tax invoice. ${BOOKING_PI_NOTES.map((n) => n).join(" ")}</p>
       <p>The WorkVilla</p></div>`,
     attachments: [{ filename: `${input.pi_number}.pdf`, content: pdf, contentType: "application/pdf" }],
   });
