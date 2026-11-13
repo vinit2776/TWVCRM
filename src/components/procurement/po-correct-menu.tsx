@@ -16,7 +16,7 @@ import {
 
 type RollbackAction =
   | "unorder" | "unmark_received" | "restore_cancelled"
-  | "restore_partial_cancel" | "reopen_advance" | "reverse_advance" | "reinstate_amc";
+  | "restore_partial_cancel" | "reopen_advance" | "reverse_advance" | "cancel_advance" | "reinstate_amc";
 
 type Props = {
   poId: string;
@@ -105,6 +105,18 @@ const COPY: Record<RollbackAction, { menu: string; title: string; button: string
       "Refused if the purchase order itself is cancelled — restore that first",
     ],
   },
+  cancel_advance: {
+    menu: "Cancel advance (never paid)…",
+    title: "Cancel advance",
+    button: "Cancel advance",
+    done: "advance cancelled",
+    intro: "The advance was never paid out, for example it was marked processed with no UTR, and the contract is being abandoned.",
+    impact: [
+      "The advance is cancelled: it no longer counts as paid and no longer waits for Finance",
+      "Bills that are rejected or withdrawn lose the advance credit they were showing, and go back to unpaid",
+      "Refused while a live bill still shows advance credit with no payment of its own. Reject or withdraw it first",
+    ],
+  },
   reverse_advance: {
     menu: "Reverse advance payment…",
     title: "Reverse advance payment",
@@ -140,6 +152,7 @@ export function PoCorrectMenu({ poId, poNumber, status, advanceStatus, advanceAp
   if (status === "cancelled") available.push("restore_cancelled");
   if (status === "partially_cancelled") available.push("restore_partial_cancel");
   if (advanceStatus === "processed") available.push("reverse_advance");
+  if (advanceStatus === "processed" || advanceStatus === "pending") available.push("cancel_advance");
   else if (advanceApprovalStatus === "approved" || advanceApprovalStatus === "rejected") available.push("reopen_advance");
 
   if (amcTerminated) available.push("reinstate_amc");
