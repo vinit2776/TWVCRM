@@ -116,7 +116,8 @@ async function deliverDoorPinEmail(params: {
             <p style="color:#015E65;font-size:36px;font-weight:bold;margin:0;letter-spacing:8px;font-family:monospace;">${pin}</p>
           </div>
           <ol style="color:#333;font-size:14px;line-height:1.6;padding-left:20px;">${steps}</ol>
-          <p style="color:#666;font-size:12px;">Please do not share this PIN. If you were not expecting door access, reply to this email and let us know.</p>
+          <p style="color:#444;font-size:13px;line-height:1.5;"><strong>Please do not share this confidential information with anyone else.</strong> This PIN is specific to you and will be kept on record against your access. Any misuse of it will be solely your responsibility.</p>
+          <p style="color:#666;font-size:12px;">If you were not expecting door access, reply to this email and let us know.</p>
         </div>`,
     });
     if (result.error) {
