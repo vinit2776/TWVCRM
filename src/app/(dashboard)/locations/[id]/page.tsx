@@ -69,7 +69,14 @@ export default function LocationDetailPage({
   const { user } = useCurrentUser();
   const canEditElectricity = user?.role === "admin" || user?.role === "manager";
   const canEditTerms = canEditAgreementTerms(user?.role);
+  // Sales reps manage customer-facing wording only (Services + Proposals tabs), not the physical setup.
+  const isSalesRep = user?.role === "sales_rep";
   const canEditProposals = canEditProposalSettings(user?.role);
+
+  // A sales rep has no Spaces/Analytics tabs, so start them on the wording tabs.
+  useEffect(() => {
+    if (isSalesRep && (tab === "spaces" || tab === "analytics")) setTab("services");
+  }, [isSalesRep, tab]);
 
   // ── Fetchers ─────────────────────────────────────────────────────────────
   const fetchLocation = useCallback(async () => {
@@ -226,15 +233,18 @@ export default function LocationDetailPage({
             )}
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setEditLocationOpen(true)}>
-          <Pencil className="mr-2 h-4 w-4" />
-          Edit Location
-        </Button>
+        {!isSalesRep && (
+          <Button variant="outline" size="sm" onClick={() => setEditLocationOpen(true)}>
+            <Pencil className="mr-2 h-4 w-4" />
+            Edit Location
+          </Button>
+        )}
       </div>
 
       {/* Tab bar */}
       <div className="flex border-b gap-1 flex-wrap">
         {(["overview", "spaces", "analytics", "electricity", "services", "proposals"] as Tab[]).map((t) => {
+          if ((t === "spaces" || t === "analytics") && isSalesRep) return null;
           if (t === "electricity" && !canEditElectricity) return null;
           if (t === "services" && !canEditTerms) return null;
           if (t === "proposals" && !canEditTerms) return null;
@@ -581,6 +591,7 @@ export default function LocationDetailPage({
           locationId={id}
           canEdit={canEditElectricity}
           canEditAgreementTerms={canEditTerms}
+          canEditAmenities={canEditTerms}
           initialAmenityIcons={location.proposal_amenity_icons}
           initialAgreementTerms={location.agreement_terms}
         />

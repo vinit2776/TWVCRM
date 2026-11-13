@@ -90,3 +90,20 @@ export function mirroredRowsToRemove<T extends { payment_reference: string | nul
     (e) => !!e.payment_reference?.startsWith("booking_payment:") && !live.has(e.payment_reference),
   );
 }
+
+/**
+ * Whether a booking's PI is worth chasing: the customer has received it, there is
+ * a balance, and the booking still owes it (not cancelled, waived or billed
+ * elsewhere). Sync normally voids a PI the booking no longer owes; this is the
+ * belt-and-braces check at the moment a reminder would go out.
+ */
+export function bookingPiChaseable(args: {
+  booking: { status: string; payment_status: string } | null;
+  emailedAt: string | null;
+  proformaSentAt: string | null;
+  balance: number;
+}): boolean {
+  if (!args.booking || bookingNoLongerOwes(args.booking)) return false;
+  if (!args.emailedAt && !args.proformaSentAt) return false;
+  return args.balance > 0;
+}
