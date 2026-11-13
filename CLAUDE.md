@@ -286,7 +286,7 @@ Staff can send a PI with the booking's Razorpay link (Collect Payment → **Send
 - Sending creates a billing statement owned by the booking (`created_via = booking_pi`, due **PI date + 7 days**) so it lists in Receivables as **Booking PI**. It shares the booking's link and is kept in step by `syncBookingPiStatement` (`src/lib/booking-pi-statement-server.ts`): payments (link, counter, accounts' verification), add-ons and rate edits, waive/complimentary all re-sync it; cancel or no-show voids it and cancels the link (a part-paid one is left, with a note, for an offline refund).
 - **One Tally handoff: the booking's own task** (after checkout, once paid). The statement never reaches the Tally Inbox (`handleStatementPaid` skips it). Recording a payment on it, sending it, or raising its GST invoice from Receivables is refused with a pointer to the booking.
 - Only **admin and accounts** can mark a reported manual payment paid (`PATCH /api/booking-payments/[id]`). Payments by link are marked paid by the Razorpay webhook with no action.
-- Reminders for these rows come in a second PR; until then the reminder cron skips them.
+- **Follow-ups:** the daily payment-reminder cron chases these in its second pass (`booking_pi` in `src/lib/receivable-fetch.ts`), on the **soft ladder** (friendly → gentle → firm, accounts CC'd, never management), from the due date. It sends only if the customer received the PI, a balance remains and the booking still owes it. The reminder reuses the booking's link and never makes a replacement (that would take a payment the booking never sees); a dead link goes without a Pay button. **Remind** on the Receivables row uses `/api/accounting/receivables/booking_pi/[id]/reminder`.
 
 ### Staged security deposit (parts)
 

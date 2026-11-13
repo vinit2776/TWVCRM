@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  addDaysYmd, bookingNoLongerOwes, bookingPiDueDate, bookingPaymentMarker, mirroredRowsToRemove,
+  addDaysYmd, bookingNoLongerOwes, bookingPiChaseable, bookingPiDueDate, bookingPaymentMarker, mirroredRowsToRemove,
   paymentsToMirror, statementPaymentStatus, todayIstYmd,
 } from "../booking-pi-statement";
 
@@ -79,5 +79,28 @@ describe("mirroredRowsToRemove", () => {
       { payment_reference: null },
     ];
     expect(mirroredRowsToRemove(existing, ["a"])).toEqual([{ payment_reference: bookingPaymentMarker("b") }]);
+  });
+});
+
+describe("bookingPiChaseable", () => {
+  const live = { status: "confirmed", payment_status: "pending" };
+  const base = { booking: live, emailedAt: "2026-11-13T10:00:00Z", proformaSentAt: null, balance: 1180 };
+
+  it("chases a delivered PI with a balance on a live booking", () => {
+    expect(bookingPiChaseable(base)).toBe(true);
+  });
+
+  it("never chases a PI the customer was not sent", () => {
+    expect(bookingPiChaseable({ ...base, emailedAt: null, proformaSentAt: null })).toBe(false);
+  });
+
+  it("stops once nothing is left to pay", () => {
+    expect(bookingPiChaseable({ ...base, balance: 0 })).toBe(false);
+  });
+
+  it("stops when the booking is cancelled, waived or billed elsewhere", () => {
+    expect(bookingPiChaseable({ ...base, booking: { status: "cancelled", payment_status: "pending" } })).toBe(false);
+    expect(bookingPiChaseable({ ...base, booking: { status: "confirmed", payment_status: "waived" } })).toBe(false);
+    expect(bookingPiChaseable({ ...base, booking: null })).toBe(false);
   });
 });
