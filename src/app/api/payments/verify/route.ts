@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import crypto from "crypto";
 import { logAudit } from "@/lib/audit";
 import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
+import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 
 // POST — verify Razorpay payment after checkout success
 export async function POST(request: NextRequest) {
@@ -85,6 +86,8 @@ export async function POST(request: NextRequest) {
           .from("bookings")
           .update({ payment_status: "paid", payment_mode: "razorpay" })
           .eq("id", payment.booking_id);
+        // Paid after checkout: the task is otherwise only created at checkout.
+        await maybeCreateBookingGstTask(createAdminClient(), payment.booking_id);
       }
       // Close or part-settle the PI's Receivables statement, if the booking has one.
       await syncBookingPiStatement(createAdminClient(), payment.booking_id);

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectIfBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
@@ -29,6 +30,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const piBlock = await rejectIfBookingPiStatement(id);
+  if (piBlock) return piBlock;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

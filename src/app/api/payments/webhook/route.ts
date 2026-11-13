@@ -144,6 +144,9 @@ export async function POST(request: NextRequest) {
             .update({ payment_status: "paid", payment_mode: "razorpay" })
             .eq("id", bookingPayment.booking_id);
 
+          // Paid after checkout: the task is otherwise only created at checkout.
+          await maybeCreateBookingGstTask(supabase, bookingPayment.booking_id);
+
           // Provision COSEC access PIN now that booking is confirmed paid.
           // Called directly (no HTTP self-fetch) to avoid serverless network fragility.
           provisionBookingAccess(bookingPayment.booking_id).catch((err) =>

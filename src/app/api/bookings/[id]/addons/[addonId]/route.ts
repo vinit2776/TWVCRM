@@ -1,6 +1,7 @@
 import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { logAudit } from "@/lib/audit";
 
 /**
@@ -75,6 +76,8 @@ export async function DELETE(
       Number(booking.total_amount) + Number(booking.gst_amount) + sum
     ),
   }).eq("id", id);
+  // Keep the PI's Receivables statement at the booking's new total.
+  await syncBookingPiStatement(createAdminClient(), id);
 
   logAudit(supabase, {
     entityType: "booking_addon", entityId: addonId, action: "delete",

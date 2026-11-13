@@ -12,14 +12,28 @@
  * the booking action that triggered them is not rolled back.
  */
 
+import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/lib/supabase/server";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { bookingPaymentTolerance } from "@/lib/booking-payment-rules";
 import { totalPaid } from "@/lib/settlement";
-import type { BookingPiTotals } from "@/lib/booking-pi";
+import { buildBookingPi, type BookingPiAddon, type BookingPiTotals } from "@/lib/booking-pi";
 import {
-  BOOKING_PI_CREATED_VIA, bookingPaymentMarker, bookingPiDueDate, paymentsToMirror, todayIstYmd,
+  BOOKING_PI_CREATED_VIA, bookingNoLongerOwes, bookingPaymentMarker, bookingPiDueDate, mirroredRowsToRemove,
+  paymentsToMirror, statementPaymentStatus, todayIstYmd,
 } from "@/lib/booking-pi-statement";
+
+function piLineItems(totals: BookingPiTotals) {
+  const hsn = resolveHsnCode("booking_usage");
+  return totals.lines.map((l) => ({
+    description: l.description,
+    qty: l.quantity,
+    unit_price: l.rate,
+    amount: l.amount,
+    hsn_sac_code: hsn,
+  }));
+}
 
 async function findLiveStatement(admin: SupabaseClient, bookingId: string) {
   const { data } = await admin
@@ -74,14 +88,7 @@ export async function upsertBookingPiStatement(
     }
 
     const today = todayIstYmd();
-    const hsn = resolveHsnCode("booking_usage");
-    const items = args.totals.lines.map((l) => ({
-      description: l.description,
-      qty: l.quantity,
-      unit_price: l.rate,
-      amount: l.amount,
-      hsn_sac_code: hsn,
-    }));
+    const items = piLineItems(args.totals);
     const { data, error } = await admin
       .from("billing_statements")
       .insert({
@@ -123,17 +130,32 @@ export async function upsertBookingPiStatement(
 }
 
 /**
- * Bring the statement's payments and status in line with the booking's
- * verified payments. Called after any payment lands on the booking: link
- * (webhook), cash/card at the counter, or a UPI payment verified by accounts.
- * Safe to call when the booking has no PI statement (it does nothing).
+ * Bring the statement in line with its booking: voided if the booking no longer
+ * owes the money, its payments mirrored from the booking's verified payments
+ * (and any mirror of a payment that was since cancelled removed), its figures
+ * refreshed from the booking's current total, and its status recomputed.
+ * Called after anything that changes the booking's money: a payment landing or
+ * being cancelled, an add-on, a rate edit, a waiver. Safe to call when the
+ * booking has no PI statement (it does nothing).
  */
 export async function syncBookingPiStatement(admin: SupabaseClient, bookingId: string): Promise<void> {
   try {
     const statement = await findLiveStatement(admin, bookingId);
     if (!statement) return;
 
-    const [{ data: verified }, { data: existing }, { data: booking }] = await Promise.all([
+    const { data: booking } = await admin
+      .from("bookings")
+      .select("id, booking_number, status, payment_status, total_amount, gst_rate, gst_amount, total_amount_with_gst, duration_hours, space:spaces!bookings_space_id_fkey(name), addons:booking_addons(*)")
+      .eq("id", bookingId)
+      .maybeSingle();
+    if (!booking) return;
+
+    if (bookingNoLongerOwes(booking)) {
+      await cancelBookingPiStatement(admin, bookingId, "Booking no longer owes this amount");
+      return;
+    }
+
+    const [{ data: verified }, { data: existing }] = await Promise.all([
       admin
         .from("booking_payments")
         .select("id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at")
@@ -141,37 +163,66 @@ export async function syncBookingPiStatement(admin: SupabaseClient, bookingId: s
         .eq("status", "verified"),
       admin
         .from("billing_payments")
-        .select("payment_reference, razorpay_payment_id")
+        .select("id, payment_reference, razorpay_payment_id")
         .eq("billing_statement_id", statement.id),
-      admin.from("bookings").select("payment_status").eq("id", bookingId).maybeSingle(),
     ]);
 
-    const missing = paymentsToMirror(verified || [], existing || []);
-    if (missing.length > 0) {
-      await admin.from("billing_payments").insert(
-        missing.map((p) => ({
-          billing_statement_id: statement.id,
-          amount: Number(p.amount),
-          payment_date: todayIstYmd(new Date(p.created_at)),
-          payment_mode: p.payment_mode,
-          payment_reference: bookingPaymentMarker(p.id),
-          razorpay_payment_id: p.razorpay_payment_id,
-          notes: "Recorded on the booking",
-        })),
-      );
+    const stale = mirroredRowsToRemove(existing || [], (verified || []).map((p) => p.id as string));
+    if (stale.length > 0) {
+      await admin.from("billing_payments").delete().in("id", stale.map((r) => (r as { id: string }).id));
     }
+
+    // One insert per payment: a unique index on the marker makes a concurrent
+    // sync's duplicate fail harmlessly instead of crediting the payment twice.
+    for (const p of paymentsToMirror(verified || [], existing || [])) {
+      const { error } = await admin.from("billing_payments").insert({
+        billing_statement_id: statement.id,
+        amount: Number(p.amount),
+        payment_date: todayIstYmd(new Date(p.created_at)),
+        payment_mode: p.payment_mode,
+        payment_reference: bookingPaymentMarker(p.id),
+        razorpay_payment_id: p.razorpay_payment_id,
+        notes: "Recorded on the booking",
+      });
+      if (error && error.code !== "23505") {
+        console.error(`[booking-pi-statement] mirror failed for booking ${bookingId}:`, error.message);
+      }
+    }
+
+    const space = booking.space as unknown as { name: string } | null;
+    const totals = buildBookingPi({
+      booking_number: booking.booking_number,
+      space_name: space?.name || "Meeting room",
+      duration_hours: booking.duration_hours,
+      total_amount: booking.total_amount,
+      gst_rate: booking.gst_rate,
+      gst_amount: booking.gst_amount,
+      total_amount_with_gst: booking.total_amount_with_gst,
+      addons: (booking.addons as BookingPiAddon[]) || [],
+    });
 
     const { data: all } = await admin
       .from("billing_payments")
       .select("amount, tds_amount")
       .eq("billing_statement_id", statement.id);
-    const paid = totalPaid(all);
-    const total = Number(statement.total_amount);
-    const settled = booking?.payment_status === "paid" || paid >= total - bookingPaymentTolerance(total);
-    const next = settled ? "paid" : paid > 0 ? "partially_paid" : "unpaid";
-    if (next !== statement.payment_status) {
-      await admin.from("billing_statements").update({ payment_status: next }).eq("id", statement.id);
-    }
+    const next = statementPaymentStatus({
+      total: totals.total,
+      paid: totalPaid(all),
+      bookingPaid: booking.payment_status === "paid",
+      tolerance: bookingPaymentTolerance(totals.total),
+    });
+
+    await admin
+      .from("billing_statements")
+      .update({
+        payment_status: next,
+        total_amount: totals.total,
+        subtotal: totals.subtotal,
+        fixed_amount: totals.subtotal,
+        tax_amount: totals.gst,
+        line_items: [{ type: "usage", label: `Booking ${booking.booking_number ?? ""}`.trim(), items: piLineItems(totals), subtotal: totals.subtotal }],
+      })
+      .eq("id", statement.id);
   } catch (err) {
     console.error(`[booking-pi-statement] sync failed for booking ${bookingId}:`, err);
   }
@@ -199,6 +250,12 @@ export async function cancelBookingPiStatement(
       .select("id", { count: "exact", head: true })
       .eq("billing_statement_id", statement.id);
     if (count || statement.payment_status !== "unpaid") {
+      // Money is on it, so it cannot be voided. Say why on the row itself, where
+      // accounts will see it in Receivables, instead of leaving it looking live.
+      await admin
+        .from("billing_statements")
+        .update({ notes: `Booking cancelled or no longer owed while part-paid: ${reason}. Refund any amount received offline, then cancel this PI.` })
+        .eq("id", statement.id);
       return { voided: false, heldBecausePaid: true };
     }
 
@@ -243,4 +300,27 @@ export async function cancelBookingPiStatement(
     console.error(`[booking-pi-statement] cancel failed for booking ${bookingId}:`, err);
     return { voided: false, heldBecausePaid: false };
   }
+}
+
+/**
+ * For routes that act on a billing statement the generic way (send, remind,
+ * raise a GST invoice). A booking's PI is paid on the booking and has one Tally
+ * handoff, its booking task, so these actions would either fail (no contract,
+ * proposal or invoice to resolve a customer from) or raise a second GST invoice.
+ * Returns the response to send back, or null when the statement is not a booking PI.
+ */
+export async function rejectIfBookingPiStatement(statementId: string): Promise<NextResponse | null> {
+  const { data } = await createAdminClient()
+    .from("billing_statements")
+    .select("booking_id, created_via")
+    .eq("id", statementId)
+    .maybeSingle();
+  if (!data || data.created_via !== BOOKING_PI_CREATED_VIA || !data.booking_id) return null;
+  return NextResponse.json(
+    {
+      error: "This is a booking PI. Send it, record payments and raise its GST invoice from the booking itself, so the booking and its single Tally handoff stay in step.",
+      booking_id: data.booking_id,
+    },
+    { status: 409 },
+  );
 }

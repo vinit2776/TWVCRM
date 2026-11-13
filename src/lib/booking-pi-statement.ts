@@ -58,3 +58,35 @@ export function paymentsToMirror(
       !(p.razorpay_payment_id && seenRzp.has(p.razorpay_payment_id)),
   );
 }
+
+export type PiStatementPaymentStatus = "unpaid" | "partially_paid" | "paid";
+
+/** The statement settles when the booking does, or when what was paid covers it within the booking tolerance. */
+export function statementPaymentStatus(args: {
+  total: number;
+  paid: number;
+  bookingPaid: boolean;
+  tolerance: number;
+}): PiStatementPaymentStatus {
+  if (args.bookingPaid || args.paid >= args.total - args.tolerance) return "paid";
+  return args.paid > 0 ? "partially_paid" : "unpaid";
+}
+
+/** True when the booking no longer owes this money, so its PI should not stay listed. */
+export function bookingNoLongerOwes(booking: { status: string; payment_status: string }): boolean {
+  return (
+    ["cancelled", "no_show"].includes(booking.status) ||
+    ["waived", "prepaid", "posted_to_bill"].includes(booking.payment_status)
+  );
+}
+
+/** Mirrored rows whose booking payment is no longer verified (cancelled or rejected after the fact). */
+export function mirroredRowsToRemove<T extends { payment_reference: string | null }>(
+  existing: T[],
+  verifiedIds: string[],
+): T[] {
+  const live = new Set(verifiedIds.map(bookingPaymentMarker));
+  return existing.filter(
+    (e) => !!e.payment_reference?.startsWith("booking_payment:") && !live.has(e.payment_reference),
+  );
+}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  addDaysYmd, bookingPiDueDate, bookingPaymentMarker, paymentsToMirror, todayIstYmd,
+  addDaysYmd, bookingNoLongerOwes, bookingPiDueDate, bookingPaymentMarker, mirroredRowsToRemove,
+  paymentsToMirror, statementPaymentStatus, todayIstYmd,
 } from "../booking-pi-statement";
 
 describe("due date", () => {
@@ -35,5 +36,48 @@ describe("paymentsToMirror", () => {
   it("skips one the webhook already recorded by Razorpay payment id", () => {
     const existing = [{ payment_reference: "pay_X", razorpay_payment_id: "pay_X" }];
     expect(paymentsToMirror([pay("a", "pay_X")], existing)).toHaveLength(0);
+  });
+});
+
+describe("statementPaymentStatus", () => {
+  it("is unpaid, partial, then paid as money arrives", () => {
+    expect(statementPaymentStatus({ total: 1180, paid: 0, bookingPaid: false, tolerance: 23 })).toBe("unpaid");
+    expect(statementPaymentStatus({ total: 1180, paid: 500, bookingPaid: false, tolerance: 23 })).toBe("partially_paid");
+    expect(statementPaymentStatus({ total: 1180, paid: 1160, bookingPaid: false, tolerance: 23 })).toBe("paid");
+  });
+
+  it("follows the booking when it is already paid", () => {
+    expect(statementPaymentStatus({ total: 1180, paid: 0, bookingPaid: true, tolerance: 23 })).toBe("paid");
+  });
+
+  it("goes back to partial when the total grows after a payment (add-on)", () => {
+    // Paid 1,180 against a PI of 1,180, then a 590 add-on lifts the total to 1,770.
+    expect(statementPaymentStatus({ total: 1770, paid: 1180, bookingPaid: false, tolerance: 35 })).toBe("partially_paid");
+  });
+});
+
+describe("bookingNoLongerOwes", () => {
+  it("is true for cancelled, no-show, waived, prepaid and posted-to-bill", () => {
+    expect(bookingNoLongerOwes({ status: "cancelled", payment_status: "pending" })).toBe(true);
+    expect(bookingNoLongerOwes({ status: "no_show", payment_status: "pending" })).toBe(true);
+    expect(bookingNoLongerOwes({ status: "confirmed", payment_status: "waived" })).toBe(true);
+    expect(bookingNoLongerOwes({ status: "confirmed", payment_status: "posted_to_bill" })).toBe(true);
+  });
+
+  it("is false while the booking is live and owing or paid", () => {
+    expect(bookingNoLongerOwes({ status: "confirmed", payment_status: "pending" })).toBe(false);
+    expect(bookingNoLongerOwes({ status: "checked_out", payment_status: "paid" })).toBe(false);
+  });
+});
+
+describe("mirroredRowsToRemove", () => {
+  it("removes only mirrors whose booking payment is no longer verified", () => {
+    const existing = [
+      { payment_reference: bookingPaymentMarker("a") },
+      { payment_reference: bookingPaymentMarker("b") },
+      { payment_reference: "pay_manual" },
+      { payment_reference: null },
+    ];
+    expect(mirroredRowsToRemove(existing, ["a"])).toEqual([{ payment_reference: bookingPaymentMarker("b") }]);
   });
 });
