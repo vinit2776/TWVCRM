@@ -58,6 +58,7 @@ export interface Location {
   unifi_console_id?: string | null;
   /** 'repository' (default) = issue from pre-uploaded pool; 'unifi_api' | 'ruijie_api' = generate on-demand. */
   wifi_voucher_mode?: string | null;
+  wifi_ssid?: string | null;
   /** Ruijie Cloud network group ID (site identifier). Set only for ruijie_api locations. */
   ruijie_group_id?: number | null;
   /** Icon keys shown in the proposal PDF amenities strip. Defaults to ["wifi","coffee","printer","meeting"]. */
