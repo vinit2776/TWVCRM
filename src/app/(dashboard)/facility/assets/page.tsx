@@ -132,7 +132,7 @@ export default function FacilityAssetsPage() {
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, code, serial, MAC…" className="pl-9" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, code, serial, make, model… (e.g. hvac 68)" className="pl-9" />
         </div>
         <select value={locationId} onChange={(e) => setLocationId(e.target.value)} className="h-10 px-2 rounded-md border bg-background text-sm">
           <option value="">All locations</option>
