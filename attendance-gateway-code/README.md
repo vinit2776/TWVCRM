@@ -217,7 +217,11 @@ An employee adds every place they went, in order, and can tick "Return to first
 stop" for a round trip. Their own branch is filled in as the starting point. The
 server sends all the stops to LocationIQ's driving directions in one call and stores
 the road distance of each leg and the total. Whatever distance the browser showed
-is ignored: the route is worked out again when the trip is submitted. Up to 6 photos
+is ignored: the route is worked out again when the trip is submitted. The coordinates
+behind each stop are only taken from the browser where they fall inside the
+`PLACES_VIEWBOX` area that address search itself is bounded to — otherwise the stop's
+address is geocoded on the server instead, so the places an approver reads are always
+the places that were measured. Up to 6 photos
 (receipts, parking slips) can be attached; the phone shrinks them to a 1000px JPEG
 first and they are stored in `field_trip_photos`.
 
