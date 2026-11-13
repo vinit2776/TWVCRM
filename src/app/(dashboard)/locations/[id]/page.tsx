@@ -14,6 +14,7 @@ import {
   Layers,
   Zap,
   ConciergeBell,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,12 +27,14 @@ import { SpaceAnalyticsPanel } from "@/components/spaces/space-analytics";
 import { LocationFormDialog } from "@/components/locations/location-form-dialog";
 import { ElectricityConfigTab } from "@/components/locations/electricity-config-tab";
 import { LocationServicesTab } from "@/components/locations/location-services-tab";
+import { LocationProposalsTab } from "@/components/locations/location-proposals-tab";
+import { canEditProposalSettings } from "@/lib/location-proposal-settings";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { canEditAgreementTerms } from "@/lib/agreement-terms";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import type { Location, LocationFloor, SpaceUnit, SpaceAnalytics } from "@/types";
 
-type Tab = "overview" | "spaces" | "analytics" | "electricity" | "services";
+type Tab = "overview" | "spaces" | "analytics" | "electricity" | "services" | "proposals";
 
 export default function LocationDetailPage({
   params,
@@ -66,6 +69,7 @@ export default function LocationDetailPage({
   const { user } = useCurrentUser();
   const canEditElectricity = user?.role === "admin" || user?.role === "manager";
   const canEditTerms = canEditAgreementTerms(user?.role);
+  const canEditProposals = canEditProposalSettings(user?.role);
 
   // ── Fetchers ─────────────────────────────────────────────────────────────
   const fetchLocation = useCallback(async () => {
@@ -230,9 +234,10 @@ export default function LocationDetailPage({
 
       {/* Tab bar */}
       <div className="flex border-b gap-1 flex-wrap">
-        {(["overview", "spaces", "analytics", "electricity", "services"] as Tab[]).map((t) => {
+        {(["overview", "spaces", "analytics", "electricity", "services", "proposals"] as Tab[]).map((t) => {
           if (t === "electricity" && !canEditElectricity) return null;
           if (t === "services" && !canEditTerms) return null;
+          if (t === "proposals" && !canEditTerms) return null;
           return (
             <button
               key={t}
@@ -248,6 +253,7 @@ export default function LocationDetailPage({
               {t === "analytics" && <BarChart3 className="inline mr-1.5 h-3.5 w-3.5" />}
               {t === "electricity" && <Zap className="inline mr-1.5 h-3.5 w-3.5" />}
               {t === "services" && <ConciergeBell className="inline mr-1.5 h-3.5 w-3.5" />}
+              {t === "proposals" && <FileText className="inline mr-1.5 h-3.5 w-3.5" />}
               {t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           );
@@ -577,6 +583,17 @@ export default function LocationDetailPage({
           canEditAgreementTerms={canEditTerms}
           initialAmenityIcons={location.proposal_amenity_icons}
           initialAgreementTerms={location.agreement_terms}
+        />
+      )}
+
+      {/* ── PROPOSALS TAB ────────────────────────────────────────────────── */}
+      {tab === "proposals" && (
+        <LocationProposalsTab
+          locationId={id}
+          canEdit={canEditProposals}
+          initialTerms={location.proposal_terms}
+          initialDefaults={location.proposal_defaults}
+          onSaved={fetchLocation}
         />
       )}
 
