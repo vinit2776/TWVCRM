@@ -1,6 +1,7 @@
 "use client";
 
 import { cycleSpan, outsideCycleWarning } from "@/lib/procurement/service-report-period";
+import { CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { amcNotReceived, assetsNeedingDetails, linesWithoutAsset, receiptHref, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
@@ -2115,6 +2116,46 @@ export default function PurchaseOrderDetailPage() {
                 />
               </div>
             </div>
+            {po && (() => {
+              const opening = po.opening_cycles ?? 0;
+              const reports = [...((po.po_service_reports as PoServiceReport[] | undefined) ?? [])].sort((x, y) => x.cycle_number - y.cycle_number);
+              const total = (po.cycle_count ?? 0) + opening;
+              const done = opening + reports.length;
+              const unit = po.billing_cycle ? CYCLE_UNIT_LABEL[po.billing_cycle] : "cycle";
+              const billFor = (id: string) => (po.vendor_bills ?? []).find((b) => b.service_report_id === id);
+              return (
+                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm space-y-2">
+                  <p>
+                    <span className="font-medium">{done} of {total} {unit}s serviced</span>
+                    <span className="text-muted-foreground"> · {Math.max(0, total - done)} to go</span>
+                  </p>
+                  <details>
+                    <summary className="cursor-pointer text-xs text-muted-foreground">Previous {unit}s ({done})</summary>
+                    <ul className="mt-2 space-y-1.5 text-xs">
+                      {done === 0 && <li className="text-muted-foreground">None yet. This is the first.</li>}
+                      {opening > 0 && (
+                        <li className="text-muted-foreground">
+                          {opening === 1 ? `${unit} 1` : `${unit}s 1 to ${opening}`}: serviced, invoiced and paid before this contract was entered here.
+                        </li>
+                      )}
+                      {reports.map((r) => {
+                        const bill = billFor(r.id);
+                        return (
+                          <li key={r.id} className="flex flex-wrap justify-between gap-x-3">
+                            <span>
+                              <span className="font-medium">{unit} {r.cycle_number}</span>: serviced {formatDate(r.service_date ?? r.period_to)}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {bill ? `Invoiced ${bill.bill_number} · ${bill.payment_status === "paid" ? "paid" : "not paid yet"}` : "Not invoiced yet"}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </details>
+                </div>
+              );
+            })()}
             {(() => {
               const span = po ? cycleSpan(po, parseInt(srCycleNumber) || 0) : null;
               const warn = srServiceDate ? outsideCycleWarning(srServiceDate, span) : null;
