@@ -47,13 +47,15 @@ interface Props {
   onApply: (plan: PrefillPlan, file: File, extracted: ExtractedAmcProposal, answers: PrefillAnswers) => number;
   /** True while a proposal is being read or is waiting for "Fill in the steps" / "Don't use it". */
   onPendingChange?: (pending: boolean) => void;
+  /** Called when the user drops an applied proposal, so the wizard can lift the lock the proposal put on its fields. */
+  onDiscard?: () => void;
 }
 
 /**
  * Optional first step: read the vendor's proposal and fill in what it says. Nothing changes
  * until the user presses the button, and the next steps still show every value for checking.
  */
-export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCreated, onApply, onPendingChange }: Props) {
+export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCreated, onApply, onPendingChange, onDiscard }: Props) {
   const [state, setState] = useState<State>({ status: "idle" });
   const [file, setFile] = useState<File | null>(null);
   const pending = state.status === "loading" || state.status === "ok";
@@ -144,6 +146,7 @@ export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCre
   };
 
   const reset = () => {
+    if (state.status === "applied") onDiscard?.();
     seq.current++;
     setFile(null);
     setAnswers({});

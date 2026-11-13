@@ -814,12 +814,8 @@ export async function PUT(
     const opening = prData.opening_cycles ?? Number(pr.opening_cycles ?? 0);
     for (const item of items) {
       const cap = item.linked_asset_id ? capByAsset.get(item.linked_asset_id) : undefined;
-      if (cap === undefined) {
-        return NextResponse.json(
-          { error: "This request was set up from a proposal, so its assets can't be changed. Upload a corrected proposal or start a new request." },
-          { status: 422 }
-        );
-      }
+      // An asset swapped in after the proposal was read has no proposal ceiling of its own.
+      if (cap === undefined) continue;
       if (exceedsProposalCap({ quantity: item.quantity, perCycleCost: item.estimated_price ?? 0, cap }, opening)) {
         return NextResponse.json({ error: proposalCapMessage(cap) }, { status: 422 });
       }
