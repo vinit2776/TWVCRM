@@ -2524,6 +2524,8 @@ export interface PoServiceReport {
   cycle_number: number;
   period_from: string;
   period_to: string;
+  /** The day the visit happened; older reports only have the cycle's period. */
+  service_date?: string | null;
   report_file_url?: string | null;
   notes?: string | null;
   recorded_by?: string | null;

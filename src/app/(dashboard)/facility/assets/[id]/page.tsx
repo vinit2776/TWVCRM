@@ -112,6 +112,7 @@ interface ServiceReport {
   cycle_number: number;
   period_from: string | null;
   period_to: string | null;
+  service_date?: string | null;
   report_file_url: string | null;
   notes: string | null;
   created_at: string;
@@ -523,7 +524,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                 // Last service of any kind
                 const allServiceDates: string[] = [
                   ...amcEvents.map((e) => e.event_date),
-                  ...serviceReports.map((r) => r.period_to || r.created_at).filter((d): d is string => !!d),
+                  ...serviceReports.map((r) => r.service_date || r.period_to || r.created_at).filter((d): d is string => !!d),
                 ].sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
                 const lastServiceDate = allServiceDates[0] ?? null;
                 // Next scheduled — earliest future next_scheduled_date across events
@@ -563,7 +564,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                       </div>
                       <div>
                         <div className="text-xs text-muted-foreground">Periodic Services (6mo)</div>
-                        <div className="text-lg font-bold text-blue-700">{last6moPreventive + serviceReports.filter(r => r.period_to && new Date(r.period_to) >= sixMonthsAgo).length}</div>
+                        <div className="text-lg font-bold text-blue-700">{last6moPreventive + serviceReports.filter(r => (r.service_date || r.period_to) && new Date((r.service_date || r.period_to)!) >= sixMonthsAgo).length}</div>
                       </div>
                       <div>
                         <div className="text-xs text-muted-foreground">Last Service</div>
@@ -779,9 +780,11 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                           {r.po_number && <code className="text-[10px] font-mono text-muted-foreground">{r.po_number}</code>}
                           <span className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
                             <Calendar className="h-3 w-3" />
-                            {r.period_from && r.period_to
-                              ? `${formatDate(r.period_from)} — ${formatDate(r.period_to)}`
-                              : formatDate(r.created_at)}
+                            {r.service_date
+                              ? `Serviced ${formatDate(r.service_date)}`
+                              : r.period_from && r.period_to
+                                ? `${formatDate(r.period_from)} — ${formatDate(r.period_to)}`
+                                : formatDate(r.created_at)}
                           </span>
                         </div>
                         {r.notes && <p className="text-sm">{r.notes}</p>}
@@ -1142,7 +1145,7 @@ function buildAssetMemory(m: MemoryInput): string[] {
   const lastReport = m.serviceReports[0];
   const lastDate = (() => {
     const a = lastEvent ? new Date(lastEvent.event_date) : null;
-    const b = lastReport?.period_to ? new Date(lastReport.period_to) : (lastReport ? new Date(lastReport.created_at) : null);
+    const b = (lastReport?.service_date || lastReport?.period_to) ? new Date((lastReport.service_date || lastReport.period_to)!) : (lastReport ? new Date(lastReport.created_at) : null);
     if (a && b) return a > b ? a : b;
     return a ?? b;
   })();

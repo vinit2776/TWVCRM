@@ -1,5 +1,6 @@
 "use client";
 
+import { cycleSpan, outsideCycleWarning } from "@/lib/procurement/service-report-period";
 import { amcNotReceived, assetsNeedingDetails, linesWithoutAsset, receiptHref, AMC_NOT_RECEIVED_WARNING, type AssetForAmc } from "@/lib/procurement/amc-received";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
@@ -401,8 +402,7 @@ export default function PurchaseOrderDetailPage() {
 
   // Record Service Report
   const [srCycleNumber, setSrCycleNumber] = useState("");
-  const [srPeriodFrom, setSrPeriodFrom] = useState("");
-  const [srPeriodTo, setSrPeriodTo] = useState("");
+  const [srServiceDate, setSrServiceDate] = useState("");
   const [srFile, setSrFile] = useState<File | null>(null);
   const [srNotes, setSrNotes] = useState("");
   const [srUploading, setSrUploading] = useState(false);
@@ -683,8 +683,7 @@ export default function PurchaseOrderDetailPage() {
     if (!srCycleNumber || isNaN(cycleNum) || cycleNum < 1) {
       toast.error("Cycle number is required"); return;
     }
-    if (!srPeriodFrom) { toast.error("Period start date is required"); return; }
-    if (!srPeriodTo) { toast.error("Period end date is required"); return; }
+    if (!srServiceDate) { toast.error("Enter the date the service visit happened"); return; }
     if (!srFile) { toast.error("Please upload the service report file"); return; }
 
     setSrUploading(true);
@@ -703,8 +702,7 @@ export default function PurchaseOrderDetailPage() {
         body: JSON.stringify({
           po_id: po?.id,
           cycle_number: cycleNum,
-          period_from: srPeriodFrom,
-          period_to: srPeriodTo,
+          service_date: srServiceDate,
           report_file_url: fileUrl,
           notes: srNotes.trim() || null,
         }),
@@ -718,8 +716,7 @@ export default function PurchaseOrderDetailPage() {
       toast.success(`Service report for Cycle ${cycleNum} recorded`);
       setActionDialog(null);
       setSrCycleNumber("");
-      setSrPeriodFrom("");
-      setSrPeriodTo("");
+      setSrServiceDate("");
       setSrFile(null);
       setSrNotes("");
       if (srFileRef.current) srFileRef.current.value = "";
@@ -1901,8 +1898,7 @@ export default function PurchaseOrderDetailPage() {
           bills={(po.vendor_bills ?? []) as CycleBill[]}
           onRecordReport={() => {
             setSrCycleNumber(String((po.opening_cycles ?? 0) + (po.po_service_reports?.length ?? 0) + 1));
-            setSrPeriodFrom("");
-            setSrPeriodTo("");
+            setSrServiceDate("");
             setActionDialog("record_service_report");
           }}
           onUploadInvoice={() => {
@@ -2088,8 +2084,7 @@ export default function PurchaseOrderDetailPage() {
           setActionDialog(null);
           setSrFile(null);
           setSrCycleNumber("");
-          setSrPeriodFrom("");
-          setSrPeriodTo("");
+          setSrServiceDate("");
           setSrNotes("");
           if (srFileRef.current) srFileRef.current.value = "";
         }}
@@ -2110,23 +2105,26 @@ export default function PurchaseOrderDetailPage() {
                   onChange={(e) => setSrCycleNumber(e.target.value)}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Period From <span className="text-red-500">*</span></Label>
+              <div className="space-y-1.5 col-span-2">
+                <Label>Service date <span className="text-red-500">*</span></Label>
                 <Input
                   type="date"
-                  value={srPeriodFrom}
-                  onChange={(e) => setSrPeriodFrom(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Period To <span className="text-red-500">*</span></Label>
-                <Input
-                  type="date"
-                  value={srPeriodTo}
-                  onChange={(e) => setSrPeriodTo(e.target.value)}
+                  max={new Date().toISOString().slice(0, 10)}
+                  value={srServiceDate}
+                  onChange={(e) => setSrServiceDate(e.target.value)}
                 />
               </div>
             </div>
+            {(() => {
+              const span = po ? cycleSpan(po, parseInt(srCycleNumber) || 0) : null;
+              const warn = srServiceDate ? outsideCycleWarning(srServiceDate, span) : null;
+              return (
+                <div className="space-y-1 -mt-2 text-xs">
+                  {span && <p className="text-muted-foreground">Cycle {srCycleNumber} runs {formatDate(span.from)} – {formatDate(span.to)}. The visit date is the day the technician came.</p>}
+                  {warn && <p className="text-amber-800">{warn}</p>}
+                </div>
+              );
+            })()}
             <div className="space-y-1.5">
               <Label>Service Report File <span className="text-red-500">*</span></Label>
               {srFile ? (
@@ -2157,8 +2155,7 @@ export default function PurchaseOrderDetailPage() {
                 setActionDialog(null);
                 setSrFile(null);
                 setSrCycleNumber("");
-                setSrPeriodFrom("");
-                setSrPeriodTo("");
+                setSrServiceDate("");
                 setSrNotes("");
               }}
             >
