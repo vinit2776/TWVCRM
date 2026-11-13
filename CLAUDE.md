@@ -192,6 +192,7 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 | Daily 10:30 IST | `/api/cron/enquiry-reconcile` | Auto-resolve enquiries: contract active → Converted, lead lost → Not interested, 21 quiet days → No response (only enquiries received after `app_settings.enquiry_auto_resolve_effective_from`) |
 | Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 | Daily 10:00 IST | `/api/cron/rent-gap-alert` | In-app + push alert to admin/manager/accounts/sales_rep for each new rent gap that can be raised from Billing → Unbilled → Rent gap (staff only, once per contract-month) |
+| Daily 10:15 IST | `/api/cron/voucher-expiry-alert` | A UniFi voucher is capped at one year (`src/lib/voucher-validity.ts`), so on a longer contract it stops before the contract does. In-app + push alert to admin/manager/sales_rep 30 days ahead and again in the last week, per contract; staff then click **Replace** on the contract's Vouchers card (re-issues on the controller). Staff only — revokes, issues and emails nothing |
 | Hourly at :07 | `/api/cron/energy-ledger-capture` | Extend each OneGrid-enabled location's energy ledger (`location_energy_readings`) from its last stored row; feeds the Usage baseline |
 | Hourly at :17 | `/api/cron/wifi-ledger-capture` | Copy each UniFi center's Wi-Fi usage (per device and site total) into `wifi_client_hourly` / `wifi_site_hourly` (console keeps ~7 days) and `wifi_client_daily` / `wifi_site_daily` (~90 days) before it ages out; read-only against UniFi, sends nothing |
 | Daily 03:00 IST | `/api/cron/customer-value` | Recompute every customer's monthly Value figures and today's score into `customer_value_monthly` / `customer_value_scores` (writes only those two tables; sends nothing) |
@@ -277,6 +278,15 @@ A live contract (`active`, or `renewal_in_progress` before its end date — `isC
 - **Renewal exception**: contracts with `deposit_carried_from` bypass the gate
 - Admin bypass: include `payment_override_reason` in PATCH body (logged to audit)
 - **Part-paid deposit (>50%)**: when the deposit is being collected in parts and **more than 50% of the adjusted required amount has actually been received** (`src/lib/deposit-activation.ts`), the deposit leg of the gate is satisfied with a warning: the PATCH must carry `acknowledge_partial_deposit: true` (else 409 `PARTIAL_DEPOSIT_ACK_REQUIRED`), the contract claims the proposal's deposit and snapshots it as `pending` with a note, and when the last part is paid `syncContractDepositFromParts` flips the contract's deposit to paid. The pro-rata / first invoice is still required, and the monthly GST invoice (`send-invoice`) follows the same >50% rule. Any role that can activate may do this. Exactly 50% is not enough. Both the proposal and the contract show a "deposit pending" warning until the balance is in.
+
+### Booking PI (optional proforma invoice for a walk-in/guest booking)
+
+Staff can send a PI with the booking's Razorpay link (Collect Payment → **Send PI + link**; `GET /api/bookings/[id]/pi` previews the PDF and sends nothing, `POST` emails it). It is optional: paying at the counter is unchanged.
+
+- Sending creates a billing statement owned by the booking (`created_via = booking_pi`, due **PI date + 7 days**) so it lists in Receivables as **Booking PI**. It shares the booking's link and is kept in step by `syncBookingPiStatement` (`src/lib/booking-pi-statement-server.ts`): payments (link, counter, accounts' verification), add-ons and rate edits, waive/complimentary all re-sync it; cancel or no-show voids it and cancels the link (a part-paid one is left, with a note, for an offline refund).
+- **One Tally handoff: the booking's own task** (after checkout, once paid). The statement never reaches the Tally Inbox (`handleStatementPaid` skips it). Recording a payment on it, sending it, or raising its GST invoice from Receivables is refused with a pointer to the booking.
+- Only **admin and accounts** can mark a reported manual payment paid (`PATCH /api/booking-payments/[id]`). Payments by link are marked paid by the Razorpay webhook with no action.
+- Reminders for these rows come in a second PR; until then the reminder cron skips them.
 
 ### Staged security deposit (parts)
 

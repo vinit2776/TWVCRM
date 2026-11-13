@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { cycleSpan, serviceDateProblem } from "@/lib/procurement/service-report-period";
 
 const createSchema = z.object({
   po_id: z.string().uuid(),
   cycle_number: z.number().int().positive(),
-  period_from: z.string().min(1, "Period start is required"),
-  period_to: z.string().min(1, "Period end is required"),
+  // The day the visit happened. The cycle's own dates are filled in from the cycle number.
+  service_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Service date is required"),
   report_file_url: z.string().url().nullish(),
   notes: z.string().nullish(),
 });
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
   // Validate PO exists and is a service PO
   const { data: po } = await supabase
     .from("purchase_orders")
-    .select("id, po_type, status")
+    .select("id, po_type, status, amc_start_date, amc_end_date, service_start_date, billing_cycle")
     .eq("id", parsed.data.po_id)
     .single();
 
@@ -59,6 +60,12 @@ export async function POST(request: NextRequest) {
   if (["cancelled"].includes(po.status)) {
     return NextResponse.json({ error: "Cannot add a service report to a cancelled order" }, { status: 422 });
   }
+
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  const dateProblem = serviceDateProblem(parsed.data.service_date, today);
+  if (dateProblem) return NextResponse.json({ error: dateProblem }, { status: 422 });
+  // period_from / period_to are the billing cycle the report belongs to; without cycle dates they fall back to the visit day.
+  const span = cycleSpan(po, parsed.data.cycle_number) ?? { from: parsed.data.service_date, to: parsed.data.service_date };
 
   // Check for duplicate cycle number
   const { count: dupCount } = await supabase
@@ -76,8 +83,9 @@ export async function POST(request: NextRequest) {
     .insert({
       po_id: parsed.data.po_id,
       cycle_number: parsed.data.cycle_number,
-      period_from: parsed.data.period_from,
-      period_to: parsed.data.period_to,
+      service_date: parsed.data.service_date,
+      period_from: span.from,
+      period_to: span.to,
       report_file_url: parsed.data.report_file_url ?? null,
       notes: parsed.data.notes ?? null,
       recorded_by: dbUser.id,

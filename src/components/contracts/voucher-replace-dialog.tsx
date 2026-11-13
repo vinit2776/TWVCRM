@@ -47,6 +47,8 @@ export function VoucherReplaceDialog({
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [newVoucherCode, setNewVoucherCode] = useState("");
   const [sentToCount, setSentToCount] = useState(0);
+  // Shown beside the Verify & Replace button rather than in a toast.
+  const [replaceError, setReplaceError] = useState<string | null>(null);
 
   const resetState = () => {
     setStep("confirm");
@@ -57,6 +59,7 @@ export function VoucherReplaceDialog({
     setExpiresAt(null);
     setNewVoucherCode("");
     setSentToCount(0);
+    setReplaceError(null);
   };
 
   const handleClose = (isOpen: boolean) => {
@@ -103,11 +106,12 @@ export function VoucherReplaceDialog({
   // Step 2: Verify OTP & Replace
   const handleVerifyAndReplace = async () => {
     if (otpCode.length !== 6) {
-      toast.error("Enter a 6-digit OTP code");
+      setReplaceError("Enter a 6-digit OTP code.");
       return;
     }
 
     setLoading(true);
+    setReplaceError(null);
     try {
       const res = await fetch(
         `/api/contracts/${contractId}/vouchers/${issuanceId}/replace`,
@@ -130,10 +134,10 @@ export function VoucherReplaceDialog({
         toast.success("Voucher replaced successfully");
         onSuccess();
       } else {
-        toast.error(json.error || "Replacement failed");
+        setReplaceError(json.error || "Replacement failed");
       }
     } catch {
-      toast.error("Replacement failed");
+      setReplaceError("Replacement failed — check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -244,6 +248,10 @@ export function VoucherReplaceDialog({
                 autoFocus
               />
             </div>
+
+            {replaceError && (
+              <p role="alert" className="text-sm text-red-600">{replaceError}</p>
+            )}
 
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setStep("confirm")}>

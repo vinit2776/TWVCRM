@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import {
@@ -82,7 +83,9 @@ export async function POST(request: NextRequest) {
     .select(`id, bill_number, invoice_number, invoice_date, total_amount, approval_status,
              procurement_vendors(name)`)
     .eq("vendor_id", input.vendor_id)
-    .neq("approval_status", "withdrawn")
+    // Rejected and withdrawn bills are out of play, same as the hard duplicate check on save: a re-submission after
+    // a rejection must not be flagged as a duplicate of the bill it replaces.
+    .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)
     .gte("invoice_date", cutoff.split("T")[0])
     .order("invoice_date", { ascending: false })
     .limit(50);

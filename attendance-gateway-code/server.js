@@ -30,7 +30,8 @@ const ONBOARDING = require('./onboarding-content');
 const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, reportKindFromPath, REPORTS: DAILY_REPORTS } = require('./daily-report');
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
-  ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
+  ACTIVITY_CATEGORIES, categoryOf, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
+  fieldChanges, activitySentence, changesAndDetails,
 } = require('./activity-log');
 const {
   formatEmployeeId, parseEmployeeNumber, nextEmployeeNumber, renameEmployeeStatements,
@@ -300,6 +301,10 @@ const SETTING_DEFS = [
     label: 'Biometric device serial number',
     help: "The ZKTeco ADMS push protocol has no header authentication — the device is identified only by this serial, which makes it the sole credential on /iclock/*. While it is empty those endpoints reject every push, so leave it blank until the device is installed. Setting it to the wrong value silently drops real punches.",
     fallback: '',
+    // Not `secret`: a wrong serial drops real punches silently, so an admin has to be
+    // able to read the current one back and check it against the device. It is still a
+    // credential, so its value never reaches the activity log or the CSV export.
+    logValue: false,
   },
   {
     key: 'DEVICE_CLOCK_OFFSET_MINUTES',
@@ -401,6 +406,15 @@ const SETTING_DEFS_BY_KEY = Object.fromEntries(SETTING_DEFS.map(d => [d.key, d])
 // environment supplies one, so an unconfigured deployment is unusable by a device
 // rather than open to one — an attacker cannot guess it, and it changes every restart.
 const EPHEMERAL_PUNCH_API_KEY = crypto.randomBytes(24).toString('hex');
+
+// Whether a setting's value may be written into the activity log and its CSV export.
+// Two different properties, deliberately separate: `secret` also hides the value in
+// the form (never pre-filled, cleared by a checkbox), which suits an API key but not
+// a serial an admin has to verify against the device. `logValue: false` keeps a
+// setting readable on the page while still only ever recording that it changed.
+function hidesValue(def) {
+  return !!def.secret || def.logValue === false;
+}
 
 // Resolved settings, refreshed once per request (see loadSettings). Seeded from env
 // and fallbacks so that any code path reached before the first refresh — a crash
@@ -778,7 +792,8 @@ const SCHEMA_SQL = `
     target_id TEXT NOT NULL DEFAULT '',
     details TEXT NOT NULL DEFAULT '',
     ip TEXT NOT NULL DEFAULT '',
-    user_agent TEXT NOT NULL DEFAULT ''
+    user_agent TEXT NOT NULL DEFAULT '',
+    changes TEXT NOT NULL DEFAULT ''
   );
   CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at);
   CREATE INDEX IF NOT EXISTS idx_activity_log_emp_created ON activity_log(employee_id, created_at);
@@ -1009,6 +1024,8 @@ async function init() {
   // No longer read: anyone can punch from outside the office now (as 'remote'). Kept
   // so older databases still match the schema.
   try { await db.exec('ALTER TABLE employees ADD COLUMN onsite_enabled INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
+  // Before → after for an edit, as JSON (see activity-log.js). '' on older entries.
+  try { await db.exec("ALTER TABLE activity_log ADD COLUMN changes TEXT NOT NULL DEFAULT ''"); } catch { /* already exists */ }
   try { await db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
   // The biometric device's own enrolled user ID (small integer, e.g. "1"), distinct
   // from this app's EMP-00N id, so ADMS pushes can be matched to an employee.
@@ -1357,7 +1374,10 @@ async function ingestAttlogText(sn, text, cmdId = null) {
     received++;
     const employee = await getEmployeeByDevicePin(record.pin);
     if (!employee) {
-      logSecurityEvent('adms_unmapped_pin', { pin: record.pin, timestamp: record.timestamp });
+      // Not the PIN itself: "unmapped" only means no employee has it *yet*, so this
+      // is routinely a real enrollee's live credential waiting to be mapped. The
+      // timestamp is what diagnoses the gap; /admin/device-pins has the mapping.
+      logSecurityEvent('adms_unmapped_pin', { timestamp: record.timestamp });
       continue;
     }
     const { inserted } = await ingestBiometricPunch(employee.id, correctDeviceTimestamp(record.timestamp));
@@ -1396,12 +1416,12 @@ const requestContext = new AsyncLocalStorage();
 
 // Never lets a logging failure break the action being logged — the punch or approval
 // already happened; a missing log line is the lesser problem.
-async function writeActivity({ category, action, employeeId = null, actorUsername, actorRole, targetType = '', targetId = '', details = '' }) {
+async function writeActivity({ category, action, employeeId = null, actorUsername, actorRole, targetType = '', targetId = '', details = '', changes = null }) {
   const ctx = requestContext.getStore() || {};
   const user = ctx.user;
   try {
     await db.prepare(
-      'INSERT INTO activity_log (created_at, category, action, employee_id, actor_username, actor_role, target_type, target_id, details, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO activity_log (created_at, category, action, employee_id, actor_username, actor_role, target_type, target_id, details, ip, user_agent, changes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       formatTimestamp(new Date()), category, action, employeeId || null,
       actorUsername !== undefined ? actorUsername : (user ? user.username : ''),
@@ -1409,6 +1429,7 @@ async function writeActivity({ category, action, employeeId = null, actorUsernam
       targetType, String(targetId), details,
       ctx.req ? getClientIp(ctx.req) : '',
       ctx.req ? String(ctx.req.headers['user-agent'] || '').slice(0, 300) : '',
+      Array.isArray(changes) ? JSON.stringify(changes) : '',
     );
   } catch (err) {
     console.error('[activity-log] could not record', action, err && err.message);
@@ -1418,9 +1439,11 @@ async function writeActivity({ category, action, employeeId = null, actorUsernam
 async function logActivity(action, employeeId, details = '', actor = {}) {
   await writeActivity({ category: categoryOf(action), action, employeeId, details, ...actor });
 }
-// employeeId is whose record the action concerns, when it concerns one.
-async function logAdminAction(actorUsername, action, targetType, targetId, details = '', employeeId = targetType === 'employee' ? targetId : null) {
-  await writeActivity({ category: 'admin', action, employeeId, actorUsername, targetType, targetId, details });
+// employeeId is whose record the action concerns, when it concerns one. `changes` is
+// the before → after list from fieldChanges() for an edit; values of secrets must be
+// marked hidden there, since the log is readable in-app and exported to CSV.
+async function logAdminAction(actorUsername, action, targetType, targetId, details = '', employeeId = targetType === 'employee' ? targetId : null, changes = null) {
+  await writeActivity({ category: 'admin', action, employeeId, actorUsername, targetType, targetId, details, changes });
 }
 async function getNotifications(employeeId) {
   return await db.prepare('SELECT * FROM notifications WHERE employee_id = ? ORDER BY created_at DESC').all(employeeId);
@@ -2663,6 +2686,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
          it was intercepting taps before they reached the links. */
       @media (max-width: 640px) {
         .main { margin-left: 0; }
+        .activity-changes { grid-template-columns: 1fr !important; }
         .wrap { padding: calc(56px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom)); }
         .topbar-mobile { display: flex; justify-content: flex-end; align-items: center; gap: 14px; margin-bottom: 10px; }
         nav {
@@ -4497,38 +4521,53 @@ async function queryActivity(filters, limit) {
   return await db.prepare(`SELECT * FROM activity_log ${where} ORDER BY created_at DESC, id DESC${limit ? ' LIMIT ?' : ''}`)
     .all(...args, ...(limit ? [limit] : []));
 }
+// Names for the sentences: employees by id, and which employee each login belongs to
+// (an admin's username isn't their employee id).
+async function activityLookups(employees) {
+  const names = Object.fromEntries(employees.map(e => [e.id, e.name]));
+  const accounts = Object.fromEntries((await db.prepare('SELECT username, employee_id FROM users').all())
+    .map(u => [u.username, u.employee_id || '']));
+  return { employeeName: (id) => names[id] || '', accountEmployee: (username) => accounts[username] || '' };
+}
+function renderActivityChanges(list) {
+  if (!list || !list.length) return '';
+  const cell = (c) => {
+    if (c.hidden) return '<span style="color:#7C8896;font-style:italic;">changed (value hidden)</span>';
+    if (c.note) return `<span style="color:#4C5A68;">${escapeHtml(c.note)}</span>`;
+    return `<span style="color:#9AA5B1;text-decoration:line-through;">${escapeHtml(c.from || '(none)')}</span><span style="color:#B0B8C1;margin:0 6px;">→</span><span style="font-weight:600;">${escapeHtml(c.to || '(none)')}</span>`;
+  };
+  return `<div class="activity-changes" style="margin-top:6px;border-left:3px solid #FFE0B2;padding:2px 0 2px 10px;display:grid;grid-template-columns:max-content 1fr;gap:3px 14px;font-size:0.9em;">
+    ${list.map(c => `<span style="color:#7C8896;">${escapeHtml(c.field)}</span><span>${cell(c)}</span>`).join('')}
+  </div>`;
+}
 async function renderActivityLog(user, filters) {
   const employees = await allEmployees();
-  const names = Object.fromEntries(employees.map(e => [e.id, e.name]));
+  const lookups = await activityLookups(employees);
   const rows = await queryActivity(filters, ACTIVITY_PAGE_LIMIT + 1);
   const truncated = rows.length > ACTIVITY_PAGE_LIMIT;
   const select = 'padding:6px;border-radius:6px;border:1px solid #D0D5DA;';
-  const who = (r) => {
-    const subject = r.employee_id
-      ? `<strong>${escapeHtml(names[r.employee_id] || r.employee_id)}</strong> <span style="color:#9AA5B1;">(${escapeHtml(r.employee_id)})</span>`
-      : '';
-    const actorName = r.actor_role === 'device' ? 'Biometric device'
-      : r.actor_role === 'system' ? 'System'
-      : names[r.actor_username] || r.actor_username;
-    // Only say who did it when it isn't the employee themselves.
-    const byOther = actorName && r.actor_username !== r.employee_id;
-    if (!subject) return escapeHtml(actorName || '—');
-    return `${subject}${byOther ? `<div style="color:#7C8896;font-size:0.85em;">by ${escapeHtml(actorName)}${r.actor_role && !['device', 'system'].includes(r.actor_role) ? ` (${escapeHtml(r.actor_role)})` : ''}</div>` : ''}`;
-  };
   const tableRows = rows.slice(0, ACTIVITY_PAGE_LIMIT).map(r => {
     const failed = r.action === 'login_failed' || r.action === 'login_blocked';
     const meta = [describeDevice(r.user_agent), r.ip].filter(Boolean).join(' · ');
+    const category = ACTIVITY_CATEGORIES.find(c => c.key === r.category);
+    const tag = failed ? 'Failed' : (category ? category.short : 'Other');
+    const sentence = activitySentence(r, lookups).map(p => (
+      p.kind === 'name' ? `<strong>${escapeHtml(p.text)}</strong>`
+        : p.kind === 'role' ? `<span style="color:#7C8896;">${escapeHtml(p.text)}</span>`
+          : escapeHtml(p.text)
+    )).join('');
+    const { changes, details } = changesAndDetails(r);
     return `
     <tr>
-      <td style="white-space:nowrap;color:#4C5A68;">${escapeHtml(r.created_at)}</td>
-      <td>${who(r)}</td>
-      <td>
-        <span style="display:inline-block;padding:2px 9px;border-radius:999px;font-size:0.85em;font-weight:600;${ACTIVITY_PILL_STYLE[failed ? 'failed' : r.category] || ACTIVITY_PILL_STYLE.other}">${escapeHtml(activityLabel(r))}</span>
-        ${r.details ? `<div style="margin-top:3px;">${escapeHtml(r.details)}</div>` : ''}
+      <td style="white-space:nowrap;color:#4C5A68;vertical-align:top;">${escapeHtml(String(r.created_at).slice(0, 10))}<br><span style="color:#7C8896;">${escapeHtml(String(r.created_at).slice(11, 16))}</span></td>
+      <td style="vertical-align:top;">
+        <div style="line-height:1.5;">${sentence} <span style="display:inline-block;margin-left:4px;padding:1px 8px;border-radius:999px;font-size:0.75em;font-weight:600;vertical-align:1px;${ACTIVITY_PILL_STYLE[failed ? 'failed' : r.category] || ACTIVITY_PILL_STYLE.other}">${escapeHtml(tag)}</span></div>
+        ${renderActivityChanges(changes)}
+        ${details ? `<div style="margin-top:3px;color:#4C5A68;font-size:0.92em;">${escapeHtml(details)}</div>` : ''}
         ${meta ? `<div style="color:#9AA5B1;font-size:0.82em;margin-top:2px;">${escapeHtml(meta)}</div>` : ''}
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="3" style="color:#9AA5B1;">No activity for these filters</td></tr>';
+  }).join('') || '<tr><td colspan="2" style="color:#9AA5B1;">No activity for these filters</td></tr>';
   const query = new URLSearchParams(Object.entries({ employee_id: filters.employeeId, category: filters.category, from: filters.from, to: filters.to }).filter(([, v]) => v)).toString();
 
   const body = `
@@ -4552,7 +4591,7 @@ async function renderActivityLog(user, filters) {
         <button type="submit" style="padding:7px 14px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Show</button>
       </form>
       ${truncated ? `<p style="color:#B26A00;font-size:0.88em;">Showing the latest ${ACTIVITY_PAGE_LIMIT}. Narrow the dates or pick an employee to see the rest, or download the CSV, which has everything.</p>` : ''}
-      <div style="overflow-x:auto;"><table><tr><th>Time</th><th>Who</th><th>What</th></tr>${tableRows}</table></div>
+      <div style="overflow-x:auto;"><table><tr><th>Time</th><th>What happened</th></tr>${tableRows}</table></div>
     </div>`;
   return pageShell('Activity Log', '', 'activity-log', body, user);
 }
@@ -6862,11 +6901,11 @@ async function handleRequest(req, res) {
   if (parsed.pathname === '/admin/activity-log.csv' && req.method === 'GET') {
     if (!isAdminRole(user)) { res.writeHead(403); return res.end('Admin access only.'); }
     const filters = activityFiltersFrom(parsed.searchParams);
-    const names = Object.fromEntries((await allEmployees()).map(e => [e.id, e.name]));
+    const lookups = await activityLookups(await allEmployees());
     const rows = await queryActivity(filters);
     await logAdminAction(user.username, 'download_report', 'activity_log', `${filters.from}..${filters.to}`, filters.employeeId || '', filters.employeeId || null);
     return sendCsv(res, `activity-log-${filters.from}-to-${filters.to}.csv`,
-      toCsv(ACTIVITY_CSV_HEADERS, rows.map(r => activityCsvRow(r, names[r.employee_id]))));
+      toCsv(ACTIVITY_CSV_HEADERS, rows.map(r => activityCsvRow(r, lookups))));
   }
 
   if (parsed.pathname === '/admin/remote-punches' && req.method === 'GET') {
@@ -7288,6 +7327,21 @@ async function handleRequest(req, res) {
     // cached form or a stray request without this field must not silently demote
     // someone, since account_role governs what the employee's login can do.
     const accountRole = ACCOUNT_ROLES.includes(form.account_role) ? form.account_role : currentAccountRole;
+    // What this save changes, for the Activity Log. Emp ID # and account role have
+    // entries of their own below, so they aren't repeated here.
+    const nameOfId = async (id) => { if (!id) return ''; const e = await getEmployee(id); return e ? e.name : id; };
+    const showShift = (start, end, custom) => (start && end ? `${start}–${end} (${Number(custom) ? 'custom' : 'branch timings'})` : '');
+    const editChanges = fieldChanges([
+      { label: 'Name', from: employee.name, to: name },
+      { label: 'Shift', from: showShift(employee.shift_start, employee.shift_end, employee.shift_custom), to: showShift(shift.start, shift.end, shift.custom) },
+      { label: 'Branch', from: employeeBranchLabel(employee.branch), to: employeeBranchLabel(branch) },
+      { label: 'Designation', from: employee.designation, to: designation },
+      { label: 'Employment type', from: employee.role, to: role },
+      { label: 'Reports to', from: await nameOfId(employee.reports_to), to: await nameOfId(reportsTo) },
+      { label: 'Date joined', from: employee.date_joined, to: dateJoined },
+      { label: 'Mobile', from: employee.mobile, to: mobile },
+      { label: 'Email', from: employee.email, to: email },
+    ]);
     await db.prepare(
       'UPDATE employees SET name = ?, shift_start = ?, shift_end = ?, shift_custom = ?, date_joined = ?, role = ?, designation = ?, branch = ?, reports_to = ?, mobile = ?, email = ? WHERE id = ?'
     ).run(name, shift.start, shift.end, shift.custom ? 1 : 0, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null, employeeId);
@@ -7309,7 +7363,11 @@ async function handleRequest(req, res) {
       await db.prepare('DELETE FROM sessions WHERE employee_id = ?').run(newId);
       await logAdminAction(user.username, 'change_account_role', 'employee', newId, `${name}: ${currentAccountRole} -> ${accountRole}`);
     }
-    await logAdminAction(user.username, 'edit_employee', 'employee', newId, name);
+    // A save that only changed the Emp ID # or account role is already fully described
+    // by those entries; one that changed nothing at all still says so.
+    if (editChanges.length || (newId === employeeId && accountRole === currentAccountRole)) {
+      await logAdminAction(user.username, 'edit_employee', 'employee', newId, name, newId, editChanges);
+    }
     res.writeHead(302, {
       Location: newId !== employeeId
         ? `/admin/employee-registration?renamed=${encodeURIComponent(newId)}&from=${encodeURIComponent(employeeId)}`
@@ -7493,6 +7551,7 @@ async function handleRequest(req, res) {
     const form = await readFormBody(req);
     const changed = [];
     const invalid = [];
+    const settingChanges = [];
     for (const def of SETTING_DEFS) {
       const submitted = form[def.key];
       const clearing = form[`__clear__${def.key}`] === '1';
@@ -7508,10 +7567,11 @@ async function handleRequest(req, res) {
       if (def.secret && !clearing && submitted === '') continue;
       const value = clearing ? '' : String(submitted === undefined ? '' : submitted).trim();
       if (value === '') {
-        const existing = await db.prepare('SELECT key FROM app_settings WHERE key = ?').get(def.key);
+        const existing = await db.prepare('SELECT key, value FROM app_settings WHERE key = ?').get(def.key);
         if (!existing) continue;
         await db.prepare('DELETE FROM app_settings WHERE key = ?').run(def.key);
         changed.push(`${def.key} cleared`);
+        settingChanges.push(hidesValue(def) ? { field: def.label, hidden: true } : { field: def.label, from: existing.value, to: '(cleared)' });
         continue;
       }
       // An invalid value is not saved, so the setting keeps working with what it had.
@@ -7524,11 +7584,16 @@ async function handleRequest(req, res) {
         'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by'
       ).run(def.key, value, formatTimestamp(new Date()), user.username);
       changed.push(`${def.key} updated`);
+      // With nothing saved yet, what was in force came from the environment or the
+      // built-in default, which CONFIG already holds.
+      const before = existing ? existing.value : (CONFIG[def.key] == null ? '' : String(CONFIG[def.key]));
+      settingChanges.push(...fieldChanges([{ label: def.label, from: before, to: value, hidden: hidesValue(def) }]));
     }
     if (changed.length) {
-      // Deliberately records which settings changed, never the values — the audit log
-      // is readable in-app and two of these are credentials.
-      await logAdminAction(user.username, 'settings_updated', 'app_settings', 'settings', changed.join(', '));
+      // Records old and new values, except for the credentials (see hidesValue),
+      // which are only marked as changed — the log is readable in-app and exported
+      // to CSV.
+      await logAdminAction(user.username, 'settings_updated', 'app_settings', 'settings', changed.join(', '), null, settingChanges);
     }
     await loadSettings({ force: true });
     return sendHtml(res, await renderAdminSettings(user, {
@@ -7578,10 +7643,12 @@ async function handleRequest(req, res) {
     if (error) return sendHtml(res, await renderAdminSettings(user, { error }));
 
     const changed = [];
+    const branchChanges = [];
     for (const id of deleting) {
       if (!existing[id]) continue;
       await db.prepare('DELETE FROM branches WHERE id = ?').run(id);
       changed.push(`${existing[id].name} deleted`);
+      branchChanges.push({ field: existing[id].name, note: 'deleted' });
     }
     // Two passes so swapping two names doesn't trip the UNIQUE constraint midway.
     for (const r of kept.filter(r => r.id && existing[r.id] && existing[r.id].name !== r.name)) {
@@ -7595,22 +7662,34 @@ async function handleRequest(req, res) {
       if (before) {
         await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ?, shift_start = ?, shift_end = ?, half_saturdays = ?, sat_start = ?, sat_end = ? WHERE id = ?')
           .run(r.name, r.location, i, r.shift_start, r.shift_end, r.half_saturdays, r.sat_start, r.sat_end, r.id);
-        if (before.half_saturdays !== r.half_saturdays) changed.push(`${r.name} half Saturdays ${r.half_saturdays ? 'on' : 'off'}`);
-        if (before.shift_start !== r.shift_start || before.shift_end !== r.shift_end) {
-          changed.push(`${r.name} shift ${r.shift_start}-${r.shift_end}`);
-          shiftChanges.push(r);
-        }
-        if (r.half_saturdays && (before.sat_start !== r.sat_start || before.sat_end !== r.sat_end)) changed.push(`${r.name} half Saturday ${r.sat_start}-${r.sat_end}`);
         if (before.name !== r.name) {
           renames.set(before.name, r.name);
           changed.push(`${before.name} renamed to ${r.name}`);
+          branchChanges.push({ field: 'Branch name', from: before.name, to: r.name });
         }
-        if (before.locationText !== r.location) changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
+        if (before.half_saturdays !== r.half_saturdays) {
+          changed.push(`${r.name} half Saturdays ${r.half_saturdays ? 'on' : 'off'}`);
+          branchChanges.push({ field: `${r.name} half Saturdays`, from: before.half_saturdays ? 'on' : 'off', to: r.half_saturdays ? 'on' : 'off' });
+        }
+        if (before.shift_start !== r.shift_start || before.shift_end !== r.shift_end) {
+          changed.push(`${r.name} shift ${r.shift_start}-${r.shift_end}`);
+          branchChanges.push({ field: `${r.name} shift`, from: `${before.shift_start}–${before.shift_end}`, to: `${r.shift_start}–${r.shift_end}` });
+          shiftChanges.push(r);
+        }
+        if (r.half_saturdays && (before.sat_start !== r.sat_start || before.sat_end !== r.sat_end)) {
+          changed.push(`${r.name} half Saturday ${r.sat_start}-${r.sat_end}`);
+          branchChanges.push({ field: `${r.name} half Saturday`, from: before.sat_start && before.sat_end ? `${before.sat_start}–${before.sat_end}` : '', to: `${r.sat_start}–${r.sat_end}` });
+        }
+        if (before.locationText !== r.location) {
+          changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
+          branchChanges.push(...fieldChanges([{ label: `${r.name} location`, from: before.locationText, to: r.location }]));
+        }
       } else {
         const result = await db.prepare('INSERT INTO branches (name, location, sort_order, shift_start, shift_end, half_saturdays, sat_start, sat_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
           .run(r.name, r.location, i, r.shift_start, r.shift_end, r.half_saturdays, r.sat_start, r.sat_end);
         newId = Number(result.lastInsertRowid);
         changed.push(`${r.name} added`);
+        branchChanges.push({ field: r.name, note: `added · shift ${r.shift_start}–${r.shift_end}${r.location ? ` · location ${r.location}` : ''}` });
       }
     }
     // One scan and one transaction for every rename in this save, rather than a scan
@@ -7648,8 +7727,10 @@ async function handleRequest(req, res) {
     if ((deviceBefore ? deviceBefore.id : null) !== deviceChoice) {
       await db.prepare('UPDATE branches SET has_device = CASE WHEN id = ? THEN 1 ELSE 0 END').run(deviceChoice);
       changed.push('biometric device branch changed');
+      const deviceAfter = deviceChoice === newId ? kept.find(r => !r.id) : kept.find(r => r.id === deviceChoice);
+      branchChanges.push(...fieldChanges([{ label: 'Biometric device branch', from: deviceBefore ? deviceBefore.name : '', to: deviceAfter ? deviceAfter.name : '' }]));
     }
-    if (changed.length) await logAdminAction(user.username, 'branches_updated', 'branches', 'branches', changed.join(', '));
+    if (changed.length) await logAdminAction(user.username, 'branches_updated', 'branches', 'branches', changed.join(', '), null, branchChanges);
     await loadSettings({ force: true });
     return sendHtml(res, await renderAdminSettings(user, { notice: changed.length ? `Saved: ${changed.join(', ')}.` : 'No changes to save.' }));
   }
@@ -7706,7 +7787,11 @@ async function handleRequest(req, res) {
       }
     }
     await db.prepare('UPDATE employees SET device_pin = ? WHERE id = ?').run(pin || null, employeeId);
-    await logAdminAction(user.username, 'set_device_pin', 'employee', employeeId, pin || '(cleared)');
+    // The PIN is what the biometric device authenticates a punch with, so it is
+    // recorded as changed and never written down — this log is readable in-app and
+    // exported to CSV, the same reason the API keys in Settings are hidden.
+    await logAdminAction(user.username, 'set_device_pin', 'employee', employeeId, '', employeeId,
+      [pin ? { field: 'Device PIN', hidden: true } : { field: 'Device PIN', note: 'cleared' }]);
     res.writeHead(302, { Location: '/admin/device-pins' });
     return res.end();
   }
@@ -7784,6 +7869,8 @@ module.exports.sendCsv = sendCsv;
 // Exported for the unit tests — the settings' own parse/validate are pure.
 module.exports.SETTING_DEFS_BY_KEY = SETTING_DEFS_BY_KEY;
 module.exports.apiReadScope = apiReadScope;
+module.exports.SETTING_DEFS = SETTING_DEFS;
+module.exports.hidesValue = hidesValue;
 module.exports.API_EMPLOYEE_FIELDS = API_EMPLOYEE_FIELDS;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the

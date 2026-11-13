@@ -112,6 +112,7 @@ interface ServiceReport {
   cycle_number: number;
   period_from: string | null;
   period_to: string | null;
+  service_date?: string | null;
   report_file_url: string | null;
   notes: string | null;
   created_at: string;
@@ -145,6 +146,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   const [asset, setAsset] = useState<AssetWithHistory | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("details");
+  const [presetInvoice, setPresetInvoice] = useState(false);
   const [amcContracts, setAmcContracts] = useState<AmcContract[]>([]);
   const [amcEvents, setAmcEvents] = useState<AmcEvent[]>([]);
   const [serviceReports, setServiceReports] = useState<ServiceReport[]>([]);
@@ -221,6 +223,13 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   }, [id]);
   useEffect(() => { if (tab === "amc" && !amcLoaded) fetchAmc(); /* eslint-disable-next-line */ }, [tab]);
   useEffect(() => { if (tab === "documents" && !docsLoaded) fetchDocs(); /* eslint-disable-next-line */ }, [tab]);
+  // The "Invoice missing" chip on the asset list lands straight on the upload form.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("upload_invoice") === "1") {
+      setTab("documents");
+      setPresetInvoice(true);
+    }
+  }, []);
 
   if (!asset) {
     return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
@@ -292,7 +301,43 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
         </div>
       )}
 
+      {/* An AMC reads these details; the same gaps are flagged on the contract, so the fix is offered here. */}
+      {(() => {
+        const live = amcContracts.filter((c) => c.amc_status !== "expired");
+        const missing = [
+          !asset.name?.trim() ? "name" : null,
+          !asset.serial_number?.trim() ? "serial number" : null,
+          !asset.location_id ? "location" : null,
+        ].filter((m): m is string => !!m);
+        if (live.length === 0 || missing.length === 0) return null;
+        return (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <span>
+              <strong>Missing for its AMC: {missing.join(", ")}.</strong>{" "}
+              Covered by {live.map((c) => c.po_number).join(", ")}. This flag goes once the details are saved.
+            </span>
+            <button type="button" className="font-medium underline" onClick={() => setEditOpen(true)}>
+              Edit details
+            </button>
+          </div>
+        );
+      })()}
       {/* Tabs */}
+      {asset.invoice_missing && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span>
+            <strong>Purchase invoice not uploaded.</strong> Upload it so the details entered here can be checked against it.
+            This flag stays until an invoice is attached.
+          </span>
+          <button
+            type="button"
+            className="font-medium underline"
+            onClick={() => { setTab("documents"); setPresetInvoice(true); }}
+          >
+            Upload invoice
+          </button>
+        </div>
+      )}
       <div className="flex gap-1 border-b">
         {([
           { key: "details" as Tab, label: "Details & Issues" },
@@ -523,7 +568,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                 // Last service of any kind
                 const allServiceDates: string[] = [
                   ...amcEvents.map((e) => e.event_date),
-                  ...serviceReports.map((r) => r.period_to || r.created_at).filter((d): d is string => !!d),
+                  ...serviceReports.map((r) => r.service_date || r.period_to || r.created_at).filter((d): d is string => !!d),
                 ].sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
                 const lastServiceDate = allServiceDates[0] ?? null;
                 // Next scheduled — earliest future next_scheduled_date across events
@@ -563,7 +608,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                       </div>
                       <div>
                         <div className="text-xs text-muted-foreground">Periodic Services (6mo)</div>
-                        <div className="text-lg font-bold text-blue-700">{last6moPreventive + serviceReports.filter(r => r.period_to && new Date(r.period_to) >= sixMonthsAgo).length}</div>
+                        <div className="text-lg font-bold text-blue-700">{last6moPreventive + serviceReports.filter(r => (r.service_date || r.period_to) && new Date((r.service_date || r.period_to)!) >= sixMonthsAgo).length}</div>
                       </div>
                       <div>
                         <div className="text-xs text-muted-foreground">Last Service</div>
@@ -779,9 +824,11 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                           {r.po_number && <code className="text-[10px] font-mono text-muted-foreground">{r.po_number}</code>}
                           <span className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
                             <Calendar className="h-3 w-3" />
-                            {r.period_from && r.period_to
-                              ? `${formatDate(r.period_from)} — ${formatDate(r.period_to)}`
-                              : formatDate(r.created_at)}
+                            {r.service_date
+                              ? `Serviced ${formatDate(r.service_date)}`
+                              : r.period_from && r.period_to
+                                ? `${formatDate(r.period_from)} — ${formatDate(r.period_to)}`
+                                : formatDate(r.created_at)}
                           </span>
                         </div>
                         {r.notes && <p className="text-sm">{r.notes}</p>}
@@ -974,7 +1021,8 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
           docs={docs}
           loaded={docsLoaded}
           userRole={userRole}
-          onRefresh={fetchDocs}
+          presetInvoice={presetInvoice}
+          onRefresh={() => { fetchDocs(); fetchData(); }}
         />
       )}
 
@@ -1142,7 +1190,7 @@ function buildAssetMemory(m: MemoryInput): string[] {
   const lastReport = m.serviceReports[0];
   const lastDate = (() => {
     const a = lastEvent ? new Date(lastEvent.event_date) : null;
-    const b = lastReport?.period_to ? new Date(lastReport.period_to) : (lastReport ? new Date(lastReport.created_at) : null);
+    const b = (lastReport?.service_date || lastReport?.period_to) ? new Date((lastReport.service_date || lastReport.period_to)!) : (lastReport ? new Date(lastReport.created_at) : null);
     if (a && b) return a > b ? a : b;
     return a ?? b;
   })();
@@ -1287,21 +1335,39 @@ const ACCEPTED = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "im
 const MAX_SIZE = 10 * 1024 * 1024;
 
 function DocumentsSection({
-  assetId, docs, loaded, userRole, onRefresh,
+  assetId, docs, loaded, userRole, presetInvoice, onRefresh,
 }: {
   assetId: string;
   docs: AssetDocument[];
   loaded: boolean;
   userRole: string;
+  presetInvoice: boolean;
   onRefresh: () => void;
 }) {
-  const [showUpload, setShowUpload] = useState(false);
+  const [showUpload, setShowUpload] = useState(presetInvoice);
+  const [alsoCovers, setAlsoCovers] = useState<Set<string>>(new Set());
+  const [assetChoices, setAssetChoices] = useState<Array<{ id: string; name: string; asset_code: string; location?: { name: string } | null }>>([]);
+  const [alsoFilter, setAlsoFilter] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [tier, setTier] = useState<AssetDocumentTier>("operational");
-  const [label, setLabel] = useState("Other");
+  const [tier, setTier] = useState<AssetDocumentTier>(presetInvoice ? "commercial" : "operational");
+  const [label, setLabel] = useState(presetInvoice ? "Purchase Invoice" : "Other");
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+
+  // The banner's "Upload invoice" can be clicked while this tab is already open.
+  useEffect(() => {
+    if (presetInvoice) { setShowUpload(true); setTier("commercial"); setLabel("Purchase Invoice"); }
+  }, [presetInvoice]);
+
+  const isInvoiceLabel = label === "Purchase Invoice" || label === "Tax Invoice";
+  useEffect(() => {
+    if (!showUpload || !isInvoiceLabel || assetChoices.length > 0) return;
+    fetch("/api/facility/assets")
+      .then((r) => r.json())
+      .then((j) => setAssetChoices(((j.data ?? []) as typeof assetChoices).filter((a) => a.id !== assetId)))
+      .catch(() => setAssetChoices([]));
+  }, [showUpload, isInvoiceLabel, assetChoices.length, assetId]);
 
   const canUpload = ["admin", "manager", "fms", "accounts", "office_admin", "coordinator", "it_manager"].includes(userRole);
   const canDelete = ["admin", "manager"].includes(userRole);
@@ -1328,16 +1394,18 @@ function DocumentsSection({
           file_size: file.size,
           mime_type: file.type,
           notes: notes || undefined,
+          also_asset_ids: isInvoiceLabel && alsoCovers.size > 0 ? [...alsoCovers] : undefined,
         }),
       });
       if (!res.ok) {
         const j = await res.json();
         throw new Error(typeof j.error === "string" ? j.error : "Upload failed");
       }
-      toast.success("Document uploaded");
+      toast.success(alsoCovers.size > 0 && isInvoiceLabel ? `Invoice attached to ${alsoCovers.size + 1} assets` : "Document uploaded");
       setShowUpload(false);
       setFile(null);
       setNotes("");
+      setAlsoCovers(new Set());
       onRefresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
@@ -1439,6 +1507,41 @@ function DocumentsSection({
                   />
                 )}
               </div>
+              {isInvoiceLabel && (
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">
+                    This invoice also covers (optional) — tick every other asset listed on it, in any location
+                  </label>
+                  <input
+                    value={alsoFilter}
+                    onChange={(e) => setAlsoFilter(e.target.value)}
+                    placeholder="Search by name, code or location"
+                    className="w-full h-8 px-2 rounded-md border bg-background text-xs"
+                  />
+                  <div className="max-h-40 overflow-y-auto rounded-md border p-1">
+                    {assetChoices
+                      .filter((a) => `${a.name} ${a.asset_code} ${a.location?.name ?? ""}`.toLowerCase().includes(alsoFilter.toLowerCase()))
+                      .slice(0, 100)
+                      .map((a) => (
+                        <label key={a.id} className="flex items-center gap-2 px-1 py-0.5 text-xs hover:bg-muted/50 rounded">
+                          <input
+                            type="checkbox"
+                            checked={alsoCovers.has(a.id)}
+                            onChange={() => setAlsoCovers((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(a.id)) next.delete(a.id); else next.add(a.id);
+                              return next;
+                            })}
+                          />
+                          <span className="font-mono">{a.asset_code}</span>
+                          <span className="truncate">{a.name}</span>
+                          <span className="ml-auto text-muted-foreground">{a.location?.name ?? ""}</span>
+                        </label>
+                      ))}
+                    {assetChoices.length === 0 && <div className="p-2 text-xs text-muted-foreground">No other assets to choose from.</div>}
+                  </div>
+                </div>
+              )}
               <Button size="sm" onClick={handleUpload} disabled={uploading || !file}>
                 {uploading && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
                 Upload

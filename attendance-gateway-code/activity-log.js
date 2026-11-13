@@ -5,12 +5,13 @@
 // /admin/activity-log. Pure helpers only (labels, filters, CSV shape), kept out of
 // server.js so they can be unit-tested without a database or a request.
 
+// `short` is the tag shown at the end of each line on the page.
 const ACTIVITY_CATEGORIES = [
-  { key: 'sign_in', label: 'Logins and logouts' },
-  { key: 'attendance', label: 'Punches and breaks' },
-  { key: 'request', label: 'Requests' },
-  { key: 'admin', label: 'Admin and manager actions' },
-  { key: 'other', label: 'Other' },
+  { key: 'sign_in', label: 'Logins and logouts', short: 'Login' },
+  { key: 'attendance', label: 'Punches and breaks', short: 'Attendance' },
+  { key: 'request', label: 'Requests', short: 'Request' },
+  { key: 'admin', label: 'Admin and manager actions', short: 'Admin' },
+  { key: 'other', label: 'Other', short: 'Other' },
 ];
 
 // Events logged by name from the routes that cause them. Admin actions aren't listed
@@ -111,6 +112,192 @@ function describeDevice(userAgent) {
   return parts.length ? parts.join(' · ') : 'Other device';
 }
 
+// --- what an edit changed -------------------------------------------------------
+// Stored in activity_log.changes as JSON: a list of { field, from, to } for a value
+// that changed, { field, hidden: true } for a secret whose value must never be written
+// down, or { field, note } for something that has no before and after ("added").
+// '' means the entry was logged before changes were recorded (or by an action that
+// doesn't record them); '[]' means it was recorded and nothing changed.
+
+const NONE = '(none)';
+function shownValue(v) {
+  const s = v == null ? '' : String(v).trim();
+  return s === '' ? NONE : s;
+}
+
+// `fields` is [{ label, from, to, hidden }] with values already in the form people
+// read them (names, not ids). Only the ones whose shown value differs come back, so a
+// form re-saved untouched gives [].
+function fieldChanges(fields) {
+  const out = [];
+  for (const f of fields) {
+    const from = shownValue(f.from);
+    const to = shownValue(f.to);
+    if (from === to) continue;
+    out.push(f.hidden ? { field: f.label, hidden: true } : { field: f.label, from, to });
+  }
+  return out;
+}
+
+// null when nothing was recorded; a list (maybe empty) otherwise.
+function parseChanges(raw) {
+  if (!raw) return null;
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter(c => c && c.field) : null;
+  } catch {
+    return null;
+  }
+}
+
+function changeText(c) {
+  if (c.hidden) return `${c.field}: changed (value hidden)`;
+  if (c.note) return `${c.field}: ${c.note}`;
+  return `${c.field}: ${shownValue(c.from)} → ${shownValue(c.to)}`;
+}
+
+function changesText(raw) {
+  const list = parseChanges(raw);
+  return list ? list.map(changeText).join('; ') : '';
+}
+
+// --- one line saying who did what -----------------------------------------------
+// {A} is whoever did it, {S} whose record it is, {S's} the same with an apostrophe.
+// `self` is used when the person did it to their own record, `other` when someone
+// else did (a manager, the biometric device, the auto punch-out).
+const SENTENCES = {
+  login: '{A} logged in',
+  login_failed: '{A} failed to log in',
+  login_blocked: '{A} was blocked from logging in after too many attempts',
+  logout: '{A} logged out',
+  password_changed: '{A} changed their password',
+  language_changed: '{A} changed their language',
+  punch_in: { self: '{A} punched in', other: '{A} punched in {S}' },
+  punch_out: { self: '{A} punched out', other: '{A} punched out {S}' },
+  break_start: { self: '{A} started a break', other: '{A} started a break for {S}' },
+  break_end: { self: '{A} ended their break', other: "{A} ended {S's} break" },
+  field_trip: { self: '{A} recorded a field trip', other: '{A} recorded a field trip for {S}' },
+  leave_applied: { self: '{A} applied for leave', other: '{A} applied for leave for {S}' },
+  permission_applied: { self: '{A} asked for permission', other: '{A} asked for permission for {S}' },
+  correction_applied: { self: '{A} asked for an attendance correction', other: '{A} asked for an attendance correction for {S}' },
+  overtime_applied: { self: '{A} applied for overtime', other: '{A} applied for overtime for {S}' },
+  document_uploaded: { self: '{A} uploaded a document', other: '{A} uploaded a document for {S}' },
+};
+
+const ADMIN_SENTENCES = {
+  add_employee: '{A} registered {S}',
+  edit_employee: "{A} edited {S's} details",
+  change_employee_id: "{A} changed {S's} Emp ID #",
+  change_account_role: "{A} changed {S's} account role",
+  reset_password: "{A} reset {S's} password",
+  upload_document: '{A} uploaded a document for {S}',
+  set_device_pin: "{A} set {S's} device PIN",
+  add_holiday: '{A} added a holiday',
+  delete_holiday: '{A} removed a holiday',
+  device_resync: '{A} re-synced the biometric device',
+  settings_updated: '{A} updated settings',
+  branches_updated: '{A} updated branches',
+  punches_rechecked: '{A} re-checked punch locations',
+  punch_api_key_generated: '{A} generated a new punch API key',
+  deviation_undo: "{A} undid the review of {S's} deviation",
+};
+
+function adminSentence(row) {
+  const action = row.action;
+  const target = TARGET_LABELS[row.target_type] || row.target_type || '';
+  if (action === 'approve' || action === 'reject') {
+    const verb = action === 'approve' ? 'approved' : 'rejected';
+    return row.employee_id ? `{A} ${verb} {S's} ${target}` : `{A} ${verb} a ${target} request`;
+  }
+  if (action === 'record' && row.target_type === 'overtime_request') return '{A} recorded overtime for {S}';
+  if (action === 'download_report') return `{A} downloaded the ${target}`;
+  if (action === 'edit_employee') {
+    const list = parseChanges(row.changes);
+    if (list && !list.length) return "{A} saved {S's} details with no changes";
+  }
+  if (ADMIN_SENTENCES[action]) return ADMIN_SENTENCES[action];
+  if (action.startsWith('deviation_')) return "{A} reviewed {S's} deviation";
+  // An admin action added later without a sentence still reads sensibly.
+  return `{A} ${action.replace(/_/g, ' ')}${row.employee_id ? ' for {S}' : ''}`;
+}
+
+const ROLE_SHOWN = new Set(['admin', 'manager']);
+
+// The line as parts the page can style and the CSV can join:
+// [{ text, kind: 'name' | 'role' | 'text' }].
+// `employeeName(id)` gives an employee's name; `accountEmployee(username)` the employee
+// a login belongs to, so an admin acting on their own record reads as "themselves".
+function activitySentence(row, { employeeName = () => '', accountEmployee = () => '' } = {}) {
+  const subjectId = row.employee_id || '';
+  const actorEmployee = row.actor_username ? (accountEmployee(row.actor_username) || '') : '';
+  const unknownLogin = !row.actor_username || row.actor_username === '(unknown)';
+  let actor;
+  if (row.actor_role === 'device') actor = 'Biometric device';
+  else if (row.actor_role === 'system') actor = 'System';
+  else if (row.category === 'sign_in' && unknownLogin) actor = 'Someone';
+  else if (unknownLogin && subjectId) actor = employeeName(subjectId) || subjectId;
+  else if (unknownLogin) actor = 'Someone';
+  else actor = employeeName(actorEmployee) || employeeName(row.actor_username) || row.actor_username;
+  // The built-in "admin" account: "Admin", not "admin (admin)".
+  const actorIsRole = !!row.actor_role && actor.toLowerCase() === row.actor_role.toLowerCase();
+  if (actorIsRole) actor = actor.charAt(0).toUpperCase() + actor.slice(1);
+
+  const isSelf = !subjectId || (!['device', 'system'].includes(row.actor_role)
+    && (unknownLogin || actorEmployee === subjectId || row.actor_username === subjectId));
+  let template;
+  if (row.category === 'admin') template = adminSentence(row);
+  else if (row.action === 'login_failed' && unknownLogin) template = "{A} tried to log in with a username that doesn't exist";
+  else {
+    const def = SENTENCES[row.action];
+    if (!def) template = `{A}: ${activityLabel(row).toLowerCase()}${subjectId && !isSelf ? ' for {S}' : ''}`;
+    else if (typeof def === 'string') template = def;
+    else template = isSelf ? def.self : def.other;
+  }
+  const subject = subjectId ? (employeeName(subjectId) || subjectId) : 'an employee';
+  const showRole = ROLE_SHOWN.has(row.actor_role) && !actorIsRole && !(isSelf && row.category !== 'admin');
+
+  const parts = [];
+  for (const piece of template.split(/(\{A\}|\{S's\}|\{S\})/)) {
+    if (!piece) continue;
+    if (piece === '{A}') {
+      parts.push({ text: actor, kind: 'name' });
+      if (showRole) parts.push({ text: ` (${row.actor_role})`, kind: 'role' });
+    } else if (piece === '{S}') {
+      parts.push({ text: subject, kind: subjectId ? 'name' : 'text' });
+    } else if (piece === "{S's}") {
+      parts.push({ text: subject, kind: subjectId ? 'name' : 'text' });
+      parts.push({ text: "'s", kind: 'text' });
+    } else {
+      parts.push({ text: piece, kind: 'text' });
+    }
+  }
+  return parts;
+}
+
+function sentenceText(parts) {
+  return parts.map(p => p.text).join('');
+}
+
+// Details that only repeat the name already in the sentence aren't shown again.
+// set_device_pin is here for a second reason: entries written before the PIN was
+// hidden still hold it in `details`, and it must not be shown or exported now.
+const DETAILS_IN_SENTENCE = new Set(['edit_employee', 'reset_password', 'set_device_pin']);
+function detailsShown(row) {
+  if (row.category === 'admin' && DETAILS_IN_SENTENCE.has(row.action)) return '';
+  return row.details || '';
+}
+
+// The page and the CSV have to make the same choice here or they drift apart. An
+// empty list means "recorded, and nothing changed", which is not the same as nothing
+// to show: it is truthy, so a save whose fields all compared equal would otherwise
+// hide its own summary on the page while the CSV still printed it.
+// `changes` is the list to render, or null when there is none; `details` is the
+// fallback text, '' when the changes have replaced it.
+function changesAndDetails(row) {
+  const changes = parseChanges(row.changes);
+  return changes && changes.length ? { changes, details: '' } : { changes: null, details: detailsShown(row) };
+}
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // WHERE clause for the page and the CSV download. Dates are inclusive calendar days
@@ -126,19 +313,22 @@ function activityFilterSql({ employeeId, category, from, to } = {}) {
   return { where: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
 }
 
-const ACTIVITY_CSV_HEADERS = ['Time', 'Employee ID', 'Employee', 'Done by', 'Role', 'Category', 'Activity', 'Details', 'Device', 'IP address'];
+const ACTIVITY_CSV_HEADERS = ['Time', 'What happened', 'Changes / details', 'Employee ID', 'Employee', 'Done by', 'Role', 'Category', 'Device', 'IP address'];
 
-function activityCsvRow(row, employeeName) {
+// `lookups` is the same { employeeName, accountEmployee } pair activitySentence takes.
+function activityCsvRow(row, lookups = {}) {
   const category = ACTIVITY_CATEGORIES.find(c => c.key === row.category);
+  const employeeName = lookups.employeeName || (() => '');
+  const { changes, details } = changesAndDetails(row);
   return [
     row.created_at,
+    sentenceText(activitySentence(row, lookups)),
+    changes ? changes.map(changeText).join('; ') : details,
     row.employee_id || '',
-    employeeName || '',
+    row.employee_id ? (employeeName(row.employee_id) || '') : '',
     row.actor_username || '',
     row.actor_role || '',
     category ? category.label : row.category,
-    activityLabel(row),
-    row.details || '',
     describeDevice(row.user_agent),
     row.ip || '',
   ];
@@ -149,6 +339,14 @@ module.exports = {
   ACTIONS,
   activityLabel,
   categoryOf,
+  fieldChanges,
+  parseChanges,
+  changeText,
+  changesText,
+  activitySentence,
+  sentenceText,
+  detailsShown,
+  changesAndDetails,
   describeDevice,
   activityFilterSql,
   ACTIVITY_CSV_HEADERS,

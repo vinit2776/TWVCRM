@@ -1,5 +1,6 @@
 "use client";
 
+import { BillAmcPanel, type BillAmcPo } from "@/components/procurement/bill-amc-panel";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { useState, useEffect, useCallback } from "react";
@@ -52,6 +53,8 @@ import { BillEditedBadge } from "@/components/procurement/bill-edited-badge";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type ChainData = {
+  /** What is left of the PO's advance; null until the advance has been paid. */
+  advanceUsage?: { advance: number; applied: number; legacyCredit: number; unused: number } | null;
   bill: {
     id: string; bill_number: string; invoice_number: string | null;
     edit_count?: number | null; last_edited_at?: string | null; last_edit_summary?: string | null;
@@ -88,9 +91,25 @@ type ChainData = {
     billing_cycle: ServicePoBillingCycle | null;
     cycle_count: number | null;
     unit_cost_per_cycle: number | null;
+    opening_cycles?: number | null;
+    amc_coverage_type?: string | null;
+    amc_start_date?: string | null;
+    amc_end_date?: string | null;
+    amc_visits_covered?: number | null;
+    amc_status?: string | null;
+    amc_terminated_at?: string | null;
+    amc_termination_reason?: string | null;
+    amc_contact_name?: string | null;
+    amc_helpline_number?: string | null;
+    amc_contact_email?: string | null;
     orderer: { id: string; full_name: string } | null;
-    purchase_order_items?: Array<{ id: string; item_name: string; quantity_ordered: number; unit: string; unit_price: number | null }>;
+    purchase_order_items?: Array<{
+      id: string; item_name: string; quantity_ordered: number; unit: string; unit_price: number | null;
+      linked_asset?: { id: string; name: string; asset_code: string | null; serial_number: string | null; make: string | null; model: string | null; location: { name: string } | null } | null;
+    }>;
   } | null;
+  poBills?: Array<{ id: string; bill_number: string; total_amount: number; approval_status: string; payment_status: string; service_report_id: string | null }>;
+  visitsLogged?: number;
   mr: {
     id: string; pr_number: string; department: string;
     total_estimated_amount: number | null; created_at: string;
@@ -169,6 +188,12 @@ export default function VendorBillDetailPage() {
 
   // GST update
   const [gstDialog, setGstDialog] = useState(false);
+  const [applyDialog, setApplyDialog] = useState(false);
+  const [applyAmount, setApplyAmount] = useState("");
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [unwindDialog, setUnwindDialog] = useState(false);
+  const [unwindReason, setUnwindReason] = useState("");
+  const [unwindLoading, setUnwindLoading] = useState(false);
   const [gstAmountInput, setGstAmountInput] = useState<string>("");
   const [gstZeroConfirm, setGstZeroConfirm] = useState(false);
   const [gstLoading, setGstLoading] = useState(false);
@@ -432,6 +457,45 @@ export default function VendorBillDetailPage() {
     }
   };
 
+  const applyAdvance = async () => {
+    const amount = parseFloat(applyAmount);
+    if (!(amount > 0)) { toast.error("Enter an amount above zero"); return; }
+    setApplyLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}/apply-advance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Could not apply the advance"); return; }
+      toast.success("Advance applied to this bill");
+      setApplyDialog(false);
+      await fetchAll();
+    } finally {
+      setApplyLoading(false);
+    }
+  };
+
+  const unwindCredit = async () => {
+    setUnwindLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}/unwind-credit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: unwindReason }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Could not take back the credit"); return; }
+      toast.success("Credit taken back");
+      setUnwindDialog(false);
+      setUnwindReason("");
+      await fetchAll();
+    } finally {
+      setUnwindLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -468,7 +532,16 @@ export default function VendorBillDetailPage() {
     advance_payment_mode?: string | null; advance_payment_reference?: string | null;
     advance_payment_date?: string | null;
   } | null;
-  const hasAdvanceCredit = linkedPo?.advance_status === "processed" && (linkedPo?.advance_amount ?? 0) > 0;
+  const advUsage = chain?.advanceUsage ?? null;
+  const standingLinesSum = ((bill.vendor_bill_payments ?? []) as Array<{ reversed_at?: string | null; amount: number }>)
+    .filter((p) => !p.reversed_at).reduce((sum, p) => sum + Number(p.amount), 0);
+  // Paid amount with no payment line behind it: the old advance pre-credit.
+  const unrecordedCredit = Math.round((Number(bill.amount_paid ?? 0) - standingLinesSum) * 100) / 100;
+  const advanceHasRef = !!linkedPo?.advance_payment_reference?.trim();
+  const canApplyAdvance =
+    ["accounts", "admin"].includes(currentUserRole ?? "") &&
+    bill.approval_status === "approved" &&
+    !!advUsage && advUsage.unused > 0.01 && remaining > 0.01 && advanceHasRef;
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   const isGoods = !chain?.po || chain.po.po_type !== "service";
@@ -996,20 +1069,53 @@ export default function VendorBillDetailPage() {
                 <span className="font-medium text-amber-700">{formatCurrency(Number(bill.approved_amount))}</span>
               </div>
             )}
-            {hasAdvanceCredit && (
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground text-orange-700">
-                  Advance Paid
-                  {linkedPo?.advance_payment_mode && (
-                    <span className="ml-1 text-xs">
-                      ({PO_ADVANCE_PAYMENT_MODE_LABELS[linkedPo.advance_payment_mode] ?? linkedPo.advance_payment_mode}
-                      {linkedPo.advance_payment_reference ? ` · ${linkedPo.advance_payment_reference}` : ""})
-                    </span>
-                  )}
-                </span>
-                <span className="font-medium text-orange-700">
-                  − {formatCurrency(Math.min(linkedPo!.advance_amount!, bill.total_amount))}
-                </span>
+            {advUsage && advUsage.advance > 0 && (
+              <div className="rounded-md border border-orange-200 bg-orange-50/60 px-3 py-2 text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-orange-800 font-medium">
+                    PO advance
+                    {linkedPo?.advance_payment_mode && (
+                      <span className="ml-1 font-normal">
+                        ({PO_ADVANCE_PAYMENT_MODE_LABELS[linkedPo.advance_payment_mode] ?? linkedPo.advance_payment_mode}
+                        {linkedPo.advance_payment_reference ? ` · ${linkedPo.advance_payment_reference}` : ""})
+                      </span>
+                    )}
+                  </span>
+                  <span className="font-medium">{formatCurrency(advUsage.advance)}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Applied to bills</span>
+                  <span>{formatCurrency(advUsage.applied + advUsage.legacyCredit)}</span>
+                </div>
+                <div className="flex justify-between font-medium">
+                  <span>Still unused</span>
+                  <span>{formatCurrency(advUsage.unused)}</span>
+                </div>
+                {canApplyAdvance && (
+                  <button
+                    type="button"
+                    onClick={() => { setApplyAmount(String(Math.min(advUsage.unused, remaining))); setApplyDialog(true); }}
+                    className="font-medium text-orange-800 underline"
+                  >
+                    Apply advance to this bill
+                  </button>
+                )}
+                {advUsage.unused > 0.01 && !advanceHasRef && (
+                  <p className="text-amber-800">
+                    This advance has no payment reference, so it cannot be applied. An admin can reopen it from the PO&apos;s Correct menu, and Accounts then record it again with its UTR or cheque number in Acc Payables.
+                  </p>
+                )}
+              </div>
+            )}
+            {unrecordedCredit > 0.005 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 space-y-1">
+                <p className="font-medium">{formatCurrency(unrecordedCredit)} shows as paid with no payment record.</p>
+                <p>It was credited from the PO advance before advances were tracked, so there is no UTR or date for it. Ask Accounts to confirm it against the bank statement.</p>
+                {currentUserRole === "admin" && (
+                  <button type="button" onClick={() => setUnwindDialog(true)} className="font-medium underline">
+                    Not paid? Take back this credit
+                  </button>
+                )}
               </div>
             )}
             <div className="flex justify-between text-sm">
@@ -1188,6 +1294,17 @@ export default function VendorBillDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* AMC details, so an AMC invoice is never approved blind */}
+      {chain?.po && chain.po.po_type === "service" && chain.po.amc_start_date && (
+        <BillAmcPanel
+          po={chain.po as BillAmcPo}
+          thisBill={{ id: bill.id, total_amount: Number(bill.total_amount), service_report_id: (bill as { service_report_id?: string | null }).service_report_id ?? null }}
+          bills={chain.poBills ?? []}
+          reports={chain.serviceReports}
+          visitsLogged={chain.visitsLogged ?? 0}
+        />
+      )}
 
       {/* Document Chain */}
       {chain && (
@@ -1514,6 +1631,60 @@ export default function VendorBillDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Apply advance */}
+      <Dialog open={applyDialog} onOpenChange={setApplyDialog}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Apply advance to this bill</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2 text-sm">
+            <p className="text-muted-foreground">
+              Invoice {formatCurrency(Number(bill.total_amount))}{billGst > 0 ? ` + GST ${formatCurrency(billGst)}` : ""}, paid so far {formatCurrency(Number(bill.amount_paid))},
+              still owed {formatCurrency(Math.max(0, remaining))}. Unused advance: {formatCurrency(advUsage?.unused ?? 0)}.
+            </p>
+            {billGst === 0 && (
+              <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                No GST is entered on this bill. If the invoice carries GST, set it first (Set GST amount), so the balance and the Paid status are right.
+              </p>
+            )}
+            <div className="space-y-1.5">
+              <Label>Amount to apply (₹)</Label>
+              <Input type="number" min="0" step="0.01" value={applyAmount} onChange={(e) => setApplyAmount(e.target.value)} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              This adds a payment line carrying the advance&apos;s own date and reference ({linkedPo?.advance_payment_reference ?? "—"}). It can be reversed like any payment.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApplyDialog(false)}>Cancel</Button>
+            <Button onClick={applyAdvance} disabled={applyLoading}>
+              {applyLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />} Apply advance
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Take back an unrecorded advance credit (admin) */}
+      <Dialog open={unwindDialog} onOpenChange={setUnwindDialog}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Take back the advance credit</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2 text-sm">
+            <p className="text-muted-foreground">
+              This removes {formatCurrency(Math.max(0, unrecordedCredit))} from the amount paid on this bill, because there is no payment record behind it.
+              Payments Accounts recorded are not touched. The bill will read as owing that amount again.
+            </p>
+            <div className="space-y-1.5">
+              <Label>Why (at least 10 characters)</Label>
+              <Textarea value={unwindReason} onChange={(e) => setUnwindReason(e.target.value)} placeholder="e.g. No transfer found on the bank statement for 3 Jun" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUnwindDialog(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={unwindCredit} disabled={unwindLoading || unwindReason.trim().length < 10}>
+              {unwindLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />} Take back credit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Approve Invoice Dialog */}
       <Dialog open={approveDialog} onOpenChange={setApproveDialog}>
