@@ -24,6 +24,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { CaseStatusPipeline } from "@/components/cases/case-status-pipeline";
 import { CaseDocumentsTab } from "@/components/cases/case-documents-tab";
+import { CaseKycReviewPanel } from "@/components/cases/case-kyc-review-panel";
 import { CaseComplianceTab } from "@/components/cases/case-compliance-tab";
 import { CaseAgreementTab } from "@/components/cases/case-agreement-tab";
 import { SpecialClauseCard, SpecialClauseBadge } from "@/components/contracts/special-clause-card";
@@ -502,6 +503,7 @@ export default function CaseDetailPage({
             </CardHeader>
             <CardContent>
               <CaseDocumentsTab caseId={id} />
+              <CaseKycReviewPanel caseId={id} />
             </CardContent>
           </Card>
         </TabsContent>
