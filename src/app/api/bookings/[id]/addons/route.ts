@@ -1,6 +1,7 @@
 import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { logAudit } from "@/lib/audit";
 
 const VALID_TYPES = ["extended_time", "service", "food_beverage", "other"] as const;
@@ -255,4 +256,6 @@ async function recomputeBookingTotal(
   await supabase.from("bookings").update({
     total_amount_with_gst: roundToRupee(baseAmount + baseGst + addonSum.total),
   }).eq("id", bookingId);
+  // Keep the PI's Receivables statement at the booking's new total.
+  await syncBookingPiStatement(createAdminClient(), bookingId);
 }

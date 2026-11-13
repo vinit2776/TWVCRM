@@ -3,17 +3,20 @@
  *
  * Both the PATCH cancel branch (`/api/bookings/[id]`) and the rich
  * POST cancel endpoint (`/api/bookings/[id]/cancel`) need the same
- * three side-effects when a booking is cancelled or marked no-show:
+ * side-effects when a booking is cancelled or marked no-show:
  *
  *   1. Revoke any active WiFi vouchers for the booking (all customer types)
  *   2. Waive the linked usage_charge
  *   3. Auto-offer the freed slot to the first waitlisted customer
+ *   4. Cancel the booking's PI (void its Receivables statement and payment link)
  *
  * This module extracts them into one function so the logic stays DRY
  * and every cancel path (including no-show) gets all three.
  */
 
 import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
+import { createAdminClient } from "@/lib/supabase/server";
+import { cancelBookingPiStatement } from "@/lib/booking-pi-statement-server";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseAny = any;
@@ -206,6 +209,11 @@ export async function executeBookingCancellationSideEffects(
       console.error("[booking-cancel] waitlist auto-offer failed:", err);
     }
   }
+
+  // ── 4. Cancel the booking's PI, if one was issued ──────────────
+  // Keeps a cancelled booking out of Receivables and the follow-up ladder.
+  // Never throws; a statement that already holds money is left for a manual refund.
+  await cancelBookingPiStatement(createAdminClient(), booking.bookingId, options.revokeReason ?? "Booking cancelled");
 
   return result;
 }

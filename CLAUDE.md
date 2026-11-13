@@ -279,6 +279,15 @@ A live contract (`active`, or `renewal_in_progress` before its end date — `isC
 - Admin bypass: include `payment_override_reason` in PATCH body (logged to audit)
 - **Part-paid deposit (>50%)**: when the deposit is being collected in parts and **more than 50% of the adjusted required amount has actually been received** (`src/lib/deposit-activation.ts`), the deposit leg of the gate is satisfied with a warning: the PATCH must carry `acknowledge_partial_deposit: true` (else 409 `PARTIAL_DEPOSIT_ACK_REQUIRED`), the contract claims the proposal's deposit and snapshots it as `pending` with a note, and when the last part is paid `syncContractDepositFromParts` flips the contract's deposit to paid. The pro-rata / first invoice is still required, and the monthly GST invoice (`send-invoice`) follows the same >50% rule. Any role that can activate may do this. Exactly 50% is not enough. Both the proposal and the contract show a "deposit pending" warning until the balance is in.
 
+### Booking PI (optional proforma invoice for a walk-in/guest booking)
+
+Staff can send a PI with the booking's Razorpay link (Collect Payment → **Send PI + link**; `GET /api/bookings/[id]/pi` previews the PDF and sends nothing, `POST` emails it). It is optional: paying at the counter is unchanged.
+
+- Sending creates a billing statement owned by the booking (`created_via = booking_pi`, due **PI date + 7 days**) so it lists in Receivables as **Booking PI**. It shares the booking's link and is kept in step by `syncBookingPiStatement` (`src/lib/booking-pi-statement-server.ts`): payments (link, counter, accounts' verification), add-ons and rate edits, waive/complimentary all re-sync it; cancel or no-show voids it and cancels the link (a part-paid one is left, with a note, for an offline refund).
+- **One Tally handoff: the booking's own task** (after checkout, once paid). The statement never reaches the Tally Inbox (`handleStatementPaid` skips it). Recording a payment on it, sending it, or raising its GST invoice from Receivables is refused with a pointer to the booking.
+- Only **admin and accounts** can mark a reported manual payment paid (`PATCH /api/booking-payments/[id]`). Payments by link are marked paid by the Razorpay webhook with no action.
+- Reminders for these rows come in a second PR; until then the reminder cron skips them.
+
 ### Staged security deposit (parts)
 
 Sales can take a proposal's deposit in parts (e.g. ₹20k of ₹60k now). **Activation is unchanged — the deposit must still be paid in full.** Ships dark: `app_settings.deposit_instalments_enabled` (`false` by default); `deposit_min_first_part_percent` (default 25) is the smallest first part without a manager.

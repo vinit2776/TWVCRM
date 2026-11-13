@@ -5,6 +5,7 @@ import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { daysPastBooking } from "@/lib/process-registry";
 import { checkInPaymentState, roundToRupee } from "@/lib/booking-payment-rules";
 import { noteProvisionalCheckIn } from "@/lib/booking-payment-server";
@@ -1008,6 +1009,12 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // A rate, extension or reschedule that changed the total must reach the PI's
+  // Receivables statement, or it keeps chasing the old amount.
+  if ("total_amount" in updates || "total_amount_with_gst" in updates) {
+    await syncBookingPiStatement(createAdminClient(), id);
+  }
 
   // Create a Tally Inbox task when the booking is checked out AND already
   // paid. Must run after the update above commits — maybeCreateBookingGstTask
