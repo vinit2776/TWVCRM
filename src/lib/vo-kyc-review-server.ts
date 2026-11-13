@@ -36,7 +36,8 @@ export async function kycReviewPresent(): Promise<boolean> {
       cached = { value: true, at: Date.now() };
       return true;
     }
-    const missing = (e: { code?: string } | null) => e?.code === "42703" || e?.code === "42P01";
+    const missing = (e: { code?: string } | null) =>
+      ["42703", "42P01", "PGRST204", "PGRST205"].includes(e?.code ?? "");
     if (missing(cols.error) || missing(table.error)) {
       cached = { value: false, at: Date.now() };
       return false;
