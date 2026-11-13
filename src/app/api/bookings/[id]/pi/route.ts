@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { upsertBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import { buildBookingPi, bookingPiNumber, piBalanceDue } from "@/lib/booking-pi";
@@ -165,6 +166,18 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     .update({ pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_by: sender.id, pi_sent_to: customerEmail })
     .eq("id", id);
 
+  // Lists the PI in Receivables as pending and lets the follow-up ladder chase
+  // it. Never blocks the send: the email has already gone.
+  const { statementId } = await upsertBookingPiStatement(createAdminClient(), {
+    bookingId: id,
+    leadId: booking.lead_id ?? null,
+    piNumber: input.pi_number,
+    totals: input.totals,
+    gstRate: Number(booking.gst_rate) || 0,
+    linkId: booking.razorpay_payment_link_id ?? null,
+    linkUrl: input.payment_link_url,
+  });
+
   void logAudit(supabase, {
     entityType: "booking",
     entityId: id,
@@ -173,5 +186,5 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     changes: { pi_number: { old: booking.pi_number ?? null, new: input.pi_number }, pi_sent_to: { old: null, new: customerEmail } },
   });
 
-  return NextResponse.json({ data: { pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_to: customerEmail } });
+  return NextResponse.json({ data: { pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_to: customerEmail, statement_id: statementId } });
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import crypto from "crypto";
 import { logAudit } from "@/lib/audit";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
 
 // POST — verify Razorpay payment after checkout success
 export async function POST(request: NextRequest) {
@@ -85,6 +86,8 @@ export async function POST(request: NextRequest) {
           .update({ payment_status: "paid", payment_mode: "razorpay" })
           .eq("id", payment.booking_id);
       }
+      // Close or part-settle the PI's Receivables statement, if the booking has one.
+      await syncBookingPiStatement(createAdminClient(), payment.booking_id);
     }
 
     logAudit(supabase, {

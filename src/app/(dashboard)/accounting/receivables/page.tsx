@@ -130,6 +130,27 @@ function leadFromCase(c: CaseRef): Lead {
   };
 }
 
+interface BookingRef {
+  id: string;
+  booking_number: string | null;
+  guest_name?: string | null;
+  guest_email?: string | null;
+  guest_phone?: string | null;
+  guest_company?: string | null;
+  lead?: Lead | null;
+}
+
+/** A booking's PI is raised for its lead, or for a guest who has no lead. */
+function leadFromBooking(b: BookingRef): Lead {
+  if (b.lead) return b.lead;
+  return {
+    id: b.id,
+    company: b.guest_company || b.guest_name || undefined,
+    email: b.guest_email || undefined,
+    phone: b.guest_phone || undefined,
+  };
+}
+
 function leadFromAggregator(a: AggregatorRef): Lead {
   return { id: a.id, company: a.name, email: a.primary_email ?? undefined, phone: a.primary_phone ?? undefined };
 }
@@ -143,10 +164,10 @@ interface Party {
   lead?: Lead;
   href: string;
   isProposal: boolean;
-  kind: "contract" | "proposal" | "invoice" | "case" | "aggregator" | "unknown";
+  kind: "contract" | "proposal" | "invoice" | "booking" | "case" | "aggregator" | "unknown";
 }
 
-function partyOf(row: { contract: Contract | null; proposal?: ProposalRef | null; invoice?: InvoiceRef | null; case?: CaseRef | null; aggregator?: AggregatorRef | null }): Party {
+function partyOf(row: { contract: Contract | null; proposal?: ProposalRef | null; invoice?: InvoiceRef | null; booking?: BookingRef | null; case?: CaseRef | null; aggregator?: AggregatorRef | null }): Party {
   if (row.contract) {
     return { id: row.contract.id, number: row.contract.contract_number, lead: row.contract.lead, href: `/contracts/${row.contract.id}`, isProposal: false, kind: "contract" };
   }
@@ -155,6 +176,9 @@ function partyOf(row: { contract: Contract | null; proposal?: ProposalRef | null
   }
   if (row.invoice) {
     return { id: row.invoice.id, number: row.invoice.invoice_number, lead: row.invoice.lead, href: `/leads/${row.invoice.lead?.id ?? ""}`, isProposal: false, kind: "invoice" };
+  }
+  if (row.booking) {
+    return { id: row.booking.id, number: row.booking.booking_number ?? "Booking", lead: leadFromBooking(row.booking), href: `/bookings/${row.booking.id}`, isProposal: false, kind: "booking" };
   }
   if (row.case) {
     return { id: row.case.id, number: row.case.case_number, lead: leadFromCase(row.case), href: `/cases/${row.case.id}`, isProposal: false, kind: "case" };
@@ -209,6 +233,7 @@ interface ReceivableRow {
   contract: Contract | null;
   proposal?: ProposalRef | null;
   invoice?: InvoiceRef | null;
+  booking?: BookingRef | null;
   case?: CaseRef | null;
   aggregator?: AggregatorRef | null;
 }
@@ -1041,6 +1066,9 @@ export default function AccountsReceivablePage() {
                                 )}
                                 {party.kind === "invoice" && (
                                   <Badge variant="outline" className="text-[10px]">Ad-hoc Invoice</Badge>
+                                )}
+                                {party.kind === "booking" && (
+                                  <Badge variant="outline" className="text-[10px]">Booking PI</Badge>
                                 )}
                                 {party.kind === "case" && (
                                   <Badge variant="outline" className="text-[10px]">VO Case</Badge>
