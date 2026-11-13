@@ -1292,7 +1292,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           }))}
                         value={l.assetId}
                         onValueChange={(v) => handleAssetSelect(l.id, v)}
-                        disabled={proposalLocked}
+                        // Locked only once the proposal's asset is matched; an unmatched line must stay pickable.
+                        disabled={proposalLocked && !!l.assetId}
                         placeholder="Select the asset this line covers..."
                         emptyMessage="No assets found"
                       />
