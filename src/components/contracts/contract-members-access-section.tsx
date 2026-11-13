@@ -590,7 +590,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
   useEffect(() => { load(); }, [load]);
 
   async function handleAdd() {
-    if (!form.name || !form.phone) { toast.error("Name and phone are required"); return; }
+    if (!form.name || !form.phone || !form.email.trim()) { toast.error("Name, phone and email are required"); return; }
     setSaving(true);
     try {
       const res = await fetch(`/api/contracts/${contractId}/members`, {
@@ -600,10 +600,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Failed to add member"); return; }
-      toast.success(`${form.name} added${contractStatus === "active" && form.email ? " — enrollment PIN emailed" : ""}`);
-      if (contractStatus === "active" && !form.email) {
-        toast.warning(`${form.name} has no email, so their door PIN was not sent. Add an email, then use "Email PIN again".`);
-      }
+      toast.success(`${form.name} added${contractStatus === "active" ? " — enrollment PIN emailed" : ""}`);
       setDialogOpen(false);
       setForm({ name: "", phone: "", email: "" });
       await load();
@@ -913,10 +910,10 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                 placeholder="9876543210"
                 type="tel"
               />
-              <p className="text-xs text-muted-foreground">Their door enrollment PIN is emailed, so add an email below</p>
+              <p className="text-xs text-muted-foreground">Their door enrollment PIN is emailed to the address below</p>
             </div>
             <div className="space-y-1.5">
-              <Label>Email <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Label>Email <span className="text-red-600 text-xs">*</span></Label>
               <Input
                 value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}

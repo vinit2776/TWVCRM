@@ -36,6 +36,9 @@ interface Person {
   voucherIssued: boolean;
   voucher: { seatNumber: number; validUntil: string | null; issuedAt: string | null; emailedAt: string | null } | null;
   doorIssuedAt: string | null;
+  doorValidUntil: string | null;
+  /** Latest door PIN email for this person (from the audit trail); null if none recorded. */
+  doorPin: { at: string; by: string; sent: boolean; reason: string | null; email: string | null; purpose: string; attempts: number } | null;
   accessEndedAt: string | null;
   doorEnrolled: boolean;
   doorStatuses: string[];
@@ -117,7 +120,23 @@ function DoorCell({ p }: { p: Person }) {
       ) : (
         <Badge variant="secondary" className="bg-blue-100 text-blue-800">Awaiting enrolment</Badge>
       )}
-      {p.doorIssuedAt && <div className="text-xs text-muted-foreground mt-0.5">Issued {formatDateTime(p.doorIssuedAt)}</div>}
+      {p.doorIssuedAt && <div className="text-xs text-muted-foreground mt-0.5">Door set up {formatDateTime(p.doorIssuedAt)}</div>}
+      {p.doorPin ? (
+        p.doorPin.sent ? (
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {p.doorPin.purpose === "fallback" ? "Fallback PIN" : "PIN"} emailed to {p.doorPin.email} on {formatDateTime(p.doorPin.at)} by {p.doorPin.by}
+            {p.doorPin.attempts > 1 ? ` (${p.doorPin.attempts} sends in total)` : ""}
+          </div>
+        ) : (
+          <div className="text-xs text-red-600 mt-0.5">
+            PIN not sent ({p.doorPin.reason === "no_email" ? "no email on record" : "email failed"}) on {formatDateTime(p.doorPin.at)}, by {p.doorPin.by}.
+            {" "}{p.doorPin.reason === "no_email" ? "Add their email, then use Email PIN again." : "Use Email PIN again."}
+          </div>
+        )
+      ) : (
+        <div className="text-xs text-amber-700 mt-0.5">No PIN email recorded for this person</div>
+      )}
+      {p.doorValidUntil && <div className="text-xs text-muted-foreground mt-0.5">Door access valid until {formatDate(p.doorValidUntil)}</div>}
     </div>
   );
 }
@@ -214,6 +233,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
 
   async function submitAdd(useExisting = false) {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
+    if (form.access && !form.email.trim()) { toast.error("An email is required for anyone who gets door access or a voucher"); return; }
     setSaving(true);
     try {
       const res = await fetch(`/api/contracts/${contractId}/people`, {
@@ -437,8 +457,8 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
                 </select>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Email</Label>
-                <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                <Label className="text-xs">Email{form.access ? " *" : ""}</Label>
+                <Input type="email" required={form.access} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Phone</Label>
@@ -506,7 +526,10 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
                               size="sm" variant="outline"
                               disabled={seatsFull || busy[`give_access_${p.contactId}`]}
                               title={seatsFull ? "All seats are in use" : undefined}
-                              onClick={() => personAction(p, { action: "give_access" }, `${p.name} now gets access`)}
+                              onClick={() => {
+                                if (!p.email) { setFixing(p); setFixForm({ email: "", phone: "" }); toast.error(`${p.name} needs an email first. Add it, then give access.`); return; }
+                                personAction(p, { action: "give_access" }, `${p.name} now gets access`);
+                              }}
                             >
                               Give access
                             </Button>

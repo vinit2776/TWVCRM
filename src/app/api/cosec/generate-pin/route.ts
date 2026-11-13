@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { setUserPin } from "@/lib/cosec";
 import { logAudit } from "@/lib/audit";
-import { sendDoorPinEmail, doorPinEmailProblem } from "@/lib/door-pin-email";
+import { sendDoorPinEmail, doorPinEmailProblem, type DoorPinRecord } from "@/lib/door-pin-email";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
 
@@ -79,7 +79,18 @@ export async function POST(request: NextRequest) {
 
   // Resolve entity name + email for the PIN email
   const { name, email } = await resolveEntityContact(admin, accessUser.user_type, accessUser.entity_id);
-  const emailed = await sendDoorPinEmail({ to: email, name, pin, purpose: "fallback" });
+  // Members are recorded against their contract so the People screen shows who issued it.
+  let record: DoorPinRecord | undefined;
+  if (accessUser.user_type === "member") {
+    const [{ data: m }, { data: dbUser }] = await Promise.all([
+      admin.from("contract_members").select("contract_id").eq("id", accessUser.entity_id).maybeSingle(),
+      supabase.from("users").select("id").eq("auth_id", user.id).single(),
+    ]);
+    if (m?.contract_id) {
+      record = { admin, contractId: m.contract_id, memberId: accessUser.entity_id, performedBy: dbUser?.id ?? null, validUntil: accessUser.valid_until ?? null };
+    }
+  }
+  const emailed = await sendDoorPinEmail({ to: email, name, pin, purpose: "fallback", record });
 
   logAudit(admin, {
     entityType: accessUser.user_type,

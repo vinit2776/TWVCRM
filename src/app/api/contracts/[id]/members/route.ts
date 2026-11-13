@@ -9,7 +9,7 @@ import { sendDoorPinEmail } from "@/lib/door-pin-email";
 const addSchema = z.object({
   name:  z.string().min(1).max(80),
   phone: z.string().min(10).max(20),
-  email: z.string().email().optional().or(z.literal("")),
+  email: z.string().trim().email("An email address is needed: the door PIN is sent by email"),
 });
 
 /** GET — list all active members for a contract with their COSEC status */
@@ -169,7 +169,10 @@ export async function POST(
 
         // Email the enrollment PIN. Not SMS: the only SMS template that fits is the
         // OTP one, which told tenants' staff "Your OTP … do not share" for a door PIN.
-        await sendDoorPinEmail({ to: parsed.data.email, name: parsed.data.name, pin, purpose: "enrollment" });
+        await sendDoorPinEmail({
+          to: parsed.data.email, name: parsed.data.name, pin, purpose: "enrollment",
+          record: { admin, contractId, memberId: member.id, performedBy: dbUser?.id ?? null, validUntil: contract.end_date ?? null },
+        });
 
       } catch (err) {
         console.error("[members] COSEC provision error:", err);

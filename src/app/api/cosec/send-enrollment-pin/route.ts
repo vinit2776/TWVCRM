@@ -24,9 +24,9 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
 
   const [{ data: member }, { data: accessUser }] = await Promise.all([
-    admin.from("contract_members").select("name, email").eq("id", parsed.data.member_id).single(),
+    admin.from("contract_members").select("name, email, contract_id").eq("id", parsed.data.member_id).single(),
     admin.from("cosec_access_users")
-      .select("access_pin")
+      .select("access_pin, valid_until")
       .eq("entity_id", parsed.data.member_id)
       .eq("user_type", "member")
       .not("access_pin", "is", null)
@@ -39,7 +39,11 @@ export async function POST(request: NextRequest) {
 
   const pin = accessUser.access_pin;
 
-  const emailed = await sendDoorPinEmail({ to: member.email, name: member.name, pin, purpose: "enrollment" });
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const emailed = await sendDoorPinEmail({
+    to: member.email, name: member.name, pin, purpose: "enrollment",
+    record: { admin, contractId: member.contract_id, memberId: parsed.data.member_id, performedBy: dbUser?.id ?? null, validUntil: accessUser.valid_until ?? null },
+  });
   if (!emailed.sent) {
     return NextResponse.json({ error: doorPinEmailProblem(emailed.reason, member.name) }, { status: emailed.reason === "no_email" ? 422 : 502 });
   }

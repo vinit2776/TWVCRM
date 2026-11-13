@@ -23,7 +23,8 @@ export interface ProvisionDoorResult {
 export async function provisionMemberDoor(
   admin: SupabaseClient,
   contract: { id: string; location_id: string | null; end_date: string | null },
-  member: { id: string; name: string; email: string | null }
+  member: { id: string; name: string; email: string | null },
+  issuedBy: string | null = null
 ): Promise<ProvisionDoorResult> {
   if (!contract.location_id) return { devices: 0, provisioned: 0, pinEmail: null };
 
@@ -80,7 +81,10 @@ export async function provisionMemberDoor(
   const provisioned = results.filter((r) => r.status === "fulfilled").length;
   // Only tell the member once the PIN is actually live on at least one device.
   const pinEmail = provisioned > 0
-    ? await sendDoorPinEmail({ to: member.email, name: member.name, pin, purpose: "enrollment" })
+    ? await sendDoorPinEmail({
+        to: member.email, name: member.name, pin, purpose: "enrollment",
+        record: { admin, contractId: contract.id, memberId: member.id, performedBy: issuedBy, validUntil: contract.end_date },
+      })
     : null;
 
   return { devices: devices.length, provisioned, pinEmail };

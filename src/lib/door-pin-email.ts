@@ -10,7 +10,9 @@
  * wording is ours. Do not point door PINs back at dltSms.otp(); that template is
  * for genuine one-time codes only (see /api/admin/otp).
  */
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { logAudit } from "@/lib/audit";
 
 export type DoorPinEmailResult =
   | { sent: true }
@@ -22,11 +24,59 @@ function escapeHtml(s: string): string {
 
 export type DoorPinPurpose = "enrollment" | "fallback";
 
+/**
+ * Where to record the send. Every attempt (sent, no email, failed) is written to
+ * the audit trail on the contract so the People screen can show who issued the
+ * PIN, to which address, when, and how long the door access is valid.
+ */
+export interface DoorPinRecord {
+  admin: SupabaseClient;
+  contractId: string;
+  memberId: string;
+  /** users.id of the staff member who triggered it; null for system actions. */
+  performedBy: string | null;
+  /** Date the member's door access runs to (the contract end), if known. */
+  validUntil: string | null;
+}
+
 export async function sendDoorPinEmail(params: {
   to: string | null | undefined;
   name: string;
   pin: string;
   /** enrollment: first-time fingerprint set-up. fallback: PIN to enter with when the card or finger isn't working. */
+  purpose: DoorPinPurpose;
+  record?: DoorPinRecord;
+}): Promise<DoorPinEmailResult> {
+  const result = await deliverDoorPinEmail(params);
+  const r = params.record;
+  if (r) {
+    await logAudit(r.admin, {
+      entityType: "contract",
+      entityId: r.contractId,
+      action: "email_sent",
+      performedBy: r.performedBy,
+      changes: {
+        door_pin: {
+          old: null,
+          new: {
+            member_id: r.memberId,
+            purpose: params.purpose,
+            email: params.to?.trim() || null,
+            sent: result.sent,
+            reason: result.sent ? null : result.reason,
+            valid_until: r.validUntil,
+          },
+        },
+      },
+    });
+  }
+  return result;
+}
+
+async function deliverDoorPinEmail(params: {
+  to: string | null | undefined;
+  name: string;
+  pin: string;
   purpose: DoorPinPurpose;
 }): Promise<DoorPinEmailResult> {
   const to = params.to?.trim();

@@ -95,6 +95,9 @@ export async function POST(
       if (result.code === "PHONE_REQUIRED") {
         return NextResponse.json({ error: "Add a phone number first, it is needed for door access", code: result.code }, { status: 400 });
       }
+      if (result.code === "EMAIL_REQUIRED") {
+        return NextResponse.json({ error: "Add an email address first: the door PIN and WiFi voucher are sent by email", code: result.code }, { status: 400 });
+      }
       if (result.code === "ALREADY_HAS_ACCESS") {
         return NextResponse.json({ error: "This person already has access set up", code: result.code }, { status: 409 });
       }
@@ -133,7 +136,8 @@ export async function POST(
     const result = await provisionMemberDoor(
       admin,
       { id: contract.id, location_id: contract.location_id, end_date: contract.end_date },
-      { id: member.id, name: member.name, email: member.email }
+      { id: member.id, name: member.name, email: member.email },
+      dbUser?.id ?? null
     );
     if (result.devices === 0) {
       return NextResponse.json({ error: "No door devices are set up for this location, so nothing was provisioned" }, { status: 422 });
