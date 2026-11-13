@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { applyDraftWatermark, isDraftAgreement } from "@/lib/draft-watermark";
+import { applyDraftWatermark, isDraftAgreement, DRAFT_WATERMARK_TEXT, draftWatermarkLayout } from "@/lib/draft-watermark";
 import { PDFDocument } from "pdf-lib";
 
 async function blankPdf(pages = 2): Promise<Uint8Array> {
@@ -60,5 +60,25 @@ describe("applyDraftWatermark", () => {
     const original = Buffer.from(await blankPdf(1));
     const marked = await applyDraftWatermark(original);
     await expect(PDFDocument.load(marked)).resolves.toBeDefined();
+  });
+});
+
+describe("watermark text and layout", () => {
+  it("says the draft is not for signing", () => {
+    expect(DRAFT_WATERMARK_TEXT).toBe("DRAFT, not for signing");
+  });
+
+  it("keeps both ends of the rotated text on the page for any format", () => {
+    for (const [w, h] of [[595, 842], [842, 595], [612, 792], [300, 900]]) {
+      const unit = 12.5; // approx Helvetica-Bold width of the text at size 1
+      const { size, x, y } = draftWatermarkLayout(w, h, unit);
+      const len = unit * size;
+      const endX = x + len * Math.cos(Math.PI / 4);
+      const endY = y + len * Math.sin(Math.PI / 4);
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(endX).toBeLessThanOrEqual(w);
+      expect(endY).toBeLessThanOrEqual(h);
+    }
   });
 });
