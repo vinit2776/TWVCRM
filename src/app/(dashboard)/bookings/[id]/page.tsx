@@ -1367,9 +1367,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
       {/* Quick Action Links */}
       <div className="flex flex-wrap gap-2">
-        <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleDownloadReceipt}>
-          <Download className="mr-1 h-3.5 w-3.5" />Download Receipt
-        </Button>
+        {/* A receipt acknowledges money received, so it only exists once a payment
+            has been verified. Before that it would show an unpaid booking as a receipt. */}
+        {existingPayments.some((p) => p.status === "verified") && (
+          <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleDownloadReceipt}>
+            <Download className="mr-1 h-3.5 w-3.5" />Download Receipt
+          </Button>
+        )}
         {booking.status === "checked_out" && (
           <>
             {booking.feedback_token && (
