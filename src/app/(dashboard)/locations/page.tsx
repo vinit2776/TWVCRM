@@ -12,6 +12,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -24,6 +25,9 @@ export default function LocationsPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companyFilter, setCompanyFilter] = useState<string>("all");
   const router = useRouter();
+  // Sales reps open a location to manage its proposal/agreement wording; they don't add or edit locations.
+  const { user } = useCurrentUser();
+  const canManageLocations = user?.role !== "sales_rep";
 
   useEffect(() => {
     fetch("/api/companies").then((r) => r.json()).then((j) => setCompanies(j.data || []));
@@ -64,10 +68,12 @@ export default function LocationsPage() {
               ))}
             </SelectContent>
           </Select>
-          <Button onClick={handleAdd}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Location
-          </Button>
+          {canManageLocations && (
+            <Button onClick={handleAdd}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Location
+            </Button>
+          )}
         </div>
       </div>
 
@@ -76,8 +82,8 @@ export default function LocationsPage() {
           icon={MapPin}
           title="No locations yet"
           description="Add your first coworking center."
-          actionLabel="Add Location"
-          onAction={handleAdd}
+          actionLabel={canManageLocations ? "Add Location" : undefined}
+          onAction={canManageLocations ? handleAdd : undefined}
         />
       ) : (
         <div className="rounded-md border overflow-x-auto">
@@ -144,14 +150,16 @@ export default function LocationsPage() {
                     </Badge>
                   </td>
                   <td className="px-4 py-3">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={(e) => handleEdit(e, loc)}
-                      title="Edit location"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
+                    {canManageLocations && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => handleEdit(e, loc)}
+                        title="Edit location"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    )}
                   </td>
                 </tr>
               ))}

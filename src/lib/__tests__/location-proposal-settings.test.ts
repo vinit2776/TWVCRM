@@ -5,10 +5,11 @@ import {
 } from "@/lib/location-proposal-settings";
 
 describe("location proposal settings", () => {
-  it("lets only admin and manager edit", () => {
+  it("lets admin, manager and sales rep edit", () => {
     expect(canEditProposalSettings("admin")).toBe(true);
     expect(canEditProposalSettings("manager")).toBe(true);
-    expect(canEditProposalSettings("sales_rep")).toBe(false);
+    expect(canEditProposalSettings("sales_rep")).toBe(true);
+    expect(canEditProposalSettings("accounts")).toBe(false);
     expect(canEditProposalSettings(undefined)).toBe(false);
   });
 

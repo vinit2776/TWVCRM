@@ -7,7 +7,7 @@
 import { z } from "zod";
 import { PROPOSAL_MAX_TENURE_MONTHS, PROPOSAL_MAX_NOTICE_MONTHS, maxNoticePeriodMonths } from "@/lib/proposal-terms";
 
-export const PROPOSAL_SETTINGS_EDITOR_ROLES = ["admin", "manager"] as const;
+export const PROPOSAL_SETTINGS_EDITOR_ROLES = ["admin", "manager", "sales_rep"] as const;
 export const canEditProposalSettings = (role: string | null | undefined): boolean =>
   (PROPOSAL_SETTINGS_EDITOR_ROLES as readonly string[]).includes(role ?? "");
 
