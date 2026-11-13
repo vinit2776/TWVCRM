@@ -57,6 +57,31 @@ function isAdminRole(user) {
   return !!user && user.role === 'admin';
 }
 
+// Admins and managers who are also on the employee list file their own leave,
+// permission, corrections, overtime and field trips like anyone else. They see them
+// on "My requests" (?mine=1), which is the employee page itself, and can never decide
+// them: another admin or manager does. The main 'admin' login has no employee record,
+// so it never files anything and can decide everyone's.
+function selfServiceEmployeeId(user) {
+  return isManagementRole(user) && user.employeeId ? user.employeeId : null;
+}
+function canFileOwnRequests(user) {
+  return !!user && (user.role === 'employee' || !!selfServiceEmployeeId(user));
+}
+function ownsRequest(user, row) {
+  return !!(user && user.employeeId && row) && String(row.employee_id) === String(user.employeeId);
+}
+// The user as seen by the employee-facing renderers on "My requests": same account
+// and nav, but the page shows their own forms rather than the team's approvals.
+function asOwnView(user) {
+  return { ...user, ownView: true };
+}
+// Where to land after filing: employees go back to their page, management to "My requests".
+function ownPagePath(user, base, employeeId) {
+  return isManagementRole(user) ? `${base}?mine=1` : `${base}?employee_id=${encodeURIComponent(employeeId)}`;
+}
+const SELF_SERVICE_PAGES = { leave: '/leave', permission: '/permission', corrections: '/corrections', overtime: '/overtime', 'field-trip': '/field-trip', notifications: '/notifications' };
+
 // Only employee accounts can be in Tamil — management pages always render in
 // English, regardless of what's stored in users.language (the toggle never shows
 // for admin/manager, so that column stays 'en' for them in practice anyway).
@@ -1683,6 +1708,13 @@ async function sendDecisionError(res, user, errorKey, backPath, activeNav) {
     <div class="card" style="color:#C62828;">${escapeHtml(t('en', errorKey, { max: NOTE_MAX_LENGTH }))}</div>
     <div class="card"><a href="${escapeHtml(backPath)}">&larr; Back</a></div>`, user));
 }
+// The decide cell on an approvals list: the form, unless the row is the viewer's own.
+function decideCellHtml(user, row, actionPath, fields) {
+  if (ownsRequest(user, row)) {
+    return `<div style="min-width:140px;color:#8A5300;font-size:0.88em;"><strong>Your request.</strong><br>Another admin or manager decides it.</div>`;
+  }
+  return decideFormHtml(actionPath, fields);
+}
 // Approve/Reject with the required note, replacing the old one-click buttons.
 function decideFormHtml(actionPath, fields) {
   const inputs = Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(String(v))}">`).join('');
@@ -2580,10 +2612,21 @@ async function employeeSwitcher(currentId, basePath) {
 
 const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'remote-punches', 'activity-log', 'permission', 'corrections', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
 
+// "Team approvals | My requests" above Leave, Permission, Corrections, Overtime, Field
+// Trips and Notifications, for an admin or manager who is also on the employee list.
+function ownRequestTabsHtml(user, activeNav) {
+  const base = SELF_SERVICE_PAGES[activeNav];
+  if (!base || !selfServiceEmployeeId(user)) return '';
+  const mine = !!user.ownView;
+  const tab = (href, label, active) => `<a href="${href}" style="padding:7px 14px;border-radius:8px;text-decoration:none;font-weight:600;font-size:0.9em;${active ? 'background:#1565C0;color:#fff;' : 'background:#fff;color:#4C5A68;border:1px solid #D0D5DA;'}">${label}</a>`;
+  return `<div style="display:flex;gap:8px;margin-bottom:14px;">${tab(base, activeNav === 'notifications' ? 'Everyone' : 'Team approvals', !mine)}${tab(`${base}?mine=1`, activeNav === 'notifications' ? 'Mine' : 'My requests', mine)}</div>`;
+}
+
 async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}) {
   const isAdmin = isManagementRole(user);
   const lang = langOf(user);
-  const showSwitcher = isAdmin && !ADMIN_TABLE_VIEWS.includes(activeNav);
+  const showSwitcher = isAdmin && !(user && user.ownView) && !ADMIN_TABLE_VIEWS.includes(activeNav);
+  const ownTabs = ownRequestTabsHtml(user, activeNav);
   // Onboarding only ever shows on an employee's own dashboard — it anchors to
   // elements (#onbHoursCard, #navCalendar, ...) that only that page guarantees.
   // opts.forceOnboardingTour replays the tour on demand without touching the
@@ -2757,7 +2800,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
     <div class="main">
       <div class="wrap">
         <div class="topbar-mobile">${langToggle}${rightSide}</div>
-        ${bodyHtml}
+        ${ownTabs}${bodyHtml}
       </div>
     </div>
     ${IOS_INSTALL_SHEET_HTML}
@@ -3348,7 +3391,7 @@ async function renderCalendar(employee, year, month, user) {
 }
 
 async function renderLeave(employee, balances, requests, user, error, prefill = {}) {
-  const isAdmin = isManagementRole(user);
+  const isAdmin = isManagementRole(user) && !user.ownView;
   const lang = langOf(user);
   const balanceCards = leaveBalanceCardsHtml(balances, lang);
   const previous = prefill.previous || null;
@@ -4057,7 +4100,7 @@ async function renderAdminFieldTrips(trips, user) {
     const emp = await getEmployee(trip.employee_id);
     const before = await earlierAttempts(trip, async id => byId.get(id) || await getRequestById('field_trips', id));
     const statusCell = trip.status === 'pending'
-      ? decideFormHtml('/field-trip/decide', { id: trip.id })
+      ? decideCellHtml(user, trip, '/field-trip/decide', { id: trip.id })
       : `${statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', trip.status)}<div style="margin-top:4px;font-size:0.9em;">${decisionNoteHtml(trip)}</div>`;
     const amount = trip.amount != null
       ? `${escapeHtml(formatInr(trip.amount))}<div style="color:#9AA5B1;font-size:0.82em;font-weight:400;">${escapeHtml(formatInr(trip.rate_per_km))}/km</div>`
@@ -4286,7 +4329,7 @@ async function renderAdminLeave(requests, balanceRows, user, error) {
       <td>${escapeHtml(r.leave_type)}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
       <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('leave_requests', r, byId, 'en', describe)}${certificateCellHtml(r, certs.get(r.id))}</td>
-      <td>${decideFormHtml('/leave/decide', { id: r.id, employee_id: r.employee_id })}</td>
+      <td>${decideCellHtml(user, r, '/leave/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -4361,7 +4404,7 @@ async function renderAdminPermission(requests, hoursReportRows, user) {
       <td>${escapeHtml(r.leave_time)}</td>
       <td>${await hoursCell(r)}</td>
       <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('permission_requests', r, byId, 'en', describe)}</td>
-      <td>${decideFormHtml('/permission/decide', { id: r.id, employee_id: r.employee_id })}</td>
+      <td>${decideCellHtml(user, r, '/permission/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -4564,7 +4607,7 @@ async function renderAdminCorrections(requests, user, error) {
       <td>${escapeHtml(afterText)}</td>
       <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('correction_requests', r, byId, 'en', describe)}</td>
       <td>${usageCell}</td>
-      <td>${decideFormHtml('/corrections/decide', { id: r.id })}</td>
+      <td>${decideCellHtml(user, r, '/corrections/decide', { id: r.id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="8" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -4615,7 +4658,7 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
       <td>${escapeHtml(r.date)}</td>
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
       <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('overtime_requests', r, byId, 'en', describe)}</td>
-      <td>${decideFormHtml('/overtime/decide', { id: r.id, employee_id: r.employee_id })}</td>
+      <td>${decideCellHtml(user, r, '/overtime/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -6610,7 +6653,8 @@ async function handleRequest(req, res) {
   }
 
   // --- Everything below requires a logged-in session ---
-  const user = await getSessionUser(req);
+  // let, not const: "My requests" pages swap in asOwnView(user) before rendering.
+  let user = await getSessionUser(req);
   if (!user) {
     res.writeHead(302, { Location: '/login' });
     return res.end();
@@ -6660,9 +6704,15 @@ async function handleRequest(req, res) {
   // Employees are locked to their own employee_id, no matter what's in the URL.
   // Admins can pass employee_id to view/act on anyone (defaults to the first employee).
   async function resolveEmployeeId() {
-    if (user.role === 'employee') return user.employeeId;
+    if (user.role === 'employee' || user.ownView) return user.employeeId;
     const employees = await allEmployees();
     return parsed.searchParams.get('employee_id') || (employees[0] && employees[0].id);
+  }
+
+  // "My requests" for an admin or manager on the employee list: ?mine=1, or a
+  // re-apply link from that page (which only carries ?reapply=).
+  function wantsOwnView() {
+    return !!selfServiceEmployeeId(user) && (parsed.searchParams.get('mine') === '1' || !!parsed.searchParams.get('reapply'));
   }
 
   if (parsed.pathname === '/' && req.method === 'GET') {
@@ -6736,7 +6786,9 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/leave' && req.method === 'GET') {
-    if (isManagementRole(user)) {
+    const ownView = wantsOwnView();
+    if (ownView) user = asOwnView(user);
+    if (isManagementRole(user) && !ownView) {
       const rows = await Promise.all((await allEmployees()).map(async employee => ({ employee, balances: await getLeaveBalanceDisplay(employee.id) })));
       return sendHtml(res, await renderAdminLeave(await getAllLeaveRequests(), rows, user));
     }
@@ -6751,7 +6803,8 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/leave/apply' && req.method === 'POST') {
     // Leave applications can only be filed by the employee themselves — not by admin on their behalf.
-    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only an employee can apply for their own leave.'); }
+    if (!canFileOwnRequests(user)) { res.writeHead(403); return res.end('Only an employee can apply for their own leave.'); }
+    if (isManagementRole(user)) user = asOwnView(user);
     const employeeId = user.employeeId;
     const lang = langOf(user);
     let form;
@@ -6802,7 +6855,7 @@ async function handleRequest(req, res) {
       }
     }
     await logActivity('leave_applied', employeeId, `${leaveType}, ${startDate} to ${endDate} · ${reason.value}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}${certificate.file ? ' · certificate attached' : ''}`);
-    res.writeHead(302, { Location: `/leave?employee_id=${encodeURIComponent(employeeId)}` });
+    res.writeHead(302, { Location: ownPagePath(user, '/leave', employeeId) });
     return res.end();
   }
 
@@ -6812,6 +6865,7 @@ async function handleRequest(req, res) {
     const id = form.id;
     const request = await db.prepare('SELECT * FROM leave_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown leave request'); }
+    if (ownsRequest(user, request)) { res.writeHead(403); return res.end("You can't decide your own request. Another admin or manager has to."); }
     const decision = readDecision(form);
     if (decision.error) return sendDecisionError(res, user, decision.error, '/leave', 'leave');
     const suffix = decisionNoteSuffix(decision.note, user.username);
@@ -6838,7 +6892,8 @@ async function handleRequest(req, res) {
 
   // An employee adds or replaces the medical certificate on their own pending Sick Leave.
   if (parsed.pathname === '/leave/certificate' && req.method === 'POST') {
-    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only the employee can attach their certificate.'); }
+    if (!canFileOwnRequests(user)) { res.writeHead(403); return res.end('Only the employee can attach their certificate.'); }
+    if (isManagementRole(user)) user = asOwnView(user);
     const lang = langOf(user);
     let form;
     try { form = await readFormBody(req, MAX_CERTIFICATE_FORM_BYTES); } catch (err) {
@@ -6855,7 +6910,7 @@ async function handleRequest(req, res) {
     if (!certificate.file) return showError(t(lang, 'leave.cert_err_type'));
     await runCertificateCheck(await saveCertificate(request, certificate.file));
     await logActivity('leave_certificate', employee.id, `Certificate for ${request.leave_type} ${request.start_date} to ${request.end_date}`);
-    res.writeHead(302, { Location: '/leave' });
+    res.writeHead(302, { Location: isManagementRole(user) ? '/leave?mine=1' : '/leave' });
     return res.end();
   }
 
@@ -6887,7 +6942,9 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/permission' && req.method === 'GET') {
     const now = new Date();
-    if (isManagementRole(user)) {
+    const ownView = wantsOwnView();
+    if (ownView) user = asOwnView(user);
+    if (isManagementRole(user) && !ownView) {
       const hoursReportRows = await Promise.all((await allEmployees()).map(async employee => ({
         employee,
         ...(await computeMonthlyPermissionSummary(employee.id, now.getFullYear(), now.getMonth() + 1)),
@@ -6905,7 +6962,8 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/permission/apply' && req.method === 'POST') {
     // Permission requests can only be filed by the employee themselves — not by admin on their behalf.
-    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only an employee can apply for their own permission.'); }
+    if (!canFileOwnRequests(user)) { res.writeHead(403); return res.end('Only an employee can apply for their own permission.'); }
+    if (isManagementRole(user)) user = asOwnView(user);
     const employeeId = user.employeeId;
     const form = await readFormBody(req);
     const date = form.date;
@@ -6949,7 +7007,7 @@ async function handleRequest(req, res) {
       'INSERT INTO permission_requests (employee_id, date, leave_time, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(employeeId, date, leaveTime, reason, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
     await logActivity('permission_applied', employeeId, `Leave at ${leaveTime} on ${date} · ${reason}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}`);
-    res.writeHead(302, { Location: `/permission?employee_id=${encodeURIComponent(employeeId)}` });
+    res.writeHead(302, { Location: ownPagePath(user, '/permission', employeeId) });
     return res.end();
   }
 
@@ -6959,6 +7017,7 @@ async function handleRequest(req, res) {
     const id = form.id;
     const request = await db.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown permission request'); }
+    if (ownsRequest(user, request)) { res.writeHead(403); return res.end("You can't decide your own request. Another admin or manager has to."); }
     const decision = readDecision(form);
     if (decision.error) return sendDecisionError(res, user, decision.error, '/permission', 'permission');
     const suffix = decisionNoteSuffix(decision.note, user.username);
@@ -6978,7 +7037,9 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/corrections' && req.method === 'GET') {
-    if (isManagementRole(user)) {
+    const ownView = wantsOwnView();
+    if (ownView) user = asOwnView(user);
+    if (isManagementRole(user) && !ownView) {
       return sendHtml(res, await renderAdminCorrections(await getAllCorrectionRequests(), user));
     }
     const employeeId = await resolveEmployeeId();
@@ -6992,7 +7053,8 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/corrections/apply' && req.method === 'POST') {
     // Filed by the employee themselves only — same rule as permission requests.
-    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only an employee can request a correction for themselves.'); }
+    if (!canFileOwnRequests(user)) { res.writeHead(403); return res.end('Only an employee can request a correction for themselves.'); }
+    if (isManagementRole(user)) user = asOwnView(user);
     const employee = await getEmployee(user.employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     const form = await readFormBody(req);
@@ -7019,7 +7081,7 @@ async function handleRequest(req, res) {
     await logActivity('correction_applied', employee.id, [request.date,
       request.check_in_time && `in ${request.check_in_time}`, request.check_out_time && `out ${request.check_out_time}`,
       request.reason, previous && `applied again after #${previous.id} was rejected`].filter(Boolean).join(' · '));
-    res.writeHead(302, { Location: `/corrections?employee_id=${encodeURIComponent(employee.id)}` });
+    res.writeHead(302, { Location: ownPagePath(user, '/corrections', employee.id) });
     return res.end();
   }
 
@@ -7028,6 +7090,7 @@ async function handleRequest(req, res) {
     const form = await readFormBody(req);
     const request = await db.prepare('SELECT * FROM correction_requests WHERE id = ?').get(form.id);
     if (!request) { res.writeHead(404); return res.end('Unknown correction request'); }
+    if (ownsRequest(user, request)) { res.writeHead(403); return res.end("You can't decide your own request. Another admin or manager has to."); }
     if (request.status !== 'pending') {
       res.writeHead(302, { Location: '/corrections' });
       return res.end();
@@ -7061,7 +7124,9 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/overtime' && req.method === 'GET') {
-    if (isManagementRole(user)) {
+    const ownView = wantsOwnView();
+    if (ownView) user = asOwnView(user);
+    if (isManagementRole(user) && !ownView) {
       const now = new Date();
       const hoursReportRows = await Promise.all((await allEmployees()).map(async employee => ({
         employee,
@@ -7081,14 +7146,20 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/overtime/apply' && req.method === 'POST') {
-    const isAdmin = isManagementRole(user);
+    const isManagement = isManagementRole(user);
     // Employees file their own requests, which need a separate admin approval. Admins can also
     // file on behalf of staff who can't (e.g. no phone) — that's recorded as already authorized,
     // skipping the approval step, since the admin is the one asserting it happened.
-    if (!isAdmin && user.role !== 'employee') {
+    if (!isManagement && user.role !== 'employee') {
       res.writeHead(403); return res.end('Only an employee or admin can request overtime.');
     }
     const form = await readFormBody(req);
+    // isAdmin below means "filing for someone else". An admin or manager filing for
+    // themselves (from My requests, or by picking their own name) is an ordinary pending
+    // request that another admin or manager has to approve — never auto-approved.
+    const filingOwn = !!selfServiceEmployeeId(user) && (!form.employee_id || String(form.employee_id) === String(user.employeeId));
+    const isAdmin = isManagement && !filingOwn;
+    if (isManagement && filingOwn) user = asOwnView(user);
     const employeeId = isAdmin ? form.employee_id : user.employeeId;
     const date = form.date;
     const plannedHours = form.planned_hours;
@@ -7141,7 +7212,7 @@ async function handleRequest(req, res) {
       'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(employeeId, date, Number(plannedHours), reason, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
     await logActivity('overtime_applied', employeeId, `${date}, ${plannedHours}h planned · ${reason}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}`);
-    res.writeHead(302, { Location: `/overtime?employee_id=${encodeURIComponent(employeeId)}` });
+    res.writeHead(302, { Location: ownPagePath(user, '/overtime', employeeId) });
     return res.end();
   }
 
@@ -7151,6 +7222,7 @@ async function handleRequest(req, res) {
     const id = form.id;
     const request = await db.prepare('SELECT * FROM overtime_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown overtime request'); }
+    if (ownsRequest(user, request)) { res.writeHead(403); return res.end("You can't decide your own request. Another admin or manager has to."); }
     const decision = readDecision(form);
     if (decision.error) return sendDecisionError(res, user, decision.error, '/overtime', 'overtime');
     const suffix = decisionNoteSuffix(decision.note, user.username);
@@ -7243,7 +7315,9 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/field-trip' && req.method === 'GET') {
     if (!CONFIG.LOCATIONIQ_API_KEY) { res.writeHead(404); return res.end('Not found'); }
-    if (isManagementRole(user)) {
+    const ownView = wantsOwnView();
+    if (ownView) user = asOwnView(user);
+    if (isManagementRole(user) && !ownView) {
       const trips = await db.prepare('SELECT * FROM field_trips ORDER BY id DESC LIMIT 200').all();
       return sendHtml(res, await renderAdminFieldTrips(trips, user));
     }
@@ -7272,6 +7346,7 @@ async function handleRequest(req, res) {
     const id = form.id;
     const trip = await db.prepare('SELECT * FROM field_trips WHERE id = ?').get(id);
     if (!trip) { res.writeHead(404); return res.end('Unknown field trip'); }
+    if (ownsRequest(user, trip)) { res.writeHead(403); return res.end("You can't decide your own request. Another admin or manager has to."); }
     const decision = readDecision(form);
     if (decision.error) return sendDecisionError(res, user, decision.error, '/field-trip', 'field-trip');
     const suffix = decisionNoteSuffix(decision.note, user.username);
@@ -7294,7 +7369,8 @@ async function handleRequest(req, res) {
   // Submitting a rejected trip again: the same trip (date, route, distance) with a new
   // reason, as a fresh pending row pointing back at the rejected one.
   if (parsed.pathname === '/field-trip/reapply' && req.method === 'POST') {
-    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only the employee can submit their trip again.'); }
+    if (!canFileOwnRequests(user)) { res.writeHead(403); return res.end('Only the employee can submit their trip again.'); }
+    if (isManagementRole(user)) user = asOwnView(user);
     const form = await readFormBody(req);
     const lang = langOf(user);
     const reapply = await resolveReapply('field_trips', form.previous_request_id, user.employeeId);
@@ -7319,12 +7395,14 @@ async function handleRequest(req, res) {
        SELECT ?, employee_id, filename, content_type, size_bytes, data, uploaded_at FROM field_trip_photos WHERE trip_id = ? ORDER BY id`
     ).run(inserted.lastInsertRowid, previous.id);
     await logActivity('field_trip', previous.employee_id, `Submitted again: ${tripSummaryText(previous)} · ${reason.value}`);
-    res.writeHead(302, { Location: '/field-trip' });
+    res.writeHead(302, { Location: isManagementRole(user) ? '/field-trip?mine=1' : '/field-trip' });
     return res.end();
   }
 
   if (parsed.pathname === '/notifications' && req.method === 'GET') {
-    if (isManagementRole(user)) {
+    const ownView = wantsOwnView();
+    if (ownView) user = asOwnView(user);
+    if (isManagementRole(user) && !ownView) {
       // Admin is browsing everyone's notifications, not acknowledging their own —
       // must not mark other employees' notifications as read on their behalf.
       return sendHtml(res, await renderAdminNotifications(await getAllNotifications(), user));
@@ -8128,6 +8206,14 @@ module.exports.API_EMPLOYEE_FIELDS = API_EMPLOYEE_FIELDS;
 // it because the rule depends on PLACES_VIEWBOX.
 module.exports.resolveTripRoute = resolveTripRoute;
 module.exports.CONFIG = CONFIG;
+// Who may file their own requests and who may decide them — pure, no server needed.
+module.exports.selfServiceEmployeeId = selfServiceEmployeeId;
+module.exports.canFileOwnRequests = canFileOwnRequests;
+module.exports.ownsRequest = ownsRequest;
+module.exports.ownPagePath = ownPagePath;
+module.exports.decideCellHtml = decideCellHtml;
+module.exports.ownRequestTabsHtml = ownRequestTabsHtml;
+module.exports.asOwnView = asOwnView;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped
