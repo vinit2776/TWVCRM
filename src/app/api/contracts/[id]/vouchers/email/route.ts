@@ -114,20 +114,28 @@ export async function POST(
       ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
       : "—";
 
+    const subject = `Your WiFi Access Code — The WorkVilla`;
+    const html = buildPerSeatEmailHTML({
+      recipientName: issuance.seat_occupant_email ? recipientEmail.split("@")[0] : (contract.lead?.first_name || "User"),
+      voucherCode: displayCode,
+      validFrom,
+      validUntil,
+      seatNumber: issuance.seat_number,
+      contractNumber: contract.contract_number,
+      senderName,
+    });
+
+    // Preview: exactly what Send would email, with nothing sent or recorded.
+    if (body.preview === true) {
+      return NextResponse.json({ preview: { to: recipientEmail, subject, html } });
+    }
+
     try {
       const sendResult = await resend.emails.send({
         from: EMAIL_FROM,
         to: [recipientEmail],
-        subject: `Your WiFi Access Code — The WorkVilla`,
-        html: buildPerSeatEmailHTML({
-          recipientName: issuance.seat_occupant_email ? recipientEmail.split("@")[0] : (contract.lead?.first_name || "User"),
-          voucherCode: displayCode,
-          validFrom,
-          validUntil,
-          seatNumber: issuance.seat_number,
-          contractNumber: contract.contract_number,
-          senderName,
-        }),
+        subject,
+        html,
       });
 
       // Check for Resend API-level errors (e.g. domain not verified)
