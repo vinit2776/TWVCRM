@@ -21,6 +21,15 @@ describe("paymentStatusForTotal", () => {
     expect(paymentStatusForTotal(1770, 1180)).toBe("pending");
     expect(paymentStatusForTotal(1180, 1180)).toBe("paid");
   });
+
+  it("does not let the rounding allowance swallow a small extra", () => {
+    // ₹20 extra on ₹1,180 with the usual ~₹23 allowance would read as paid.
+    expect(paymentStatusForTotal(1200, 1180, 20)).toBe("pending");
+  });
+
+  it("still forgives a few rupees short on the original payment", () => {
+    expect(paymentStatusForTotal(1180, 1175)).toBe("paid");
+  });
 });
 
 describe("planGstTasks", () => {

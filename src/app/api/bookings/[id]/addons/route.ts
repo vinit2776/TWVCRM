@@ -214,7 +214,7 @@ export async function POST(
   const newTotal = await recomputeBookingTotal(supabase, id, booking);
 
   if (postCheckout) {
-    await reopenBalanceAfterExtra(id, newTotal, dbUser.id);
+    await reopenBalanceAfterExtra(id, newTotal, Number(booking.total_amount_with_gst), dbUser.id);
   }
 
   // Audit one row per inserted addon — keeps the existing per-addon timeline
@@ -273,22 +273,35 @@ async function recomputeBookingTotal(
 }
 
 /**
- * An extra added after checkout lifts the total above what was collected, so the
- * booking goes back to Pending Collection for the difference. The old payment link
- * is spent (it was for the earlier amount), so it is cleared: the next Send link or
- * PI makes a fresh one for the balance. The Tally task is held by the same state: it
- * only goes ahead once the booking is paid again.
+ * An extra added after checkout lifts the total above what was collected, so a booking
+ * that was paid goes back to Pending Collection for the difference. The Tally task is
+ * held by the same state: it only goes ahead once the booking is paid again.
+ *
+ * Only a booking that is "paid" with money actually collected is reopened. Waived,
+ * complimentary and prepaid bookings keep the status they were given on purpose.
+ * The flip is a compare-and-set on payment_status, so a payment that lands at the same
+ * moment is not overwritten. The old payment link is cleared only because it was already
+ * spent on the earlier amount; the next Send link or PI makes a fresh one for the balance.
  */
-async function reopenBalanceAfterExtra(bookingId: string, total: number, userId: string) {
+async function reopenBalanceAfterExtra(bookingId: string, total: number, previousTotal: number, userId: string) {
   const admin = createAdminClient();
+  const { data: current } = await admin
+    .from("bookings").select("payment_status").eq("id", bookingId).maybeSingle();
+  if (current?.payment_status !== "paid") return;
+
   const { data: payments } = await admin
     .from("booking_payments").select("amount").eq("booking_id", bookingId).eq("status", "verified");
   const paid = (payments || []).reduce((s: number, p: { amount: number | string }) => s + Number(p.amount), 0);
-  const status = paymentStatusForTotal(total, paid);
+  if (paid <= 0) return;
+
+  const status = paymentStatusForTotal(total, paid, total - previousTotal);
   if (status === "pending") {
-    await admin.from("bookings")
+    const { data: flipped } = await admin.from("bookings")
       .update({ payment_status: "pending", razorpay_payment_link_id: null, razorpay_payment_link_url: null })
-      .eq("id", bookingId);
+      .eq("id", bookingId)
+      .eq("payment_status", "paid")
+      .select("id");
+    if (!flipped || flipped.length === 0) return;
     await syncBookingPiStatement(admin, bookingId);
     void logAudit(admin, {
       entityType: "booking", entityId: bookingId, action: "update", performedBy: userId,

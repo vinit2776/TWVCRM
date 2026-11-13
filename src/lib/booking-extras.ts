@@ -18,9 +18,14 @@ export function postCheckoutExtrasAllowed(b: {
   return b.status === "checked_out" && b.customer_type !== "contract_holder" && !b.contract_id;
 }
 
-/** After an extra changes the total: still paid if the money received covers it, else pending. */
-export function paymentStatusForTotal(total: number, verifiedPaid: number): "paid" | "pending" {
-  return verifiedPaid >= total - bookingPaymentTolerance(total) ? "paid" : "pending";
+/**
+ * After an extra changes the total: still paid if the money received covers it, else pending.
+ * The usual tolerance (₹10 / 2%) is for rounding on a UPI amount, not for letting a small
+ * extra go uncollected, so what the extra itself added is taken off the allowance.
+ */
+export function paymentStatusForTotal(total: number, verifiedPaid: number, added = 0): "paid" | "pending" {
+  const allowance = Math.max(bookingPaymentTolerance(total) - Math.max(added, 0), 0.5);
+  return verifiedPaid >= total - allowance ? "paid" : "pending";
 }
 
 export interface TaskLike {

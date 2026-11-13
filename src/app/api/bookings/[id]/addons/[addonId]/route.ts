@@ -90,16 +90,18 @@ export async function DELETE(
   // Keep the PI's Receivables statement at the booking's new total.
   const admin = createAdminClient();
   await syncBookingPiStatement(admin, id);
+  let overpaid = 0;
   if (postCheckout) {
-    // Taking the extra off may leave the booking fully paid again.
+    // Taking the extra off may leave the booking fully paid again, or paid beyond its total.
     const total = roundToRupee(Number(booking.total_amount) + Number(booking.gst_amount) + sum);
     const { data: payments } = await admin
       .from("booking_payments").select("amount").eq("booking_id", id).eq("status", "verified");
     const paid = (payments || []).reduce((s: number, p: { amount: number | string }) => s + Number(p.amount), 0);
-    if (paymentStatusForTotal(total, paid) === "paid") {
-      await admin.from("bookings").update({ payment_status: "paid" }).eq("id", id);
+    if (booking.payment_status === "pending" && paid > 0 && paymentStatusForTotal(total, paid) === "paid") {
+      await admin.from("bookings").update({ payment_status: "paid" }).eq("id", id).eq("payment_status", "pending");
       await maybeCreateBookingGstTask(admin, id);
     }
+    overpaid = Math.max(0, Math.round((paid - total) * 100) / 100);
   }
 
   logAudit(supabase, {
@@ -107,5 +109,9 @@ export async function DELETE(
     performedBy: dbUser.id, changes: { record: { old: addon, new: null } },
   });
 
-  return NextResponse.json({ success: true });
+  // A paid extra can come off, but the money stays: say so, so it is refunded or kept on purpose.
+  return NextResponse.json({
+    success: true,
+    ...(overpaid >= 1 ? { overpaid, warning: `₹${overpaid.toLocaleString("en-IN")} was collected beyond the new total. Refund it by hand or keep it as credit.` } : {}),
+  });
 }

@@ -32,6 +32,17 @@ ALTER TABLE booking_gst_tasks
 CREATE UNIQUE INDEX IF NOT EXISTS booking_gst_tasks_booking_sequence_key
   ON booking_gst_tasks (booking_id, sequence);
 
+-- Add-ons already on an issued GST invoice belong to that task, so the first supplement
+-- only carries what is genuinely new.
+UPDATE booking_addons a
+   SET gst_task_id = t.id
+  FROM booking_gst_tasks t
+ WHERE t.booking_id = a.booking_id
+   AND t.kind = 'main'
+   AND a.gst_task_id IS NULL
+   AND t.voided_at IS NULL
+   AND (t.gst_invoice_number IS NOT NULL OR t.tally_invoice_number IS NOT NULL OR t.handoff_state <> 'gst_to_issue');
+
 -- Existing tasks were created for the booking's total at the time.
 UPDATE booking_gst_tasks t
    SET amount_with_gst = b.total_amount_with_gst

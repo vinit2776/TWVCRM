@@ -219,7 +219,9 @@ export async function syncBookingPiStatement(admin: SupabaseClient, bookingId: s
       .update({
         payment_status: next,
         // Follows the booking's link: an extra after checkout gets a fresh one for the balance.
-        ...(booking.razorpay_payment_link_id ? { razorpay_payment_link_id: booking.razorpay_payment_link_id, razorpay_payment_link_url: booking.razorpay_payment_link_url } : {}),
+        // Including none: a cleared link must not leave the statement pointing at a spent one.
+        razorpay_payment_link_id: booking.razorpay_payment_link_id ?? null,
+        razorpay_payment_link_url: booking.razorpay_payment_link_url ?? null,
         total_amount: totals.total,
         subtotal: totals.subtotal,
         fixed_amount: totals.subtotal,
