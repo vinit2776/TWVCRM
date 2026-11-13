@@ -6,6 +6,9 @@ import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
 import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
+import { attachPurchasePos } from "@/lib/procurement/amc-asset-receipts";
+import type { AssetForAmc } from "@/lib/procurement/amc-received";
+import { TERMINATE_ROLES, terminateBlocker, terminationPatch } from "@/lib/procurement/amc-terminate";
 import { amcStatusFor, poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
 
 // Admin-only corrections, one step back each. See src/lib/procurement/admin-rollback.ts.
@@ -88,7 +91,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*, linked_asset:facility_assets(id, name, asset_code), procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), companies(id, name, brand_name, gstin, address, city, state, pincode, phone, email), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
+      `*, purchase_order_items(*, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id), procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), companies(id, name, brand_name, gstin, address, city, state, pincode, phone, email), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -102,6 +105,11 @@ export async function GET(
     .eq("entity_type", "purchase_order")
     .eq("entity_id", id)
     .order("created_at", { ascending: true });
+
+  // Warning data only: where each linked asset was bought and whether its goods arrived.
+  const d = data as { linked_asset?: AssetForAmc | null; purchase_order_items?: Array<{ linked_asset?: AssetForAmc | null }> };
+  const linkedAssets = [d.linked_asset, ...(d.purchase_order_items ?? []).map((i) => i.linked_asset)].filter(Boolean) as AssetForAmc[];
+  await attachPurchasePos(supabase, linkedAssets);
 
   return NextResponse.json({ data, audit_events: auditEvents ?? [] });
 }
@@ -525,7 +533,7 @@ export async function PATCH(
     }
 
     case "reinstate_amc": {
-      if (po.po_type !== "service" || !po.amc_terminated_at) {
+      if (!po.amc_terminated_at) {
         return NextResponse.json({ error: "This contract has not been terminated" }, { status: 422 });
       }
       if (["cancelled", "partially_cancelled"].includes(po.status)) {
@@ -641,36 +649,20 @@ export async function PATCH(
       // Admin/manager only — terminating an AMC mid-contract is a destructive,
       // irreversible action. Once terminated, no new events can be logged and
       // the only way back is to create a new PO.
-      if (!["admin", "manager"].includes(dbUser.role)) {
+      if (!(TERMINATE_ROLES as readonly string[]).includes(dbUser.role)) {
         return NextResponse.json(
           { error: "Only admin and manager can terminate an AMC" },
           { status: 403 }
         );
       }
-      if (po.po_type !== "service") {
-        return NextResponse.json(
-          { error: "Termination is only available on service / AMC POs" },
-          { status: 422 }
-        );
+      let requestIsAmc = false;
+      if (po.pr_id) {
+        const { data: pr } = await supabase.from("purchase_requests").select("expenditure_type").eq("id", po.pr_id).maybeSingle();
+        requestIsAmc = pr?.expenditure_type === "amc";
       }
-      if (po.amc_terminated_at) {
-        return NextResponse.json(
-          { error: "This AMC has already been terminated" },
-          { status: 422 }
-        );
-      }
-      if (!["active", "expiring"].includes(po.amc_status ?? "")) {
-        return NextResponse.json(
-          { error: `Can only terminate an active or expiring AMC (current state: ${po.amc_status ?? "unknown"})` },
-          { status: 422 }
-        );
-      }
-      updatePayload = {
-        amc_terminated_at: new Date().toISOString(),
-        amc_terminated_by: dbUser.id,
-        amc_termination_reason: parsed.data.termination_reason.trim(),
-        amc_status: "terminated",
-      };
+      const blocker = terminateBlocker(po, requestIsAmc);
+      if (blocker) return NextResponse.json({ error: blocker }, { status: 422 });
+      updatePayload = terminationPatch(dbUser.id, parsed.data.termination_reason);
       break;
     }
   }

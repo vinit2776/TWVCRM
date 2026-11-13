@@ -16,9 +16,10 @@ const bodySchema = z.object({
 
 // POST /api/leads/[id]/not-interested
 // The one-tap "Not interested" action on the Leads list: records why, closes the lead (lost, or
-// junk when it was never a real lead) and moves it to the archive in one step. The generic
-// archive route is admin/manager only; a sales rep who just got a "no" on the phone has to be able
-// to close their own lead, so this route does both under the caller's normal lead permissions.
+// junk when it was never a real lead). It does NOT disable the lead: a lost lead stays in the
+// list and in search so it can be reviewed or revived, and "disabled" (archive route, admin/manager
+// only) is kept for contacts who asked not to be contacted again. A sales rep who just got a "no"
+// on the phone has to be able to close their own lead, so this runs under normal lead permissions.
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -52,8 +53,8 @@ export async function POST(
   if (oldLead.status === "won") {
     return NextResponse.json({ error: "A won lead can't be closed as not interested" }, { status: 409 });
   }
-  if (oldLead.archived_at) {
-    return NextResponse.json({ error: "This lead is already closed and archived" }, { status: 409 });
+  if (oldLead.status === "lost" || oldLead.status === "junk") {
+    return NextResponse.json({ error: "This lead is already closed" }, { status: 409 });
   }
 
   const now = new Date().toISOString();
@@ -62,15 +63,12 @@ export async function POST(
     reason === "junk"
       ? { status: "junk" }
       : { status: "lost", lost_reason: NOT_INTERESTED_TO_LOST_REASON[reason], lost_at: now };
-  update.archived_at = now;
-  update.archived_by = dbUser?.id ?? null;
-  update.archive_reason = `Not interested: ${label}`;
 
   const { data, error } = await supabase
     .from("leads")
     .update(update)
     .eq("id", id)
-    .is("archived_at", null)
+    .eq("status", oldLead.status) // someone else changed it since we read it: don't overwrite
     .select("*")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -103,7 +101,6 @@ export async function POST(
       performedBy: dbUser.id,
       changes: {
         status: { old: oldLead.status, new: update.status },
-        archived_at: { old: oldLead.archived_at ?? null, new: now },
         not_interested_reason: { old: null, new: reason },
       },
     });

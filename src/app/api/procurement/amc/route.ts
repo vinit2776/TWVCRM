@@ -1,6 +1,8 @@
 import { isDeadBillStatus } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { attachPurchasePos } from "@/lib/procurement/amc-asset-receipts";
+import type { AssetForAmc } from "@/lib/procurement/amc-received";
 import { computeAmcCommitted } from "@/lib/procurement/amc-budget";
 
 function getCurrentFY(date = new Date()): number {
@@ -38,7 +40,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("purchase_orders")
     .select(`
-      id, po_number, po_type, status, amc_status,
+      id, po_number, po_type, status, amc_status, amc_terminated_at,
       billing_cycle, cycle_count, opening_cycles, unit_cost_per_cycle,
       amc_start_date, amc_end_date,
       amc_visits_covered, amc_visits_used,
@@ -49,9 +51,9 @@ export async function GET(request: NextRequest) {
       locations(id, name),
       companies(id, name, brand_name),
       purchase_requests(id, pr_number, department, expenditure_type),
-      purchase_order_items(id, item_name, unit, linked_asset_id, linked_asset:facility_assets(id, name, asset_code)),
+      purchase_order_items(id, item_name, unit, linked_asset_id, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id)),
       vendor_bills(id, payment_status, approval_status),
-      linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code)
+      linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id)
     `)
     .order("created_at", { ascending: false });
 
@@ -77,9 +79,10 @@ export async function GET(request: NextRequest) {
   const today = new Date();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   amcRows = amcRows.map((r: any) => {
-    const computed = computeAmcStatus(
-      r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today
-    );
+    // A termination overrides the date maths, as it does on the contract page.
+    const computed = r.amc_terminated_at
+      ? "terminated"
+      : computeAmcStatus(r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today);
     const { vendor_bills: bills, ...rest } = r;
     // Rejected bills do not consume a billing cycle — that cycle is still unbilled.
     // Matches the cap enforced when a bill is created.
@@ -95,13 +98,19 @@ export async function GET(request: NextRequest) {
   });
 
   // Apply filters
-  if (amcStatus) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    amcRows = amcRows.filter((r: any) => r.amc_status === amcStatus);
-  }
   if (locationId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     amcRows = amcRows.filter((r: any) => r.location_id === locationId);
+  }
+  // Terminated AMCs live on their own tab: the default list is the contracts still in use.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const terminatedCount = amcRows.filter((r: any) => r.amc_status === "terminated").length;
+  if (amcStatus) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    amcRows = amcRows.filter((r: any) => r.amc_status === amcStatus);
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    amcRows = amcRows.filter((r: any) => r.amc_status !== "terminated");
   }
 
   // ── AMC annual budget summary (for budget banner on the page) ────────────
@@ -149,7 +158,13 @@ export async function GET(request: NextRequest) {
     };
   }
 
-  return NextResponse.json({ data: amcRows, budget: budgetSummary });
+  // Warning data only: where each linked asset was bought and whether its goods arrived.
+  const linkedAssets = (amcRows as unknown as Array<{ linked_asset?: AssetForAmc | null; purchase_order_items?: Array<{ linked_asset?: AssetForAmc | null }> }>)
+    .flatMap((r) => [r.linked_asset, ...(r.purchase_order_items ?? []).map((i) => i.linked_asset)])
+    .filter(Boolean) as AssetForAmc[];
+  await attachPurchasePos(supabase, linkedAssets);
+
+  return NextResponse.json({ data: amcRows, budget: budgetSummary, terminated_count: terminatedCount });
 }
 
 /**

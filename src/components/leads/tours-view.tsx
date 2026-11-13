@@ -244,7 +244,7 @@ function TourPanel({
         <div className="space-y-1">
           <div className="text-sm font-medium">Why?</div>
           <Chips options={NOT_INTERESTED_REASONS.map((r) => NOT_INTERESTED_REASON_LABELS[r])} selected={reason} onPick={setReason} />
-          <div className="text-xs text-muted-foreground">No date needed. The lead is closed and archived, and can be restored from its page.</div>
+          <div className="text-xs text-muted-foreground">No date needed. The lead is closed, and stays in the list so it can be reopened.</div>
         </div>
       )}
 

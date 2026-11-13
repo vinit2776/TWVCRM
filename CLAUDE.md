@@ -192,7 +192,6 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 | Daily 10:30 IST | `/api/cron/enquiry-reconcile` | Auto-resolve enquiries: contract active → Converted, lead lost → Not interested, 21 quiet days → No response (only enquiries received after `app_settings.enquiry_auto_resolve_effective_from`) |
 | Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 | Daily 10:00 IST | `/api/cron/rent-gap-alert` | In-app + push alert to admin/manager/accounts/sales_rep for each new rent gap that can be raised from Billing → Unbilled → Rent gap (staff only, once per contract-month) |
-| Every 5 min, 08:30–12:29 IST, Mon–Sat | `/api/cron/attendance-punchin-reminder` | Pokes the attendance gateway's `/internal/punchin-reminder` so it can email anyone who hasn't punched in 10 min after their shift starts. Holds no attendance logic and no DB work — the gateway decides everything, including whether the feature is on. Needs `ATTENDANCE_CRON_SECRET` (the **gateway's** CRON_SECRET, not this project's); unset, it no-ops. The gateway is on Vercel Hobby, where cron runs at most daily, which is why the schedule lives here |
 | Hourly at :07 | `/api/cron/energy-ledger-capture` | Extend each OneGrid-enabled location's energy ledger (`location_energy_readings`) from its last stored row; feeds the Usage baseline |
 | Hourly at :17 | `/api/cron/wifi-ledger-capture` | Copy each UniFi center's Wi-Fi usage (per device and site total) into `wifi_client_hourly` / `wifi_site_hourly` (console keeps ~7 days) and `wifi_client_daily` / `wifi_site_daily` (~90 days) before it ages out; read-only against UniFi, sends nothing |
 | Daily 03:00 IST | `/api/cron/customer-value` | Recompute every customer's monthly Value figures and today's score into `customer_value_monthly` / `customer_value_scores` (writes only those two tables; sends nothing) |
@@ -331,7 +330,6 @@ MSG91_AUTH_KEY / MSG91_WHATSAPP_SENDER / MSG91_SMS_*
 B2_KEY_ID / B2_APPLICATION_KEY / B2_BUCKET / B2_ENDPOINT
 LEEGALITY_API_KEY / LEEGALITY_API_URL / LEEGALITY_PROFILE_ID / LEEGALITY_PRIVATE_SALT
 BACKUP_DB_HOST / BACKUP_DB_NAME / BACKUP_DB_USER / BACKUP_DB_PASSWORD / BACKUP_DB_PORT
-ATTENDANCE_CRON_SECRET   # the attendance gateway's CRON_SECRET, so /api/cron/attendance-punchin-reminder can call it
 ASSET_CREDENTIALS_ENCRYPTION_KEY   # encrypts facility_asset_credentials.password_encrypted; generate with `openssl rand -hex 32`
 ```
 
@@ -528,6 +526,21 @@ Staging is exactly what makes clicking through freely safe. Use it.
 - [ ] Migration rollback noted (if applicable)
 - [ ] Tested on staging (for anything touching auth, payments, or data) — see "Staging" above for how
 - [ ] Reviewed by at least one other person (once team is in place)
+
+---
+
+## Warnings Are Never Dead Ends
+
+Added 2026-11-12. Any warning, flag, chip or blocked-action message shown to a user must also give the **path to fix it**, so the user never has to work out what to do next and the warning clears once they have done it.
+
+- **Link or button right at the warning** to the exact place the fix is made (the page, dialog or action), named in plain words: "Record the delivery challan", not just "Delivery challan missing".
+- **Say what is wrong and what clears it** (which field, which document, which step first). If a prerequisite comes first ("mark the PO as ordered, then record the delivery"), say so in the same line.
+- **The warning disappears by itself once fixed** — it is derived from the data, never a dismissable note someone has to remember to clear. A flag stays visible until the underlying thing is done (e.g. an asset invoice missing stays flagged until it is uploaded).
+- **Do not show a warning that cannot be acted on.** If the user has no way to fix it on that screen or anywhere else, either build the path or do not show it; if a gap remains, say so in the PR so it is picked up, rather than shipping a dead end.
+- **Warn, don't block, unless told otherwise.** Prefer a visible warning with a way forward over a hard stop; blocks are only for the strictly enforced rules written elsewhere in this file.
+- A list row or chip that only summarises (e.g. a register chip) may leave the fix to the detail page, but that page must carry the full link/button.
+
+Applied first to the AMC warnings (item not received, delivery challan, asset details, line not an asset) in `src/lib/procurement/amc-received.ts` and the AMC contract page.
 
 ---
 
