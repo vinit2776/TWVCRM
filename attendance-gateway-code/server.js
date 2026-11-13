@@ -1144,6 +1144,8 @@ async function init() {
     try { await db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_prev ON ${table}(previous_request_id)`); } catch { /* column missing on a very old db */ }
   }
   try { await db.exec("ALTER TABLE field_trips ADD COLUMN reason TEXT DEFAULT ''"); } catch { /* already exists */ }
+  // How many Claude certificate checks a leave request has used (CERTIFICATE_CHECK_LIMIT).
+  try { await db.exec('ALTER TABLE leave_requests ADD COLUMN certificate_checks INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
 
   // India's three compulsory national holidays (Republic Day, Independence Day, Gandhi
   // Jayanti) — fixed Gregorian dates, mandated nationwide regardless of state, unlike
@@ -1605,8 +1607,8 @@ async function getRequestById(table, id) {
   return await db.prepare(`SELECT * FROM ${requestTable(table)} WHERE id = ?`).get(id);
 }
 // Ids of requests that have already been filed again, so their "Apply again" is gone.
-async function reappliedIds(table) {
-  const rows = await db.prepare(`SELECT previous_request_id AS id FROM ${requestTable(table)} WHERE previous_request_id IS NOT NULL`).all();
+async function reappliedIds(table, employeeId) {
+  const rows = await db.prepare(`SELECT previous_request_id AS id FROM ${requestTable(table)} WHERE employee_id = ? AND previous_request_id IS NOT NULL`).all(employeeId);
   return new Set(rows.map(r => r.id));
 }
 // The rejected request an "Apply again" form points at, checked: { previous } or { errorKey }.
@@ -1637,8 +1639,20 @@ function readDecision(form) {
 }
 async function sendDecisionError(res, user, errorKey, backPath, activeNav) {
   return sendHtml(res, await pageShell('Note needed', '', activeNav, `
-    <div class="card" style="color:#C62828;">${escapeHtml(t('en', errorKey, { max: NOTE_MAX_LENGTH }))}</div>
+    <div class="card" style="color:#C62828;">${escapeHtml(t(langOf(user), errorKey, { max: NOTE_MAX_LENGTH }))}</div>
     <div class="card"><a href="${escapeHtml(backPath)}">&larr; Back</a></div>`, user));
+}
+// When claimDecision loses (someone else decided first), say who and how, and hand the
+// manager their note back so it isn't silently lost.
+async function sendAlreadyDecided(res, user, table, id, note, backPath, activeNav) {
+  const r = await getRequestById(table, id);
+  const who = r && r.decided_by ? r.decided_by : 'someone else';
+  const when = r && r.decided_at ? ` on ${r.decided_at.slice(0, 16)}` : '';
+  return sendHtml(res, await pageShell('Already decided', '', activeNav, `
+    <div class="card" style="color:#C62828;">This request was already ${escapeHtml(r ? r.status : 'decided')} by ${escapeHtml(who)}${escapeHtml(when)}, so your decision wasn't saved.</div>
+    ${r && r.decision_note ? `<div class="card"><strong>Their note:</strong> ${escapeHtml(r.decision_note)}</div>` : ''}
+    <div class="card"><strong>Your note (not saved):</strong> ${escapeHtml(note)}</div>
+    <div class="card"><a href="${escapeHtml(backPath)}">&larr; Back to the list</a></div>`, user));
 }
 // Approve/Reject with the required note, replacing the old one-click buttons.
 function decideFormHtml(actionPath, fields) {
@@ -1712,12 +1726,19 @@ function readCertificateFields(form) {
   if (data.length === 0 || data.length > MAX_DOCUMENT_BYTES) return { errorKey: 'leave.cert_err_size' };
   return { file: { filename: String(form.certificate_name || 'certificate').slice(0, 255), contentType, data } };
 }
+// Saves the certificate and deletes the one it replaces, so a request only ever holds
+// its newest file (a replaced 2 MB photo isn't kept around).
 async function saveCertificate(leaveRequest, file) {
   const result = await db.prepare(
     'INSERT INTO leave_certificates (leave_request_id, employee_id, filename, content_type, size_bytes, data, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(leaveRequest.id, leaveRequest.employee_id, file.filename, file.contentType, file.data.length, file.data, formatTimestamp(new Date()));
-  return Number(result.lastInsertRowid);
+  const id = Number(result.lastInsertRowid);
+  await db.prepare('DELETE FROM leave_certificates WHERE leave_request_id = ? AND id != ?').run(leaveRequest.id, id);
+  return id;
 }
+// Claude checks per leave request, automatic and "Check again" together, so retries
+// (a blurry photo replaced ten times, a manager re-clicking) can't run up the bill.
+const CERTIFICATE_CHECK_LIMIT = 3;
 // Runs the Claude check on one stored certificate if the setting is on, and stores the
 // result. A failure is stored as 'error' (the manager can press Check again); a function
 // timeout leaves it 'not_checked', which offers the same button.
@@ -1728,6 +1749,10 @@ async function runCertificateCheck(certificateId) {
   const request = await getRequestById('leave_requests', cert.leave_request_id);
   const employee = request && await getEmployee(request.employee_id);
   if (!employee) return null;
+  // Take a slot first, atomically, so two uploads at once can't both slip under the limit.
+  const slot = await db.prepare('UPDATE leave_requests SET certificate_checks = certificate_checks + 1 WHERE id = ? AND certificate_checks < ?')
+    .run(request.id, CERTIFICATE_CHECK_LIMIT);
+  if (!slot.changes) return null;
   const data = Buffer.isBuffer(cert.data) ? cert.data : Buffer.from(cert.data);
   const result = await checkCertificate({
     apiKey: CONFIG.ANTHROPIC_API_KEY,
@@ -1763,7 +1788,11 @@ function certificateCellHtml(request, cert) {
   } else {
     check = `<div style="font-size:0.82em;color:#9AA5B1;margin-top:2px;">Not checked yet</div>`;
   }
-  const recheck = CONFIG.CERTIFICATE_CHECK === 'on' && request.status === 'pending'
+  const limitReached = (request.certificate_checks || 0) >= CERTIFICATE_CHECK_LIMIT;
+  if (limitReached && CONFIG.CERTIFICATE_CHECK === 'on' && request.status === 'pending') {
+    check += `<div style="font-size:0.82em;color:#8A5300;margin-top:2px;">All ${CERTIFICATE_CHECK_LIMIT} automatic checks for this request are used. Open the certificate above and review it yourself.</div>`;
+  }
+  const recheck = CONFIG.CERTIFICATE_CHECK === 'on' && request.status === 'pending' && !limitReached
     ? actionButton('/leave/certificate/check', { id: cert.id }, cert.check_status === 'not_checked' ? 'Check now' : 'Check again', '#1565C0')
     : '';
   return `<div style="margin-top:6px;font-size:0.9em;">${link}${check}${recheck ? `<div style="margin-top:4px;font-size:0.85em;">${recheck}</div>` : ''}</div>`;
@@ -3316,7 +3345,7 @@ async function renderLeave(employee, balances, requests, user, error, prefill = 
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
   const byId = new Map(requests.map(r => [r.id, r]));
-  const reapplied = await reappliedIds('leave_requests');
+  const reapplied = await reappliedIds('leave_requests', employee.id);
   const certs = await latestCertificatesByRequest(requests.filter(r => r.leave_type === CERTIFICATE_LEAVE_TYPE).map(r => r.id));
   const describe = r => `${t(lang, `leave_type.${r.leave_type}`)}, ${r.start_date} – ${r.end_date}`;
   const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('leave_requests', id))).length;
@@ -3333,6 +3362,7 @@ async function renderLeave(employee, balances, requests, user, error, prefill = 
     const label = t(lang, cert ? 'leave.cert_replace' : 'leave.cert_add');
     return `${state}<form method="POST" action="/leave/certificate" ${certificateFormData(lang, label)} style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
       <input type="hidden" name="leave_request_id" value="${r.id}">${certificateFieldsHtml()}
+      ${CONFIG.CERTIFICATE_CHECK === 'on' ? `<div style="flex-basis:100%;font-size:0.78em;color:#5F6B7A;">${escapeHtml(t(lang, 'leave.cert_hint_ai'))}</div>` : ''}
       <button type="submit" style="padding:4px 10px;border-radius:6px;border:1px solid #1565C0;background:#fff;color:#1565C0;font-weight:600;font-size:0.85em;">${escapeHtml(label)}</button>
     </form>`;
   };
@@ -3393,6 +3423,8 @@ async function renderLeave(employee, balances, requests, user, error, prefill = 
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.cert_label')}</label>
           ${certificateFieldsHtml()}
           <div style="font-size:0.78em;color:#9AA5B1;">${t(lang, previous && certs.get(previous.id) ? 'leave.cert_hint_reapply' : 'leave.cert_hint')}</div>
+          ${CONFIG.CERTIFICATE_CHECK === 'on' ? `<div style="font-size:0.78em;color:#5F6B7A;margin-top:2px;">${escapeHtml(t(lang, 'leave.cert_hint_ai'))}</div>` : ''}
+          <noscript><div style="font-size:0.78em;color:#C62828;">${escapeHtml(t(lang, 'leave.cert_needs_js'))}</div></noscript>
         </div>
         <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${escapeHtml(applyLabel)}</button>
       </form>
@@ -3426,7 +3458,7 @@ async function renderPermission(employee, requests, monthlySummary, user, error,
   const history = requests.filter(r => r.status !== 'pending');
   const previous = prefill.previous || null;
   const byId = new Map(requests.map(r => [r.id, r]));
-  const reapplied = await reappliedIds('permission_requests');
+  const reapplied = await reappliedIds('permission_requests', employee.id);
   const describe = r => t(lang, 'notes.describe_permission', { time: r.leave_time, date: r.date });
   const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('permission_requests', id))).length;
 
@@ -3513,7 +3545,7 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
   const history = requests.filter(r => r.status !== 'pending');
   const previous = prefill.previous || null;
   const byId = new Map(requests.map(r => [r.id, r]));
-  const reapplied = await reappliedIds('overtime_requests');
+  const reapplied = await reappliedIds('overtime_requests', employee.id);
   const describe = r => t(lang, 'notes.describe_overtime', { hours: r.planned_hours, date: r.date });
   const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('overtime_requests', id))).length;
 
@@ -3583,7 +3615,7 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
 
 async function renderFieldTrip(employeeId, trips, user, error) {
   const lang = langOf(user);
-  const reapplied = await reappliedIds('field_trips');
+  const reapplied = await reappliedIds('field_trips', employeeId);
   // A rejected trip is submitted again right in its row: same trip, new reason.
   const resubmitHtml = trip => {
     if (trip.status !== 'rejected') return '';
@@ -4126,7 +4158,7 @@ async function renderCorrections(employee, requests, user, error, prefill = {}) 
   const previous = prefill.previous || null;
   const kind = CORRECTION_KINDS.includes(prefill.kind) ? prefill.kind : (previous ? previous.kind : 'check_out');
   const byId = new Map(requests.map(r => [r.id, r]));
-  const reapplied = await reappliedIds('correction_requests');
+  const reapplied = await reappliedIds('correction_requests', employee.id);
   const describe = r => `${r.date}, ${t(lang, `corrections.kind.${r.kind}`)}`;
 
   const rows = (await Promise.all(requests.map(async r => {
@@ -6467,18 +6499,19 @@ async function handleRequest(req, res) {
     const suffix = decisionNoteSuffix(decision.note, user.username);
     const summary = `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date} · ${decision.note}`;
 
+    if (!(await claimDecision('leave_requests', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'leave_requests', id, decision.note, '/leave', 'leave');
+    }
     if (decision.action === 'approve') {
-      if (await claimDecision('leave_requests', id, 'approved', decision.note, user)) {
-        // Casual/Sick no longer draw from a balance — see MONTHLY_PAID_LEAVE_TYPES.
-        if (BALANCE_POOL_LEAVE_TYPES.includes(request.leave_type)) {
-          const days = await countLeaveDays(request.start_date, request.end_date);
-          await db.prepare('UPDATE leave_balances SET balance = balance - ? WHERE employee_id = ? AND leave_type = ?')
-            .run(days, request.employee_id, request.leave_type);
-        }
-        await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been approved.${suffix}`);
-        await logAdminAction(user.username, 'approve', 'leave_request', id, summary, request.employee_id);
+      // Casual/Sick no longer draw from a balance — see MONTHLY_PAID_LEAVE_TYPES.
+      if (BALANCE_POOL_LEAVE_TYPES.includes(request.leave_type)) {
+        const days = await countLeaveDays(request.start_date, request.end_date);
+        await db.prepare('UPDATE leave_balances SET balance = balance - ? WHERE employee_id = ? AND leave_type = ?')
+          .run(days, request.employee_id, request.leave_type);
       }
-    } else if (await claimDecision('leave_requests', id, 'rejected', decision.note, user)) {
+      await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been approved.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'leave_request', id, summary, request.employee_id);
+    } else {
       await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been rejected.${suffix} You can apply again from the Leave page.`);
       await logAdminAction(user.username, 'reject', 'leave_request', id, summary, request.employee_id);
     }
@@ -6614,12 +6647,13 @@ async function handleRequest(req, res) {
     const suffix = decisionNoteSuffix(decision.note, user.username);
     const summary = `${request.employee_id}: leave at ${request.leave_time} on ${request.date} · ${decision.note}`;
 
+    if (!(await claimDecision('permission_requests', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'permission_requests', id, decision.note, '/permission', 'permission');
+    }
     if (decision.action === 'approve') {
-      if (await claimDecision('permission_requests', id, 'approved', decision.note, user)) {
-        await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been approved.${suffix}`);
-        await logAdminAction(user.username, 'approve', 'permission_request', id, summary, request.employee_id);
-      }
-    } else if (await claimDecision('permission_requests', id, 'rejected', decision.note, user)) {
+      await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been approved.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'permission_request', id, summary, request.employee_id);
+    } else {
       await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been rejected.${suffix} You can apply again from the Permission page.`);
       await logAdminAction(user.username, 'reject', 'permission_request', id, summary, request.employee_id);
     }
@@ -6678,12 +6712,9 @@ async function handleRequest(req, res) {
     const form = await readFormBody(req);
     const request = await db.prepare('SELECT * FROM correction_requests WHERE id = ?').get(form.id);
     if (!request) { res.writeHead(404); return res.end('Unknown correction request'); }
-    if (request.status !== 'pending') {
-      res.writeHead(302, { Location: '/corrections' });
-      return res.end();
-    }
     const decision = readDecision(form);
     if (decision.error) return sendDecisionError(res, user, decision.error, '/corrections', 'corrections');
+    if (request.status !== 'pending') return sendAlreadyDecided(res, user, 'correction_requests', request.id, decision.note, '/corrections', 'corrections');
     const suffix = decisionNoteSuffix(decision.note, user.username);
     const summary = `${request.employee_id}: ${request.kind} on ${request.date} (${correctionTimesText(request, 'en')}) · ${decision.note}`;
     if (decision.action === 'approve') {
@@ -6696,13 +6727,16 @@ async function handleRequest(req, res) {
         return sendHtml(res, await renderAdminCorrections(await getAllCorrectionRequests(), user, message));
       }
       // Claim the request first so a double-click can't insert the punches twice.
-      if (await claimDecision('correction_requests', request.id, 'approved', decision.note, user)) {
-        if (request.check_in_time) await recordPunch(request.employee_id, `${request.date} ${request.check_in_time}:00`, 'in', 'correction', `Correction #${request.id}`, '', user.username);
-        if (request.check_out_time) await recordPunch(request.employee_id, `${request.date} ${request.check_out_time}:00`, 'out', 'correction', `Correction #${request.id}`, '', user.username);
-        await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been approved.${suffix}`);
-        await logAdminAction(user.username, 'approve', 'correction_request', request.id, summary, request.employee_id);
+      if (!(await claimDecision('correction_requests', request.id, 'approved', decision.note, user))) {
+        return sendAlreadyDecided(res, user, 'correction_requests', request.id, decision.note, '/corrections', 'corrections');
       }
-    } else if (await claimDecision('correction_requests', request.id, 'rejected', decision.note, user)) {
+      if (request.check_in_time) await recordPunch(request.employee_id, `${request.date} ${request.check_in_time}:00`, 'in', 'correction', `Correction #${request.id}`, '', user.username);
+      if (request.check_out_time) await recordPunch(request.employee_id, `${request.date} ${request.check_out_time}:00`, 'out', 'correction', `Correction #${request.id}`, '', user.username);
+      await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been approved.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'correction_request', request.id, summary, request.employee_id);
+    } else if (!(await claimDecision('correction_requests', request.id, 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'correction_requests', request.id, decision.note, '/corrections', 'corrections');
+    } else {
       await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been rejected.${suffix} You can apply again from the Corrections page.`);
       await logAdminAction(user.username, 'reject', 'correction_request', request.id, summary, request.employee_id);
     }
@@ -6806,12 +6840,13 @@ async function handleRequest(req, res) {
     const suffix = decisionNoteSuffix(decision.note, user.username);
     const summary = `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned · ${decision.note}`;
 
+    if (!(await claimDecision('overtime_requests', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'overtime_requests', id, decision.note, '/overtime', 'overtime');
+    }
     if (decision.action === 'approve') {
-      if (await claimDecision('overtime_requests', id, 'approved', decision.note, user)) {
-        await createNotification(request.employee_id, `Your overtime request for ${request.date} has been approved.${suffix}`);
-        await logAdminAction(user.username, 'approve', 'overtime_request', id, summary, request.employee_id);
-      }
-    } else if (await claimDecision('overtime_requests', id, 'rejected', decision.note, user)) {
+      await createNotification(request.employee_id, `Your overtime request for ${request.date} has been approved.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'overtime_request', id, summary, request.employee_id);
+    } else {
       await logAdminAction(user.username, 'reject', 'overtime_request', id, summary, request.employee_id);
       await createNotification(request.employee_id, `Your overtime request for ${request.date} has been rejected.${suffix} You can apply again from the Overtime page.`);
     }
@@ -6913,12 +6948,13 @@ async function handleRequest(req, res) {
     const suffix = decisionNoteSuffix(decision.note, user.username);
     const summary = `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km · ${decision.note}`;
 
+    if (!(await claimDecision('field_trips', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'field_trips', id, decision.note, '/field-trip', 'field-trip');
+    }
     if (decision.action === 'approve') {
-      if (await claimDecision('field_trips', id, 'approved', decision.note, user)) {
-        await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) has been approved for reimbursement.${suffix}`);
-        await logAdminAction(user.username, 'approve', 'field_trip', id, summary, trip.employee_id);
-      }
-    } else if (await claimDecision('field_trips', id, 'rejected', decision.note, user)) {
+      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) has been approved for reimbursement.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'field_trip', id, summary, trip.employee_id);
+    } else {
       await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) was not approved for reimbursement.${suffix} You can submit it again from the Field Trips page.`);
       await logAdminAction(user.username, 'reject', 'field_trip', id, summary, trip.employee_id);
     }

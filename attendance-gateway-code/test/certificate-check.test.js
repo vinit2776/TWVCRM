@@ -78,6 +78,8 @@ test('checkCertificate never throws', async () => {
   assert.equal((await checkCertificate(args)).status, 'error');
   const refused = await checkCertificate(args, { client: fakeClient(() => ({ stop_reason: 'refusal', content: [] })) });
   assert.equal(refused.status, 'error');
+  const cut = await checkCertificate(args, { client: fakeClient(() => ({ stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"is_medical' }] })) });
+  assert.match(cut.summary, /ran out of room/);
   const garbled = await checkCertificate(args, { client: fakeClient(() => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'not json' }] })) });
   assert.match(garbled.summary, /couldn't be read/);
   const offline = await checkCertificate(args, { client: fakeClient(() => { throw new Anthropic.APIConnectionError({ message: 'down' }); }) });
