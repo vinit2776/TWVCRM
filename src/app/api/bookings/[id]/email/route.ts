@@ -3,11 +3,11 @@ import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateICS } from "@/lib/ics-generator";
 import { BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_PAYMENT_MODE_LABELS, BOOKING_PAYMENT_STATUS_LABELS } from "@/lib/constants";
-import { logEmailActivity } from "@/lib/audit";
+import { logAudit, logEmailActivity } from "@/lib/audit";
 import { getLocationIncharges, getLocationInchargeUserIds } from "@/lib/location-incharges";
 import { sendPushToUsers } from "@/lib/push";
 import { bookingWindowHours } from "@/lib/utils";
-import { validateRecipients } from "@/lib/email-recipients";
+import { canChooseRecipients, validateRecipients } from "@/lib/email-recipients";
 import { bookingContactEmail } from "@/lib/booking-contact";
 
 function formatCurrency(amount: number): string {
@@ -66,7 +66,7 @@ export async function POST(
   // Get sender info for activity logging
   const { data: sender } = await supabase
     .from("users")
-    .select("id, full_name")
+    .select("id, full_name, role")
     .eq("auth_id", user.id)
     .single();
 
@@ -107,6 +107,20 @@ export async function POST(
   if (!recipients.ok) return NextResponse.json({ error: recipients.error }, { status: 400 });
   const extraCc = recipients.cc.length > 0 ? recipients.cc : undefined;
   const customerEmail = recipients.to || bookingContactEmail(booking);
+  const choseRecipients = !!recipients.to || recipients.cc.length > 0;
+  if (choseRecipients && !canChooseRecipients(sender?.role)) {
+    return NextResponse.json({ error: "Your role can't change who a customer email goes to." }, { status: 403 });
+  }
+  if (choseRecipients) {
+    // Who was emailed instead of, or as well as, the booking's own address.
+    void logAudit(supabase, {
+      entityType: "booking",
+      entityId: id,
+      action: "email_sent",
+      performedBy: sender?.id ?? null,
+      changes: { recipients_chosen: { old: bookingContactEmail(booking), new: `${emailType}: to ${customerEmail}${recipients.cc.length > 0 ? `, cc ${recipients.cc.join(", ")}` : ""}` } },
+    });
+  }
   const spaceName = booking.space?.name || "Conference Room";
   const locationName = booking.location?.name || "";
   const locationAddress = [booking.location?.address, booking.location?.city, booking.location?.state].filter(Boolean).join(", ");

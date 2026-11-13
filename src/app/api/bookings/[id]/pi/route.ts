@@ -173,7 +173,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const sentAt = new Date().toISOString();
   await supabase
     .from("bookings")
-    .update({ pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_by: sender.id, pi_sent_to: customerEmail })
+    .update({ pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_by: sender.id, pi_sent_to: recipients.cc.length > 0 ? `${customerEmail} · cc ${recipients.cc.join(", ")}` : customerEmail })
     .eq("id", id);
 
   // Lists the PI in Receivables as pending and lets the follow-up ladder chase
@@ -196,7 +196,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     changes: { pi_number: { old: booking.pi_number ?? null, new: input.pi_number }, pi_sent_to: { old: null, new: customerEmail }, ...(recipients.cc.length > 0 ? { pi_cc: { old: null, new: recipients.cc.join(", ") } } : {}) },
   });
 
-  return NextResponse.json({ data: { pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_to: customerEmail, statement_id: statementId,
+  return NextResponse.json({ data: { pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_to: recipients.cc.length > 0 ? `${customerEmail} · cc ${recipients.cc.join(", ")}` : customerEmail, statement_id: statementId,
       // The email has gone; say so if it could not be listed in Receivables, or nobody will chase it.
       warning: statementId ? null : "The PI was emailed but could not be added to Receivables. Send it again to retry, or tell accounts." } });
 }

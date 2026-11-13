@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseEmailList, validateRecipients } from "../email-recipients";
+import { canChooseRecipients, parseEmailList, validateRecipients } from "../email-recipients";
 
 describe("parseEmailList", () => {
   it("splits on commas, semicolons and spaces and removes duplicates", () => {
@@ -37,5 +37,14 @@ describe("validateRecipients", () => {
   it("caps cc", () => {
     const many = Array.from({ length: 11 }, (_, i) => `u${i}@x.com`).join(",");
     expect(validateRecipients({ cc: many }).ok).toBe(false);
+  });
+});
+
+describe("canChooseRecipients", () => {
+  it("allows the staff roles that send customer email and nobody else", () => {
+    expect(canChooseRecipients("accounts")).toBe(true);
+    expect(canChooseRecipients("floor_manager")).toBe(true);
+    expect(canChooseRecipients("it_technician")).toBe(false);
+    expect(canChooseRecipients(null)).toBe(false);
   });
 });

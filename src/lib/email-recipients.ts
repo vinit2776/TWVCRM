@@ -49,3 +49,16 @@ export function validateRecipients(input: { to?: unknown; cc?: unknown }): Recip
   }
   return { ok: true, to: toText || null, cc };
 }
+
+/**
+ * Roles that send customer emails from a booking. Only these may point one at a
+ * different address or add CCs, so the company's sender cannot be used by any
+ * login to mail arbitrary people.
+ */
+export const CUSTOMER_EMAIL_ROLES = [
+  "admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin", "coordinator",
+] as const;
+
+export function canChooseRecipients(role: string | null | undefined): boolean {
+  return !!role && (CUSTOMER_EMAIL_ROLES as readonly string[]).includes(role);
+}

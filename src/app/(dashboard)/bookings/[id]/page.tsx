@@ -515,20 +515,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }).catch(() => {});
   }, [fetchBooking, id]);
 
-  const handleResendEmail = async () => {
-    const res = await fetch(`/api/bookings/${id}/email`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "confirmation" }),
-    });
-    if (res.ok) {
-      toast.success("Confirmation email sent");
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to send email");
-    }
-  };
-
   const handleCopyFeedbackLink = () => {
     if (!booking?.feedback_token) { toast.error("No feedback token"); return; }
     const url = `${window.location.origin}/feedback/${booking.feedback_token}`;
@@ -1637,14 +1623,19 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const existingPin = (booking as any).access_pin as string | null;
 
-          async function provisionPin(to?: string, cc?: string) {
+          // Returns what actually happened, so a dialog never claims an email went when it did not.
+          async function provisionPinDetailed(to?: string, cc?: string): Promise<{ ok: boolean; message: string | null }> {
             const res = await fetch("/api/cosec/booking-access", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ booking_id: id, ...(to ? { to } : {}), ...(cc ? { cc } : {}) }),
             });
-            const json = res.ok ? await res.json() : null;
-            if (res.ok && json) {
+            const json = await res.json().catch(() => null);
+            if (!res.ok) return { ok: false, message: json?.error || "Failed to resend PIN" };
+            if (json?.skipped) {
+              return { ok: false, message: "No door devices are set up at this location, so no PIN was provisioned or sent." };
+            }
+            if (json) {
               // Surface per-channel delivery result
               if (json.delivery) setPinDelivery(json.delivery);
               // Refresh booking to pick up new access_pin value
@@ -1654,7 +1645,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               fetch(`/api/cosec/booking-devices?booking_id=${id}`)
                 .then(r => r.json()).then(j => setBookingDevices(j.data || [])).catch(() => {});
             }
-            return res.ok;
+            const emailStatus = json?.delivery?.email;
+            if (to && emailStatus && emailStatus !== "sent") {
+              return { ok: false, message: `The PIN was provisioned but the email to ${to} was not sent (${emailStatus}).` };
+            }
+            return { ok: true, message: null };
+          }
+
+          async function provisionPin() {
+            return (await provisionPinDetailed()).ok;
           }
 
           // Build the shareable PIN message the staff member can copy and send manually
@@ -1701,13 +1700,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                           open={resendPinOpen}
                           onOpenChange={setResendPinOpen}
                           title="Resend access PIN"
-                          savedEmail={customerEmail || null}
+                          // The PIN's own default: the address entered for this booking, then the customer record's.
+                          savedEmail={booking.guest_email || customerEmail || null}
                           idPrefix="pin"
                           successMessage={(to) => `Access PIN resent. The email went to ${to}.`}
                           onSend={async (to, cc) => {
                             setPinDelivery(null);
-                            const ok = await provisionPin(to, cc);
-                            return ok ? null : "Failed to resend PIN";
+                            const result = await provisionPinDetailed(to, cc);
+                            return result.ok ? null : result.message;
                           }}
                         />
                         {/* Copy to share */}

@@ -12,7 +12,6 @@
  */
 
 import { createAdminClient } from "@/lib/supabase/server";
-import { bookingContactEmail } from "@/lib/booking-contact";
 import { provisionUser, bookingCosecId, uuidToRefId, generatePin } from "@/lib/cosec";
 import { logAudit } from "@/lib/audit";
 import { dltSms } from "@/lib/whatsapp";
@@ -170,7 +169,9 @@ export async function provisionBookingAccess(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = booking.lead as any;
   const contactPhone = (booking.booker_phone as string | null) ?? (booking.guest_phone as string | null) ?? lead?.phone;
-  const contactEmail = opts.emailTo || bookingContactEmail({ guest_email: booking.guest_email as string | null, lead });
+  // Booking-specific contact first (as for the phone above): the address entered for
+  // this booking, then the customer record's.
+  const contactEmail = opts.emailTo || (booking.guest_email as string | null) || lead?.email;
   const leadFullName = `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim();
   const contactName  = (booking.guest_name as string | null) ?? (leadFullName || "Guest");
 

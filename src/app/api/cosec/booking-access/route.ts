@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
 import { zodErrorResponse } from "@/lib/validations";
-import { validateRecipients } from "@/lib/email-recipients";
+import { canChooseRecipients, validateRecipients } from "@/lib/email-recipients";
+import { createClient } from "@/lib/supabase/server";
 
 export const maxDuration = 30; // allow SMTP + COSEC device calls to complete
 
@@ -23,6 +24,15 @@ const schema = z.object({
  * Safe to call multiple times — idempotent via upsert.
  */
 export async function POST(request: NextRequest) {
+  // The PIN opens a door and this route can name where it is mailed, so it is staff-only.
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { data: actor } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!actor || !canChooseRecipients(actor.role)) {
+    return NextResponse.json({ error: "Your role can't resend access PINs." }, { status: 403 });
+  }
+
   const parsed = schema.safeParse(await request.json());
   if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 

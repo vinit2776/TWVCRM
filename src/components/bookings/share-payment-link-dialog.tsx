@@ -59,6 +59,11 @@ export function SharePaymentLinkDialog({
   const [emailSent, setEmailSent] = useState(false);
   const [emailTo, setEmailTo] = useState(customerEmail ?? "");
   const [emailCc, setEmailCc] = useState("");
+  // Each time the dialog opens, start from the booking's email with no CC, so a CC added
+  // for one send is never copied silently on a later one.
+  useEffect(() => {
+    if (open) { setEmailTo(customerEmail ?? ""); setEmailCc(""); }
+  }, [open, customerEmail]);
 
   // Resolve the link the moment the dialog opens. The "Pay Now" link
   // sent by every channel must be the same instance so all webhooks /
