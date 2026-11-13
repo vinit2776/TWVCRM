@@ -4,8 +4,15 @@ import { generateConsolidatedInvoice } from "@/lib/aggregator-invoicing";
 import { withCronHealth } from "@/lib/cron-ping";
 
 /**
- * Aggregator invoicing cron — runs at 9:30 AM IST (4:00 AM UTC) on the 1st of
- * every month. Auto-generates a consolidated commission invoice, for the month
+ * Aggregator invoicing cron — SCHEDULE REMOVED from vercel.json (2026-10-22).
+ *
+ * Virtual Office is billed annually, one bill per client term; there is no
+ * monthly VO billing. This job billed each case's `rate` as a monthly amount,
+ * but `rate` is the full-term fee, so a monthly run would invoice partners the
+ * annual fee every month. Do not re-add the schedule; partner clients renew
+ * through the annual renewal flow instead.
+ *
+ * When scheduled it ran at 9:30 AM IST (4:00 AM UTC) on the 1st of every month. Auto-generates a consolidated commission invoice, for the month
  * that just ended, for every active postpaid aggregator with billable cases.
  *
  * Staff can still generate ad-hoc/off-cycle invoices manually from the
