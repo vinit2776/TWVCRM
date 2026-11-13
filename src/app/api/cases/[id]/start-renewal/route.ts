@@ -13,12 +13,14 @@ import {
   sendRenewalWhatsApp,
   type VoCaseForRenewal,
 } from "@/lib/vo-renewal";
+import { caseOwnerEmail, renewalCopies } from "@/lib/vo-renewal-copies";
 import { renewalRecipients } from "@/lib/renewal-recipients";
 import { latestLapseDecision } from "@/lib/vo-lapse-decision";
 import { isProductionDatabase } from "@/lib/environment";
 import { statementCoversNextTerm } from "@/lib/vo-renewal-term";
 import {
   RENEWAL_DURATIONS,
+  RENEWAL_DURATIONS_TEXT,
   RENEWAL_ESCALATION_MODES,
   renewalOffer,
 } from "@/lib/vo-renewal-offer";
@@ -53,6 +55,7 @@ const CASE_SELECT =
 
 type CaseRow = VoCaseForRenewal & {
   status: string;
+  assigned_to?: string | null;
   metadata?: unknown;
   renewal_notices_enabled?: boolean | null;
 };
@@ -62,7 +65,7 @@ const bodySchema = z
     duration_months: z
       .number()
       .int()
-      .refine((n) => (RENEWAL_DURATIONS as readonly number[]).includes(n), "Choose 6, 12, 24 or 36 months"),
+      .refine((n) => (RENEWAL_DURATIONS as readonly number[]).includes(n), `Choose ${RENEWAL_DURATIONS_TEXT}`),
     escalation_mode: z.enum(RENEWAL_ESCALATION_MODES),
     custom_percentage: z.number().min(0).max(100).nullish(),
     escalation_reason: z.string().trim().max(500).nullish(),
@@ -387,7 +390,17 @@ export async function POST(
       razorpayUrl: link.url,
     };
     if (body.send_email) {
-      emailSent = await sendRenewalEmail({ ...notice, pdfBuffer, recipient: routing.billing, cc: body.cc });
+      const copies = renewalCopies({
+        reminderNumber: 1,
+        ownerEmail: await caseOwnerEmail(adminSupabase, caseRow.assigned_to),
+        alreadyAddressed: [routing.billing.email, ...body.cc],
+      });
+      emailSent = await sendRenewalEmail({
+        ...notice,
+        pdfBuffer,
+        recipient: routing.billing,
+        cc: [...body.cc, ...copies],
+      });
       // The client hears too when a partner is billed, as the cron does.
       if (routing.headsUp?.email) {
         headsUpSent = await sendRenewalEmail({ ...notice, recipient: routing.headsUp });
