@@ -35,6 +35,7 @@ const SharePaymentLinkDialog = dynamic(() => import("@/components/bookings/share
 const PostCheckoutChecklistDialog = dynamic(() => import("@/components/bookings/post-checkout-checklist-dialog").then(m => m.PostCheckoutChecklistDialog), { ssr: false });
 const CancelBookingDialog    = dynamic(() => import("@/components/bookings/cancel-booking-dialog").then(m => m.CancelBookingDialog),         { ssr: false });
 const MarkComplimentaryDialog = dynamic(() => import("@/components/bookings/mark-complimentary-dialog").then(m => m.MarkComplimentaryDialog), { ssr: false });
+const SendPiDialog = dynamic(() => import("@/components/bookings/send-pi-dialog").then(m => m.SendPiDialog), { ssr: false });
 const GetPaymentChooser      = dynamic(() => import("@/components/bookings/get-payment-chooser").then(m => m.GetPaymentChooser),             { ssr: false });
 import { NextActionBanner, NextActionTarget, computeNextActionTarget } from "@/components/bookings/next-action-banner";
 import { OvertimeChargeBanner } from "@/components/bookings/overtime-charge-banner";
@@ -113,6 +114,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [deferDialogOpen, setDeferDialogOpen] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [getPaymentChooserOpen, setGetPaymentChooserOpen] = useState(false);
+  const [sendPiOpen, setSendPiOpen] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [markCompDialogOpen, setMarkCompDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
@@ -1385,6 +1387,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             unified "Collect Payment" chooser above. The payment-link
             flow itself is preserved — it's just one click deeper now,
             chosen via the chooser dialog. */}
+        {booking.pi_sent_at && booking.payment_status === "pending" && (
+          <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 bg-emerald-50">
+            PI sent {formatDate(booking.pi_sent_at)}{booking.pi_sent_to ? ` to ${booking.pi_sent_to}` : ""}
+          </Badge>
+        )}
         {paymentLinkSent && (
           <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700 bg-blue-50 animate-pulse">
             ⏳ Awaiting payment…
@@ -2501,6 +2508,18 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         })()}
         onPickCounter={() => setPaymentDialogOpen(true)}
         onPickLink={() => setPaymentSendDialogOpen(true)}
+        onPickPi={() => setSendPiOpen(true)}
+      />
+
+      <SendPiDialog
+        open={sendPiOpen}
+        onOpenChange={setSendPiOpen}
+        bookingId={booking.id}
+        piNumber={booking.pi_number || `PI-${booking.booking_number || booking.id.slice(0, 8).toUpperCase()}`}
+        amountDue={amountLeftToCollect(Number(booking.total_amount_with_gst) || Number(booking.total_amount), existingPayments)}
+        customerEmail={customerEmail || null}
+        alreadySentAt={booking.pi_sent_at ?? null}
+        onSent={() => { fetchBooking(); startPaymentPoll(); }}
       />
 
       <CancelBookingDialog

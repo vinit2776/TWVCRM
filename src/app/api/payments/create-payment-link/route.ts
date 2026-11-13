@@ -10,6 +10,9 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const { booking_id } = body;
+  // The PI flow emails the customer itself, so Razorpay must stay quiet or they
+  // would get two messages about one request.
+  const skipNotify = body.skip_notify === true;
 
   if (!booking_id) {
     return NextResponse.json({ error: "booking_id is required" }, { status: 400 });
@@ -66,8 +69,8 @@ export async function POST(request: NextRequest) {
     return "+" + phone;
   })();
 
-  const notifiedViaSms = !!customerPhone;
-  const notifiedViaEmail = !!customerEmail;
+  const notifiedViaSms = !skipNotify && !!customerPhone;
+  const notifiedViaEmail = !skipNotify && !!customerEmail;
 
   // If a payment link already exists, resend notifications via Razorpay's notify endpoints
   // instead of silently returning the cached URL with no customer communication.
