@@ -2044,7 +2044,7 @@ export interface CustomerSegment {
 // ==========================================
 export type AggregatorStatus = "active" | "inactive" | "suspended";
 
-export type VoPurpose = "gst_registration" | "mca_registration" | "branch_office" | "mail_handling" | "business_address";
+export type VoPurpose = "gst_new" | "gst_existing" | "gst_registration" | "mca_registration" | "branch_office" | "mail_handling" | "business_address";
 
 export type EntityType = "individual" | "proprietorship" | "partnership" | "llp" | "pvt_ltd" | "public_ltd" | "trust" | "society" | "huf" | "other";
 

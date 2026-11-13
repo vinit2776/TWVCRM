@@ -279,6 +279,8 @@ export async function parseAggregatorEmail(
 
 function validatePurpose(value: string): VoPurpose {
   const valid: VoPurpose[] = [
+    "gst_new",
+    "gst_existing",
     "gst_registration",
     "mca_registration",
     "branch_office",

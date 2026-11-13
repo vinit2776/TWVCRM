@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ACCOUNTING_HEADS } from "@/lib/constants";
+import { ACCOUNTING_HEADS, VO_PURPOSES } from "@/lib/constants";
 import { PROPOSAL_MAX_NOTICE_MONTHS, PROPOSAL_MAX_TENURE_MONTHS, validateCommitmentTerms } from "@/lib/proposal-terms";
 
 export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; details: Record<string, string[] | undefined> } {
@@ -727,7 +727,7 @@ const caseFieldsSchema = z.object({
   aggregator_id: z.string().uuid("Invalid aggregator ID").optional().or(z.literal("")).transform(v => v || undefined),
   aggregator_contact_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
-  purpose: z.enum(["gst_registration", "mca_registration", "branch_office", "mail_handling", "business_address"]),
+  purpose: z.enum(VO_PURPOSES),
   is_renewal: z.boolean(),
   parent_case_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   client_name: z.string().min(1, "Client name is required"),

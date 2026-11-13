@@ -9,6 +9,7 @@ import { stripSpecialConditionsHeading } from "@/lib/special-clause/membership";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS, KYC_DOCUMENTS } from "@/lib/constants";
+import { legacyPurposeFor, type LegacyVoPurpose } from "@/lib/vo-purpose";
 import {
   BRAND_TEAL,
   BRAND_DARK,
@@ -176,7 +177,7 @@ export function mergeLeaveLicenseVariables(params: {
 
 /** Returns the purpose description for the WHEREAS clause. */
 function getPurposeDescription(purpose: VoPurpose): string {
-  const descriptions: Record<VoPurpose, string> = {
+  const descriptions: Record<LegacyVoPurpose, string> = {
     gst_registration:
       "solely as the principal address for GST Registration and business correspondence",
     mca_registration:
@@ -188,12 +189,12 @@ function getPurposeDescription(purpose: VoPurpose): string {
     business_address:
       "as a virtual office and professional business address for business operations",
   };
-  return descriptions[purpose];
+  return descriptions[legacyPurposeFor(purpose) as LegacyVoPurpose];
 }
 
 /** Returns the purpose-specific text for Terms of Usage clause 2. */
 function getTermsOfUsagePurpose(purpose: VoPurpose): string {
-  const purposes: Record<VoPurpose, string> = {
+  const purposes: Record<LegacyVoPurpose, string> = {
     gst_registration:
       "as their principal address for GST Registration",
     mca_registration:
@@ -205,7 +206,7 @@ function getTermsOfUsagePurpose(purpose: VoPurpose): string {
     business_address:
       "as their principal business address",
   };
-  return purposes[purpose];
+  return purposes[legacyPurposeFor(purpose) as LegacyVoPurpose];
 }
 
 function getRequiredDocuments(entityType: EntityType): string[][] {
