@@ -22,6 +22,12 @@ const { t } = require('./i18n');
 const { cleanNote, ordinal, earlierAttempts, reapplyError, decisionNoteSuffix, NOTE_MAX_LENGTH } = require('./request-notes');
 const { checkCertificate } = require('./certificate-check');
 const {
+  MAX_STOPS_LIMIT: FIELD_TRIP_MAX_STOPS_LIMIT, DEFAULT_MAX_STOPS: FIELD_TRIP_DEFAULT_MAX_STOPS, MAX_PHOTOS: FIELD_TRIP_MAX_PHOTOS, BACKDATE_DAYS: FIELD_TRIP_BACKDATE_DAYS,
+  cleanStops, routePoints, directionsCoords, parseRouteLegs, parseRate, validateRate, parseMaxStops, validateMaxStops,
+  parseViewbox, stopNeedsGeocode,
+  reimbursement, formatInr, cleanTripDate, cleanPhotos, tripStops, googleMapsUrl,
+} = require('./field-trip');
+const {
   DEVICE_POLL_SECONDS, DEVICE_OFFLINE_MINUTES, DEVICE_COMMAND_TIMEOUT_MINUTES, RESYNC_OVERLAP_MINUTES,
   shiftTs, minutesSince, formatDuration, isDeviceOffline, shouldShowOfflineAlert,
   parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
@@ -344,6 +350,29 @@ const SETTING_DEFS = [
     label: 'Address search bounding box',
     help: 'lon1,lat1,lon2,lat2 — biases address suggestions to one city so other cities do not clutter results. Default covers Chennai. Empty disables the restriction.',
     fallback: '79.95,12.75,80.35,13.35',
+  },
+  {
+    key: 'FIELD_TRIP_RATE_PER_KM',
+    label: 'Field trip rate per km (₹)',
+    help: "Multiplied by each field trip's road distance to show the amount to reimburse. Each trip keeps the rate in force on the day it was submitted, so changing this only affects trips submitted afterwards. 0 hides amounts and shows distance only.",
+    fallback: '0',
+    parse: parseRate,
+    validate: validateRate,
+  },
+  {
+    key: 'FIELD_TRIP_PHOTO_REQUIRED',
+    label: 'Field trip photo',
+    help: 'Whether employees must attach at least one photo (a receipt, parking slip or site photo) to submit a field trip. Up to 6 photos can always be attached.',
+    fallback: 'off',
+    options: [{ value: 'off', label: 'Optional' }, { value: 'on', label: 'Required' }],
+  },
+  {
+    key: 'FIELD_TRIP_MAX_STOPS',
+    label: 'Field trip maximum stops',
+    help: `How many stops one field trip can have, including the starting point. Between 2 and ${FIELD_TRIP_MAX_STOPS_LIMIT}.`,
+    fallback: String(FIELD_TRIP_DEFAULT_MAX_STOPS),
+    parse: parseMaxStops,
+    validate: validateMaxStops,
   },
   {
     key: 'REPORT_EMAILS',
@@ -1163,6 +1192,28 @@ async function init() {
   try { await db.exec("ALTER TABLE field_trips ADD COLUMN reason TEXT DEFAULT ''"); } catch { /* already exists */ }
   // How many Claude certificate checks a leave request has used (CERTIFICATE_CHECK_LIMIT).
   try { await db.exec('ALTER TABLE leave_requests ADD COLUMN certificate_checks INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
+
+  // Multi-stop trips (field-trip.js). stops is a JSON array of { address, lat, lon, km }
+  // where km is the road distance from the stop before; from/to_address keep the first
+  // and last place so notifications and older views still read. rate_per_km and amount
+  // are frozen when the trip is submitted, so a later rate change never alters a trip
+  // already in the books; both stay NULL while no rate is set and on older trips.
+  for (const col of ['stops TEXT', 'round_trip INTEGER NOT NULL DEFAULT 0', 'rate_per_km REAL', 'amount REAL']) {
+    try { await db.exec(`ALTER TABLE field_trips ADD COLUMN ${col}`); } catch { /* already exists */ }
+  }
+  // Photos attached to a field trip (receipts, parking slips, site photos), shrunk on
+  // the phone before upload. Same storage as Sick Leave certificates.
+  await db.exec(`CREATE TABLE IF NOT EXISTS field_trip_photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL,
+    employee_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    uploaded_at TEXT NOT NULL
+  )`);
+  await db.exec('CREATE INDEX IF NOT EXISTS idx_field_trip_photos_trip ON field_trip_photos(trip_id, id)');
 
   // India's three compulsory national holidays (Republic Day, Independence Day, Gandhi
   // Jayanti) — fixed Gregorian dates, mandated nationwide regardless of state, unlike
@@ -3644,6 +3695,50 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
   return pageShell(t(lang, 'overtime.title'), employee.id, 'overtime', body, user);
 }
 
+// JSON for an inline <script>: < > & and the line separators escaped, so a value can
+// never close the script tag or break the line.
+function safeJson(value) {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+}
+// "LGF branch → Greenfield Tower → back, 27.8 km, ₹222.40" for notifications and logs.
+function tripSummaryText(trip) {
+  const names = tripStops(trip).map(st => String(st.address || '').split(',')[0].trim()).filter(Boolean);
+  const amount = trip.amount != null ? `, ${formatInr(trip.amount)}` : '';
+  return `${names.join(' → ')}${trip.round_trip ? ' → back' : ''}, ${trip.distance_km} km${amount}`;
+}
+// Photo ids per trip id, for the thumbnails in both trip tables.
+async function tripPhotoIds(trips) {
+  const ids = (trips || []).map(tr => tr.id);
+  const out = new Map(ids.map(id => [id, []]));
+  if (!ids.length) return out;
+  const rows = await db.prepare(`SELECT id, trip_id FROM field_trip_photos WHERE trip_id IN (${ids.map(() => '?').join(',')}) ORDER BY id`).all(...ids);
+  for (const r of rows) out.get(r.trip_id) && out.get(r.trip_id).push(r.id);
+  return out;
+}
+function tripPhotosHtml(photoIds) {
+  if (!photoIds || !photoIds.length) return '<span style="color:#9AA5B1;">—</span>';
+  return `<div style="display:flex;gap:4px;flex-wrap:wrap;">${photoIds.map(id =>
+    `<a href="/field-trip/photo?id=${id}" target="_blank" rel="noopener"><img src="/field-trip/photo?id=${id}" alt="Trip photo" loading="lazy" style="width:38px;height:38px;object-fit:cover;border-radius:6px;border:1px solid #D0D5DA;display:block;"></a>`).join('')}</div>`;
+}
+// The stops of a trip as a compact route with each leg's km, plus a Google Maps link
+// through the same points so the distance can be checked in one tap.
+function tripRouteHtml(trip, { mapsLink = false, lang = 'en' } = {}) {
+  const stops = tripStops(trip);
+  const parts = stops.map((st, i) => {
+    const name = String(st.address || '').split(',')[0].trim() || st.address || '—';
+    const km = i > 0 && st.km != null ? ` <span style="color:#9AA5B1;font-size:0.85em;white-space:nowrap;">(${escapeHtml(String(st.km))} km)</span>` : '';
+    return `<span title="${escapeHtml(st.address || '')}">${escapeHtml(name)}</span>${km}`;
+  });
+  if (trip.round_trip) {
+    // The return leg isn't a stop of its own: it's whatever the total has beyond the legs.
+    const legs = stops.reduce((sum, st) => sum + (Number(st.km) || 0), 0);
+    const backKm = Math.round((Number(trip.distance_km) - legs) * 100) / 100;
+    const km = backKm > 0 ? ` <span style="color:#9AA5B1;font-size:0.85em;white-space:nowrap;">(${backKm} km)</span>` : '';
+    parts.push(`<span style="color:#7C8896;">${escapeHtml(t(lang, 'fieldtrip.back_to_start'))}</span>${km}`);
+  }
+  const link = mapsLink ? `<div style="margin-top:3px;"><a href="${escapeHtml(googleMapsUrl(stops, !!trip.round_trip))}" target="_blank" rel="noopener" style="font-size:0.82em;">Check in Google Maps ↗</a></div>` : '';
+  return `<div style="line-height:1.5;">${parts.join(' <span style="color:#9AA5B1;">→</span> ')}</div>${link}`;
+}
 async function renderFieldTrip(employeeId, trips, user, error) {
   const lang = langOf(user);
   const reapplied = await reappliedIds('field_trips', employeeId);
@@ -3660,166 +3755,366 @@ async function renderFieldTrip(employeeId, trips, user, error) {
   const tripsById = new Map((trips || []).map(trip => [trip.id, trip]));
   const attempts = new Map(await Promise.all((trips || []).map(async trip =>
     [trip.id, (await earlierAttempts(trip, async id => tripsById.get(id) || await getRequestById('field_trips', id))).length])));
+  const photoIds = await tripPhotoIds(trips);
   const recentRows = (trips || []).map(trip => {
     const statusCell = trip.status === 'pending'
       ? statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)
       : statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${trip.status}`), lang);
+    const amount = trip.amount != null
+      ? `${escapeHtml(formatInr(trip.amount))}<div style="color:#9AA5B1;font-size:0.82em;font-weight:400;">${escapeHtml(formatInr(trip.rate_per_km))}/km</div>`
+      : '<span style="color:#9AA5B1;">—</span>';
+    const photosCell = (photoIds.get(trip.id) || []).length ? `<div style="margin-top:6px;">${tripPhotosHtml(photoIds.get(trip.id))}</div>` : '';
+    const note = trip.decision_note ? `<div style="margin-top:6px;font-size:0.85em;">${decisionNoteHtml(trip)}</div>` : '';
     return `
     <tr>
-      <td>${escapeHtml(trip.date)}${attemptBadge(trip, attempts.get(trip.id) || 0, lang)}</td>
-      <td>${escapeHtml(trip.from_address)} &rarr; ${escapeHtml(trip.to_address)}</td>
-      <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km</td>
-      <td>${escapeHtml(trip.reason || '—')}</td>
-      <td>${statusCell}${resubmitHtml(trip)}</td>
-      <td>${decisionNoteHtml(trip)}</td>
+      <td style="white-space:nowrap;">${escapeHtml(trip.date)}${attemptBadge(trip, attempts.get(trip.id) || 0, lang)}</td>
+      <td style="min-width:180px;">${tripRouteHtml(trip, { lang })}<div style="color:#7C8896;font-size:0.85em;margin-top:2px;">${escapeHtml(trip.reason || '—')}</div>${photosCell}</td>
+      <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km<div style="margin-top:4px;">${amount}</div></td>
+      <td>${statusCell}${note}${resubmitHtml(trip)}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">${t(lang, 'fieldtrip.no_trips')}</td></tr>`;
+  }).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'fieldtrip.no_trips')}</td></tr>`;
+
+  // Offices as ready-made stops (the branch's saved location), with the employee's own
+  // branch filled in as the starting point when they have exactly one.
+  const offices = CONFIG.BRANCH_LIST.filter(b => b.location).map(b => ({ address: `The Work Villa — ${b.name}`, lat: b.location.lat, lon: b.location.lng }));
+  const employee = employeeId ? await getEmployee(employeeId) : null;
+  const ownBranches = employee ? employeeBranches(employee.branch) : { all: false, names: [] };
+  const homeOffice = !ownBranches.all && ownBranches.names.length === 1 ? offices.find(o => o.address === `The Work Villa — ${ownBranches.names[0]}`) : null;
+  const today = formatTimestamp(new Date()).split(' ')[0];
+  const earliest = (() => { const d = new Date(`${today}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - FIELD_TRIP_BACKDATE_DAYS); return d.toISOString().slice(0, 10); })();
+  const photoRequired = CONFIG.FIELD_TRIP_PHOTO_REQUIRED === 'on';
+  const L = key => t(lang, key);
+  const clientText = {
+    stopStart: L('fieldtrip.stop_start_placeholder'), stopNext: L('fieldtrip.address_placeholder'),
+    moveUp: L('fieldtrip.move_up'), moveDown: L('fieldtrip.move_down'), remove: L('fieldtrip.remove_stop'),
+    kmFrom: L('fieldtrip.km_from'), backTo: L('fieldtrip.back_to'), office: L('fieldtrip.office'),
+    calculating: L('fieldtrip.calculating'), couldNotCalculate: L('fieldtrip.could_not_calculate'),
+    somethingWrong: L('fieldtrip.something_wrong'), fillEvery: L('fieldtrip.fill_every_stop'),
+    addPhotoToSubmit: L('fieldtrip.add_photo_to_submit'), submit: L('fieldtrip.submit_btn'),
+    recording: L('fieldtrip.recording'), recorded: L('fieldtrip.recorded'), couldNotRecord: L('fieldtrip.could_not_record'),
+    reasonRequired: t(lang, 'notes.err_reason_required'), maxStops: L('fieldtrip.max_stops'), addStop: L('fieldtrip.add_stop'),
+    matched: L('fieldtrip.matched'), drivingAbout: L('fieldtrip.driving_about'), addPhoto: L('fieldtrip.add_photo'),
+    photoFailed: L('fieldtrip.photo_failed'), removePhoto: L('fieldtrip.remove_photo'), plusReturn: L('fieldtrip.plus_return'),
+  };
   const body = `
     <style>
-      .ac-wrap { position: relative; }
-      .ac-drop { display:none; position:absolute; left:0; right:0; top:100%; z-index:20; background:#fff; border:1px solid #D0D5DA; border-radius:6px; margin-top:2px; max-height:220px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,0.12); }
-      .ac-item { padding:8px 10px; font-size:0.9em; cursor:pointer; }
+      .ft-grid { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); gap:16px; align-items:start; }
+      @media (max-width: 860px) { .ft-grid { grid-template-columns:1fr; } }
+      .ft-label { display:block; font-size:0.8em; color:#7C8896; margin-bottom:4px; }
+      .ft-input { padding:8px; border-radius:6px; border:1px solid #D0D5DA; width:100%; box-sizing:border-box; font:inherit; }
+      .ft-stop { display:grid; grid-template-columns:26px minmax(0,1fr) auto; gap:8px; align-items:center; position:relative; padding:4px 0; }
+      .ft-stop:not(:last-child)::after { content:""; position:absolute; left:12px; top:28px; bottom:-6px; border-left:2px dotted #D0D5DA; }
+      .ft-pin { width:24px; height:24px; border-radius:50%; background:#1565C0; color:#fff; font-weight:700; font-size:0.72em; display:grid; place-items:center; z-index:1; }
+      .ft-stop.first .ft-pin { background:#2E7D32; } .ft-stop.last .ft-pin { background:#C62828; }
+      .ft-leg { grid-column:2 / 4; font-size:0.78em; color:#7C8896; margin-top:-2px; }
+      .ft-leg .warn { color:#B26A00; }
+      .ft-ib { border:0; background:transparent; color:#7C8896; cursor:pointer; width:28px; height:28px; border-radius:6px; font-size:1em; }
+      .ft-ib:hover:not(:disabled) { background:#EEF1F4; color:#1F2933; } .ft-ib:disabled { opacity:.3; cursor:default; }
+      .ac-wrap { position:relative; }
+      .ac-drop { display:none; position:absolute; left:0; right:0; top:100%; z-index:20; background:#fff; border:1px solid #D0D5DA; border-radius:6px; margin-top:2px; max-height:240px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,0.12); }
+      .ac-item { padding:8px 10px; font-size:0.9em; cursor:pointer; } .ac-item small { display:block; color:#7C8896; }
       .ac-item:hover, .ac-item.active { background:#E3F2FD; }
+      .ft-photos { display:grid; grid-template-columns:repeat(auto-fill, minmax(80px, 1fr)); gap:8px; }
+      .ft-ph { position:relative; aspect-ratio:1; border-radius:8px; overflow:hidden; background:#EEF1F4; }
+      .ft-ph img { width:100%; height:100%; object-fit:cover; display:block; }
+      .ft-ph button { position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:50%; border:0; background:rgba(0,0,0,.6); color:#fff; cursor:pointer; font-size:0.8em; }
+      .ft-addph { aspect-ratio:1; border:1.5px dashed #D0D5DA; border-radius:8px; background:#fff; color:#7C8896; font:inherit; font-size:0.8em; cursor:pointer; }
+      .ft-addph:hover { border-color:#1565C0; color:#1565C0; }
+      .ft-map { border:1px solid #D0D5DA; border-radius:8px; background:#F4F7F3; aspect-ratio:4/3; overflow:hidden; }
+      .ft-map svg { width:100%; height:100%; display:block; }
+      .ft-sum { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:1px; background:#D0D5DA; border:1px solid #D0D5DA; border-radius:8px; overflow:hidden; margin-top:12px; }
+      .ft-sum div { background:#fff; padding:10px 12px; } .ft-sum b { display:block; font-size:1.2em; font-variant-numeric:tabular-nums; }
+      .ft-sum span { font-size:0.75em; color:#7C8896; }
+      @media (max-width: 480px) { .ft-sum { grid-template-columns:1fr; } }
+      #ftSubmit:disabled { opacity:.55; cursor:not-allowed; }
     </style>
     ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
-    <div class="card">
-      <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'fieldtrip.title')}</div>
-      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'fieldtrip.hint')}</p>
-      <button id="startTripBtn" onclick="showTripForm()" style="padding:10px 20px;border-radius:8px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">${t(lang, 'fieldtrip.start_btn')}</button>
-      <div id="tripForm" style="display:none;margin-top:14px;">
-        <div class="ac-wrap" style="margin-bottom:10px;max-width:340px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'fieldtrip.from')}</label>
-          <input id="tripFrom" type="text" autocomplete="off" placeholder="${escapeHtml(t(lang, 'fieldtrip.address_placeholder'))}" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;width:100%;box-sizing:border-box;">
-          <input type="hidden" id="tripFromLat"><input type="hidden" id="tripFromLon">
-          <div id="tripFromDrop" class="ac-drop"></div>
+    <div class="ft-grid">
+      <div class="card" style="min-width:0;">
+        <div style="font-weight:700;margin-bottom:6px;">${L('fieldtrip.title')}</div>
+        <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${L('fieldtrip.hint')}</p>
+        <div style="margin-bottom:12px;max-width:200px;">
+          <label class="ft-label" for="tripDate">${L('fieldtrip.col_date')}</label>
+          <input id="tripDate" class="ft-input" type="date" value="${today}" min="${earliest}" max="${today}">
         </div>
-        <div class="ac-wrap" style="margin-bottom:10px;max-width:340px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'fieldtrip.to')}</label>
-          <input id="tripTo" type="text" autocomplete="off" placeholder="${escapeHtml(t(lang, 'fieldtrip.address_placeholder'))}" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;width:100%;box-sizing:border-box;">
-          <input type="hidden" id="tripToLat"><input type="hidden" id="tripToLon">
-          <div id="tripToDrop" class="ac-drop"></div>
+        <label class="ft-label">${L('fieldtrip.stops_label')}</label>
+        <div id="ftStops"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center;margin:8px 0 14px;">
+          <button type="button" id="ftAddStop" style="padding:7px 14px;border-radius:6px;border:1px dashed #1565C0;background:#fff;color:#1565C0;font-weight:600;cursor:pointer;"></button>
+          <label style="display:inline-flex;gap:8px;align-items:center;font-size:0.9em;cursor:pointer;"><input type="checkbox" id="ftRound" style="width:16px;height:16px;"> ${L('fieldtrip.round_trip')}</label>
         </div>
-        <div style="margin-bottom:10px;max-width:340px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'fieldtrip.reason')} *</label>
-          <input id="tripReason" type="text" maxlength="${NOTE_MAX_LENGTH}" placeholder="${escapeHtml(t(lang, 'fieldtrip.reason_placeholder'))}" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;width:100%;box-sizing:border-box;">
+        <div style="margin-bottom:14px;">
+          <label class="ft-label" for="tripReason">${L('fieldtrip.reason')} *</label>
+          <input id="tripReason" class="ft-input" type="text" maxlength="${NOTE_MAX_LENGTH}" placeholder="${escapeHtml(L('fieldtrip.reason_placeholder'))}">
         </div>
-        <button id="calcTripBtn" onclick="calcTrip()" style="padding:9px 18px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">${t(lang, 'fieldtrip.calculate_btn')}</button>
-        <div id="tripResult" style="margin-top:12px;font-size:0.95em;"></div>
-        <button id="recordTripBtn" onclick="recordTrip()" style="display:none;margin-top:12px;padding:9px 18px;border-radius:6px;border:none;background:#2E7D32;color:#fff;font-weight:600;cursor:pointer;">${t(lang, 'fieldtrip.record_btn')}</button>
+        <label class="ft-label">${L('fieldtrip.photos_label')} <span>${escapeHtml(t(lang, photoRequired ? 'fieldtrip.photos_required' : 'fieldtrip.photos_optional', { max: FIELD_TRIP_MAX_PHOTOS }))}</span></label>
+        <div class="ft-photos" id="ftPhotos"></div>
+        <input type="file" id="ftFile" accept="image/*" multiple hidden>
+        <p style="color:#7C8896;font-size:0.8em;margin:6px 0 0;">${L('fieldtrip.photos_hint')}</p>
+      </div>
+      <div class="card" style="min-width:0;">
+        <div class="ft-map" id="ftMap"></div>
+        <div class="ft-sum">
+          <div><b id="ftKm">—</b><span>${L('fieldtrip.total_distance')}</span></div>
+          <div><b id="ftStopCount">0</b><span>${L('fieldtrip.stops_label')}</span></div>
+          <div><b id="ftAmount" style="color:#2E7D32;">—</b><span id="ftRate"></span></div>
+        </div>
+        <div id="ftStatus" style="font-size:0.85em;color:#7C8896;margin:8px 0 12px;min-height:1.2em;"></div>
+        ${CONFIG.FIELD_TRIP_RATE_PER_KM > 0 ? `<p style="color:#7C8896;font-size:0.8em;margin:0 0 12px;">${L('fieldtrip.amount_note')}</p>` : ''}
+        <button type="button" id="ftSubmit" disabled style="width:100%;padding:10px 18px;border-radius:8px;border:none;background:#2E7D32;color:#fff;font-weight:600;cursor:pointer;"></button>
       </div>
     </div>
-    <div class="card">
-      <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'fieldtrip.recent_title')}</div>
-      <table><tr><th>${t(lang, 'fieldtrip.col_date')}</th><th>${t(lang, 'fieldtrip.col_from')} &rarr; ${t(lang, 'fieldtrip.col_to')}</th><th>${t(lang, 'fieldtrip.col_distance')}</th><th>${t(lang, 'fieldtrip.reason')}</th><th>${t(lang, 'fieldtrip.col_status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${recentRows}</table>
+    <div class="card" style="overflow-x:auto;">
+      <div style="font-weight:700;margin-bottom:10px;">${L('fieldtrip.recent_title')}</div>
+      <table><tr><th>${L('fieldtrip.col_date')}</th><th>${L('fieldtrip.col_route')}</th><th>${L('fieldtrip.col_distance')}</th><th>${L('fieldtrip.col_status')}</th></tr>${recentRows}</table>
     </div>
     <script>
-      function showTripForm() {
-        document.getElementById('tripForm').style.display = 'block';
-        document.getElementById('startTripBtn').style.display = 'none';
-        document.getElementById('tripFrom').focus();
+    (function () {
+      var T = ${safeJson(clientText)};
+      var OFFICES = ${safeJson(offices)};
+      var RATE = ${safeJson(CONFIG.FIELD_TRIP_RATE_PER_KM || 0)};
+      var MAX_STOPS = ${safeJson(CONFIG.FIELD_TRIP_MAX_STOPS)};
+      var MAX_PHOTOS = ${safeJson(FIELD_TRIP_MAX_PHOTOS)};
+      var PHOTO_REQUIRED = ${safeJson(photoRequired)};
+      var stops = [${homeOffice ? safeJson(homeOffice) : 'null'}, null];
+      var roundTrip = false, photos = [], route = null, calcSeq = 0, calcTimer = null, submitting = false;
+      var $ = function (id) { return document.getElementById(id); };
+      function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+      function inr(n) { var whole = Math.round(n * 100) % 100 === 0; return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 }); }
+      function letter(i) { return String.fromCharCode(65 + i); }
+      function short(a) { return String(a || '').split(',')[0]; }
+      function filled() { return stops.length >= 2 && stops.every(function (s) { return s && s.address; }); }
+
+      function renderStops() {
+        var el = $('ftStops'); el.innerHTML = '';
+        var n = stops.length;
+        stops.forEach(function (s, i) {
+          var row = document.createElement('div');
+          row.className = 'ft-stop' + (i === 0 ? ' first' : '') + (i === n - 1 && !roundTrip ? ' last' : '');
+          row.innerHTML = '<div class="ft-pin">' + letter(i) + '</div>'
+            + '<div class="ac-wrap"><input type="text" class="ft-input" autocomplete="off" id="ftStop' + i + '" placeholder="' + esc(i === 0 ? T.stopStart : T.stopNext) + '"><div class="ac-drop"></div></div>'
+            + '<div style="display:flex;"><button type="button" class="ft-ib" title="' + esc(T.moveUp) + '" aria-label="' + esc(T.moveUp) + '"' + (i === 0 ? ' disabled' : '') + ' data-up="' + i + '">↑</button>'
+            + '<button type="button" class="ft-ib" title="' + esc(T.moveDown) + '" aria-label="' + esc(T.moveDown) + '"' + (i === n - 1 ? ' disabled' : '') + ' data-down="' + i + '">↓</button>'
+            + '<button type="button" class="ft-ib" title="' + esc(T.remove) + '" aria-label="' + esc(T.remove) + '"' + (n <= 2 ? ' disabled' : '') + ' data-rm="' + i + '">✕</button></div>';
+          var leg = route && route.stops[i];
+          if (i > 0 && leg && s && s.address) {
+            var d = document.createElement('div'); d.className = 'ft-leg';
+            d.innerHTML = '↳ ' + esc(T.kmFrom.split('{{km}}').join(leg.km).split('{{from}}').join(letter(i - 1)));
+            if (leg.geocoded) d.innerHTML += ' · <span class="warn">' + esc(T.matched) + ' ' + esc(leg.address) + '</span>';
+            row.appendChild(d);
+          } else if (i === 0 && leg && leg.geocoded) {
+            var d0 = document.createElement('div'); d0.className = 'ft-leg';
+            d0.innerHTML = '<span class="warn">' + esc(T.matched) + ' ' + esc(leg.address) + '</span>';
+            row.appendChild(d0);
+          }
+          el.appendChild(row);
+          var input = row.querySelector('input');
+          input.value = s ? s.address : '';
+          attachAutocomplete(input, row.querySelector('.ac-drop'), i);
+        });
+        if (roundTrip && n >= 2) {
+          var back = document.createElement('div'); back.className = 'ft-stop last';
+          var backName = stops[0] && stops[0].address ? short(stops[0].address) : letter(0);
+          back.innerHTML = '<div class="ft-pin">A</div><div style="color:#7C8896;padding:8px 0;">' + esc(T.backTo.split('{{place}}').join(backName)) + '</div><div></div>';
+          if (route && route.returnKm != null) back.innerHTML += '<div class="ft-leg">↳ ' + esc(T.kmFrom.split('{{km}}').join(route.returnKm).split('{{from}}').join(letter(n - 1))) + '</div>';
+          el.appendChild(back);
+        }
+        el.querySelectorAll('[data-up]').forEach(function (b) { b.onclick = function () { var i = +b.dataset.up; var x = stops[i - 1]; stops[i - 1] = stops[i]; stops[i] = x; changed(); }; });
+        el.querySelectorAll('[data-down]').forEach(function (b) { b.onclick = function () { var i = +b.dataset.down; var x = stops[i + 1]; stops[i + 1] = stops[i]; stops[i] = x; changed(); }; });
+        el.querySelectorAll('[data-rm]').forEach(function (b) { b.onclick = function () { stops.splice(+b.dataset.rm, 1); changed(); }; });
+        var add = $('ftAddStop');
+        add.disabled = n >= MAX_STOPS;
+        add.textContent = n >= MAX_STOPS ? T.maxStops.split('{{max}}').join(MAX_STOPS) : T.addStop;
       }
-      function escapeText(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
-      // Wires LocationIQ type-ahead onto one input: debounced fetch, a suggestions dropdown,
-      // keyboard (up/down/enter/esc) + mouse selection. Each suggestion carries lat/lon, which
-      // we stash in hidden fields so the distance call can route between exact points.
-      function attachAutocomplete(inputId, dropId, latId, lonId) {
-        const input = document.getElementById(inputId);
-        const drop = document.getElementById(dropId);
-        const latEl = document.getElementById(latId);
-        const lonEl = document.getElementById(lonId);
-        let items = [], active = -1, timer = null;
+
+      // LocationIQ type-ahead on one stop: debounced fetch, keyboard and mouse selection.
+      // An empty box offers the offices. A pick carries exact coordinates; typing after a
+      // pick drops them, and the server geocodes whatever was typed instead.
+      function attachAutocomplete(input, drop, idx) {
+        var items = [], active = -1, timer = null;
         function close() { drop.style.display = 'none'; drop.innerHTML = ''; items = []; active = -1; }
         function render() {
           if (!items.length) { close(); return; }
-          drop.innerHTML = items.map(function(s, i) {
-            return '<div class="ac-item' + (i === active ? ' active' : '') + '" data-i="' + i + '">' + escapeText(s.description) + '</div>';
+          drop.innerHTML = items.map(function (s, i) {
+            return '<div class="ac-item' + (i === active ? ' active' : '') + '" data-i="' + i + '">' + esc(s.address) + (s.office ? '<small>' + esc(T.office) + '</small>' : '') + '</div>';
           }).join('');
           drop.style.display = 'block';
-          Array.prototype.forEach.call(drop.children, function(el) {
-            el.addEventListener('mousedown', function(e) { e.preventDefault(); select(parseInt(el.getAttribute('data-i'), 10)); });
+          Array.prototype.forEach.call(drop.children, function (el) {
+            el.addEventListener('mousedown', function (e) { e.preventDefault(); select(+el.getAttribute('data-i')); });
           });
         }
         function select(i) {
-          const s = items[i]; if (!s) return;
-          input.value = s.description; latEl.value = s.lat || ''; lonEl.value = s.lon || '';
-          close();
+          var s = items[i]; if (!s) return;
+          stops[idx] = { address: s.address, lat: s.lat, lon: s.lon };
+          close(); changed();
+          var next = $('ftStop' + (idx + 1));
+          if (next && !next.value) next.focus();
         }
-        input.addEventListener('input', function() {
-          latEl.value = ''; lonEl.value = ''; // typing after a pick invalidates the coords
-          const q = input.value.trim();
+        function offices(q) {
+          return OFFICES.filter(function (o) { return !q || o.address.toLowerCase().indexOf(q.toLowerCase()) >= 0; })
+            .map(function (o) { return { address: o.address, lat: o.lat, lon: o.lon, office: true }; });
+        }
+        input.addEventListener('focus', function () { if (!input.value.trim()) { items = offices(''); active = -1; render(); } });
+        input.addEventListener('input', function () {
+          var q = input.value.trim();
+          stops[idx] = q ? { address: q } : null; // typing drops any picked coordinates
+          route = null; refreshSummary();
           clearTimeout(timer);
-          if (q.length < 3) { close(); return; }
-          timer = setTimeout(function() {
+          if (q.length < 3) { items = offices(q); active = -1; render(); return; }
+          timer = setTimeout(function () {
             fetch('/api/places/autocomplete?q=' + encodeURIComponent(q))
-              .then(function(r) { return r.json(); })
-              .then(function(d) { items = d.suggestions || []; active = -1; render(); })
-              .catch(function() { close(); });
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (input.value.trim() !== q) return;
+                items = offices(q).concat((d.suggestions || []).map(function (s) { return { address: s.description, lat: s.lat, lon: s.lon }; }));
+                active = -1; render();
+              })
+              .catch(close);
           }, 250);
         });
-        input.addEventListener('keydown', function(e) {
+        input.addEventListener('keydown', function (e) {
           if (drop.style.display !== 'block') return;
           if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); render(); }
           else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); render(); }
           else if (e.key === 'Enter') { if (active >= 0) { e.preventDefault(); select(active); } }
           else if (e.key === 'Escape') { close(); }
         });
-        input.addEventListener('blur', function() { setTimeout(close, 150); });
+        input.addEventListener('blur', function () {
+          setTimeout(close, 150);
+          // A typed address that wasn't picked still needs a distance: work it out now.
+          if (stops[idx] && stops[idx].lat === undefined) scheduleCalc(0);
+        });
       }
-      var lastTripPayload = null;
-      ${(() => {
-        const [drivingPrefix, drivingSuffix] = t(lang, 'fieldtrip.driving_about').split('{{duration}}');
-        return `var DRIVING_PREFIX = ${JSON.stringify(drivingPrefix)}, DRIVING_SUFFIX = ${JSON.stringify(drivingSuffix)};`;
-      })()}
-      function calcTrip() {
-        const from = document.getElementById('tripFrom').value.trim();
-        const to = document.getElementById('tripTo').value.trim();
-        const result = document.getElementById('tripResult');
-        const btn = document.getElementById('calcTripBtn');
-        const recBtn = document.getElementById('recordTripBtn');
-        recBtn.style.display = 'none';
-        if (!from || !to) { result.innerHTML = '<span style="color:#C62828;">' + ${JSON.stringify(t(lang, 'fieldtrip.enter_both'))} + '</span>'; return; }
-        const payload = {
-          from: from, to: to,
-          from_lat: document.getElementById('tripFromLat').value, from_lon: document.getElementById('tripFromLon').value,
-          to_lat: document.getElementById('tripToLat').value, to_lon: document.getElementById('tripToLon').value
-        };
-        result.textContent = ${JSON.stringify(t(lang, 'fieldtrip.calculating'))}; btn.disabled = true;
+
+      function changed() { route = null; renderStops(); refreshSummary(); scheduleCalc(150); }
+      function scheduleCalc(delay) {
+        clearTimeout(calcTimer);
+        if (!filled()) { renderMap(); return; }
+        calcTimer = setTimeout(calc, delay);
+      }
+      function calc() {
+        if (!filled()) return;
+        var seq = ++calcSeq;
+        $('ftStatus').style.color = '#7C8896'; $('ftStatus').textContent = T.calculating;
         fetch('/api/field-trip/distance', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        }).then(r => r.json().then(d => ({ ok: r.ok, d: d }))).then(({ ok, d }) => {
-          btn.disabled = false;
-          if (!ok) { result.innerHTML = '<span style="color:#C62828;">' + escapeText(d.error || ${JSON.stringify(t(lang, 'fieldtrip.could_not_calculate'))}) + '</span>'; return; }
-          lastTripPayload = payload;
-          result.innerHTML = '<div style="font-size:1.5em;font-weight:700;color:#1565C0;">' + escapeText(String(d.distanceKm)) + ' km</div>'
-            + '<div style="color:#7C8896;font-size:0.85em;margin-top:4px;line-height:1.5;">'
-            + (d.durationText ? DRIVING_PREFIX + escapeText(d.durationText) + DRIVING_SUFFIX + '<br>' : '')
-            + '<strong>${escapeHtml(t(lang, 'fieldtrip.from_label'))}</strong> ' + escapeText(d.fromResolved) + '<br><strong>${escapeHtml(t(lang, 'fieldtrip.to_label'))}</strong> ' + escapeText(d.toResolved) + '</div>';
-          recBtn.style.display = 'inline-block'; recBtn.disabled = false; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.record_btn'))};
-        }).catch(() => { btn.disabled = false; result.innerHTML = '<span style="color:#C62828;">' + ${JSON.stringify(t(lang, 'fieldtrip.something_wrong'))} + '</span>'; });
+          body: JSON.stringify({ stops: stops, round_trip: roundTrip })
+        }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); }).then(function (res) {
+          if (seq !== calcSeq) return; // a newer edit is already being calculated
+          if (!res.ok) { route = null; $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = res.d.error || T.couldNotCalculate; refreshSummary(); renderMap(); return; }
+          route = res.d;
+          // Keep the exact points the server routed, so submitting routes the same ones.
+          route.stops.forEach(function (s, i) { stops[i] = { address: s.address, lat: s.lat, lon: s.lon }; });
+          $('ftStatus').textContent = route.durationText ? T.drivingAbout.split('{{duration}}').join(route.durationText) : '';
+          renderStops(); refreshSummary(); renderMap();
+        }).catch(function () { if (seq === calcSeq) { $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = T.somethingWrong; } });
       }
-      function recordTrip() {
-        if (!lastTripPayload) return;
-        const recBtn = document.getElementById('recordTripBtn');
-        const result = document.getElementById('tripResult');
-        const reasonEl = document.getElementById('tripReason');
-        lastTripPayload.reason = reasonEl.value.trim();
-        if (lastTripPayload.reason.length < 3) {
-          result.innerHTML += '<div style="color:#C62828;margin-top:8px;">' + ${JSON.stringify(t(lang, 'notes.err_reason_required'))} + '</div>';
-          reasonEl.focus(); return;
+
+      function refreshSummary() {
+        var count = stops.filter(function (s) { return s && s.address; }).length;
+        $('ftStopCount').textContent = count + (roundTrip && count >= 2 ? ' ' + T.plusReturn : '');
+        $('ftKm').textContent = route ? route.distanceKm + ' km' : '—';
+        $('ftAmount').textContent = route && route.amount != null ? inr(route.amount) : '—';
+        $('ftRate').textContent = RATE > 0 ? inr(RATE) + '/km' : '';
+        var btn = $('ftSubmit');
+        var needPhoto = PHOTO_REQUIRED && !photos.length;
+        btn.disabled = submitting || !route || needPhoto;
+        if (!submitting) btn.textContent = !filled() ? T.fillEvery : (needPhoto ? T.addPhotoToSubmit : T.submit);
+      }
+
+      // Route sketch from the stops' coordinates: pins in order, joined by the path.
+      // Straight lines between stops for orientation; the distance is the road distance.
+      function renderMap() {
+        var pts = route ? route.stops : stops.filter(function (s) { return s && s.lat !== undefined; });
+        var el = $('ftMap');
+        if (!pts.length) { el.innerHTML = ''; return; }
+        var lats = pts.map(function (p) { return +p.lat; }), lons = pts.map(function (p) { return +p.lon; });
+        var minLat = Math.min.apply(null, lats), maxLat = Math.max.apply(null, lats), minLon = Math.min.apply(null, lons), maxLon = Math.max.apply(null, lons);
+        var cosLat = Math.cos((minLat + maxLat) / 2 * Math.PI / 180);
+        var spanX = Math.max((maxLon - minLon) * cosLat, 0.002), spanY = Math.max(maxLat - minLat, 0.002);
+        var W = 400, H = 300, pad = 40, scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+        var cx = (minLon + maxLon) / 2, cy = (minLat + maxLat) / 2;
+        function xy(p) { return [W / 2 + (p.lon - cx) * cosLat * scale, H / 2 - (p.lat - cy) * scale]; }
+        var path = pts.map(function (p, i) { var c = xy(p); return (i ? 'L' : 'M') + c[0].toFixed(1) + ' ' + c[1].toFixed(1); }).join(' ');
+        if (route && route.roundTrip && pts.length > 1) { var c0 = xy(pts[0]); path += ' L' + c0[0].toFixed(1) + ' ' + c0[1].toFixed(1); }
+        var pins = pts.map(function (p, i) {
+          var c = xy(p), col = i === 0 ? '#2E7D32' : (i === pts.length - 1 && !(route && route.roundTrip) ? '#C62828' : '#1565C0');
+          return '<g transform="translate(' + c[0].toFixed(1) + ' ' + c[1].toFixed(1) + ')"><path d="M0 0 C-9 -12 -11 -16 -11 -21 A11 11 0 1 1 11 -21 C11 -16 9 -12 0 0Z" fill="' + col + '" stroke="#fff" stroke-width="2"/><text y="-17" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">' + letter(i) + '</text></g>';
+        }).join('');
+        el.innerHTML = '<svg viewBox="0 0 400 300" role="img" aria-label="Route sketch"><rect width="400" height="300" fill="#F4F7F3"/>'
+          + (pts.length > 1 ? '<path d="' + path + '" fill="none" stroke="#1565C0" stroke-width="3" stroke-dasharray="7 5" stroke-linejoin="round" opacity=".8"/>' : '') + pins + '</svg>';
+      }
+
+      // Photos are shrunk on the phone (max 1000px JPEG) before upload, like profile photos.
+      function shrink(file) {
+        return new Promise(function (resolve, reject) {
+          var img = new Image(), url = URL.createObjectURL(file);
+          img.onload = function () {
+            var w = img.naturalWidth, h = img.naturalHeight, max = 1000;
+            if (w > max || h > max) { if (w > h) { h = Math.round(h * max / w); w = max; } else { w = Math.round(w * max / h); h = max; } }
+            var c = document.createElement('canvas'); c.width = w; c.height = h;
+            c.getContext('2d').drawImage(img, 0, 0, w, h);
+            URL.revokeObjectURL(url);
+            var data = c.toDataURL('image/jpeg', 0.8);
+            if (data.length > 640000) data = c.toDataURL('image/jpeg', 0.6);
+            resolve({ filename: baseName(file.name) + '.jpg', content_type: 'image/jpeg', data_base64: data.split(',')[1], preview: data });
+          };
+          img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('unreadable')); };
+          img.src = url;
+        });
+      }
+      function baseName(name) { name = name || 'photo'; var dot = name.lastIndexOf('.'); return dot > 0 ? name.slice(0, dot) : name; }
+      function renderPhotos() {
+        var el = $('ftPhotos'); el.innerHTML = '';
+        photos.forEach(function (p, i) {
+          var d = document.createElement('div'); d.className = 'ft-ph';
+          d.innerHTML = '<img alt=""><button type="button" aria-label="' + esc(T.removePhoto) + '" title="' + esc(T.removePhoto) + '">✕</button>';
+          d.querySelector('img').src = p.preview;
+          d.querySelector('button').onclick = function () { photos.splice(i, 1); renderPhotos(); refreshSummary(); };
+          el.appendChild(d);
+        });
+        if (photos.length < MAX_PHOTOS) {
+          var b = document.createElement('button'); b.type = 'button'; b.className = 'ft-addph'; b.textContent = '📷 ' + T.addPhoto;
+          b.onclick = function () { $('ftFile').click(); };
+          el.appendChild(b);
         }
-        recBtn.disabled = true; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.recording'))};
+      }
+      $('ftFile').addEventListener('change', function (e) {
+        var files = Array.prototype.slice.call(e.target.files, 0, MAX_PHOTOS - photos.length);
+        e.target.value = '';
+        Promise.all(files.map(function (f) { return shrink(f).catch(function () { return null; }); })).then(function (list) {
+          if (list.some(function (x) { return !x; })) { $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = T.photoFailed; }
+          photos = photos.concat(list.filter(Boolean)).slice(0, MAX_PHOTOS);
+          renderPhotos(); refreshSummary();
+        });
+      });
+
+      $('ftAddStop').onclick = function () {
+        if (stops.length >= MAX_STOPS) return;
+        stops.push(null); route = null; renderStops(); refreshSummary();
+        var el = $('ftStop' + (stops.length - 1)); if (el) el.focus();
+      };
+      $('ftRound').onchange = function (e) { roundTrip = e.target.checked; changed(); };
+      $('ftSubmit').onclick = function () {
+        var reason = $('tripReason').value.trim();
+        if (reason.length < 3) { $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = T.reasonRequired; $('tripReason').focus(); return; }
+        if (!route) return;
+        submitting = true; var btn = $('ftSubmit'); btn.disabled = true; btn.textContent = T.recording;
         fetch('/api/field-trip/record', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(lastTripPayload)
-        }).then(r => r.json().then(d => ({ ok: r.ok, d: d }))).then(({ ok, d }) => {
-          if (!ok) { recBtn.disabled = false; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.record_btn'))}; result.innerHTML += '<div style="color:#C62828;margin-top:8px;">' + escapeText(d.error || ${JSON.stringify(t(lang, 'fieldtrip.could_not_record'))}) + '</div>'; return; }
-          recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.recorded'))};
-          setTimeout(function () { window.location.reload(); }, 900); // refresh the recent-trips list
-        }).catch(function () { recBtn.disabled = false; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.record_btn'))}; });
-      }
-      attachAutocomplete('tripFrom', 'tripFromDrop', 'tripFromLat', 'tripFromLon');
-      attachAutocomplete('tripTo', 'tripToDrop', 'tripToLat', 'tripToLon');
+          body: JSON.stringify({
+            date: $('tripDate').value, stops: stops, round_trip: roundTrip, reason: reason,
+            photos: photos.map(function (p) { return { filename: p.filename, content_type: p.content_type, data_base64: p.data_base64 }; })
+          })
+        }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); }).then(function (res) {
+          if (!res.ok) { submitting = false; $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = res.d.error || T.couldNotRecord; refreshSummary(); return; }
+          btn.textContent = T.recorded;
+          setTimeout(function () { window.location.reload(); }, 900);
+        }).catch(function () { submitting = false; $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = T.somethingWrong; refreshSummary(); });
+      };
+
+      renderStops(); renderPhotos(); refreshSummary(); renderMap();
+    })();
     </script>`;
   return pageShell(t(lang, 'nav.field_trips'), employeeId || '', 'field-trip', body, user);
 }
@@ -3827,35 +4122,53 @@ async function renderFieldTrip(employeeId, trips, user, error) {
 // Accounts-team view: every recorded field trip, for fuel reimbursement.
 async function renderAdminFieldTrips(trips, user) {
   const byId = new Map(trips.map(trip => [trip.id, trip]));
-  const describe = trip => `${trip.date}, ${trip.distance_km} km`;
+  const describe = trip => `${trip.date}, ${trip.distance_km} km${trip.amount != null ? `, ${formatInr(trip.amount)}` : ''}`;
+  const photoIds = await tripPhotoIds(trips);
   const rows = (await Promise.all(trips.map(async trip => {
     const emp = await getEmployee(trip.employee_id);
     const before = await earlierAttempts(trip, async id => byId.get(id) || await getRequestById('field_trips', id));
     const statusCell = trip.status === 'pending'
       ? decideFormHtml('/field-trip/decide', { id: trip.id })
       : `${statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', trip.status)}<div style="margin-top:4px;font-size:0.9em;">${decisionNoteHtml(trip)}</div>`;
+    const amount = trip.amount != null
+      ? `${escapeHtml(formatInr(trip.amount))}<div style="color:#9AA5B1;font-size:0.82em;font-weight:400;">${escapeHtml(formatInr(trip.rate_per_km))}/km</div>`
+      : '<span style="color:#9AA5B1;">—</span>';
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : trip.employee_id)}</strong> <span style="color:#9AA5B1;">(${escapeHtml(trip.employee_id)})</span>${attemptBadge(trip, before.length)}</td>
-      <td>${escapeHtml(trip.date)}</td>
-      <td>${escapeHtml(trip.from_address)} &rarr; ${escapeHtml(trip.to_address)}</td>
-      <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km</td>
-      <td>${escapeHtml(trip.reason || '—')}${trip.status === 'pending' ? await earlierAttemptsHtml('field_trips', trip, byId, 'en', describe) : ''}</td>
+      <td><strong>${escapeHtml(emp ? emp.name : trip.employee_id)}</strong><div style="color:#9AA5B1;font-size:0.85em;">${escapeHtml(trip.employee_id)}</div><div style="white-space:nowrap;margin-top:4px;">${escapeHtml(trip.date)}</div>${attemptBadge(trip, before.length)}</td>
+      <td style="min-width:200px;">
+        ${tripRouteHtml(trip, { mapsLink: true })}
+        <div style="color:#5F6B7A;font-size:0.88em;margin-top:6px;">${escapeHtml(trip.reason || '—')}</div>
+        ${trip.status === 'pending' ? await earlierAttemptsHtml('field_trips', trip, byId, 'en', describe) : ''}
+        ${(photoIds.get(trip.id) || []).length ? `<div style="margin-top:6px;">${tripPhotosHtml(photoIds.get(trip.id))}</div>` : ''}
+      </td>
+      <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km<div style="margin-top:4px;">${amount}</div></td>
       <td>${statusCell}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No field trips recorded yet</td></tr>`;
-  // Only approved distance counts toward the reimbursement total — pending/rejected
-  // trips shouldn't inflate the number accounts actually pays out on.
-  const approvedKm = Math.round(trips.filter(trip => trip.status === 'approved').reduce((s, trip) => s + (trip.distance_km || 0), 0) * 100) / 100;
+  }))).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">No field trips recorded yet</td></tr>`;
+  // Only approved trips count toward reimbursement — pending/rejected ones shouldn't
+  // inflate what accounts actually pays out. The month is the trip's own date.
+  const month = formatTimestamp(new Date()).slice(0, 7);
+  const sum = (list, f) => Math.round(list.reduce((s, trip) => s + (Number(trip[f]) || 0), 0) * 100) / 100;
+  const approved = trips.filter(trip => trip.status === 'approved');
+  const approvedThisMonth = approved.filter(trip => String(trip.date).startsWith(month));
+  const pending = trips.filter(trip => trip.status === 'pending');
+  const stat = (value, label) => `<div><div style="font-size:1.4em;font-weight:700;font-variant-numeric:tabular-nums;">${escapeHtml(value)}</div><div style="color:#7C8896;font-size:0.85em;">${escapeHtml(label)}</div></div>`;
+  const rateOn = CONFIG.FIELD_TRIP_RATE_PER_KM > 0;
   const body = `
-    <div class="card" style="color:#7C8896;font-size:0.9em;">
-      Distances recorded by employees for field trips (work travel away from the office), for fuel reimbursement.
-      A trip only counts toward reimbursement once approved — reject any trip the office didn't ask for.
-      Showing the ${trips.length} most recent — ${approvedKm} km approved so far.
+    <div class="card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">
+      ${stat(rateOn || pending.some(trip => trip.amount != null) ? formatInr(sum(pending, 'amount')) : `${sum(pending, 'distance_km')} km`, `Waiting for approval (${pending.length})`)}
+      ${stat(formatInr(sum(approvedThisMonth, 'amount')), 'Approved this month')}
+      ${stat(`${sum(approvedThisMonth, 'distance_km')} km`, 'Approved distance this month')}
     </div>
-    <div class="card">
+    <div class="card" style="color:#7C8896;font-size:0.9em;">
+      Trips employees made away from the office, for fuel reimbursement. The distance is the road route through every stop, worked out by the server when the trip was submitted; use "Check in Google Maps" to compare.
+      Each trip keeps the rate in force when it was submitted${rateOn ? ` (currently ${escapeHtml(formatInr(CONFIG.FIELD_TRIP_RATE_PER_KM))}/km, set in Settings)` : ' (no rate is set in Settings, so new trips show distance only)'}.
+      A trip only counts toward reimbursement once approved. Showing the ${trips.length} most recent — ${sum(approved, 'distance_km')} km approved in all.
+    </div>
+    <div class="card" style="overflow-x:auto;">
       <div style="font-weight:700;margin-bottom:10px;">Recorded Field Trips</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Trip</th><th>Distance</th><th>Reason</th><th>Status</th></tr>${rows}</table>
+      <table><tr><th>Employee</th><th>Trip</th><th>Distance &amp; amount</th><th>Status</th></tr>${rows}</table>
     </div>`;
   return pageShell('Field Trips', '', 'field-trip', body, user);
 }
@@ -5608,6 +5921,14 @@ async function readTextBody(req) {
 // ~37% size overhead, not just the raw file size.
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024; // 2MB per file, enforced on the decoded size
 const MAX_DOCUMENT_UPLOAD_BODY_BYTES = 3 * 1024 * 1024; // covers base64 overhead + JSON wrapper
+// Up to 6 photos of at most 500 KB each, base64-encoded, plus the stops. Stays under
+// Vercel's 4.5 MB request limit.
+const MAX_FIELD_TRIP_BODY_BYTES = 4.2 * 1024 * 1024;
+async function readFieldTripBody(req) {
+  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  const raw = await bufferBody(req, MAX_FIELD_TRIP_BODY_BYTES);
+  return raw ? JSON.parse(raw) : {};
+}
 async function readDocumentUploadBody(req) {
   if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
   const raw = await bufferBody(req, MAX_DOCUMENT_UPLOAD_BODY_BYTES);
@@ -5749,19 +6070,12 @@ async function reverseGeocode(lat, lon) {
   } catch { return ''; }
 }
 
-// Driving distance between two coordinate pairs via LocationIQ Directions (OSRM). Note
-// the URL takes lon,lat order. Returns { distanceKm, durationText }.
-function parseDirections(data) {
-  if (!data || data.code !== 'Ok' || !Array.isArray(data.routes) || !data.routes.length) {
-    throw new Error('No driving route found between those two places.');
-  }
-  const r = data.routes[0];
-  return { distanceKm: Math.round((r.distance / 1000) * 100) / 100, durationText: formatDurationSeconds(r.duration) };
-}
-async function roadDistanceByCoords(fromLat, fromLon, toLat, toLon) {
+// Road route through every stop of a field trip via LocationIQ Directions (OSRM), in one
+// call. The URL takes lon,lat order. Each leg in the response is the road distance from
+// one point to the next, which is what each stop shows and what the total adds up.
+async function roadRouteByCoords(points) {
   if (!CONFIG.LOCATIONIQ_API_KEY) throw new Error('Maps API key is not configured on the server.');
-  const coords = `${fromLon},${fromLat};${toLon},${toLat}`;
-  const url = locationiqUrl('/directions/driving/' + coords);
+  const url = locationiqUrl('/directions/driving/' + directionsCoords(points));
   url.searchParams.set('key', CONFIG.LOCATIONIQ_API_KEY);
   url.searchParams.set('overview', 'false');
   let data;
@@ -5771,22 +6085,42 @@ async function roadDistanceByCoords(fromLat, fromLon, toLat, toLon) {
   } catch {
     throw new Error('Could not reach the maps service — check the server\'s internet connection.');
   }
-  return parseDirections(data);
+  return parseRouteLegs(data, points.length);
 }
 
-// Resolves a trip request { from, to, from_lat?, from_lon?, to_lat?, to_lon? } to a
-// driving distance + resolved addresses. A picked suggestion supplies coords; otherwise
-// the typed text is forward-geocoded. Throws Error (with .status) on bad input / no match.
-async function resolveTripDistance(body) {
-  const from = (body.from || '').trim();
-  const to = (body.to || '').trim();
-  if (!from || !to) { const e = new Error('Please enter both a "from" and a "to" location.'); e.status = 400; throw e; }
-  const fromLoc = (body.from_lat && body.from_lon) ? { lat: body.from_lat, lon: body.from_lon, display: from } : await forwardGeocode(from);
-  if (!fromLoc) { const e = new Error(`Could not find "${from}". Pick a suggestion from the list.`); e.status = 502; throw e; }
-  const toLoc = (body.to_lat && body.to_lon) ? { lat: body.to_lat, lon: body.to_lon, display: to } : await forwardGeocode(to);
-  if (!toLoc) { const e = new Error(`Could not find "${to}". Pick a suggestion from the list.`); e.status = 502; throw e; }
-  const dist = await roadDistanceByCoords(fromLoc.lat, fromLoc.lon, toLoc.lat, toLoc.lon);
-  return { distanceKm: dist.distanceKm, durationText: dist.durationText, fromResolved: fromLoc.display || from, toResolved: toLoc.display || to };
+function tripError(message, status) { const e = new Error(message); e.status = status; return e; }
+
+// Resolves { stops: [{ address, lat?, lon? }], round_trip } to the road route through them.
+// A picked suggestion supplies its coordinates; a typed address is geocoded here and the
+// match LocationIQ chose comes back as that stop's address, so the employee sees it
+// before submitting. Throws Error (with .status) on bad input / no match / no route.
+//
+// Coordinates arrive from the browser, and the distance they produce is what the trip
+// pays, so they are only used where they land inside the area addresses are bounded to
+// (stopNeedsGeocode); anything else is re-derived from the stop's own address. The
+// address an approver reads therefore always matches the points that were measured.
+async function resolveTripRoute(body) {
+  const cleaned = cleanStops(body && body.stops, CONFIG.FIELD_TRIP_MAX_STOPS);
+  if (cleaned.error) throw tripError(cleaned.error, 400);
+  const box = parseViewbox(CONFIG.PLACES_VIEWBOX);
+  const stops = [];
+  for (const s of cleaned.stops) {
+    if (!stopNeedsGeocode(s, box)) { stops.push(s); continue; }
+    const found = await forwardGeocode(s.address);
+    if (!found) throw tripError(`Could not find "${s.address}". Pick a suggestion from the list.`, 422);
+    stops.push({ address: found.display || s.address, lat: Number(found.lat), lon: Number(found.lon), geocoded: true });
+  }
+  const roundTrip = !!(body && (body.round_trip === true || body.round_trip === 1 || body.round_trip === '1' || body.round_trip === 'true'));
+  const route = await roadRouteByCoords(routePoints(stops, roundTrip));
+  const legs = stops.map((s, i) => ({ address: s.address, lat: s.lat, lon: s.lon, km: i === 0 ? 0 : route.legsKm[i - 1], geocoded: !!s.geocoded }));
+  const returnKm = roundTrip ? route.legsKm[route.legsKm.length - 1] : null;
+  const ratePerKm = CONFIG.FIELD_TRIP_RATE_PER_KM || 0;
+  return {
+    stops: legs, roundTrip, returnKm,
+    distanceKm: route.distanceKm,
+    durationText: formatDurationSeconds(route.durationSec),
+    ratePerKm, amount: reimbursement(route.distanceKm, ratePerKm),
+  };
 }
 
 async function getSessionUser(req) {
@@ -6029,42 +6363,66 @@ async function handleRequest(req, res) {
     }
   }
 
-  // POST /api/field-trip/distance { from, to, from_lat?, from_lon?, to_lat?, to_lon? } —
-  // driving distance. A picked suggestion supplies its coords; otherwise the typed text is
-  // forward-geocoded first. LocationIQ routing needs coordinates, so both ends resolve to
-  // lat/lon before the directions call. The key stays server-side.
+  // POST /api/field-trip/distance { stops: [{ address, lat?, lon? }], round_trip } — the
+  // road route through every stop, each leg's km, and the amount at today's rate. A
+  // picked suggestion supplies its coords; a typed address is geocoded first. The key
+  // stays server-side.
   if (parsed.pathname === '/api/field-trip/distance' && req.method === 'POST') {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser) return sendJson(res, 401, { error: 'Unauthorized' });
     let body;
     try { body = await readJsonBody(req); } catch (err) { if (err && err.statusCode === 413) return sendJson(res, 413, { error: 'Request body too large' }); return sendJson(res, 400, { error: 'Invalid JSON body' }); }
     try {
-      return sendJson(res, 200, await resolveTripDistance(body));
+      return sendJson(res, 200, await resolveTripRoute(body));
     } catch (e) {
       return sendJson(res, e.status || 502, { error: e.message || 'Could not calculate distance.' });
     }
   }
 
-  // POST /api/field-trip/record { from, to, from_lat?, ... } — recompute the distance
-  // server-side (so it can't be tampered with) and save the trip for the accounts team.
+  // POST /api/field-trip/record { date, stops, round_trip, reason, photos: [{ filename,
+  // content_type, data_base64 }] } — recomputes the route server-side (whatever distance
+  // the browser showed is ignored), freezes today's rate and the amount on the trip, and
+  // saves it with its photos for the manager to approve.
   if (parsed.pathname === '/api/field-trip/record' && req.method === 'POST') {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser || !sessionUser.employeeId) return sendJson(res, 401, { error: 'Only an employee can record a field trip.' });
     let body;
-    try { body = await readJsonBody(req); } catch (err) { if (err && err.statusCode === 413) return sendJson(res, 413, { error: 'Request body too large' }); return sendJson(res, 400, { error: 'Invalid JSON body' }); }
+    try { body = await readFieldTripBody(req); } catch (err) { if (err && err.statusCode === 413) return sendJson(res, 413, { error: 'The photos are too large together. Remove one and try again.' }); return sendJson(res, 400, { error: 'Invalid JSON body' }); }
     const reason = cleanNote(body && body.reason);
     if (reason.error) return sendJson(res, 400, { error: t(langOf(sessionUser), reason.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }) });
+    const now = formatTimestamp(new Date());
+    const date = cleanTripDate(body && body.date, now.split(' ')[0]);
+    if (date.error) return sendJson(res, 400, { error: date.error });
+    const photos = cleanPhotos(body && body.photos, { required: CONFIG.FIELD_TRIP_PHOTO_REQUIRED === 'on' });
+    if (photos.error) return sendJson(res, 400, { error: photos.error });
+    let r;
     try {
-      const r = await resolveTripDistance(body);
-      const now = formatTimestamp(new Date());
-      await db.prepare(
-        'INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km, reason) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(sessionUser.employeeId, now.split(' ')[0], now, r.fromResolved, r.toResolved, r.distanceKm, reason.value);
-      await logActivity('field_trip', sessionUser.employeeId, `${r.fromResolved} to ${r.toResolved}, ${r.distanceKm} km · ${reason.value}`);
-      return sendJson(res, 200, { recorded: true, ...r });
+      r = await resolveTripRoute(body);
     } catch (e) {
       return sendJson(res, e.status || 502, { error: e.message || 'Could not record the trip.' });
     }
+    const stored = r.stops.map(s => ({ address: s.address, lat: s.lat, lon: s.lon, km: s.km }));
+    const first = stored[0].address, last = r.roundTrip ? stored[0].address : stored[stored.length - 1].address;
+    const inserted = await db.prepare(
+      `INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km, reason, stops, round_trip, rate_per_km, amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(sessionUser.employeeId, date.value, now, first, last, r.distanceKm, reason.value, JSON.stringify(stored), r.roundTrip ? 1 : 0, r.ratePerKm || null, r.amount);
+    const tripId = inserted.lastInsertRowid;
+    if (photos.photos.length) {
+      try {
+        await db.batch(photos.photos.map(ph => ({
+          sql: 'INSERT INTO field_trip_photos (trip_id, employee_id, filename, content_type, size_bytes, data, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          args: [tripId, sessionUser.employeeId, ph.filename, ph.contentType, ph.data.length, ph.data, now],
+        })));
+      } catch {
+        // A trip without the photos it was submitted with would mislead the approver.
+        await db.prepare('DELETE FROM field_trips WHERE id = ?').run(tripId);
+        return sendJson(res, 502, { error: 'Could not save the photos. Try again.' });
+      }
+    }
+    const amountText = r.amount !== null ? ` · ${formatInr(r.amount)}` : '';
+    await logActivity('field_trip', sessionUser.employeeId, `${stored.map(s => s.address.split(',')[0]).join(' → ')}${r.roundTrip ? ' → back' : ''}, ${r.distanceKm} km${amountText} · ${reason.value}`);
+    return sendJson(res, 200, { recorded: true, id: tripId, ...r });
   }
 
   // --- ZKTeco ADMS push protocol (K40 Pro biometric device) ---
@@ -6983,6 +7341,20 @@ async function handleRequest(req, res) {
     return sendHtml(res, await renderFieldTrip(employeeId, trips, user));
   }
 
+  // A field trip photo. Managers see every trip's; an employee sees only their own.
+  if (parsed.pathname === '/field-trip/photo' && req.method === 'GET') {
+    const photo = await db.prepare('SELECT * FROM field_trip_photos WHERE id = ?').get(parsed.searchParams.get('id'));
+    if (!photo || (!isManagementRole(user) && photo.employee_id !== user.employeeId)) { res.writeHead(404); return res.end('Not found'); }
+    res.writeHead(200, {
+      'Content-Type': photo.content_type,
+      'Content-Length': photo.size_bytes,
+      'Content-Disposition': `inline; filename="${String(photo.filename).replace(/["\r\n]/g, '')}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=86400',
+    });
+    return res.end(Buffer.isBuffer(photo.data) ? photo.data : Buffer.from(photo.data));
+  }
+
   if (parsed.pathname === '/field-trip/decide' && req.method === 'POST') {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject field trips.'); }
     const form = await readFormBody(req);
@@ -6992,16 +7364,17 @@ async function handleRequest(req, res) {
     const decision = readDecision(form);
     if (decision.error) return sendDecisionError(res, user, decision.error, '/field-trip', 'field-trip');
     const suffix = decisionNoteSuffix(decision.note, user.username);
-    const summary = `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km · ${decision.note}`;
+    const summary = `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km${trip.amount != null ? ` (${formatInr(trip.amount)})` : ''} · ${decision.note}`;
+    const described = tripSummaryText(trip);
 
     if (!(await claimDecision('field_trips', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
       return sendAlreadyDecided(res, user, 'field_trips', id, decision.note, '/field-trip', 'field-trip');
     }
     if (decision.action === 'approve') {
-      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) has been approved for reimbursement.${suffix}`);
+      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${described}) has been approved for reimbursement.${suffix}`);
       await logAdminAction(user.username, 'approve', 'field_trip', id, summary, trip.employee_id);
     } else {
-      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) was not approved for reimbursement.${suffix} You can submit it again from the Field Trips page.`);
+      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${described}) was not approved for reimbursement.${suffix} You can submit it again from the Field Trips page.`);
       await logAdminAction(user.username, 'reject', 'field_trip', id, summary, trip.employee_id);
     }
     res.writeHead(302, { Location: '/field-trip' });
@@ -7023,10 +7396,19 @@ async function handleRequest(req, res) {
       return sendHtml(res, await renderFieldTrip(user.employeeId, trips, user, t(lang, errorKey, { max: NOTE_MAX_LENGTH })));
     }
     const previous = reapply.previous;
+    // Same trip, so the same stops, rate and amount it was first submitted with, and the
+    // same photos copied onto the new attempt.
+    const now = formatTimestamp(new Date());
+    const inserted = await db.prepare(
+      `INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km, reason, previous_request_id, stops, round_trip, rate_per_km, amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(previous.employee_id, previous.date, now, previous.from_address, previous.to_address, previous.distance_km, reason.value, previous.id,
+      previous.stops || null, previous.round_trip || 0, previous.rate_per_km == null ? null : previous.rate_per_km, previous.amount == null ? null : previous.amount);
     await db.prepare(
-      'INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km, reason, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(previous.employee_id, previous.date, formatTimestamp(new Date()), previous.from_address, previous.to_address, previous.distance_km, reason.value, previous.id);
-    await logActivity('field_trip', previous.employee_id, `Submitted again: ${previous.from_address} to ${previous.to_address}, ${previous.distance_km} km · ${reason.value}`);
+      `INSERT INTO field_trip_photos (trip_id, employee_id, filename, content_type, size_bytes, data, uploaded_at)
+       SELECT ?, employee_id, filename, content_type, size_bytes, data, uploaded_at FROM field_trip_photos WHERE trip_id = ? ORDER BY id`
+    ).run(inserted.lastInsertRowid, previous.id);
+    await logActivity('field_trip', previous.employee_id, `Submitted again: ${tripSummaryText(previous)} · ${reason.value}`);
     res.writeHead(302, { Location: '/field-trip' });
     return res.end();
   }
@@ -7879,6 +8261,11 @@ module.exports.apiReadScope = apiReadScope;
 module.exports.SETTING_DEFS = SETTING_DEFS;
 module.exports.hidesValue = hidesValue;
 module.exports.API_EMPLOYEE_FIELDS = API_EMPLOYEE_FIELDS;
+// resolveTripRoute talks to LocationIQ and nothing else, so a test can stand in for
+// fetch and check which coordinates a trip is actually measured from. CONFIG goes with
+// it because the rule depends on PLACES_VIEWBOX.
+module.exports.resolveTripRoute = resolveTripRoute;
+module.exports.CONFIG = CONFIG;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped
