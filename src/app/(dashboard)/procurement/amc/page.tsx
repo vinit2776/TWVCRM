@@ -462,10 +462,14 @@ export default function AmcRegisterPage() {
                           ...row.purchase_order_items.map((i) => i.linked_asset).filter(Boolean) as AssetForAmc[],
                           ...(row.linked_asset ? [row.linked_asset] : []),
                         ]).length > 0 && (
-                          <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                          <Link
+                            href={`/procurement/orders/${row.id}`}
+                            title="Open the contract to see which details are missing and fix them"
+                            className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full hover:bg-amber-100 hover:underline"
+                          >
                             <AlertTriangle className="h-3 w-3" />
-                            Asset details missing
-                          </span>
+                            Asset details missing · fix
+                          </Link>
                         )}
                         {row.amc_status !== "terminated" && !row.linked_asset && linesWithoutAsset(row.purchase_order_items).length > 0 && (
                           <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">

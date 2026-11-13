@@ -301,6 +301,27 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
         </div>
       )}
 
+      {/* An AMC reads these details; the same gaps are flagged on the contract, so the fix is offered here. */}
+      {(() => {
+        const live = amcContracts.filter((c) => c.amc_status !== "expired");
+        const missing = [
+          !asset.name?.trim() ? "name" : null,
+          !asset.serial_number?.trim() ? "serial number" : null,
+          !asset.location_id ? "location" : null,
+        ].filter((m): m is string => !!m);
+        if (live.length === 0 || missing.length === 0) return null;
+        return (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <span>
+              <strong>Missing for its AMC: {missing.join(", ")}.</strong>{" "}
+              Covered by {live.map((c) => c.po_number).join(", ")}. This flag goes once the details are saved.
+            </span>
+            <button type="button" className="font-medium underline" onClick={() => setEditOpen(true)}>
+              Edit details
+            </button>
+          </div>
+        );
+      })()}
       {/* Tabs */}
       {asset.invoice_missing && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
