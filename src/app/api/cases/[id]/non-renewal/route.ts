@@ -22,7 +22,7 @@ import {
  * draft for a person to send themselves; marking it only records that it was drafted.
  *
  * Deploy comes before the migration: while vo_non_renewal_steps is missing
- * (42P01) the GET reports `available: false` and the POST refuses with 503.
+ * (42P01, or PGRST205 from the PostgREST schema cache) the GET reports `available: false` and the POST refuses with 503.
  */
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -34,8 +34,9 @@ const bodySchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
-// Postgres: undefined_table / undefined_column — "not migrated yet".
-const NOT_MIGRATED = new Set(["42P01", "42703"]);
+// "Not migrated yet": Postgres undefined_table / undefined_column, and PostgREST schema-cache misses
+// (PGRST205 table, PGRST204 column), which is what the API answers when the cache has not reloaded.
+const NOT_MIGRATED = new Set(["42P01", "42703", "PGRST205", "PGRST204"]);
 
 async function authorise() {
   const supabase = await createClient();
