@@ -151,4 +151,16 @@ async function checkCertificate({ apiKey, employeeName, leaveStart, leaveEnd, to
   }
 }
 
-module.exports = { CERTIFICATE_CHECK_MODEL, EXTRACTION_SCHEMA, buildCertificateRequest, evaluateCertificate, checkCertificate };
+// How many times one leave request's certificate may be checked, counting every
+// replacement the employee uploads and every "Check again" a manager presses. Each
+// check is a paid API call on a document a person can simply open and read, so the
+// ceiling is a number rather than however long someone keeps clicking.
+const MAX_CERTIFICATE_CHECKS = 3;
+function checksLeft(used) {
+  return Math.max(0, MAX_CERTIFICATE_CHECKS - (Number(used) || 0));
+}
+
+module.exports = {
+  CERTIFICATE_CHECK_MODEL, EXTRACTION_SCHEMA, MAX_CERTIFICATE_CHECKS,
+  buildCertificateRequest, evaluateCertificate, checkCertificate, checksLeft,
+};

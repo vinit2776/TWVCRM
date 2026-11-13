@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Anthropic = require('@anthropic-ai/sdk');
-const { buildCertificateRequest, evaluateCertificate, checkCertificate, CERTIFICATE_CHECK_MODEL } = require('../certificate-check');
+const { buildCertificateRequest, evaluateCertificate, checkCertificate, checksLeft, CERTIFICATE_CHECK_MODEL, MAX_CERTIFICATE_CHECKS } = require('../certificate-check');
 
 const LEAVE = { leaveStart: '2026-11-12', leaveEnd: '2026-11-13', today: '2026-11-14' };
 const GOOD = {
@@ -84,4 +84,14 @@ test('checkCertificate never throws', async () => {
   assert.equal(offline.status, 'error');
   const boom = await checkCertificate(args, { client: fakeClient(() => { throw new Error('boom'); }) });
   assert.equal(boom.status, 'error');
+});
+
+test('a leave request gets a fixed number of automatic checks', () => {
+  assert.equal(checksLeft(0), MAX_CERTIFICATE_CHECKS);
+  assert.equal(checksLeft(MAX_CERTIFICATE_CHECKS - 1), 1);
+  assert.equal(checksLeft(MAX_CERTIFICATE_CHECKS), 0);
+  // Past the cap, and for a row from before the column existed.
+  assert.equal(checksLeft(MAX_CERTIFICATE_CHECKS + 5), 0);
+  assert.equal(checksLeft(null), MAX_CERTIFICATE_CHECKS);
+  assert.equal(checksLeft(undefined), MAX_CERTIFICATE_CHECKS);
 });

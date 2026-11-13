@@ -20,7 +20,7 @@ const {
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const { cleanNote, ordinal, earlierAttempts, reapplyError, decisionNoteSuffix, NOTE_MAX_LENGTH } = require('./request-notes');
-const { checkCertificate } = require('./certificate-check');
+const { checkCertificate, MAX_CERTIFICATE_CHECKS, checksLeft } = require('./certificate-check');
 const {
   DEVICE_POLL_SECONDS, DEVICE_OFFLINE_MINUTES, DEVICE_COMMAND_TIMEOUT_MINUTES, RESYNC_OVERLAP_MINUTES,
   shiftTs, minutesSince, formatDuration, isDeviceOffline, shouldShowOfflineAlert,
@@ -1144,6 +1144,9 @@ async function init() {
     try { await db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_prev ON ${table}(previous_request_id)`); } catch { /* column missing on a very old db */ }
   }
   try { await db.exec("ALTER TABLE field_trips ADD COLUMN reason TEXT DEFAULT ''"); } catch { /* already exists */ }
+  // How many Claude checks this leave request has already spent (see MAX_CERTIFICATE_CHECKS).
+  // On the request, not the certificate, so replacing the certificate doesn't reset it.
+  try { await db.exec('ALTER TABLE leave_requests ADD COLUMN certificate_checks INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
 
   // India's three compulsory national holidays (Republic Day, Independence Day, Gandhi
   // Jayanti) — fixed Gregorian dates, mandated nationwide regardless of state, unlike
@@ -1712,15 +1715,23 @@ function readCertificateFields(form) {
   if (data.length === 0 || data.length > MAX_DOCUMENT_BYTES) return { errorKey: 'leave.cert_err_size' };
   return { file: { filename: String(form.certificate_name || 'certificate').slice(0, 255), contentType, data } };
 }
+// Only the newest certificate per request is ever shown or checked, so the one it
+// replaces is deleted rather than left behind — each is up to 2 MB of blob, and an
+// employee can replace one as often as they like.
 async function saveCertificate(leaveRequest, file) {
   const result = await db.prepare(
     'INSERT INTO leave_certificates (leave_request_id, employee_id, filename, content_type, size_bytes, data, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(leaveRequest.id, leaveRequest.employee_id, file.filename, file.contentType, file.data.length, file.data, formatTimestamp(new Date()));
-  return Number(result.lastInsertRowid);
+  const id = Number(result.lastInsertRowid);
+  await db.prepare('DELETE FROM leave_certificates WHERE leave_request_id = ? AND id != ?').run(leaveRequest.id, id);
+  return id;
 }
 // Runs the Claude check on one stored certificate if the setting is on, and stores the
 // result. A failure is stored as 'error' (the manager can press Check again); a function
 // timeout leaves it 'not_checked', which offers the same button.
+//
+// Each run spends one of the leave request's MAX_CERTIFICATE_CHECKS. Past the cap this
+// does nothing and the manager reads the certificate themselves.
 async function runCertificateCheck(certificateId) {
   if (CONFIG.CERTIFICATE_CHECK !== 'on') return null;
   const cert = await db.prepare('SELECT * FROM leave_certificates WHERE id = ?').get(certificateId);
@@ -1728,6 +1739,13 @@ async function runCertificateCheck(certificateId) {
   const request = await getRequestById('leave_requests', cert.leave_request_id);
   const employee = request && await getEmployee(request.employee_id);
   if (!employee) return null;
+  if (!checksLeft(request.certificate_checks)) return null;
+  // Spent before the call, so a run that fails or times out still costs one — otherwise a
+  // certificate that reliably errors would be an unlimited loop. With no API key nothing
+  // is called at all, so that costs nothing and the checks survive until the key is set.
+  if (CONFIG.ANTHROPIC_API_KEY) {
+    await db.prepare('UPDATE leave_requests SET certificate_checks = certificate_checks + 1 WHERE id = ?').run(request.id);
+  }
   const data = Buffer.isBuffer(cert.data) ? cert.data : Buffer.from(cert.data);
   const result = await checkCertificate({
     apiKey: CONFIG.ANTHROPIC_API_KEY,
@@ -1763,9 +1781,16 @@ function certificateCellHtml(request, cert) {
   } else {
     check = `<div style="font-size:0.82em;color:#9AA5B1;margin-top:2px;">Not checked yet</div>`;
   }
-  const recheck = CONFIG.CERTIFICATE_CHECK === 'on' && request.status === 'pending'
-    ? actionButton('/leave/certificate/check', { id: cert.id }, cert.check_status === 'not_checked' ? 'Check now' : 'Check again', '#1565C0')
-    : '';
+  // Each automatic check costs a paid API call, so a request gets a fixed few. Once
+  // they're gone the button goes with them and the certificate link above is the answer.
+  const left = checksLeft(request.certificate_checks);
+  const note = text => `<span style="color:#7C8896;font-size:0.85em;">${text}</span>`;
+  let recheck = '';
+  if (CONFIG.CERTIFICATE_CHECK === 'on' && request.status === 'pending') {
+    recheck = left
+      ? `${actionButton('/leave/certificate/check', { id: cert.id }, cert.check_status === 'not_checked' ? 'Check now' : 'Check again', '#1565C0')} ${note(`${left} of ${MAX_CERTIFICATE_CHECKS} automatic checks left`)}`
+      : note('No automatic checks left on this request — open the certificate above and read it yourself.');
+  }
   return `<div style="margin-top:6px;font-size:0.9em;">${link}${check}${recheck ? `<div style="margin-top:4px;font-size:0.85em;">${recheck}</div>` : ''}</div>`;
 }
 // Client side of the certificate picker: shrinks photos (a phone camera shot can be
@@ -1820,10 +1845,16 @@ document.querySelectorAll('form[data-cert-form]').forEach(function (form) {
 });
 </script>`;
 }
-function certificateFieldsHtml() {
+// The notice lives on the picker, not on one of the two forms that use it, so an
+// employee is told where they hand the document over — wherever that is. It appears
+// only while the check is on: with it off the certificate never leaves the server.
+function certificateFieldsHtml(lang) {
+  const notice = CONFIG.CERTIFICATE_CHECK === 'on'
+    ? `<div style="flex-basis:100%;font-size:0.78em;color:#7C8896;">${escapeHtml(t(lang, 'leave.cert_notice_ai'))}</div>`
+    : '';
   return `<input type="file" accept="image/*,application/pdf" style="font-size:0.85em;max-width:230px;">
     <input type="hidden" name="certificate_data"><input type="hidden" name="certificate_type"><input type="hidden" name="certificate_name">
-    <div class="cert-error" style="color:#C62828;font-size:0.82em;"></div>`;
+    <div class="cert-error" style="color:#C62828;font-size:0.82em;"></div>${notice}`;
 }
 function certificateFormData(lang, label) {
   return `data-cert-form data-busy="${escapeHtml(t(lang, 'leave.cert_uploading'))}" data-label="${escapeHtml(label)}" data-err-type="${escapeHtml(t(lang, 'leave.cert_err_type'))}" data-err-size="${escapeHtml(t(lang, 'leave.cert_err_size'))}"`;
@@ -3332,7 +3363,7 @@ async function renderLeave(employee, balances, requests, user, error, prefill = 
     if (r.status !== 'pending' || isAdmin) return state;
     const label = t(lang, cert ? 'leave.cert_replace' : 'leave.cert_add');
     return `${state}<form method="POST" action="/leave/certificate" ${certificateFormData(lang, label)} style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-      <input type="hidden" name="leave_request_id" value="${r.id}">${certificateFieldsHtml()}
+      <input type="hidden" name="leave_request_id" value="${r.id}">${certificateFieldsHtml(lang)}
       <button type="submit" style="padding:4px 10px;border-radius:6px;border:1px solid #1565C0;background:#fff;color:#1565C0;font-weight:600;font-size:0.85em;">${escapeHtml(label)}</button>
     </form>`;
   };
@@ -3391,7 +3422,7 @@ async function renderLeave(employee, balances, requests, user, error, prefill = 
         </div>
         <div id="certField" style="flex-basis:100%;">
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.cert_label')}</label>
-          ${certificateFieldsHtml()}
+          ${certificateFieldsHtml(lang)}
           <div style="font-size:0.78em;color:#9AA5B1;">${t(lang, previous && certs.get(previous.id) ? 'leave.cert_hint_reapply' : 'leave.cert_hint')}</div>
         </div>
         <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${escapeHtml(applyLabel)}</button>
