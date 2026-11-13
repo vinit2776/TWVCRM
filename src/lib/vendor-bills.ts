@@ -25,6 +25,8 @@ export interface CreateVendorBillInput extends Partial<ToleranceFacts> {
   po_id?: string | null;
   service_report_id?: string | null;
   replaces_bill_id?: string | null;
+  /** One vendor invoice shared across several PO bills (migration 00671). */
+  invoice_group_id?: string | null;
   electricity_bill_id?: string | null;
   // Electricity-provider bills only (migration 00587). Never passed for any other bill, so ordinary
   // bills never reference these columns and keep working whether or not the migration has run.
@@ -69,6 +71,8 @@ export async function createVendorBill(
       service_report_id: input.service_report_id ?? null,
       ...(input.invoice_check ? { invoice_check: input.invoice_check } : {}),
       electricity_bill_id: input.electricity_bill_id ?? null,
+      // Only sent for a shared invoice, so ordinary bills keep working before the migration has run.
+      ...(input.invoice_group_id ? { invoice_group_id: input.invoice_group_id } : {}),
       ...(input.location_id
         ? {
             location_id: input.location_id,

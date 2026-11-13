@@ -39,6 +39,7 @@ import { BillTransactionHistory } from "@/components/procurement/bill-transactio
 import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
 import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-display";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
+import { SharedInvoicePanel } from "@/components/procurement/shared-invoice-panel";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
 import { ElectricityLinkCard } from "@/components/procurement/electricity-link-card";
 import { VendorBillDocuments } from "@/components/procurement/vendor-bill-documents";
@@ -647,6 +648,8 @@ export default function VendorBillDetailPage() {
       </div>
 
       <ChainLockBanner chain={cycle} ref={{ billId: id }} isAdmin={currentUserRole === "admin"} onChanged={() => { fetchAll(); reloadChain(); }} />
+
+      <SharedInvoicePanel billId={id} role={currentUserRole} refreshKey={bill.approval_status} />
 
       {/* Loud call to action: someone is waiting on this bill and the viewer can fix it */}
       {(onHold || openQueries.length > 0) && bill.approval_status !== "withdrawn" && (

@@ -36,6 +36,7 @@ import {
   PARTIAL_APPROVAL_REASON_LABELS,
 } from "@/lib/constants";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
+import { SharedInvoicePanel } from "@/components/procurement/shared-invoice-panel";
 import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
 import { VendorBillDocuments } from "@/components/procurement/vendor-bill-documents";
@@ -1137,6 +1138,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       )}
 
       {bill.electricity_bill && <ElectricityBillBreakupCard bill={bill.electricity_bill} />}
+
+      <SharedInvoicePanel billId={id} role={userRole} refreshKey={bill.amount_paid} />
 
       {/* Document Chain */}
       <Card>

@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
 import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } from "@/types";
 import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
@@ -23,6 +23,7 @@ import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hint
 import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
 import { buildInvoiceCheckRecord, checkInvoice, type SuggestionField } from "@/lib/procurement/invoice-check";
 import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
+import { SharedInvoiceSection, type SameInvoiceLookup, type ShareChoice } from "@/components/procurement/shared-invoice-section";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
@@ -61,6 +62,12 @@ function NewVendorBillForm() {
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // One vendor invoice covering several POs: "open" = this is the first PO on a bigger invoice,
+  // "join" = the number is already on other bills. The amount field then holds this PO's share.
+  const [shareChoice, setShareChoice] = useState<ShareChoice>("none");
+  const [invoiceTotal, setInvoiceTotal] = useState("");
+  const [sameInvoice, setSameInvoice] = useState<SameInvoiceLookup | null>(null);
+
   // Duplicate-invoice detector (Finance Intelligence — Day 2)
   type DupCandidate = {
     bill_id: string; bill_number: string;
@@ -68,7 +75,13 @@ function NewVendorBillForm() {
     total_amount: number; similarity_score: number; match_reason: string;
     approval_status: string;
   };
-  const [duplicates, setDuplicates] = useState<DupCandidate[]>([]);
+  const [duplicatesRaw, setDuplicates] = useState<DupCandidate[]>([]);
+  // Bills the "same invoice number" prompt already covers are not shown again here: that prompt
+  // explains them (and blocks saving itself when this PO can't join).
+  const duplicates = useMemo(() => {
+    const covered = new Set(sameInvoice?.existing.map((b) => b.id) ?? []);
+    return duplicatesRaw.filter((d) => !covered.has(d.bill_id));
+  }, [duplicatesRaw, sameInvoice]);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [duplicateDismissed, setDuplicateDismissed] = useState(false);
 
@@ -263,6 +276,32 @@ function NewVendorBillForm() {
     return () => { cancelled = true; clearTimeout(t); };
   }, [vendorId, invoiceNumber, totalAmount, invoiceDate]);
 
+  // ── Same invoice number already on another PO's bill? ───────────────────────
+  useEffect(() => {
+    setSameInvoice(null);
+    const num = invoiceNumber.trim();
+    if (!vendorId || !poId || !num) {
+      setShareChoice((c) => (c === "join" ? "none" : c));
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const qs = new URLSearchParams({ vendor_id: vendorId, po_id: poId, invoice_number: num });
+        if (replacesBill?.id) qs.set("exclude_bill_id", replacesBill.id);
+        const res = await fetch(`/api/procurement/bills/same-invoice?${qs.toString()}`);
+        if (!res.ok || cancelled) return;
+        const json = (await res.json()) as SameInvoiceLookup;
+        if (cancelled) return;
+        if (json.existing?.length) setSameInvoice(json);
+        else setShareChoice((c) => (c === "join" ? "none" : c));
+      } catch {
+        // Advisory only: the bill route checks again when the form is saved.
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [vendorId, poId, invoiceNumber, replacesBill?.id]);
+
   // ── Bill hints — debounced fetch (Day 3-5) ──────────────────────────────────
   useEffect(() => {
     // Reset dismissals when inputs change
@@ -426,6 +465,37 @@ function NewVendorBillForm() {
     return null;
   })();
 
+  const isGoodsPo = !!poData && poData.po_type !== "service";
+  const exceedsPo = isGoodsPo && shareChoice === "none" && !!amountError;
+  // The number is already on a bill this PO can't share an invoice with (same PO, service PO...).
+  const sameInvoiceBlocked = !!sameInvoice && !sameInvoice.can_join;
+
+  const joinShared = () => {
+    if (!sameInvoice) return;
+    setShareChoice("join");
+    setInvoiceTotal(String(sameInvoice.invoice_total));
+    const cur = parseFloat(totalAmount);
+    if (!isFinite(cur) || cur > sameInvoice.left + 0.01) {
+      const cap = effectiveCeiling && effectiveCeiling > 0 ? Math.min(sameInvoice.left, effectiveCeiling) : sameInvoice.left;
+      setTotalAmount(String(cap));
+    }
+  };
+  const openShared = () => {
+    setInvoiceTotal(totalAmount);
+    setTotalAmount("");
+    setShareChoice("open");
+  };
+  const backToNormal = () => {
+    if (invoiceTotal) setTotalAmount(invoiceTotal);
+    setInvoiceTotal("");
+    setShareChoice("none");
+  };
+  const useDifferentNumber = () => {
+    setInvoiceNumber("");
+    setSameInvoice(null);
+    document.getElementById("invoice_number")?.focus();
+  };
+
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
     if (!poId && !companyId) return "Select which company this bill is for";
@@ -439,6 +509,23 @@ function NewVendorBillForm() {
     if (gst > maxGst) return `GST amount (₹${gst.toLocaleString("en-IN")}) cannot exceed 28% of the invoice base (max ₹${maxGst.toLocaleString("en-IN")})`;
     // File is mandatory when linked to a PO
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
+    if (sameInvoice && shareChoice !== "join") {
+      return sameInvoice.can_join
+        ? "This invoice number is already on another PO. Choose 'Yes, same invoice' to add this PO to it, or use a different number."
+        : (sameInvoice.reason ?? "This invoice number is already recorded.");
+    }
+    if (shareChoice !== "none") {
+      if (!invoiceNumber.trim()) return "Enter the invoice number: it is how the POs are tied to one invoice";
+      const tot = parseFloat(invoiceTotal);
+      if (!isFinite(tot) || tot <= 0) return "Enter the total on the vendor's invoice";
+      if (shareChoice === "open" && tot <= amount + 0.01) {
+        return "The invoice total must be more than this PO's share. If the invoice only covers this PO, choose 'It only covers this PO'.";
+      }
+      if (shareChoice === "join" && sameInvoice) {
+        if (tot < sameInvoice.invoice_total - 0.01) return "The invoice total can only go up here. To lower it, ask an admin.";
+        if (sameInvoice.allocated + amount > tot + 0.01) return "This share is more than is left on the invoice";
+      }
+    }
     if (showElectricity && !elecStatus.ok) return elecStatus.reason ?? "Choose the location this electricity bill is for";
     return null;
   };
@@ -446,16 +533,27 @@ function NewVendorBillForm() {
   // Findings from the invoice check get one pause at Save — a guide, never a block ("Save anyway").
   const [findingsConfirmOpen, setFindingsConfirmOpen] = useState(false);
 
+  // Save problems stay on the page until acknowledged: a toast alone vanishes before it can be read.
+  const [formError, setFormError] = useState<string | null>(null);
+  const formErrorRef = useRef<HTMLDivElement>(null);
+  const reportError = (msg: string) => {
+    setFormError(msg);
+    toast.error(msg, { duration: 6000 });
+    requestAnimationFrame(() => formErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  };
+
   const handleSave = () => {
+    setFormError(null);
     const err = validate();
-    if (err) { toast.error(err, { duration: 6000 }); return; }
+    if (err) { reportError(err); return; }
     if (invoiceFindings.length > 0) { setFindingsConfirmOpen(true); return; }
     void handleSubmit();
   };
 
   const handleSubmit = async () => {
+    setFormError(null);
     const err = validate();
-    if (err) { toast.error(err, { duration: 6000 }); return; }
+    if (err) { reportError(err); return; }
 
     setSubmitting(true);
     try {
@@ -471,7 +569,7 @@ function NewVendorBillForm() {
           .upload(filePath, invoiceFile);
 
         if (uploadError) {
-          toast.error(`File upload failed: ${uploadError.message}`);
+          reportError(`File upload failed: ${uploadError.message}`);
           return;
         }
 
@@ -494,6 +592,8 @@ function NewVendorBillForm() {
         invoice_file_url: invoiceFileUrl,
         invoice_check: invoiceCheck.status === "ok" ? buildInvoiceCheckRecord(invoiceCheck.extracted, invoiceFindings) : null,
         replaces_bill_id: replacesBill?.id ?? null,
+        ...(shareChoice !== "none" ? { invoice_total: parseFloat(invoiceTotal) } : {}),
+        ...(shareChoice === "join" ? { join_existing_invoice: true } : {}),
         ...(needsToleranceReason ? { tolerance_exception_reason: toleranceReason.trim() } : {}),
         ...(showElectricity
           ? {
@@ -514,7 +614,7 @@ function NewVendorBillForm() {
       });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(typeof json.error === "string" ? json.error : "Failed to create vendor invoice");
+        reportError(typeof json.error === "string" ? json.error : "Failed to create vendor invoice");
         return;
       }
       toast.success(`Vendor invoice recorded — ${json.data.bill_number}`);
@@ -718,59 +818,45 @@ function NewVendorBillForm() {
           {/* Duplicate-invoice warning (Finance Intelligence) */}
           {(hasExactDuplicate || (!duplicateDismissed && duplicates.length > 0)) && (
             <div className={`rounded-lg border p-3 space-y-2 ${
-              hasExactDuplicate
-                ? "border-red-400 bg-red-50"
-                : "border-amber-300 bg-amber-50"
+              hasExactDuplicate ? "border-red-300 bg-red-50" : "border-amber-300 bg-amber-50"
             }`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2 min-w-0">
-                  <AlertCircle className={`h-4 w-4 shrink-0 mt-0.5 ${hasExactDuplicate ? "text-red-600" : "text-amber-600"}`} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-semibold ${hasExactDuplicate ? "text-red-900" : "text-amber-900"}`}>
-                      {hasExactDuplicate ? "Duplicate invoice — submission blocked" : `Possible duplicate${duplicates.length > 1 ? "s" : ""} found`}
-                    </p>
-                    <p className={`text-xs mt-0.5 ${hasExactDuplicate ? "text-red-700" : "text-amber-700"}`}>
-                      {hasExactDuplicate
-                        ? "This invoice number already exists for this vendor. Open the existing bill below to check before creating another."
-                        : "A bill matching these details already exists for this vendor. Review before saving."}
-                    </p>
-                  </div>
+              <div className="flex items-start gap-2">
+                <AlertCircle className={`h-4 w-4 shrink-0 mt-0.5 ${hasExactDuplicate ? "text-red-600" : "text-amber-600"}`} />
+                <div className="min-w-0">
+                  <p className={`text-sm font-semibold ${hasExactDuplicate ? "text-red-900" : "text-amber-900"}`}>
+                    {hasExactDuplicate ? "This invoice number is already recorded" : "This may be an invoice you already recorded"}
+                  </p>
+                  <p className={`text-xs mt-0.5 ${hasExactDuplicate ? "text-red-700" : "text-amber-800"}`}>
+                    {hasExactDuplicate
+                      ? "The same vendor can't have the same invoice number twice, so saving is blocked. Open the bill to check, or change the invoice number."
+                      : "Open the bill to check before saving. If yours is a different invoice, carry on."}
+                  </p>
                 </div>
-                {!hasExactDuplicate && (
-                  <button
-                    type="button"
-                    onClick={() => setDuplicateDismissed(true)}
-                    className="text-xs text-amber-700 hover:text-amber-900 shrink-0"
-                    aria-label="Dismiss"
-                  >
-                    Dismiss
-                  </button>
-                )}
               </div>
-              <div className="space-y-1 mt-2">
-                {duplicates.map((d) => (
-                  <div
-                    key={d.bill_id}
-                    className="flex items-center justify-between gap-2 bg-white/60 rounded px-2 py-1.5 text-xs"
-                  >
-                    <div className="flex flex-wrap items-baseline gap-x-2 min-w-0">
-                      <Link
-                        href={`/procurement/bills/${d.bill_id}`}
-                        target="_blank"
-                        className="font-mono font-medium text-amber-900 hover:underline"
-                      >
-                        {d.bill_number}
+              <div className="space-y-1">
+                {/* When the invoice number matches exactly, the look-alikes below are noise: show only the exact ones. */}
+                {duplicates.filter((d) => !hasExactDuplicate || d.match_reason.includes("Same invoice #")).map((d) => (
+                  <div key={d.bill_id} className="bg-white/70 rounded px-2.5 py-2 text-xs space-y-0.5">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+                      <span>
+                        <span className="font-mono font-medium">{d.bill_number}</span>
+                        <span className="text-muted-foreground"> · {formatCurrency(d.total_amount)} · dated {formatDate(d.invoice_date)}</span>
+                      </span>
+                      <Link href={`/procurement/bills/${d.bill_id}`} target="_blank" className="text-primary font-medium hover:underline">
+                        Open bill
                       </Link>
-                      <span className="text-amber-700">{formatCurrency(d.total_amount)}</span>
-                      <span className="text-amber-600">{d.invoice_date}</span>
-                      <span className="text-amber-700 text-[10px]">· {d.match_reason}</span>
                     </div>
-                    <span className="text-amber-900 font-semibold tabular-nums text-[10px] shrink-0">
-                      {Math.round(d.similarity_score * 100)}% match
-                    </span>
+                    <p className="text-muted-foreground">
+                      Why it matched: {d.match_reason.split(" · ").map((r) => r.replace(/invoice #/gi, "invoice number").replace(/^./, (c) => c.toLowerCase())).join(", ")}
+                    </p>
                   </div>
                 ))}
               </div>
+              {!hasExactDuplicate && (
+                <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => setDuplicateDismissed(true)}>
+                  It&apos;s a different invoice
+                </Button>
+              )}
             </div>
           )}
 
@@ -824,6 +910,21 @@ function NewVendorBillForm() {
             </div>
           )}
 
+          <SharedInvoiceSection
+            choice={shareChoice}
+            share={parseFloat(totalAmount) || 0}
+            invoiceTotal={invoiceTotal}
+            onInvoiceTotalChange={setInvoiceTotal}
+            exceedsPo={exceedsPo}
+            poNumber={poData?.po_number ?? null}
+            poValue={poData ? Number(poData.total_ordered_amount) : null}
+            lookup={sameInvoice}
+            onOpen={openShared}
+            onJoin={joinShared}
+            onBackToNormal={backToNormal}
+            onUseDifferentNumber={useDifferentNumber}
+          />
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="invoice_number">
@@ -845,7 +946,7 @@ function NewVendorBillForm() {
 
             <div className="space-y-1.5">
               <Label htmlFor="total_amount">
-                Invoice Amount (₹) <span className="text-red-500">*</span>
+                {shareChoice !== "none" ? "This PO's share of the invoice (₹)" : "Invoice Amount (₹)"} <span className="text-red-500">*</span>
               </Label>
               <Input
                 id="total_amount"
@@ -1102,9 +1203,27 @@ function NewVendorBillForm() {
             </span>
           </p>
         )}
+        {formError ? (
+          <div ref={formErrorRef} role="alert" className="w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-900 flex items-start gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-600" />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold">Couldn&apos;t save this invoice</p>
+              <p className="text-xs mt-0.5">{formError}</p>
+            </div>
+            <Button type="button" size="sm" variant="outline" className="h-7 shrink-0 bg-white" onClick={() => setFormError(null)}>Got it</Button>
+          </div>
+        ) : (amountError || hasExactDuplicate || sameInvoiceBlocked) ? (
+          <div role="alert" className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 flex items-start gap-2">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-red-600" />
+            <span>
+              <b>Saving is blocked.</b>{" "}
+              {amountError ?? (sameInvoiceBlocked ? sameInvoice?.reason : "This invoice number is already recorded for this vendor. Open the bill in the card above, or change the invoice number.")}
+            </span>
+          </div>
+        ) : null}
         <Button
           onClick={handleSave}
-          disabled={submitting || !!amountError || hasExactDuplicate}
+          disabled={submitting || !!amountError || hasExactDuplicate || sameInvoiceBlocked}
           size="lg"
           className={invoiceFindings.length > 0 ? "bg-amber-600 hover:bg-amber-700 text-white" : undefined}
         >

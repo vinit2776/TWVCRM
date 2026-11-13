@@ -6,6 +6,8 @@ import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
 import { RollbackDialog } from "@/components/procurement/rollback-dialog";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { SharedInvoicePanel } from "@/components/procurement/shared-invoice-panel";
+import { isDeadBillStatus } from "@/lib/constants";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -770,7 +772,13 @@ export default function PurchaseOrderDetailPage() {
       ? Number(po.unit_cost_per_cycle)
       : Number(po?.total_ordered_amount ?? 0);
     if (ceiling > 0 && amount > ceiling) {
-      toast.error(`Invoice amount cannot exceed ${po?.po_type === "service" ? "cycle cost" : "PO value"} (${formatCurrency(ceiling)})`);
+      toast.error(`Invoice amount cannot exceed ${po?.po_type === "service" ? "cycle cost" : "PO value"} (${formatCurrency(ceiling)})`, {
+        duration: 10000,
+        // One vendor invoice can cover several goods POs; the full invoice form handles that.
+        ...(po?.po_type !== "service" && po?.id
+          ? { action: { label: "Covers other POs?", onClick: () => router.push(`/procurement/bills/new?po_id=${po.id}`) } }
+          : {}),
+      });
       return;
     }
 
@@ -802,7 +810,13 @@ export default function PurchaseOrderDetailPage() {
       });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(typeof json.error === "string" ? json.error : "Failed to create vendor invoice");
+        toast.error(typeof json.error === "string" ? json.error : "Failed to create vendor invoice", {
+          duration: 10000,
+          // Same number already on another PO's bill: the full invoice form can add this PO to that invoice.
+          ...(json.code === "INVOICE_NUMBER_EXISTS" && po?.id
+            ? { action: { label: "Same invoice, other PO?", onClick: () => router.push(`/procurement/bills/new?po_id=${po.id}`) } }
+            : {}),
+        });
         return;
       }
 
@@ -1280,6 +1294,28 @@ export default function PurchaseOrderDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Goods PO: what has been invoiced against it, and the whole-invoice picture when an invoice is shared or several invoices exist */}
+      {po.po_type !== "service" && (() => {
+        const live = (po.vendor_bills ?? []).filter((b) => !isDeadBillStatus(b.approval_status));
+        if (live.length === 0 || !(po.total_ordered_amount > 0)) return null;
+        const invoiced = live.reduce((sum, b) => sum + Number(b.total_amount), 0);
+        const left = Math.max(0, Number(po.total_ordered_amount) - invoiced);
+        return (
+          <div className="space-y-4">
+            <Card>
+              <CardContent className="pt-4">
+                <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div className="rounded-lg border px-3 py-2"><p className="text-xs text-muted-foreground">PO value</p><p className="font-semibold">{formatCurrency(po.total_ordered_amount)}</p></div>
+                  <div className="rounded-lg border px-3 py-2"><p className="text-xs text-muted-foreground">Invoiced</p><p className="font-semibold">{formatCurrency(invoiced)}</p><p className="text-[11px] text-muted-foreground">{live.length} live bill{live.length === 1 ? "" : "s"}</p></div>
+                  <div className="rounded-lg border border-teal-700/40 bg-teal-50 px-3 py-2"><p className="text-xs text-muted-foreground">Still un-invoiced</p><p className="font-semibold text-teal-800">{formatCurrency(left)}</p></div>
+                </div>
+              </CardContent>
+            </Card>
+            <SharedInvoicePanel billId={live[0].id} role={currentUserRole} refreshKey={live.length} />
+          </div>
+        );
+      })()}
 
       {/* Service Contract Info */}
       {po.po_type === "service" && (

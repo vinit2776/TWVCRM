@@ -1,4 +1,6 @@
 import { chainLockedResponse } from "@/lib/procurement/chain-lock";
+import { sharedInvoiceGateError } from "@/lib/procurement/shared-invoice-server";
+import { invoiceNumberKey } from "@/lib/procurement/shared-invoice";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -586,6 +588,13 @@ export async function PATCH(
           { error: "Only pending bills can be approved" },
           { status: 422 }
         );
+      }
+
+      // A bill that shares a vendor invoice with other POs is approved only while the whole
+      // invoice still adds up: shares within the invoice total, the total within its POs.
+      const sharedGate = await sharedInvoiceGateError(supabase, bill.invoice_group_id ?? null);
+      if (sharedGate) {
+        return NextResponse.json({ error: sharedGate, code: "SHARED_INVOICE_GATE" }, { status: 422 });
       }
 
       // A bill outside its PO's price tolerance needs the admin to confirm they saw the variance.
@@ -1306,7 +1315,17 @@ export async function PATCH(
 
       // Duplicate invoice-number guard (mirrors creation), excluding this bill itself.
       const trimmedInvoiceNumber = parsed.data.invoice_number?.trim() || null;
-      if (trimmedInvoiceNumber) {
+      // A bill on a shared vendor invoice keeps the invoice's number: the other bills carry it too,
+      // so it can't be changed from one bill, and the sibling bills are not duplicates of this one.
+      if (bill.invoice_group_id) {
+        if (invoiceNumberKey(trimmedInvoiceNumber ?? "") !== invoiceNumberKey(bill.invoice_number ?? "")) {
+          return NextResponse.json(
+            { error: "This bill is one of several on a shared vendor invoice, so its invoice number can't be changed here. Ask an admin to correct it." },
+            { status: 422 }
+          );
+        }
+      }
+      if (trimmedInvoiceNumber && !bill.invoice_group_id) {
         const { count: dupCount } = await supabase
           .from("vendor_bills")
           .select("*", { count: "exact", head: true })
