@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  addDaysYmd, bookingNoLongerOwes, bookingPiChaseable, bookingPiDueDate, bookingPaymentMarker, mirroredRowsToRemove,
+  addDaysYmd, bookingModeForStatementPayment, bookingNoLongerOwes, bookingPiChaseable, bookingPiDueDate, bookingPaymentMarker, mirroredRowsToRemove,
   paymentsToMirror, statementPaymentStatus, todayIstYmd,
 } from "../booking-pi-statement";
 
@@ -102,5 +102,16 @@ describe("bookingPiChaseable", () => {
     expect(bookingPiChaseable({ ...base, booking: { status: "cancelled", payment_status: "pending" } })).toBe(false);
     expect(bookingPiChaseable({ ...base, booking: { status: "confirmed", payment_status: "waived" } })).toBe(false);
     expect(bookingPiChaseable({ ...base, booking: null })).toBe(false);
+  });
+});
+
+describe("bookingModeForStatementPayment", () => {
+  it("maps bank transfers to upi and keeps cash, card and unknown modes", () => {
+    expect(bookingModeForStatementPayment("NEFT")).toBe("upi");
+    expect(bookingModeForStatementPayment("rtgs")).toBe("upi");
+    expect(bookingModeForStatementPayment("upi")).toBe("upi");
+    expect(bookingModeForStatementPayment("cash")).toBe("cash");
+    expect(bookingModeForStatementPayment("card")).toBe("card");
+    expect(bookingModeForStatementPayment("cheque")).toBe("cheque");
   });
 });

@@ -17,11 +17,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { bookingPaymentTolerance } from "@/lib/booking-payment-rules";
+import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { logAudit } from "@/lib/audit";
 import { totalPaid } from "@/lib/settlement";
 import { buildBookingPi, type BookingPiAddon, type BookingPiTotals } from "@/lib/booking-pi";
 import {
   BOOKING_PI_CREATED_VIA, bookingNoLongerOwes, bookingPaymentMarker, bookingPiDueDate, mirroredRowsToRemove,
-  paymentsToMirror, statementPaymentStatus, todayIstYmd,
+  bookingModeForStatementPayment, paymentsToMirror, statementPaymentStatus, todayIstYmd,
 } from "@/lib/booking-pi-statement";
 
 function piLineItems(totals: BookingPiTotals) {
@@ -323,4 +325,71 @@ export async function rejectIfBookingPiStatement(statementId: string): Promise<N
     },
     { status: 409 },
   );
+}
+
+export type RecordBookingPiPaymentResult =
+  | { ok: true; paymentId: string; markerRef: string }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Accounts record a booking PI's payment from Receivables. The money belongs to
+ * the booking, so it is recorded there (as a verified booking payment, the same
+ * RPC the counter uses) and the statement follows through the sync. That keeps the
+ * booking paid, its single Tally task created, and the statement settled together.
+ */
+export async function recordBookingPiPayment(
+  admin: SupabaseClient,
+  args: {
+    bookingId: string;
+    amount: number;
+    mode: string;
+    reference: string | null;
+    notes: string | null;
+    proofPath: string | null;
+    actor: { id: string; full_name: string | null };
+  },
+): Promise<RecordBookingPiPaymentResult> {
+  const mode = bookingModeForStatementPayment(args.mode);
+  const { data: rpc, error } = await admin.rpc("insert_booking_payment_atomic", {
+    p_booking_id: args.bookingId,
+    p_amount: args.amount,
+    p_payment_mode: mode,
+    p_payment_reference: args.reference?.trim() || null,
+    p_status: "verified",
+    p_created_by: args.actor.id,
+    p_cash_handover_status: null,
+    p_collected_by: null,
+    p_collected_at: null,
+    p_screenshot_verified: null,
+    p_verification_notes: `Recorded from Receivables by ${args.actor.full_name ?? "accounts"}${args.notes ? `: ${args.notes}` : ""}`,
+  });
+  if (error) return { ok: false, status: 500, error: error.message };
+  if (rpc?.error) {
+    return { ok: false, status: 409, error: `${rpc.error}${rpc.balance_due != null ? ` Balance due on the booking is ₹${Number(rpc.balance_due).toLocaleString("en-IN")}.` : ""}` };
+  }
+  const paymentId = rpc.payment.id as string;
+  if (args.proofPath) {
+    await admin.from("booking_payments").update({ screenshot_path: args.proofPath }).eq("id", paymentId);
+  }
+
+  const newTotal = Number(rpc.new_total);
+  const grandTotal = Number(rpc.grand_total);
+  if (newTotal >= grandTotal - bookingPaymentTolerance(grandTotal)) {
+    await admin.from("bookings").update({ payment_status: "paid", payment_mode: mode }).eq("id", args.bookingId);
+    await maybeCreateBookingGstTask(admin, args.bookingId);
+  }
+  await syncBookingPiStatement(admin, args.bookingId);
+
+  void logAudit(admin, {
+    entityType: "booking_payment",
+    entityId: paymentId,
+    action: "create",
+    performedBy: args.actor.id,
+    changes: {
+      amount: { old: null, new: args.amount },
+      payment_mode: { old: null, new: mode },
+      status: { old: null, new: "verified" },
+    },
+  });
+  return { ok: true, paymentId, markerRef: bookingPaymentMarker(paymentId) };
 }
