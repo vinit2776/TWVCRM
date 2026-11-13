@@ -82,6 +82,11 @@ describe("helpers", () => {
     expect(isMissingSchema({ code: "42P01" })).toBe(true);
     expect(isMissingSchema({ code: "23505" })).toBe(false);
   });
+  it("treats a PostgREST schema-cache miss as not migrated yet", () => {
+    expect(isMissingSchema({ code: "PGRST205" })).toBe(true);
+    expect(isMissingSchema({ code: "PGRST204" })).toBe(true);
+    expect(isMissingSchema({ code: "42501" })).toBe(false);
+  });
   it("validates the check form", () => {
     expect(addressCheckSchema.safeParse({ source: "mca", finding: "not_found", checked_on: "2026-01-02", note: "Checked MCA" }).success).toBe(true);
     expect(addressCheckSchema.safeParse({ source: "x", finding: "not_found", checked_on: "2026-01-02", note: "Checked MCA" }).success).toBe(false);
