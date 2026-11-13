@@ -63,6 +63,7 @@ import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { revisionBlockedReason } from "@/lib/proposal-revision";
 import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
+import { VoPricingPanel } from "@/components/proposals/vo-pricing-panel";
 import { JourneyPanel } from "@/components/journey/journey-panel";
 import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
 import { partialDepositState, partialDepositWarning, type PartialDepositState } from "@/lib/deposit-activation";
@@ -1176,6 +1177,8 @@ export default function ProposalDetailPage({
           </CardContent>
         </Card>
       )}
+
+      {isVoKind && <VoPricingPanel proposalId={proposal.id} canRequest={["admin", "manager", "sales_rep"].includes(currentUser?.role ?? "")} onChanged={fetchProposal} />}
 
       {/* History: dates, references and reasons. What to do next is in the Customer journey panel above. */}
       <Card>

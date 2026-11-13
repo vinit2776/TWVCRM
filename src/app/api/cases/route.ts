@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createCaseSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { DOCUMENT_CHECKLISTS, COMPLIANCE_CHECKLISTS } from "@/lib/constants";
 import { legacyPurposeFor, isMissingEnumValueError, PURPOSE_MIGRATION_PENDING_MESSAGE } from "@/lib/vo-purpose";
 import { caseEndDate } from "@/lib/case-workflow";
 import { EXPIRY_RELEVANT_STATUSES } from "@/lib/constants";
+import { rateCardPurposeFor, computeVoPricing, buildDirectSnapshot, computeAggregatorCasePricing } from "@/lib/vo-pricing";
+import { loadDirectRates, loadAggregatorRates, isMissingColumn } from "@/lib/vo-pricing-server";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -180,10 +182,42 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Freeze the rate card values used for this case (W2-4) so later card edits never change it.
+  // Aggregator cases use that aggregator's own card and are blocked when no row matches; an
+  // aggregator without a card (or purposes with no card) keep today's behaviour untouched.
+  let priceSnapshot: Record<string, unknown> | null = null;
+  const cardPurpose = rateCardPurposeFor(result.data.purpose);
+  if (cardPurpose) {
+    try {
+      const admin = createAdminClient();
+      const locationId = result.data.location_id ?? null;
+      if (result.data.aggregator_id) {
+        const card = await loadAggregatorRates(admin, result.data.aggregator_id);
+        if (card.hasCard) {
+          const priced = computeAggregatorCasePricing({
+            purpose: cardPurpose, locationId, termMonths: result.data.tenure_months,
+            customerRate: rate ?? null, rows: card.rows,
+          });
+          if (!priced.ok) return NextResponse.json({ error: priced.message }, { status: 422 });
+          priceSnapshot = priced.snapshot;
+        }
+      } else {
+        const card = await loadDirectRates(admin);
+        if (card.setUp) {
+          const priced = computeVoPricing({
+            purpose: cardPurpose, locationId, termMonths: result.data.tenure_months,
+            rows: card.rows, quotedRate: rate ?? null,
+          });
+          if (priced.ok) priceSnapshot = buildDirectSnapshot(priced);
+        }
+      }
+    } catch (err) {
+      console.error("[cases] rate card snapshot skipped:", err instanceof Error ? err.message : err);
+    }
+  }
+
   // Insert the case
-  const { data, error } = await supabase
-    .from("cases")
-    .insert({
+  const caseRow = {
       ...result.data,
       rate,
       // Without this the case has no expiry, and every renewal stage —
@@ -192,9 +226,16 @@ export async function POST(request: NextRequest) {
       status: "intake_received",
       created_by: dbUser?.id,
       assigned_to: result.data.assigned_to || dbUser?.id,
-    })
+  };
+  let { data, error } = await supabase
+    .from("cases")
+    .insert(priceSnapshot ? { ...caseRow, price_snapshot: priceSnapshot } : caseRow)
     .select("*")
     .single();
+  // Deployed before migration 00688: create the case without the snapshot rather than fail.
+  if (error && priceSnapshot && isMissingColumn(error)) {
+    ({ data, error } = await supabase.from("cases").insert(caseRow).select("*").single());
+  }
 
   if (isMissingEnumValueError(error)) {
     return NextResponse.json({ error: PURPOSE_MIGRATION_PENDING_MESSAGE }, { status: 409 });

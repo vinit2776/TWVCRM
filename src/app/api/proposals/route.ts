@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createProposalSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
 import { voCreateSchema } from "@/lib/vo-proposal";
 import { voProposalColumnsPresent, VO_PROPOSAL_NOT_READY } from "@/lib/vo-proposal-server";
+import { priceVoQuote, buildDirectSnapshot, requestFloorApproval, isMissingColumn } from "@/lib/vo-pricing-server";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -152,6 +153,8 @@ export async function POST(request: NextRequest) {
   // Virtual Office kind: zero deposit, validated term, columns must exist.
   // Standard proposals (no `kind` in the body) take none of these branches.
   let voFields: Record<string, unknown> = {};
+  let voSnapshot: ReturnType<typeof buildDirectSnapshot> | null = null;
+  let voFloorReason = "";
   if (body?.kind === "virtual_office") {
     if (!(await voProposalColumnsPresent())) return NextResponse.json({ error: VO_PROPOSAL_NOT_READY }, { status: 503 });
     const vo = voCreateSchema.safeParse(body);
@@ -162,6 +165,25 @@ export async function POST(request: NextRequest) {
       vo_guide_price: vo.data.vo_guide_price ?? null,
       vo_quoted_price: vo.data.vo_quoted_price,
     };
+
+    // Rate card pricing (W2-4). While the rate card tables are not migrated this is skipped and
+    // the caller's own guide price is kept, exactly as before.
+    const priced = await priceVoQuote(createAdminClient(), {
+      purpose: vo.data.vo_purpose ?? "",
+      locationId: result.data.location_id ?? null,
+      termMonths: vo.data.vo_term_months,
+      quotedRate: vo.data.vo_quoted_price,
+    });
+    if (priced.setUp) {
+      if (!vo.data.vo_purpose) return NextResponse.json({ error: "Choose the purpose (GST new or GST existing) so the rate card price can be looked up." }, { status: 400 });
+      if (!priced.result.ok) return NextResponse.json({ error: priced.result.message }, { status: 422 });
+      if (priced.result.quote?.requiresApproval && !vo.data.vo_below_floor_reason) {
+        return NextResponse.json({ error: "This quote is below the floor price. Add a reason so a manager can approve it." }, { status: 400 });
+      }
+      voFields.vo_guide_price = priced.result.guide;
+      voSnapshot = buildDirectSnapshot(priced.result);
+      voFloorReason = vo.data.vo_below_floor_reason ?? "";
+    }
   }
   const isVo = voFields.kind === "virtual_office";
 
@@ -171,9 +193,7 @@ export async function POST(request: NextRequest) {
 
   const { service_quotas, ...proposalFields } = result.data;
 
-  const { data, error } = await supabase
-    .from("proposals")
-    .insert({
+  const insertRow = {
       ...proposalFields,
       ...voFields,
       proposal_number: proposalNumber,
@@ -186,11 +206,42 @@ export async function POST(request: NextRequest) {
       security_deposit_amount: depositAmount,
       deposit_payment_status: depositPaymentStatus,
       created_by: dbUser?.id,
-    })
+  };
+  let { data, error } = await supabase
+    .from("proposals")
+    .insert(voSnapshot ? { ...insertRow, vo_price_snapshot: voSnapshot } : insertRow)
     .select("*")
     .single();
+  // Deployed before migration 00688: save without the snapshot column rather than fail.
+  if (error && voSnapshot && isMissingColumn(error)) {
+    ({ data, error } = await supabase.from("proposals").insert(insertRow).select("*").single());
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  let floorApprovalId: string | null = null;
+  if (data && voSnapshot?.requires_approval && dbUser?.id) {
+    const approval = await requestFloorApproval(createAdminClient(), {
+      proposalId: data.id,
+      proposalNumber: data.proposal_number,
+      requestedBy: dbUser.id,
+      reason: voFloorReason,
+      snapshot: voSnapshot,
+      locationId: data.location_id ?? null,
+    });
+    if ("id" in approval) {
+      floorApprovalId = approval.id;
+      logAudit(supabase, {
+        entityType: "proposal",
+        entityId: data.id,
+        action: "update",
+        performedBy: dbUser.id,
+        changes: { vo_floor_approval_requested: { old: null, new: approval.id } },
+      });
+    } else {
+      console.error("[proposals] could not raise below-floor approval:", approval.error);
+    }
+  }
 
   if (data && dbUser?.id) {
     logAudit(supabase, {
@@ -222,5 +273,5 @@ export async function POST(request: NextRequest) {
     await autoUpdateLeadStatus(supabase, result.data.lead_id, "proposal");
   }
 
-  return NextResponse.json({ data }, { status: 201 });
+  return NextResponse.json({ data, floor_approval_id: floorApprovalId }, { status: 201 });
 }
