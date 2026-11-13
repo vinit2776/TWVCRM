@@ -1,3 +1,4 @@
+import { exceedsProposalCap, proposalCapMessage } from "@/lib/procurement/proposal-cap";
 import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -540,7 +541,7 @@ export async function PATCH(
         // Validate edits target items actually belonging to this PR.
         const { data: existingItems } = await supabase
           .from("purchase_request_items")
-          .select("id, quantity")
+          .select("id, quantity, proposal_line_total")
           .eq("pr_id", id);
         const itemsById = new Map((existingItems ?? []).map((it) => [it.id as string, it]));
         for (const edit of priceEdits) {
@@ -549,6 +550,11 @@ export async function PATCH(
               { error: `Line item ${edit.id} does not belong to this MR` },
               { status: 422 }
             );
+          }
+          // A proposal's value can be lowered but never raised, also when resubmitting.
+          const cap = itemsById.get(edit.id)!.proposal_line_total;
+          if (cap != null && exceedsProposalCap({ quantity: Number(itemsById.get(edit.id)!.quantity ?? 0), perCycleCost: edit.estimated_price, cap: Number(cap) }, Number(pr.opening_cycles ?? 0))) {
+            return NextResponse.json({ error: proposalCapMessage(Number(cap)) }, { status: 422 });
           }
         }
         // Apply: update each row's estimated_price + recompute its total_estimated.
@@ -795,9 +801,30 @@ export async function PUT(
   // with an opaque database error rather than something the user can act on.
   const { data: existingItems } = await supabase
     .from("purchase_request_items")
-    .select("id")
+    .select("id, linked_asset_id, proposal_line_total")
     .eq("pr_id", id);
   const existingItemIds = (existingItems ?? []).map((it) => it.id as string);
+
+  // A request set up from a proposal keeps its ceilings: the same assets, the value only lower.
+  const capByAsset = new Map<string, number>();
+  for (const it of existingItems ?? []) {
+    if (it.proposal_line_total != null && it.linked_asset_id) capByAsset.set(it.linked_asset_id as string, Number(it.proposal_line_total));
+  }
+  if (capByAsset.size > 0 && prData.department === "amc") {
+    const opening = prData.opening_cycles ?? Number(pr.opening_cycles ?? 0);
+    for (const item of items) {
+      const cap = item.linked_asset_id ? capByAsset.get(item.linked_asset_id) : undefined;
+      if (cap === undefined) {
+        return NextResponse.json(
+          { error: "This request was set up from a proposal, so its assets can't be changed. Upload a corrected proposal or start a new request." },
+          { status: 422 }
+        );
+      }
+      if (exceedsProposalCap({ quantity: item.quantity, perCycleCost: item.estimated_price ?? 0, cap }, opening)) {
+        return NextResponse.json({ error: proposalCapMessage(cap) }, { status: 422 });
+      }
+    }
+  }
   if (existingItemIds.length > 0) {
     const { count: linkedPoItems } = await supabase
       .from("purchase_order_items")
@@ -831,6 +858,7 @@ export async function PUT(
         total_estimated: item.estimated_price ? round2(item.quantity * item.estimated_price) : null,
         notes: item.notes || null,
         linked_asset_id: prData.department === "amc" ? item.linked_asset_id || null : null,
+        proposal_line_total: prData.department === "amc" && item.linked_asset_id ? capByAsset.get(item.linked_asset_id) ?? null : null,
       }))
     )
     .select("id");

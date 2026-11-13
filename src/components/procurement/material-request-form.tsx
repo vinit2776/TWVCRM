@@ -31,6 +31,7 @@ import { formatCurrency } from "@/lib/utils";
 import { uploadQuotation } from "@/lib/procurement/upload-quotation";
 import { cyclesBetween, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { PROPOSAL_CAP_TOLERANCE, proposalCapMessage } from "@/lib/procurement/proposal-cap";
 import { PriceToleranceField } from "@/components/procurement/price-tolerance-field";
 import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -72,6 +73,10 @@ interface AmcLine {
   billingCycle: ServicePoBillingCycle;
   cycleCountOverride: string;
   perCycleCost: string; // pre-GST, INR
+  /** The whole contract value as typed; while set, the cost per cycle follows it divided by the number of cycles. */
+  totalEntry?: string;
+  /** Set when the line came from a proposal: its contract total before GST, a ceiling for the value. */
+  proposalTotal?: number;
 }
 
 const newAmcLine = (over: Partial<AmcLine> = {}): AmcLine => ({
@@ -481,6 +486,36 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     const count = fullCount - Math.min(openingCycles, Math.max(0, fullCount - 1));
     return { derived, count, fullCount, cost, total: fig.remaining, fullTotal: fig.full, paidTotal: fig.paid };
   };
+  // A typed contract total is split over the agreed number of payments; it follows later changes to the dates or frequency.
+  const totalKey = amcLines.map((l) => `${l.totalEntry ?? ""}|${amcLineFull(l).count}`).join(",");
+  useEffect(() => {
+    setAmcLines((prev) => {
+      let changed = false;
+      const next = prev.map((l) => {
+        const total = parseFloat(l.totalEntry ?? "");
+        if (!(total > 0)) return l;
+        const want = String(Math.round((total / amcLineFull(l).count) * 100) / 100);
+        if (want === l.perCycleCost) return l;
+        changed = true;
+        return { ...l, perCycleCost: want };
+      });
+      return changed ? next : prev;
+    });
+    // amcLineFull reads the dates, which totalKey already reflects through each line's cycle count.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalKey]);
+  // Set up from a proposal: assets, dates and billing are fixed to it; only the value can change, and only downwards.
+  const proposalLocked = department === "amc" && amcLines.some((l) => l.proposalTotal != null);
+  const proposalCapError = (): string | null => {
+    for (let i = 0; i < amcLines.length; i++) {
+      const l = amcLines[i];
+      if (l.proposalTotal == null) continue;
+      if (amcLineCalc(l).fullTotal > l.proposalTotal + PROPOSAL_CAP_TOLERANCE) {
+        return `${amcLines.length > 1 ? `Line ${i + 1}: ` : ""}${proposalCapMessage(l.proposalTotal)}`;
+      }
+    }
+    return null;
+  };
   const amcContractTotal = amcLines.reduce((sum, l) => sum + amcLineCalc(l).total, 0);
   const amcFullTotal = amcLines.reduce((sum, l) => sum + amcLineCalc(l).fullTotal, 0);
   const amcPaidTotal = amcLines.reduce((sum, l) => sum + amcLineCalc(l).paidTotal, 0);
@@ -503,6 +538,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             estimated_price: c.cost || null,
             notes: undefined,
             linked_asset_id: l.assetId || null,
+            proposal_line_total: l.proposalTotal ?? null,
           };
         })
       : items.map((li) => ({
@@ -632,6 +668,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
         if (!l.assetId) return `Please select the asset this AMC covers${at}`;
         const amt = parseFloat(l.perCycleCost);
         if (!amt || amt <= 0) return `Enter the ${CYCLE_COST_LABEL[l.billingCycle].toLowerCase()} (pre-GST)${at}`;
+        const capErr = proposalCapError();
+        if (capErr) return capErr;
         if (l.cycleCountOverride.trim() !== "" && parseInt(l.cycleCountOverride) <= 0)
           return `Number of cycles must be at least 1${at}`;
       }
@@ -858,7 +896,13 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   /** Hides a block on every step but its own; unchanged when not in the step-by-step flow. */
   const showStep = (key: string) => (!amcWizard || stepKey === key ? "" : "hidden");
   const goToAmcStep = (n: number) => { setAmcStep(n); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  // A proposal that is being read, or read but not yet used or dismissed, holds the wizard on its first step.
+  const [proposalPending, setProposalPending] = useState(false);
+  const waitingOnProposal = proposalPending && stepKey === "proposal";
   const nextAmcStep = () => {
+    if (waitingOnProposal) return;
+    const capErr = proposalCapError();
+    if (capErr) { toast.error(capErr); return; }
     const err = validateAmcStep(amcStep, {
       companyId, serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,
       unlimitedVisits: amcUnlimited, visitsCovered: amcVisitsCovered,
@@ -883,11 +927,11 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     if (u.contactEmail !== undefined) { setAmcContactEmail(u.contactEmail); count++; }
     if (u.firstLine) {
       const fl = u.firstLine;
-      setAmcLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, billingCycle: fl.billingCycle, perCycleCost: fl.perCycleCost ?? l.perCycleCost, cycleCountOverride: "" } : l)));
+      setAmcLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, billingCycle: fl.billingCycle, perCycleCost: fl.perCycleCost ?? l.perCycleCost, cycleCountOverride: "", proposalTotal: fl.proposalTotal } : l)));
       count += fl.perCycleCost === undefined ? 1 : 2;
     }
     if (u.lines) {
-      setAmcLines(u.lines.map((l) => newAmcLine({ assetId: l.assetId, billingCycle: l.billingCycle, perCycleCost: l.perCycleCost })));
+      setAmcLines(u.lines.map((l) => newAmcLine({ assetId: l.assetId, billingCycle: l.billingCycle, perCycleCost: l.perCycleCost, proposalTotal: l.proposalTotal })));
       count += u.lines.length;
     }
     // Keep the proposal itself as the attached quotation, so the approver can read it.
@@ -1115,6 +1159,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           defaultLocationId={locationId || undefined}
           onAssetCreated={(a) => setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]))}
           onApply={applyProposalPrefill}
+          onPendingChange={setProposalPending}
           current={{
             serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,
             visitsCovered: amcVisitsCovered, unlimitedVisits: amcUnlimited,
@@ -1146,6 +1191,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                   placeholder="e.g. Annual Maintenance Contract — HVAC System"
                   value={serviceItemName}
                   onChange={(e) => setServiceItemName(e.target.value)}
+                  disabled={proposalLocked}
                 />
               </div>
 
@@ -1157,6 +1203,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                       type="radio"
                       name="amc-coverage"
                       checked={amcCoverageType === "comprehensive"}
+                      disabled={proposalLocked}
                       onChange={() => setAmcCoverageType("comprehensive")}
                     />
                     Comprehensive (labour + parts)
@@ -1166,6 +1213,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                       type="radio"
                       name="amc-coverage"
                       checked={amcCoverageType === "labour_only"}
+                      disabled={proposalLocked}
                       onChange={() => setAmcCoverageType("labour_only")}
                     />
                     Labour-only
@@ -1179,6 +1227,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                   id="amc-start"
                   type="date"
                   value={amcStartDate}
+                  disabled={proposalLocked}
                   onChange={(e) => handleAmcStartDateChange(e.target.value)}
                 />
               </div>
@@ -1188,6 +1237,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                   id="amc-end"
                   type="date"
                   value={amcEndDate}
+                  disabled={proposalLocked}
                   onChange={(e) => setAmcEndDate(e.target.value)}
                 />
               </div>
@@ -1201,11 +1251,12 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                   placeholder="e.g. 4"
                   value={amcVisitsCovered}
                   onChange={(e) => setAmcVisitsCovered(e.target.value)}
-                  disabled={amcUnlimited}
+                  disabled={amcUnlimited || proposalLocked}
                 />
                 <label className="flex items-center gap-2 text-xs cursor-pointer pt-1">
                   <Checkbox
                     checked={amcUnlimited}
+                    disabled={proposalLocked}
                     onCheckedChange={(c) => setAmcUnlimited(Boolean(c))}
                   />
                   Unlimited visits
@@ -1222,6 +1273,13 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                   One line per asset. Each line becomes its own PO with its own cycles, visits and invoices.
                 </p>
               </div>
+              {proposalLocked && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+                  Set up from the proposal, so the assets, dates, visits and payment schedule are fixed to it.
+                  If the final agreed value is lower, enter the lower amount on each line. It can&apos;t be higher.
+                  To change anything else, upload a corrected proposal or start a new request.
+                </div>
+              )}
               {amcLines.map((l, idx) => {
                 const c = amcLineCalc(l);
                 const takenByOthers = new Set(amcLines.filter((x) => x.id !== l.id).map((x) => x.assetId));
@@ -1231,7 +1289,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                       <span className="text-xs font-medium text-muted-foreground">
                         {amcLines.length > 1 ? `Line ${idx + 1}` : "Asset"}
                       </span>
-                      {amcLines.length > 1 && (
+                      {amcLines.length > 1 && !proposalLocked && (
                         <button
                           type="button"
                           onClick={() => removeAmcLine(l.id)}
@@ -1259,6 +1317,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           }))}
                         value={l.assetId}
                         onValueChange={(v) => handleAssetSelect(l.id, v)}
+                        // Locked only once the proposal's asset is matched; an unmatched line must stay pickable.
+                        disabled={proposalLocked && !!l.assetId}
                         placeholder="Select the asset this line covers..."
                         emptyMessage="No assets found"
                       />
@@ -1270,6 +1330,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                         <Select
                           value={l.billingCycle}
                           onValueChange={(v) => updateAmcLine(l.id, { billingCycle: v as ServicePoBillingCycle })}
+                          disabled={proposalLocked}
                         >
                           <SelectTrigger><SelectValue /></SelectTrigger>
                           <SelectContent>
@@ -1279,6 +1340,31 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           </SelectContent>
                         </Select>
                       </div>
+                      {l.billingCycle !== "yearly" && (
+                        <div className="space-y-1.5 sm:col-span-3">
+                          <Label className="text-xs">Total contract value (pre-GST)</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="Enter the whole contract value to split it across the payments"
+                            value={l.totalEntry || (c.fullTotal > 0 ? String(Math.round(c.fullTotal * 100) / 100) : "")}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              const n = parseFloat(v);
+                              updateAmcLine(l.id, {
+                                totalEntry: v,
+                                perCycleCost: n > 0 ? String(Math.round((n / c.fullCount) * 100) / 100) : "",
+                              });
+                            }}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {parseFloat(l.totalEntry ?? "") > 0
+                              ? `Split into ${c.fullCount} ${CYCLE_UNIT_LABEL[l.billingCycle]}${c.fullCount === 1 ? "" : "s"}, each ${formatCurrency(c.cost)} before GST.${Math.abs(c.fullTotal - parseFloat(l.totalEntry!)) > 0.01 ? ` It does not divide evenly, so the contract comes to ${formatCurrency(c.fullTotal)}.` : ""}`
+                              : c.derived ? `Divided by the ${c.fullCount} payments in the contract period to fill in the cost below.` : "Set the contract dates first so the payments can be counted."}
+                          </p>
+                        </div>
+                      )}
                       <div className="space-y-1.5">
                         <Label className="text-xs">
                           {CYCLE_COST_LABEL[l.billingCycle]} (pre-GST) <span className="text-red-500">*</span>
@@ -1289,8 +1375,13 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           step="0.01"
                           placeholder="0.00"
                           value={l.perCycleCost}
-                          onChange={(e) => updateAmcLine(l.id, { perCycleCost: e.target.value })}
+                          onChange={(e) => updateAmcLine(l.id, { perCycleCost: e.target.value, totalEntry: "" })}
                         />
+                        {l.proposalTotal != null && (
+                          <p className={`text-xs ${c.fullTotal > l.proposalTotal + PROPOSAL_CAP_TOLERANCE ? "text-red-600" : "text-muted-foreground"}`}>
+                            Proposal value {formatCurrency(l.proposalTotal)} before GST. If it was agreed lower, enter the lower amount — it can&apos;t be higher.
+                          </p>
+                        )}
                       </div>
                       {l.billingCycle !== "yearly" && (
                         <div className="space-y-1.5">
@@ -1302,6 +1393,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                             // Derived from the contract period; overridable for irregular terms.
                             placeholder={c.derived ? String(c.derived) : "Set the contract dates"}
                             value={l.cycleCountOverride}
+                            disabled={proposalLocked}
                             onChange={(e) => updateAmcLine(l.id, { cycleCountOverride: e.target.value })}
                           />
                         </div>
@@ -1318,10 +1410,10 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                 );
               })}
               <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={addAmcLine}>
+                <Button type="button" variant="outline" size="sm" onClick={addAmcLine} disabled={proposalLocked}>
                   <Plus className="h-4 w-4 mr-1" /> Add asset
                 </Button>
-                {amcLines.length > 1 && (
+                {amcLines.length > 1 && !proposalLocked && (
                   <Button type="button" variant="ghost" size="sm" onClick={copyFirstAmcLineToAll}>
                     Copy first line&apos;s payment terms to all
                   </Button>
@@ -1987,7 +2079,10 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
               {stepKey === "proposal" && validQuotations.length === 0 && (
                 <span className="text-xs text-muted-foreground">No proposal yet? You can skip.</span>
               )}
-              <Button onClick={nextAmcStep}>{stepKey === "proposal" ? (validQuotations.length === 0 ? "Skip" : "Next →") : "Next →"}</Button>
+              {waitingOnProposal && (
+                <span className="text-xs text-amber-800">Choose &quot;Fill in the steps for me&quot; or &quot;Don&apos;t use it&quot; to continue.</span>
+              )}
+              <Button onClick={nextAmcStep} disabled={waitingOnProposal}>{stepKey === "proposal" ? (validQuotations.length === 0 ? "Skip" : "Next →") : "Next →"}</Button>
             </div>
           )}
         </div>

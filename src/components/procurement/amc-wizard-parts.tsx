@@ -153,7 +153,11 @@ export function AmcRunningStep(p: AmcRunningStepProps) {
   const toggle = (n: number) => {
     if (n > p.maxSettled) return;
     // Ticking cycle n settles 1..n; un-ticking the last ticked one steps back.
-    p.onOpening(n === p.opening ? n - 1 : n);
+    const next = n === p.opening ? n - 1 : n;
+    p.onOpening(next);
+    // A cycle that is billed and paid has been serviced, so its share of the visits is done too.
+    // The count below stays adjustable for a contract whose visits did not fall evenly.
+    if (p.visitsCovered != null && total > 0) p.onVisits(Math.round((p.visitsCovered * next) / total));
   };
   return (
     <Card>
@@ -161,7 +165,7 @@ export function AmcRunningStep(p: AmcRunningStepProps) {
         <div>
           <p className="text-sm font-medium">Which cycles are already billed and paid?</p>
           <p className="text-xs text-muted-foreground">
-            Tick the ones the vendor has already invoiced and you have already paid, outside this system. Leave all unticked if none has been paid yet.
+            Tick a cycle if it has already been serviced, invoiced by the vendor and paid by you, outside this system. Its share of the visits is counted as done. Leave all unticked if none has been paid yet.
           </p>
         </div>
         <div className="rounded-lg border divide-y">
@@ -184,6 +188,7 @@ export function AmcRunningStep(p: AmcRunningStepProps) {
                   <span className="font-medium">{Unit} {c.n} of {total}</span>
                   {c.n === startsAt && <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] font-medium text-blue-800">we start here</span>}
                   <span className="block text-xs text-muted-foreground">{formatDate(c.from)} – {formatDate(c.to)}</span>
+                  {done && <span className="block text-[11px] font-medium text-green-700">Serviced · Invoiced · Paid</span>}
                 </span>
                 <span className="text-right">
                   {formatCurrency(p.perCycleTotal)}
@@ -201,6 +206,9 @@ export function AmcRunningStep(p: AmcRunningStepProps) {
           <p className="text-sm font-medium">
             How many{p.visitsCovered ? ` of the ${p.visitsCovered}` : ""} visits are already done?
           </p>
+          {p.opening > 0 && p.visitsCovered != null && (
+            <p className="text-xs text-muted-foreground">Filled in from the cycles you ticked. Change it if the vendor made a different number of visits.</p>
+          )}
           <div className="mt-2 flex items-center gap-3">
             <button type="button" aria-label="One fewer visit" className="h-8 w-8 rounded-md border flex items-center justify-center disabled:opacity-40"
               disabled={p.visits <= 0} onClick={() => p.onVisits(p.visits - 1)}><Minus className="h-4 w-4" /></button>
