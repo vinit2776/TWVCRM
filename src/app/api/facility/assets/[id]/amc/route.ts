@@ -69,6 +69,7 @@ export async function GET(
     cycle_number: number;
     period_from: string | null;
     period_to: string | null;
+    service_date: string | null;
     report_file_url: string | null;
     notes: string | null;
     created_at: string;
@@ -78,7 +79,7 @@ export async function GET(
     const { data: reports } = await supabase
       .from("po_service_reports")
       .select(`
-        id, po_id, cycle_number, period_from, period_to,
+        id, po_id, cycle_number, period_from, period_to, service_date,
         report_file_url, notes, created_at,
         recorder:users!po_service_reports_recorded_by_fkey(id, full_name)
       `)
