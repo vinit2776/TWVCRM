@@ -18,6 +18,9 @@ Mark each step Pass / Fail / Blocked in the checklist at the end. A Fail on a st
 - **First thing on every page: confirm the amber banner "STAGING, this is test data".** If it is not there, stop: you are on production.
 - Deploy first, migrate second: the preview is already deployed, so apply the migrations next.
 
+### 0.1b Required first pass: deployed, migrations NOT applied yet
+Before applying anything, open every new page and call every new route on the preview. The expected result is a friendly "not set up" message or a 503/409, **never a 500 or a blank page**. A 500 here means a not-migrated guard is missing (it must accept Postgres `42P01`/`42703` and PostgREST `PGRST205`/`PGRST204`). Pages: `/admin/vo-rate-cards`, `/admin/terms-library`, `/approvals`, `/cases/renewals`, a case page (KYC panel, non-renewal checklist, address watch panel), a VO proposal page and its `/vo-proposal/<token>` link. Routes: `/api/admin/vo-rates`, `/api/admin/vo-terms`, `/api/aggregator-invoices/billing-preview`, `/api/cases/<id>/kyc-review`, `/api/cases/<id>/non-renewal`, `/api/cases/<id>/address-checks`. Record any failure and fix it before migrating.
+
 ### 0.2 Apply migrations, in this order, to the staging database (`vmxugqfglajqpskazpdc` only)
 `00677`, `00678`, `00679`, `00680`, `00681`, `00682`, `00683`, `00684`, `00685`, `00686`, `00687`, `00688`, `00689`, `00690` (all are in `supabase/migrations/`).
 
@@ -243,7 +246,7 @@ Renew or create a 36-month case with a total fee of 25,000. Expected: annual rat
 
 - **Audit log:** each mutation above has an entry with the right actor (customer actions show actor "customer").
 - **Roles:** sales_rep cannot edit rate cards or sign off KYC; only admin/manager mark non-renewal steps.
-- **Deploy-before-migration:** (optional) point a second preview at a database **without** the new migrations. New panels should hide and new POSTs should return 503/409, not 500.
+- **Deploy-before-migration:** covered by the required first pass in 0.1b.
 - **No customer sends:** check the email and WhatsApp logs. Nothing should have gone out except to your test addresses.
 - **Old flows:** a standard proposal, an existing case's agreement, an existing renewal and a normal aggregator invoice all behave as before with every new setting at its default.
 
