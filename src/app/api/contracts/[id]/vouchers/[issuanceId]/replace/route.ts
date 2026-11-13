@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import {
+  createUnifiVoucher,
+  revokeUnifiVoucher,
+  calcVoucherMinutes,
+  buildVoucherNote,
+  siteConfigFromLocation,
+  siteConfigForStoredVoucher,
+  unifiFailureReason,
+  UnifiConfigError,
+} from "@/lib/unifi";
+import { voucherValidUntil } from "@/lib/voucher-validity";
 
 /**
  * POST /api/contracts/[id]/vouchers/[issuanceId]/replace
- * Replace a voucher after OTP verification
+ * Replace a voucher after OTP verification. Pool vouchers are swapped for another
+ * pool code; UniFi vouchers are re-issued on the controller (this is also how a
+ * voucher that hit the one-year cap is renewed for a longer contract).
  * Body: { otp_id: string, otp_code: string, revoke_reason: string }
  */
 export async function POST(
@@ -80,6 +93,128 @@ export async function POST(
 
   if (!contract) {
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+  }
+
+  // ── UniFi-issued voucher: re-issue on the controller ────────────────
+  if (oldIssuance.unifi_voucher_id) {
+    if (!contract.location_id) {
+      return NextResponse.json({ error: "Contract has no location to issue a UniFi voucher for" }, { status: 400 });
+    }
+    const { data: location } = await supabase
+      .from("locations")
+      .select("code, unifi_site_id, unifi_console_id, name")
+      .eq("id", contract.location_id)
+      .single();
+    if (!location) {
+      return NextResponse.json({ error: "Location not found" }, { status: 404 });
+    }
+
+    let siteConfig: ReturnType<typeof siteConfigFromLocation>;
+    try {
+      siteConfig = siteConfigFromLocation(location);
+    } catch (err) {
+      if (err instanceof UnifiConfigError) return NextResponse.json({ error: err.message }, { status: 400 });
+      throw err;
+    }
+
+    const { data: dbUser } = await supabase
+      .from("users")
+      .select("id")
+      .eq("auth_id", user.id)
+      .single();
+
+    // New voucher first: if UniFi refuses, the customer's current code is untouched.
+    let newUnifiId: string;
+    let newUnifiCode: string;
+    try {
+      const created = await createUnifiVoucher(
+        {
+          durationMinutes: calcVoucherMinutes(contract.end_date),
+          note: buildVoucherNote(location.code, `${contract.contract_number}_seat${oldIssuance.seat_number}`),
+          quota: 2,
+        },
+        siteConfig
+      );
+      newUnifiId = created.id;
+      newUnifiCode = created.code;
+    } catch (err) {
+      console.error("[unifi] voucher replacement failed:", err);
+      return NextResponse.json(
+        { error: `Failed to create the replacement UniFi voucher (${unifiFailureReason(err)}). The current voucher was not changed.` },
+        { status: 502 }
+      );
+    }
+
+    const now = new Date().toISOString();
+    const { error: deactivateError } = await supabase
+      .from("voucher_issuances")
+      .update({ is_active: false, revoked_at: now, revoke_reason })
+      .eq("id", issuanceId);
+
+    if (deactivateError) {
+      await revokeUnifiVoucher(newUnifiId, siteConfig);
+      return NextResponse.json({ error: deactivateError.message }, { status: 500 });
+    }
+
+    const { data: newIssuance, error: insertError } = await supabase
+      .from("voucher_issuances")
+      .insert({
+        contract_id: id,
+        voucher_id: null,
+        lead_id: oldIssuance.lead_id,
+        seat_number: oldIssuance.seat_number,
+        issued_by: dbUser?.id,
+        valid_from: contract.start_date,
+        valid_until: voucherValidUntil(contract.end_date),
+        seat_occupant_email: oldIssuance.seat_occupant_email,
+        member_id: oldIssuance.member_id,
+        is_active: true,
+        replaces_issuance_id: issuanceId,
+        unifi_voucher_id: newUnifiId,
+        unifi_code: newUnifiCode,
+        unifi_console_id: siteConfig.consoleId,
+        unifi_location_code: location.code ?? null,
+      })
+      .select("*")
+      .single();
+
+    if (insertError) {
+      // Put things back: kill the unused new voucher, reactivate the old row.
+      await revokeUnifiVoucher(newUnifiId, siteConfig);
+      await supabase
+        .from("voucher_issuances")
+        .update({ is_active: true, revoked_at: null, revoke_reason: null })
+        .eq("id", issuanceId);
+      return NextResponse.json({ error: insertError.message }, { status: 500 });
+    }
+
+    // Kill the old code on the controller (the console that issued it).
+    await revokeUnifiVoucher(
+      oldIssuance.unifi_voucher_id,
+      await siteConfigForStoredVoucher({ consoleId: oldIssuance.unifi_console_id, locationId: contract.location_id })
+    );
+
+    if (dbUser?.id) {
+      logAudit(supabase, {
+        entityType: "voucher",
+        entityId: id,
+        action: "update",
+        performedBy: dbUser.id,
+        changes: {
+          action: { old: null, new: "replacement" },
+          seat_number: { old: oldIssuance.seat_number, new: oldIssuance.seat_number },
+          revoke_reason: { old: null, new: revoke_reason },
+          old_issuance_id: { old: issuanceId, new: newIssuance.id },
+        },
+      });
+    }
+
+    return NextResponse.json({
+      data: newIssuance,
+      message: "Voucher replaced successfully",
+      old_voucher_code: oldIssuance.unifi_code ?? null,
+      new_voucher_code: newUnifiCode,
+    });
   }
 
   // Step 3: Find a replacement voucher from pool

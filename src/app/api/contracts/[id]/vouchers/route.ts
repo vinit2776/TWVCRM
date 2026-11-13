@@ -8,8 +8,10 @@ import {
   isUnifiLocation,
   calcVoucherMinutes,
   buildVoucherNote,
+  unifiFailureReason,
   UnifiConfigError,
 } from "@/lib/unifi";
+import { voucherValidUntil } from "@/lib/voucher-validity";
 import {
   siteConfigFromLocation as ruijieSiteConfigFromLocation,
   isRuijieLocation,
@@ -180,7 +182,7 @@ export async function POST(
       } catch (err) {
         console.error("[unifi] per-seat voucher creation failed:", err);
         return NextResponse.json(
-          { error: "Failed to create Unifi voucher. Check API credentials and try again." },
+          { error: `Failed to create Unifi voucher (${unifiFailureReason(err)}). If this keeps happening, check the location's UniFi console settings.` },
           { status: 502 }
         );
       }
@@ -194,7 +196,7 @@ export async function POST(
           seat_number: seatNumber,
           issued_by: dbUser?.id,
           valid_from: contract.start_date,
-          valid_until: contract.end_date,
+          valid_until: voucherValidUntil(contract.end_date),
           seat_occupant_email: body.seat_occupant_email || null,
           member_id: body.member_id || null,
           is_active: true,
@@ -277,7 +279,7 @@ export async function POST(
       } catch (err) {
         console.error(`[unifi] seat ${seatNumber} voucher creation failed:`, err);
         return NextResponse.json(
-          { error: `Failed to create Unifi voucher for seat ${seatNumber}. ${issuedVouchers.length} vouchers issued before failure.` },
+          { error: `Failed to create Unifi voucher for seat ${seatNumber} (${unifiFailureReason(err)}). ${issuedVouchers.length} vouchers issued before failure.` },
           { status: 502 }
         );
       }
@@ -291,7 +293,7 @@ export async function POST(
           seat_number: seatNumber,
           issued_by: dbUser?.id,
           valid_from: contract.start_date,
-          valid_until: contract.end_date,
+          valid_until: voucherValidUntil(contract.end_date),
           is_active: true,
           unifi_voucher_id: unifiId,
           unifi_code: unifiCode,

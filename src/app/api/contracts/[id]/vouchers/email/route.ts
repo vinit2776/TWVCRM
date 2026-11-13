@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { getUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
+import { buildPerSeatEmailHTML, greetingName, wifiNetworkName } from "@/lib/voucher-email";
 
 export async function POST(
   request: NextRequest,
@@ -41,6 +42,18 @@ export async function POST(
       { status: 404 }
     );
   }
+
+  // The email names the network the member joins (set per location on the Vouchers page)
+  // and how long renewals are offered (the contract's end date).
+  let locationSsid: string | null = null;
+  if (contract.location_id) {
+    const { data: loc } = await supabase.from("locations").select("wifi_ssid").eq("id", contract.location_id).maybeSingle();
+    locationSsid = loc?.wifi_ssid ?? null;
+  }
+  const wifiSsid = wifiNetworkName(locationSsid);
+  const fmtDate = (d?: string | null) =>
+    d ? new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" }) : "—";
+  const contractEnd = fmtDate(contract.end_date);
 
   // ===== Mode 1: Per-seat individual email =====
   if (body.issuance_id) {
@@ -114,20 +127,35 @@ export async function POST(
       ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
       : "—";
 
+    const subject = `Your WiFi Access Code — The WorkVilla`;
+    let memberName: string | null = null;
+    if (issuance.member_id) {
+      const { data: member } = await supabase.from("contract_members").select("name").eq("id", issuance.member_id).maybeSingle();
+      memberName = member?.name ?? null;
+    }
+    const html = buildPerSeatEmailHTML({
+      recipientName: greetingName(memberName, contract.lead?.first_name),
+      voucherCode: displayCode,
+      validFrom,
+      validUntil,
+      contractEnd,
+      wifiSsid,
+      seatNumber: issuance.seat_number,
+      contractNumber: contract.contract_number,
+      senderName,
+    });
+
+    // Preview: exactly what Send would email, with nothing sent or recorded.
+    if (body.preview === true) {
+      return NextResponse.json({ preview: { to: recipientEmail, subject, html } });
+    }
+
     try {
       const sendResult = await resend.emails.send({
         from: EMAIL_FROM,
         to: [recipientEmail],
-        subject: `Your WiFi Access Code — The WorkVilla`,
-        html: buildPerSeatEmailHTML({
-          recipientName: issuance.seat_occupant_email ? recipientEmail.split("@")[0] : (contract.lead?.first_name || "User"),
-          voucherCode: displayCode,
-          validFrom,
-          validUntil,
-          seatNumber: issuance.seat_number,
-          contractNumber: contract.contract_number,
-          senderName,
-        }),
+        subject,
+        html,
       });
 
       // Check for Resend API-level errors (e.g. domain not verified)
@@ -191,6 +219,12 @@ export async function POST(
     const issuancesWithEmail = issuances.filter((i) => i.seat_occupant_email);
 
     // Send all per-seat emails in parallel instead of sequentially
+    const memberIds = issuancesWithEmail.map((i) => i.member_id).filter((m): m is string => !!m);
+    const memberNames = new Map<string, string>();
+    if (memberIds.length > 0) {
+      const { data: members } = await supabase.from("contract_members").select("id, name").in("id", memberIds);
+      for (const m of members ?? []) memberNames.set(m.id as string, m.name as string);
+    }
     const sendResults = await Promise.allSettled(
       issuancesWithEmail.map(async (issuance) => {
         const email = issuance.seat_occupant_email!;
@@ -207,10 +241,12 @@ export async function POST(
           to: [email],
           subject: `Your WiFi Access Code — The WorkVilla`,
           html: buildPerSeatEmailHTML({
-            recipientName: email.split("@")[0],
+            recipientName: greetingName(issuance.member_id ? memberNames.get(issuance.member_id) : null, contract.lead?.first_name),
             voucherCode,
             validFrom,
             validUntil,
+            contractEnd,
+            wifiSsid,
             seatNumber: issuance.seat_number,
             contractNumber: contract.contract_number,
             senderName,
@@ -349,67 +385,3 @@ export async function POST(
   }
 }
 
-// ===== Per-seat email HTML builder with WiFi instructions =====
-function buildPerSeatEmailHTML(params: {
-  recipientName: string;
-  voucherCode: string;
-  validFrom: string;
-  validUntil: string;
-  seatNumber: number;
-  contractNumber: string;
-  senderName: string;
-}) {
-  const { recipientName, voucherCode, validFrom, validUntil, seatNumber, contractNumber, senderName } = params;
-
-  return `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
-      <div style="background-color: #015E65; padding: 24px 32px;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold;">The WorkVilla</h1>
-        <p style="color: #00AE6C; margin: 4px 0 0; font-size: 12px;">Your WiFi Access Code</p>
-      </div>
-      <div style="padding: 32px;">
-        <p style="color: #1a1b1e; font-size: 15px;">Hello ${recipientName},</p>
-        <p style="color: #333; font-size: 14px;">Here is your personal internet access code for The WorkVilla (Seat #${seatNumber}, Contract ${contractNumber}).</p>
-
-        <!-- Voucher Code Box -->
-        <div style="text-align: center; margin: 24px 0; padding: 20px; background: #f0faf5; border-radius: 8px; border: 2px solid #015E65;">
-          <p style="color: #015E65; font-size: 13px; margin: 0 0 8px;">Your Voucher Code</p>
-          <p style="color: #015E65; font-size: 32px; font-weight: bold; margin: 0; letter-spacing: 4px; font-family: monospace;">${voucherCode}</p>
-        </div>
-
-        <!-- Validity -->
-        <table style="border-collapse: collapse; margin: 16px 0; width: 100%;">
-          <tr>
-            <td style="padding: 8px 16px; color: #666; font-size: 13px; border-bottom: 1px solid #e5e7eb;">Valid From</td>
-            <td style="padding: 8px 16px; color: #333; font-size: 13px; font-weight: bold; border-bottom: 1px solid #e5e7eb; text-align: right;">${validFrom}</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 16px; color: #666; font-size: 13px;">Valid Until</td>
-            <td style="padding: 8px 16px; color: #333; font-size: 13px; font-weight: bold; text-align: right;">${validUntil}</td>
-          </tr>
-        </table>
-
-        <!-- WiFi Instructions -->
-        <div style="margin-top: 24px; padding: 16px; background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb;">
-          <h3 style="color: #015E65; margin: 0 0 12px; font-size: 14px;">How to Connect</h3>
-          <ol style="color: #555; font-size: 13px; margin: 0; padding-left: 20px; line-height: 1.8;">
-            <li>Connect to the WiFi network: <strong style="color: #015E65;">Workvilla Clients</strong></li>
-            <li>A login page will appear in your browser</li>
-            <li>Enter the voucher code shown above</li>
-            <li>Click <strong>Connect</strong> — you&apos;re online!</li>
-          </ol>
-          <p style="color: #888; font-size: 12px; margin: 12px 0 0;">This code is tied to your device. If you change your device, please contact The WorkVilla front desk for a replacement code.</p>
-        </div>
-
-        <p style="color: #333; font-size: 14px; margin-top: 24px;">If you have any questions, please reach out to the front desk or email us.</p>
-        <p style="color: #333; font-size: 14px;">Best regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
-      </div>
-      <div style="background-color: #015E65; padding: 16px 32px; text-align: center;">
-        <p style="color: #ffffff; margin: 0; font-size: 11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
-        <p style="color: rgba(255,255,255,0.7); margin: 4px 0 0; font-size: 10px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | +91 97910 97900</p>
-        <p style="color: rgba(255,255,255,0.7); margin: 4px 0 0; font-size: 10px;">GST: 33AAACU4245J1ZF</p>
-        <p style="color: #00AE6C; margin: 4px 0 0; font-size: 10px;">www.theworkvilla.com</p>
-      </div>
-    </div>
-  `;
-}

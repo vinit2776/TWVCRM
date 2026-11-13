@@ -61,15 +61,21 @@ export async function POST(
   // Confirm the MR exists, and block uploads once approved/closed.
   const { data: pr, error: prErr } = await supabase
     .from("purchase_requests")
-    .select("id, status")
+    .select("id, status, department, expenditure_type")
     .eq("id", id)
     .single();
   if (prErr || !pr) return NextResponse.json({ error: "Request not found" }, { status: 404 });
-  if (!["draft", "submitted", "rejected"].includes(pr.status)) {
+  // Other requests only take a quotation before approval. An AMC can have its vendor proposal attached at any
+  // time, for reference and to compare with what was set up, so a contract entered by hand is never stuck without one.
+  const isAmc = pr.department === "amc" || pr.expenditure_type === "amc";
+  if (!isAmc && !["draft", "submitted", "rejected"].includes(pr.status)) {
     return NextResponse.json(
       { error: "Quotations can only be added before approval" },
       { status: 422 }
     );
+  }
+  if (pr.status === "cancelled") {
+    return NextResponse.json({ error: "This request was cancelled" }, { status: 422 });
   }
 
   // File is already uploaded directly to storage by the client via a signed

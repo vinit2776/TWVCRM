@@ -22,8 +22,11 @@ export async function PATCH(
 
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  if (!["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin", "coordinator"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
+  // A reported manual payment is only marked paid once accounts (or an admin)
+  // have seen it in the bank. Online payments via the link never come here:
+  // the Razorpay webhook marks those paid on its own.
+  if (!["admin", "accounts"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admin or accounts can mark a reported payment as paid" }, { status: 403 });
   }
 
   const body = await request.json();

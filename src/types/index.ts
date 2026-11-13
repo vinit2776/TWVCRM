@@ -58,6 +58,7 @@ export interface Location {
   unifi_console_id?: string | null;
   /** 'repository' (default) = issue from pre-uploaded pool; 'unifi_api' | 'ruijie_api' = generate on-demand. */
   wifi_voucher_mode?: string | null;
+  wifi_ssid?: string | null;
   /** Ruijie Cloud network group ID (site identifier). Set only for ruijie_api locations. */
   ruijie_group_id?: number | null;
   /** Icon keys shown in the proposal PDF amenities strip. Defaults to ["wifi","coffee","printer","meeting"]. */
@@ -1504,6 +1505,10 @@ export interface Booking {
   // Razorpay Payment Links
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;
+  // Optional proforma invoice sent with the payment link
+  pi_number?: string | null;
+  pi_sent_at?: string | null;
+  pi_sent_to?: string | null;
   // Prepaid package redemption
   prepaid_purchase_id?: string;
   prepaid_credits_used?: number;
@@ -2528,6 +2533,8 @@ export interface PoServiceReport {
   cycle_number: number;
   period_from: string;
   period_to: string;
+  /** The day the visit happened; older reports only have the cycle's period. */
+  service_date?: string | null;
   report_file_url?: string | null;
   notes?: string | null;
   recorded_by?: string | null;
@@ -2724,6 +2731,10 @@ export interface AssetDocument {
   mime_type?: string | null;
   notes?: string | null;
   uploaded_by?: string | null;
+  /** 'invoice' marks the asset's purchase invoice. */
+  doc_kind?: "invoice" | null;
+  /** Rows created from one upload share this id (one invoice covering several assets). */
+  invoice_group_id?: string | null;
   created_at: string;
   updated_at: string;
   uploader?: { id: string; full_name: string } | null;
@@ -3588,6 +3599,8 @@ export interface FacilityAsset {
   open_issue_count?: number;
   total_issue_count?: number;
   last_issue_at?: string | null;
+  /** True when no purchase invoice is attached; undefined when it could not be checked. */
+  invoice_missing?: boolean;
 }
 
 // Non-secret fields only — the decrypted password is never part of this

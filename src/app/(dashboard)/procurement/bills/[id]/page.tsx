@@ -1,5 +1,6 @@
 "use client";
 
+import { BillAmcPanel, type BillAmcPo } from "@/components/procurement/bill-amc-panel";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { useState, useEffect, useCallback } from "react";
@@ -88,9 +89,25 @@ type ChainData = {
     billing_cycle: ServicePoBillingCycle | null;
     cycle_count: number | null;
     unit_cost_per_cycle: number | null;
+    opening_cycles?: number | null;
+    amc_coverage_type?: string | null;
+    amc_start_date?: string | null;
+    amc_end_date?: string | null;
+    amc_visits_covered?: number | null;
+    amc_status?: string | null;
+    amc_terminated_at?: string | null;
+    amc_termination_reason?: string | null;
+    amc_contact_name?: string | null;
+    amc_helpline_number?: string | null;
+    amc_contact_email?: string | null;
     orderer: { id: string; full_name: string } | null;
-    purchase_order_items?: Array<{ id: string; item_name: string; quantity_ordered: number; unit: string; unit_price: number | null }>;
+    purchase_order_items?: Array<{
+      id: string; item_name: string; quantity_ordered: number; unit: string; unit_price: number | null;
+      linked_asset?: { id: string; name: string; asset_code: string | null; serial_number: string | null; make: string | null; model: string | null; location: { name: string } | null } | null;
+    }>;
   } | null;
+  poBills?: Array<{ id: string; bill_number: string; total_amount: number; approval_status: string; payment_status: string; service_report_id: string | null }>;
+  visitsLogged?: number;
   mr: {
     id: string; pr_number: string; department: string;
     total_estimated_amount: number | null; created_at: string;
@@ -1188,6 +1205,17 @@ export default function VendorBillDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* AMC details, so an AMC invoice is never approved blind */}
+      {chain?.po && chain.po.po_type === "service" && chain.po.amc_start_date && (
+        <BillAmcPanel
+          po={chain.po as BillAmcPo}
+          thisBill={{ id: bill.id, total_amount: Number(bill.total_amount), service_report_id: (bill as { service_report_id?: string | null }).service_report_id ?? null }}
+          bills={chain.poBills ?? []}
+          reports={chain.serviceReports}
+          visitsLogged={chain.visitsLogged ?? 0}
+        />
+      )}
 
       {/* Document Chain */}
       {chain && (

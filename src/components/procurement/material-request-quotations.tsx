@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { FileText, Paperclip, Plus, Trash2, Upload, ExternalLink } from "lucide-react";
+import { FileText, Paperclip, Plus, Trash2, Upload, ExternalLink, ScanSearch, Loader2, AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,14 +19,19 @@ import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { MaterialRequestQuotation } from "@/types";
+import { requestProposalExtraction } from "@/lib/procurement/proposal-extract-client";
+import { compareProposalToRequest, type CompareRequest, type CompareRow } from "@/lib/procurement/proposal-compare";
+import { EXTRACTION_MEDIA_TYPES } from "@/lib/procurement/proposal-extraction";
 
 type Props = {
   prId: string;
   prStatus: string;
+  /** The AMC as set up, when this request is an AMC: lets a vendor proposal be attached at any stage and compared with it. */
+  amc?: CompareRequest | null;
   onChange?: () => void;
 };
 
-export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
+export function MaterialRequestQuotations({ prId, prStatus, amc, onChange }: Props) {
   const [quotations, setQuotations] = useState<MaterialRequestQuotation[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -37,7 +42,12 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
 
+  const [comparingId, setComparingId] = useState<string | null>(null);
+  const [comparison, setComparison] = useState<{ id: string; name: string; rows: CompareRow[]; lowConfidence: boolean } | { id: string; name: string; error: string } | null>(null);
+
   const isEditable = ["draft", "submitted", "rejected"].includes(prStatus);
+  // An AMC takes its vendor proposal at any stage, so a contract set up by hand can have it attached afterwards.
+  const canAdd = isEditable || (!!amc && prStatus !== "cancelled");
   const isMissingForApproval = prStatus === "submitted" && quotations.length === 0;
 
   const fetchQuotations = useCallback(async () => {
@@ -56,6 +66,29 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
   useEffect(() => {
     fetchQuotations();
   }, [fetchQuotations]);
+
+  const readAndCompare = async (q: MaterialRequestQuotation) => {
+    if (!amc || !q.signed_url) return;
+    setComparingId(q.id);
+    setComparison(null);
+    try {
+      let x = null;
+      try {
+        const res = await fetch(q.signed_url);
+        const blob = await res.blob();
+        x = await requestProposalExtraction(new File([blob], q.file_name, { type: q.file_mime_type }));
+      } catch {
+        x = null;
+      }
+      if (!x) {
+        setComparison({ id: q.id, name: q.file_name, error: "Couldn't read that file. Open it and compare the terms by eye with the AMC below." });
+        return;
+      }
+      setComparison({ id: q.id, name: q.file_name, rows: compareProposalToRequest(x, amc), lowConfidence: x.confidence === "low" });
+    } finally {
+      setComparingId(null);
+    }
+  };
 
   const resetForm = () => {
     setVendorName("");
@@ -174,7 +207,7 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
             )}
           </CardTitle>
         </div>
-        {isEditable && (
+        {canAdd && (
           <Button size="sm" variant="outline" onClick={() => setUploadOpen(true)}>
             <Plus className="h-4 w-4 mr-1" /> Add Quotation
           </Button>
@@ -192,7 +225,7 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
         ) : quotations.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No quotations attached yet.
-            {isEditable && " Use Add Quotation to upload a vendor estimate or bill."}
+            {canAdd && (amc ? " Use Add Quotation to attach the vendor's proposal. You can read it and compare it with this AMC." : " Use Add Quotation to upload a vendor estimate or bill.")}
           </p>
         ) : (
           <div className="rounded-md border overflow-x-auto">
@@ -247,6 +280,19 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
                           {q.file_name}
                         </span>
                       )}
+                      {amc && q.signed_url && (EXTRACTION_MEDIA_TYPES as readonly string[]).includes(q.file_mime_type) && (
+                        <div className="mt-1">
+                          <button
+                            type="button"
+                            onClick={() => readAndCompare(q)}
+                            disabled={comparingId !== null}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline disabled:opacity-50"
+                          >
+                            {comparingId === q.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ScanSearch className="h-3 w-3" />}
+                            {comparingId === q.id ? "Reading… about 15 seconds" : "Read & compare with this AMC"}
+                          </button>
+                        </div>
+                      )}
                     </td>
                     {isEditable && (
                       <td className="px-3 py-2 align-top text-right">
@@ -265,6 +311,38 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {comparison && (
+          <div className="rounded-md border p-3 space-y-2 text-sm">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-medium">Proposal compared with this AMC <span className="text-xs font-normal text-muted-foreground">· {comparison.name}</span></p>
+              <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setComparison(null)}>Close</button>
+            </div>
+            {"error" in comparison ? (
+              <p className="text-amber-800">{comparison.error}</p>
+            ) : (
+              <>
+                {comparison.lowConfidence && <p className="text-xs text-amber-800">The file was hard to read. Double-check every figure.</p>}
+                <ul className="divide-y rounded border">
+                  {comparison.rows.map((row) => (
+                    <li key={row.key} className="grid grid-cols-[auto_1fr] gap-x-2 px-3 py-2">
+                      {row.status === "match" ? <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5" />
+                        : row.status === "differs" ? <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5" />
+                        : <Info className="h-4 w-4 text-muted-foreground mt-0.5" />}
+                      <div>
+                        <p className="font-medium">{row.label}{row.status === "match" && <span className="ml-1 text-xs font-normal text-green-700">matches</span>}</p>
+                        <p className="text-xs text-muted-foreground">Proposal: {row.proposal} · This AMC: {row.request}</p>
+                        {row.hint && <p className="text-xs text-amber-800 mt-0.5">{row.hint}</p>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted-foreground">
+                  This only compares. Nothing is blocked or changed. Before approval you can fix a difference with Edit Request. After approval an admin can use Correct on the request or the PO.
+                </p>
+              </>
+            )}
           </div>
         )}
       </CardContent>

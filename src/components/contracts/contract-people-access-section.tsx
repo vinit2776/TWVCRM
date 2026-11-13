@@ -147,6 +147,29 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
   const [fixing, setFixing] = useState<Person | null>(null);
   const [doorConfirm, setDoorConfirm] = useState<Person | null>(null);
   const [emailPrompt, setEmailPrompt] = useState<{ issuanceId: string; name: string; email: string } | null>(null);
+  // The exact email Send would deliver, fetched from the server (which builds it) without sending anything.
+  const [emailPreview, setEmailPreview] = useState<{ loading: boolean; error?: string; to?: string; subject?: string; html?: string }>({ loading: false });
+  const [emailSendError, setEmailSendError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!emailPrompt) { setEmailPreview({ loading: false }); setEmailSendError(null); return; }
+    let cancelled = false;
+    setEmailPreview({ loading: true });
+    setEmailSendError(null);
+    fetch(`/api/contracts/${contractId}/vouchers/email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issuance_id: emailPrompt.issuanceId, email: emailPrompt.email, preview: true }),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || !json.preview) setEmailPreview({ loading: false, error: json.error ?? "Could not load the email preview" });
+        else setEmailPreview({ loading: false, ...json.preview });
+      })
+      .catch(() => { if (!cancelled) setEmailPreview({ loading: false, error: "Could not load the email preview" }); });
+    return () => { cancelled = true; };
+  }, [emailPrompt, contractId]);
   const [fixForm, setFixForm] = useState({ email: "", phone: "" });
   const [wizardOpen, setWizardOpen] = useState(false);
 
@@ -263,6 +286,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
 
   async function sendVoucherEmail() {
     if (!emailPrompt) return;
+    setEmailSendError(null);
     setBusyFor("voucher_email", true);
     try {
       const res = await fetch(`/api/contracts/${contractId}/vouchers/email`, {
@@ -271,7 +295,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
         body: JSON.stringify({ issuance_id: emailPrompt.issuanceId, email: emailPrompt.email }),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) { toast.error(json.error ?? "Could not send the email"); return; }
+      if (!res.ok) { setEmailSendError(json.error ?? "Could not send the email"); return; }
       toast.success(`Voucher emailed to ${emailPrompt.email}`);
       setEmailPrompt(null);
       await refresh();
@@ -561,7 +585,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
       </CardContent>
 
       <Dialog open={!!emailPrompt} onOpenChange={(o) => !o && setEmailPrompt(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Email the voucher?</DialogTitle>
             <DialogDescription>
@@ -569,6 +593,30 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
               If you skip this, nothing is sent and the voucher can be emailed later from the Vouchers section.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="space-y-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">This is exactly what the customer will receive</p>
+            {emailPreview.loading ? (
+              <div className="flex h-40 items-center justify-center rounded-md border text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading the email…
+              </div>
+            ) : emailPreview.error ? (
+              <p role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                {emailPreview.error}. You can still send it; the email is the standard WiFi access code message.
+              </p>
+            ) : (
+              <div className="overflow-hidden rounded-md border">
+                <div className="space-y-0.5 border-b bg-muted/40 px-3 py-2 text-xs">
+                  <div><span className="text-muted-foreground">To:</span> {emailPreview.to}</div>
+                  <div><span className="text-muted-foreground">Subject:</span> {emailPreview.subject}</div>
+                </div>
+                {/* sandbox="" — no scripts, no navigation: the HTML is only displayed. */}
+                <iframe title="Email preview" sandbox="" srcDoc={emailPreview.html} className="h-80 w-full bg-white" />
+              </div>
+            )}
+          </div>
+
+          {emailSendError && <p role="alert" className="text-sm text-red-600">{emailSendError}</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => setEmailPrompt(null)}>Not now</Button>
             <Button onClick={sendVoucherEmail} disabled={busy["voucher_email"]}>
