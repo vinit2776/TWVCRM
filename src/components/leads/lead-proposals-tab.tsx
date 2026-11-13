@@ -12,6 +12,7 @@ import { StatementPaymentPanel } from "@/components/billing/payment-collected-pa
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ProposalForm } from "@/components/proposals/proposal-form";
+import { VoProposalForm } from "@/components/proposals/vo-proposal-form";
 import { InvoiceForm } from "@/components/invoices/invoice-form";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import {
@@ -118,6 +119,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   const [invoices, setInvoices] = useState<(ProformaInvoice & { lead?: Lead })[]>([]);
   const [loading, setLoading] = useState(true);
   const [proposalFormOpen, setProposalFormOpen] = useState(false);
+  const [voFormOpen, setVoFormOpen] = useState(false);
   const [editingProposal, setEditingProposal] = useState<(Proposal & { lead?: Lead }) | null>(null);
   const [invoiceFormOpen, setInvoiceFormOpen] = useState(false);
   const [viewInvoice, setViewInvoice] = useState<(ProformaInvoice & { lead?: Lead }) | null>(null);
@@ -341,10 +343,18 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Proposals</CardTitle>
-          <Button size="sm" onClick={() => setProposalFormOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Proposal
-          </Button>
+          <div className="flex items-center gap-2">
+            {(userRole === "admin" || userRole === "manager" || userRole === "sales_rep") && (
+              <Button size="sm" variant="outline" onClick={() => setVoFormOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                New VO Proposal
+              </Button>
+            )}
+            <Button size="sm" onClick={() => setProposalFormOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Proposal
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {proposals.length === 0 ? (
@@ -682,6 +692,13 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
         onSuccess={handleSuccess}
         proposalId={editingProposal?.id}
         initialProposal={editingProposal ?? undefined}
+      />
+      <VoProposalForm
+        leadId={leadId}
+        leadLocationId={leadLocationId}
+        open={voFormOpen}
+        onOpenChange={setVoFormOpen}
+        onSuccess={handleSuccess}
       />
       <InvoiceForm
         leadId={leadId}
