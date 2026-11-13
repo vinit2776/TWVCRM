@@ -79,6 +79,10 @@
       "schedule": "0 4 * * *"
     },
     {
+      "path": "/api/cron/vo-proposal-expiry",
+      "schedule": "15 4 * * *"
+    },
+    {
       "path": "/api/cron/auto-renew",
       "schedule": "30 0 * * *"
     },
