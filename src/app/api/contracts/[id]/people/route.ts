@@ -103,6 +103,22 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     ? await admin.from("users").select("id, full_name").in("id", byIds)
     : { data: [] as { id: string; full_name: string }[] };
   const userName = new Map((byUsers ?? []).map((u: { id: string; full_name: string }) => [u.id, u.full_name]));
+  // Before door PINs were emailed they went out as an SMS. That send is logged in
+  // whatsapp_messages with the member id as its entity, so older PINs still show a history.
+  const { data: smsRows } = memberIds.length
+    ? await admin
+        .from("whatsapp_messages")
+        .select("entity_id, created_at, status")
+        .eq("template_name", "dlt_otp")
+        .in("entity_id", memberIds)
+        .order("created_at", { ascending: false })
+    : { data: [] as { entity_id: string; created_at: string; status: string }[] };
+  const smsByMember = new Map<string, { at: string; status: string; attempts: number }>();
+  for (const r of (smsRows ?? []) as { entity_id: string; created_at: string; status: string }[]) {
+    const prev = smsByMember.get(r.entity_id);
+    if (prev) prev.attempts += 1;
+    else smsByMember.set(r.entity_id, { at: r.created_at, status: r.status, attempts: 1 });
+  }
   const doorValidUntil = new Map<string, string>();
   const doorHasFingerprintReader = new Set<string>();
   const doorCardIssued = new Set<string>();
@@ -153,6 +169,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       // Set up only on card-only readers: no PIN applies, staff issue an access card.
       doorCardOnly: !!c.source_member_id && liveStatuses.length > 0 && !doorHasFingerprintReader.has(c.source_member_id),
       doorCardIssued: !!c.source_member_id && doorCardIssued.has(c.source_member_id),
+      doorPinSms: c.source_member_id ? (smsByMember.get(c.source_member_id) ?? null) : null,
       doorPin: (() => {
         const v = c.source_member_id ? pinByMember.get(c.source_member_id) : undefined;
         if (!v) return null;

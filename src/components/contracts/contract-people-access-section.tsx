@@ -40,6 +40,8 @@ interface Person {
   doorCardOnly: boolean;
   doorCardIssued: boolean;
   /** Latest door PIN email for this person (from the audit trail); null if none recorded. */
+  /** Older PINs were sent by SMS; the latest of those, from the message log. */
+  doorPinSms: { at: string; status: string; attempts: number } | null;
   doorPin: { at: string; by: string; sent: boolean; reason: string | null; email: string | null; purpose: string; attempts: number } | null;
   accessEndedAt: string | null;
   doorEnrolled: boolean;
@@ -142,8 +144,16 @@ function DoorCell({ p }: { p: Person }) {
             {" "}{p.doorPin.reason === "no_email" ? "Add their email, then use Email PIN again." : "Use Email PIN again."}
           </div>
         )
-      ) : (
-        <div className="text-xs text-amber-700 mt-0.5">No PIN email recorded for this person</div>
+      ) : !p.doorPinSms ? (
+        <div className="text-xs text-amber-700 mt-0.5">No PIN message recorded for this person</div>
+      ) : null}
+      {p.doorPinSms && (
+        <div className={`text-xs mt-0.5 ${p.doorPinSms.status === "failed" ? "text-red-600" : "text-muted-foreground"}`}>
+          {p.doorPinSms.status === "failed"
+            ? `${p.doorPin ? "An earlier" : "The"} PIN SMS on ${formatDateTime(p.doorPinSms.at)} failed to send.${p.doorPin ? "" : " Use Email PIN again."}`
+            : `${p.doorPin ? "Earlier PIN" : "PIN"} sent by SMS on ${formatDateTime(p.doorPinSms.at)}${p.doorPinSms.status === "sent" ? "" : ", delivered"}, sender not recorded`}
+          {p.doorPinSms.attempts > 1 ? ` (${p.doorPinSms.attempts} sends in total)` : ""}
+        </div>
       )}
       {p.doorValidUntil && <div className="text-xs text-muted-foreground mt-0.5">Door access valid until {formatDate(p.doorValidUntil)}</div>}
     </div>
