@@ -4,7 +4,7 @@ import { buildProformaPdf } from "@/lib/proforma-pdf";
 import { fetchInvoiceAttachment, type ReminderAttachment } from "@/lib/reminder-invoice-attachment";
 import { formatCurrency, formatDate } from "@/lib/pdf-utils";
 
-export type ReceivableAttachmentKind = "deposit" | "topup" | "adhoc_invoice";
+export type ReceivableAttachmentKind = "deposit" | "topup" | "adhoc_invoice" | "booking_pi";
 
 export interface ReceivableAttachmentInput {
   kind: ReceivableAttachmentKind;
@@ -48,6 +48,8 @@ export async function fetchReceivableAttachment(
   try {
     if (input.kind === "deposit") return await depositAttachment(admin, input);
     if (input.kind === "topup") return await topupAttachment(input);
+    // The PI went out with the original email; the reminder carries the amount and the pay link.
+    if (input.kind === "booking_pi") return null;
     return await adhocAttachment(admin, input);
   } catch (err) {
     console.error(`[receivable-reminder] ${input.kind} attachment failed:`, err instanceof Error ? err.message : err);

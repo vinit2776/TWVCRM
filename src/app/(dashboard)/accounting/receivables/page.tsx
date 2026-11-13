@@ -672,15 +672,24 @@ export default function AccountsReceivablePage() {
   const sendReminder = async (row: ReceivableRow) => {
     setRemindingId(row.id);
     try {
-      const res = await fetch(`/api/billing-statements/${row.id}/send-reminder`, {
+      // A booking's PI is reminded through the receivable route, which knows how to
+      // find its customer; the statement route would refuse it.
+      const url = row.booking
+        ? `/api/accounting/receivables/booking_pi/${row.id}/reminder`
+        : `/api/billing-statements/${row.id}/send-reminder`;
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
-      const channels = [json.emailSent && "email", json.whatsAppSent && "WhatsApp"].filter(Boolean).join(" + ");
-      toast.success(`${json.toneLabel} sent via ${channels || "no channel"}`);
+      // The two routes answer in different shapes.
+      const sent = json.data ?? json;
+      const emailSent = sent.email_sent ?? sent.emailSent;
+      const whatsAppSent = sent.whatsapp_sent ?? sent.whatsAppSent;
+      const channels = [emailSent && "email", whatsAppSent && "WhatsApp"].filter(Boolean).join(" + ");
+      toast.success(`${sent.tone ?? sent.toneLabel} sent via ${channels || "no channel"}`);
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to send reminder");
