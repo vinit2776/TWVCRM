@@ -39,6 +39,41 @@ function cleanStops(raw, maxStops = DEFAULT_MAX_STOPS) {
   return { stops };
 }
 
+// PLACES_VIEWBOX ("lon1,lat1,lon2,lat2", LocationIQ's order) as a box to test points
+// against, or null when the setting is empty or unusable.
+function parseViewbox(raw) {
+  const parts = String(raw == null ? '' : raw).split(',').map(Number);
+  if (parts.length !== 4 || !parts.every(Number.isFinite)) return null;
+  const [lon1, lat1, lon2, lat2] = parts;
+  return {
+    minLon: Math.min(lon1, lon2), maxLon: Math.max(lon1, lon2),
+    minLat: Math.min(lat1, lat2), maxLat: Math.max(lat1, lat2),
+  };
+}
+
+function isInsideViewbox(lat, lon, box) {
+  if (!box) return false;
+  return Number(lat) >= box.minLat && Number(lat) <= box.maxLat
+    && Number(lon) >= box.minLon && Number(lon) <= box.maxLon;
+}
+
+// Whether a stop's address has to be geocoded on the server rather than using the
+// coordinates the browser sent with it.
+//
+// The amount a trip pays is distance x rate, and the distance comes from these points, so
+// a coordinate is a money input. Autocomplete and geocoding are both bounded to
+// PLACES_VIEWBOX (`bounded=1`), which makes "inside the box" the rule the server already
+// enforces on every address an employee can pick or type. A coordinate posted straight to
+// the API bypassed that: addresses reading as local with coordinates a thousand km away
+// produced a real road route and a real amount. So a supplied coordinate is used only
+// where it lands inside that same box, and anything else is re-derived from the address,
+// which the box then applies to in turn. With no box configured there is nothing to check
+// against, so nothing is taken on trust and every stop is geocoded.
+function stopNeedsGeocode(stop, box) {
+  if (!stop || stop.lat === undefined || stop.lon === undefined) return true;
+  return !isInsideViewbox(stop.lat, stop.lon, box);
+}
+
 // The points actually driven: the stops in order, plus the first stop again for a round trip.
 function routePoints(stops, roundTrip) {
   return roundTrip && stops.length >= 2 ? [...stops, stops[0]] : [...stops];
@@ -152,6 +187,7 @@ function googleMapsUrl(stops, roundTrip) {
 module.exports = {
   MAX_STOPS_LIMIT, DEFAULT_MAX_STOPS, MAX_PHOTOS, MAX_PHOTO_BYTES, BACKDATE_DAYS,
   cleanStops, routePoints, directionsCoords, parseRouteLegs, parseRate, validateRate,
+  parseViewbox, isInsideViewbox, stopNeedsGeocode,
   parseMaxStops, validateMaxStops, reimbursement, formatInr, cleanTripDate, cleanPhotos,
   tripStops, googleMapsUrl,
 };

@@ -23,6 +23,7 @@ const { checkCertificate } = require('./certificate-check');
 const {
   MAX_STOPS_LIMIT: FIELD_TRIP_MAX_STOPS_LIMIT, DEFAULT_MAX_STOPS: FIELD_TRIP_DEFAULT_MAX_STOPS, MAX_PHOTOS: FIELD_TRIP_MAX_PHOTOS, BACKDATE_DAYS: FIELD_TRIP_BACKDATE_DAYS,
   cleanStops, routePoints, directionsCoords, parseRouteLegs, parseRate, validateRate, parseMaxStops, validateMaxStops,
+  parseViewbox, stopNeedsGeocode,
   reimbursement, formatInr, cleanTripDate, cleanPhotos, tripStops, googleMapsUrl,
 } = require('./field-trip');
 const {
@@ -6007,12 +6008,18 @@ function tripError(message, status) { const e = new Error(message); e.status = s
 // A picked suggestion supplies its coordinates; a typed address is geocoded here and the
 // match LocationIQ chose comes back as that stop's address, so the employee sees it
 // before submitting. Throws Error (with .status) on bad input / no match / no route.
+//
+// Coordinates arrive from the browser, and the distance they produce is what the trip
+// pays, so they are only used where they land inside the area addresses are bounded to
+// (stopNeedsGeocode); anything else is re-derived from the stop's own address. The
+// address an approver reads therefore always matches the points that were measured.
 async function resolveTripRoute(body) {
   const cleaned = cleanStops(body && body.stops, CONFIG.FIELD_TRIP_MAX_STOPS);
   if (cleaned.error) throw tripError(cleaned.error, 400);
+  const box = parseViewbox(CONFIG.PLACES_VIEWBOX);
   const stops = [];
   for (const s of cleaned.stops) {
-    if (s.lat !== undefined) { stops.push(s); continue; }
+    if (!stopNeedsGeocode(s, box)) { stops.push(s); continue; }
     const found = await forwardGeocode(s.address);
     if (!found) throw tripError(`Could not find "${s.address}". Pick a suggestion from the list.`, 422);
     stops.push({ address: found.display || s.address, lat: Number(found.lat), lon: Number(found.lon), geocoded: true });
@@ -8116,6 +8123,11 @@ module.exports.sendCsv = sendCsv;
 module.exports.SETTING_DEFS_BY_KEY = SETTING_DEFS_BY_KEY;
 module.exports.apiReadScope = apiReadScope;
 module.exports.API_EMPLOYEE_FIELDS = API_EMPLOYEE_FIELDS;
+// resolveTripRoute talks to LocationIQ and nothing else, so a test can stand in for
+// fetch and check which coordinates a trip is actually measured from. CONFIG goes with
+// it because the rule depends on PLACES_VIEWBOX.
+module.exports.resolveTripRoute = resolveTripRoute;
+module.exports.CONFIG = CONFIG;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped
