@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { loadAdvanceUsage } from "@/lib/procurement/po-advance";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 export async function GET(
   _req: NextRequest,
@@ -210,8 +211,14 @@ export async function GET(
     .in("entity_id", entityIds)
     .order("created_at", { ascending: true });
 
+  // What is left of the PO's advance, so the bill page can offer to apply it.
+  const advanceUsage = bill.po_id && po && (po as { advance_status?: string }).advance_status === "processed"
+    ? await loadAdvanceUsage(createAdminClient(), bill.po_id as string)
+    : null;
+
   return NextResponse.json({
     data: {
+      advanceUsage,
       bill: { ...bill, invoice_signed_url: invoiceSignedUrl },
       vendor,
       po,
