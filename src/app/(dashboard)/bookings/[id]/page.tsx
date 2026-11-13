@@ -844,6 +844,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const isTerminalStatus = ["cancelled", "checked_out", "no_show", "closed"].includes(booking.status);
   const isPaid = booking.payment_status === "paid";
   const canEditPricing = !isTerminalStatus && !isPaid && !hasVerifiedPayment;
+  // A walk-in or guest booking takes an extra found after checkout as a line on the
+  // booking itself (it reopens the balance); contract holders still use the monthly invoice.
+  const extrasAfterCheckout = booking.status === "checked_out"
+    && booking.customer_type !== "contract_holder" && !booking.contract_id;
+  const openExtras = () => {
+    setShowAddonsSection(true);
+    setAddonOpenSignal(Date.now());
+  };
   const lockReason = isTerminalStatus
     ? `Locked — booking is ${booking.status}`
     : isPaid
@@ -1064,7 +1072,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               consistent verb across the whole booking lifecycle —
               the underlying ledger differs but the intent is the same. */}
           {(booking.status === "checked_out" || booking.status === "no_show") && (
-            <Button variant="outline" size="sm" onClick={() => setLogChargeOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => (extrasAfterCheckout ? openExtras() : setLogChargeOpen(true))}>
               <Plus className="mr-1 h-4 w-4" />Add Charge
             </Button>
           )}
@@ -1114,6 +1122,24 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           phone={booking.booker_phone || booking.lead?.phone || booking.guest_phone || ""}
           leadId={booking.lead?.id}
         />
+      )}
+
+      {extrasAfterCheckout && booking.payment_status === "pending"
+        && existingPayments.some((p) => p.status === "verified") && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold text-amber-800">
+              Extra to collect · {formatCurrency(amountLeftToCollect(Number(booking.total_amount_with_gst) || Number(booking.total_amount), existingPayments))}
+            </div>
+            <div className="text-xs text-amber-700 mt-0.5">
+              Added after checkout. The booking was already paid; this is the balance. The GST invoice waits until it is collected, then covers everything.
+            </div>
+          </div>
+          <Button size="sm" variant="outline" className="shrink-0 bg-white/70" onClick={() => setGetPaymentChooserOpen(true)}>
+            Collect
+          </Button>
+        </div>
       )}
 
       {booking.pi_sent_at && (
@@ -2326,7 +2352,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <BookingAddonsSection
             bookingId={booking.id}
             spaceId={booking.space_id}
-            canEdit={canEditPricing}
+            canEdit={canEditPricing || extrasAfterCheckout}
             onChange={fetchBooking}
             prefill={addonPrefill}
             openSignal={addonOpenSignal}
@@ -2340,7 +2366,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             {/* Same lock as the in-section "Add charge" — once payment is
                 collected, charges can't be added (would create a hidden
                 balance due). */}
-            {canEditPricing ? (
+            {canEditPricing || extrasAfterCheckout ? (
               <Button
                 size="sm"
                 onClick={() => {
@@ -2383,7 +2409,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         />
         {["checked_out", "no_show"].includes(booking.status) && (
           <div className="flex justify-end">
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setLogChargeOpen(true)}>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => (extrasAfterCheckout ? openExtras() : setLogChargeOpen(true))}>
               <Plus className="mr-1 h-3 w-3" />Add Charge
             </Button>
           </div>

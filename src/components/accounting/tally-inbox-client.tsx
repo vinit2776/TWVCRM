@@ -2657,7 +2657,8 @@ function BookingInboxRowItem({
   const agingClass =
     aging >= AGING_ESCALATE_HOURS ? "text-red-700" : aging >= 24 ? "text-amber-700" : "text-muted-foreground";
 
-  const canUpload = row.handoff_state === "gst_to_issue";
+  // A held row waits for an unpaid extra on the booking; it releases by itself once paid.
+  const canUpload = row.handoff_state === "gst_to_issue" && !row.held_reason;
   const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
   const canMarkDone = row.handoff_state === "ready_to_send";
   const hasUpload = row.latest_upload !== null;
@@ -2677,6 +2678,11 @@ function BookingInboxRowItem({
             <CalendarDays className="h-2.5 w-2.5" />
             Booking
           </span>
+          {row.task_kind === "supplement" && (
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 flex-shrink-0">
+              Supplement
+            </span>
+          )}
           <BookingPaymentPill confirmations={row.payment_confirmations} />
           <span className="font-medium text-sm truncate">{partyName}</span>
         </div>
@@ -2689,11 +2695,18 @@ function BookingInboxRowItem({
           <span className="font-mono">{row.booking_number ?? "(no number)"}</span>
           {row.space_name && <span> · {row.space_name}</span>}
           {row.booking_date && <span> · {row.booking_date}</span>}
-          <span> · {row.handoff_state === "gst_to_issue" ? "GST to issue" : row.handoff_state === "ready_to_send" ? "Ready to send" : "Complete"}</span>
+          <span> · {row.held_reason ? "On hold" : row.handoff_state === "gst_to_issue" ? "GST to issue" : row.handoff_state === "ready_to_send" ? "Ready to send" : "Complete"}</span>
         </div>
         <div className={`text-xs ${agingClass} text-right`}>
           {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
         </div>
+
+        {row.held_reason && (
+          <div className="col-span-2 text-xs rounded border border-amber-200 bg-amber-50 text-amber-800 px-2.5 py-1.5">
+            {row.held_reason}. Collect it on{" "}
+            <a className="underline font-medium" href={`/bookings/${row.booking_id}`}>the booking</a>; this row releases by itself once it is paid.
+          </div>
+        )}
 
         {/* Line 3: GSTIN + IRN pill */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap text-[11px]">
