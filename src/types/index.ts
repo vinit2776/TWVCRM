@@ -1501,6 +1501,10 @@ export interface Booking {
   // Razorpay Payment Links
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;
+  // Optional proforma invoice sent with the payment link
+  pi_number?: string | null;
+  pi_sent_at?: string | null;
+  pi_sent_to?: string | null;
   // Prepaid package redemption
   prepaid_purchase_id?: string;
   prepaid_credits_used?: number;
