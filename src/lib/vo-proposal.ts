@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod";
+import { VO_RATE_PURPOSES } from "@/lib/constants";
 
 export const PROPOSAL_KINDS = ["standard", "virtual_office"] as const;
 export type ProposalKind = (typeof PROPOSAL_KINDS)[number];
@@ -43,6 +44,10 @@ export const voCreateSchema = z.object({
   vo_term_months: z.number().int().refine(isAllowedVoTerm, { message: `A Virtual Office term must be one of ${VO_ALLOWED_TERMS.join(", ")} months.` }),
   vo_quoted_price: z.number().positive("Quoted price is required"),
   vo_guide_price: z.number().nonnegative().optional(),
+  /** Rate card purpose; required once the rate cards are set up (the guide is looked up from it). */
+  vo_purpose: z.enum(VO_RATE_PURPOSES).optional(),
+  /** Why the quote is below the floor; required when it is. Goes to the approver. */
+  vo_below_floor_reason: z.string().trim().min(5, "Say why this quote is below the floor").max(500).optional(),
 });
 
 // ---- Status transitions ------------------------------------------------------
