@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { DatabaseSync } = require('node:sqlite');
 const {
   ACTIONS, ACTIVITY_CATEGORIES, activityLabel, categoryOf, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
+  fieldChanges, parseChanges, changesText, activitySentence, sentenceText, detailsShown,
 } = require('../activity-log');
 
 test('every logged action belongs to a real category', () => {
@@ -54,13 +55,120 @@ test('activityFilterSql filters by employee, category and inclusive dates, ignor
   assert.equal(count({ category: 'not-a-category', from: "2026-10-15' OR 1=1 --" }), 5);
 });
 
+const NAMES = { 'EMP-005': 'Prema R', 'EMP-012': 'Rahul Sharma', 'EMP-001': 'Priya Mehta' };
+const ACCOUNTS = { priya: 'EMP-001', 'EMP-005': 'EMP-005', 'EMP-012': 'EMP-012', amit: '' };
+const lookups = { employeeName: (id) => NAMES[id] || '', accountEmployee: (u) => ACCOUNTS[u] || '' };
+const say = (row) => sentenceText(activitySentence(row, lookups));
+
 test('activityCsvRow lines up with the CSV headers', () => {
   const row = activityCsvRow({
     created_at: '2026-10-15 09:28:00', category: 'attendance', action: 'punch_in', employee_id: 'EMP-005',
     actor_username: '', actor_role: 'device', details: 'Punch time 2026-10-15 09:28:00 · Biometric device', user_agent: '', ip: '',
-  }, 'Prema R');
+  }, lookups);
   assert.equal(row.length, ACTIVITY_CSV_HEADERS.length);
-  assert.deepEqual(row.slice(0, 7), ['2026-10-15 09:28:00', 'EMP-005', 'Prema R', '', 'device', 'Punches and breaks', 'Punch in']);
+  assert.deepEqual(row.slice(0, 5), ['2026-10-15 09:28:00', 'Biometric device punched in Prema R', 'Punch time 2026-10-15 09:28:00 · Biometric device', 'EMP-005', 'Prema R']);
+});
+
+test('the CSV puts recorded changes in place of the short details', () => {
+  const row = activityCsvRow({
+    created_at: '2026-11-13 11:42:00', category: 'admin', action: 'edit_employee', employee_id: 'EMP-012',
+    actor_username: 'priya', actor_role: 'admin', details: 'Rahul Sharma',
+    changes: JSON.stringify([{ field: 'Branch', from: 'LGF', to: 'LGF, Arcade Center' }]),
+  }, lookups);
+  assert.equal(row[1], "Priya Mehta (admin) edited Rahul Sharma's details");
+  assert.equal(row[2], 'Branch: LGF → LGF, Arcade Center');
+});
+
+// --- what an edit changed -----------------------------------------------------------
+
+test('fieldChanges keeps only fields whose value changed, treating blank and null alike', () => {
+  assert.deepEqual(fieldChanges([
+    { label: 'Name', from: 'Rahul Sharma', to: 'Rahul Sharma' },
+    { label: 'Email', from: null, to: '' },
+    { label: 'Designation', from: '  Associate ', to: 'Associate' },
+    { label: 'Reports to', from: 'Amit Verma', to: 'Neha Kapoor' },
+    { label: 'Mobile', from: '', to: '9876543210' },
+  ]), [
+    { field: 'Reports to', from: 'Amit Verma', to: 'Neha Kapoor' },
+    { field: 'Mobile', from: '(none)', to: '9876543210' },
+  ]);
+  // A form saved untouched records "nothing changed", not "not recorded".
+  assert.deepEqual(fieldChanges([{ label: 'Name', from: 'A', to: 'A' }]), []);
+});
+
+test('a secret is marked changed but its values are never stored', () => {
+  const list = fieldChanges([{ label: 'Punch API key', from: 'old-secret-123', to: 'new-secret-456', hidden: true }]);
+  assert.deepEqual(list, [{ field: 'Punch API key', hidden: true }]);
+  assert.ok(!JSON.stringify(list).includes('secret-'));
+  assert.equal(changesText(JSON.stringify(list)), 'Punch API key: changed (value hidden)');
+  // Unchanged secrets leave no trace at all.
+  assert.deepEqual(fieldChanges([{ label: 'Punch API key', from: 'same', to: 'same', hidden: true }]), []);
+});
+
+test('parseChanges tells old entries (nothing recorded) from edits with no changes', () => {
+  assert.equal(parseChanges(''), null);
+  assert.equal(parseChanges(undefined), null);
+  assert.equal(parseChanges('not json'), null);
+  assert.deepEqual(parseChanges('[]'), []);
+  assert.equal(changesText(JSON.stringify([
+    { field: 'Arcade Center shift', from: '09:30–18:30', to: '10:00–19:00' },
+    { field: 'Andheri', note: 'deleted' },
+  ])), 'Arcade Center shift: 09:30–18:30 → 10:00–19:00; Andheri: deleted');
+});
+
+// --- one line saying who did what ---------------------------------------------------
+
+test('employee actions read as the person doing them', () => {
+  assert.equal(say({ category: 'attendance', action: 'punch_in', employee_id: 'EMP-012', actor_username: 'EMP-012', actor_role: 'employee' }), 'Rahul Sharma punched in');
+  assert.equal(say({ category: 'sign_in', action: 'login', employee_id: 'EMP-012', actor_username: 'EMP-012', actor_role: 'employee' }), 'Rahul Sharma logged in');
+  assert.equal(say({ category: 'request', action: 'leave_applied', employee_id: 'EMP-005', actor_username: 'EMP-005', actor_role: 'employee' }), 'Prema R applied for leave');
+  assert.equal(say({ category: 'attendance', action: 'break_end', employee_id: 'EMP-005', actor_username: 'EMP-005', actor_role: 'employee' }), 'Prema R ended their break');
+});
+
+test('the device, the auto punch-out and managers are named as who did it', () => {
+  assert.equal(say({ category: 'attendance', action: 'punch_in', employee_id: 'EMP-005', actor_username: '', actor_role: 'device' }), 'Biometric device punched in Prema R');
+  assert.equal(say({ category: 'attendance', action: 'punch_out', employee_id: 'EMP-005', actor_username: '', actor_role: 'system' }), 'System punched out Prema R');
+  assert.equal(say({ category: 'attendance', action: 'punch_in', employee_id: 'EMP-005', actor_username: 'priya', actor_role: 'admin' }), 'Priya Mehta (admin) punched in Prema R');
+});
+
+test('an admin acting on their own record is not named twice', () => {
+  // priya's login belongs to EMP-001, so this is her own punch.
+  assert.equal(say({ category: 'attendance', action: 'punch_in', employee_id: 'EMP-001', actor_username: 'priya', actor_role: 'admin' }), 'Priya Mehta punched in');
+});
+
+test('admin actions say who did what to whom', () => {
+  const by = { category: 'admin', actor_username: 'priya', actor_role: 'admin' };
+  assert.equal(say({ ...by, action: 'approve', target_type: 'leave_request', employee_id: 'EMP-012' }), "Priya Mehta (admin) approved Rahul Sharma's leave");
+  assert.equal(say({ ...by, action: 'reject', target_type: 'field_trip', employee_id: 'EMP-005' }), "Priya Mehta (admin) rejected Prema R's field trip");
+  assert.equal(say({ ...by, action: 'download_report', target_type: 'muster_report' }), 'Priya Mehta (admin) downloaded the Muster report');
+  assert.equal(say({ ...by, action: 'settings_updated', target_type: 'app_settings' }), 'Priya Mehta (admin) updated settings');
+  assert.equal(say({ ...by, action: 'add_employee', target_type: 'employee', employee_id: 'EMP-012' }), 'Priya Mehta (admin) registered Rahul Sharma');
+  assert.equal(say({ ...by, action: 'deviation_absent', target_type: 'deviation', employee_id: 'EMP-005' }), "Priya Mehta (admin) reviewed Prema R's deviation");
+  // A manager with no employee record shows their username.
+  assert.equal(say({ category: 'admin', actor_username: 'amit', actor_role: 'manager', action: 'edit_employee', target_type: 'employee', employee_id: 'EMP-005' }), "amit (manager) edited Prema R's details");
+  // The built-in admin account isn't named twice.
+  assert.equal(say({ category: 'admin', actor_username: 'admin', actor_role: 'admin', action: 'settings_updated', target_type: 'app_settings' }), 'Admin updated settings');
+  // An admin action added later without a sentence still reads sensibly.
+  assert.equal(say({ ...by, action: 'archive_branch', target_type: 'branches' }), 'Priya Mehta (admin) archive branch');
+});
+
+test('an edit saved untouched says so; an old edit entry just says it was edited', () => {
+  const edit = { category: 'admin', action: 'edit_employee', target_type: 'employee', employee_id: 'EMP-012', actor_username: 'priya', actor_role: 'admin' };
+  assert.equal(say({ ...edit, changes: '[]' }), "Priya Mehta (admin) saved Rahul Sharma's details with no changes");
+  assert.equal(say({ ...edit, changes: '' }), "Priya Mehta (admin) edited Rahul Sharma's details");
+  // The name the old entry stored as its details is already in the sentence.
+  assert.equal(detailsShown({ ...edit, details: 'Rahul Sharma' }), '');
+});
+
+test('failed logins never invent a name', () => {
+  assert.equal(say({ category: 'sign_in', action: 'login_failed', employee_id: null, actor_username: '(unknown)', actor_role: '' }), "Someone tried to log in with a username that doesn't exist");
+  assert.equal(say({ category: 'sign_in', action: 'login_failed', employee_id: 'EMP-012', actor_username: 'EMP-012', actor_role: 'employee' }), 'Rahul Sharma failed to log in');
+});
+
+test('names are kept apart from the words around them so the page can bold them', () => {
+  const parts = activitySentence({ category: 'admin', action: 'approve', target_type: 'leave_request', employee_id: 'EMP-012', actor_username: 'priya', actor_role: 'admin' }, lookups);
+  assert.deepEqual(parts.filter(p => p.kind === 'name').map(p => p.text), ['Priya Mehta', 'Rahul Sharma']);
+  assert.deepEqual(parts.filter(p => p.kind === 'role').map(p => p.text), [' (admin)']);
 });
 
 // --- what a failed login is allowed to record -------------------------------------
