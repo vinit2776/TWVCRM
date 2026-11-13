@@ -243,7 +243,7 @@ export default function ProposalDetailPage({
       setProposal(p);
 
       // Auto-generate Razorpay payment link if not yet created
-      if (p && !p.razorpay_payment_link_url && p.status !== "rejected" && p.status !== "superseded") {
+      if (p && !p.razorpay_payment_link_url && p.status !== "rejected" && p.status !== "superseded" && p.status !== "withdrawn" && p.status !== "declined") {
         fetch(`/api/proposals/${id}/payment-link`, { method: "POST" })
           .then((r) => r.ok ? r.json() : null)
           .then((data) => {
@@ -832,7 +832,27 @@ export default function ProposalDetailPage({
 
   const isZeroDeposit = Number(proposal?.security_deposit_months || 0) === 0;
   const waiverVerified = !!proposal?.deposit_waiver_verified_at;
-  const needsWaiver = isZeroDeposit && !waiverVerified;
+  // Virtual Office proposals carry zero deposit by design: no OTP waiver needed.
+  const isVoKind = proposal?.kind === "virtual_office";
+  const needsWaiver = isZeroDeposit && !waiverVerified && !isVoKind;
+
+  const voAction = async (action: "withdraw" | "reissue") => {
+    const reason = action === "withdraw" ? window.prompt("Why are you withdrawing this proposal?") : "";
+    if (action === "withdraw" && !reason) return;
+    const res = await fetch(`/api/proposals/${id}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(action === "withdraw" ? { reason } : {}),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(json.error || `Could not ${action} the proposal`);
+      return;
+    }
+    toast.success(action === "withdraw" ? "Proposal withdrawn" : "New version created as a draft");
+    if (action === "reissue" && json.data?.id) router.push(`/proposals/${json.data.id}`);
+    else fetchProposal();
+  };
 
   if (loading) {
     return (
@@ -1077,7 +1097,22 @@ export default function ProposalDetailPage({
               Edit
             </Button>
           )}
-          {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && !revisionBlockedReason({ ...proposal, deposit_parts_active: depositPartsActive }) && (
+          {isVoKind && proposal.public_token && ["sent", "viewed", "changes_requested"].includes(proposal.status) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/vo-proposal/${proposal.public_token}`); toast.success("Customer link copied"); }}
+            >
+              Copy customer link
+            </Button>
+          )}
+          {isVoKind && ["sent", "viewed", "changes_requested"].includes(proposal.status) && (
+            <Button variant="outline" size="sm" onClick={() => voAction("withdraw")}>Withdraw</Button>
+          )}
+          {isVoKind && ["sent", "viewed", "changes_requested", "withdrawn", "declined", "expired"].includes(proposal.status) && (
+            <Button variant="outline" size="sm" onClick={() => voAction("reissue")}>Reissue</Button>
+          )}
+          {!isVoKind && (PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && !revisionBlockedReason({ ...proposal, deposit_parts_active: depositPartsActive }) && (
             <Button variant="outline" size="sm" onClick={() => setReviseOpen(true)}>
               <Pencil className="mr-2 h-4 w-4" />
               Revise
