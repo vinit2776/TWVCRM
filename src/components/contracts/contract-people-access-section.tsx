@@ -37,6 +37,8 @@ interface Person {
   voucher: { seatNumber: number; validUntil: string | null; issuedAt: string | null; emailedAt: string | null } | null;
   doorIssuedAt: string | null;
   doorValidUntil: string | null;
+  doorCardOnly: boolean;
+  doorCardIssued: boolean;
   /** Latest door PIN email for this person (from the audit trail); null if none recorded. */
   doorPin: { at: string; by: string; sent: boolean; reason: string | null; email: string | null; purpose: string; attempts: number } | null;
   accessEndedAt: string | null;
@@ -121,6 +123,13 @@ function DoorCell({ p }: { p: Person }) {
         <Badge variant="secondary" className="bg-blue-100 text-blue-800">Awaiting enrolment</Badge>
       )}
       {p.doorIssuedAt && <div className="text-xs text-muted-foreground mt-0.5">Door set up {formatDateTime(p.doorIssuedAt)}</div>}
+      {p.doorCardOnly && (
+        <div className={`text-xs mt-0.5 ${p.doorCardIssued ? "text-muted-foreground" : "text-amber-700"}`}>
+          {p.doorCardIssued
+            ? "Card-only reader: access card issued"
+            : "Card-only reader: access card not issued yet, the PIN is their way in until then"}
+        </div>
+      )}
       {p.doorPin ? (
         p.doorPin.sent ? (
           <div className="text-xs text-muted-foreground mt-0.5">

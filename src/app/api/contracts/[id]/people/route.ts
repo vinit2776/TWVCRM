@@ -63,7 +63,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     memberIds.length
       ? admin
           .from("cosec_access_users")
-          .select("entity_id, enrollment_status, provisioned_at, blocked_at, valid_until")
+          .select("entity_id, enrollment_status, provisioned_at, blocked_at, valid_until, nfc_card_number, device:cosec_devices(supports_biometric)")
           .eq("user_type", "member")
           .in("entity_id", memberIds)
       : Promise.resolve({ data: [] as never[] }),
@@ -104,10 +104,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     : { data: [] as { id: string; full_name: string }[] };
   const userName = new Map((byUsers ?? []).map((u: { id: string; full_name: string }) => [u.id, u.full_name]));
   const doorValidUntil = new Map<string, string>();
+  const doorHasFingerprintReader = new Set<string>();
+  const doorCardIssued = new Set<string>();
 
   const doorStatuses = new Map<string, string[]>();
   const doorAt = new Map<string, string>();
-  for (const a of (accessRes.data ?? []) as { entity_id: string; enrollment_status: string; provisioned_at: string | null; blocked_at: string | null; valid_until: string | null }[]) {
+  for (const a of (accessRes.data ?? []) as unknown as { entity_id: string; enrollment_status: string; provisioned_at: string | null; blocked_at: string | null; valid_until: string | null; nfc_card_number: string | null; device: { supports_biometric: boolean } | null }[]) {
+    if (a.device?.supports_biometric !== false) doorHasFingerprintReader.add(a.entity_id);
+    if (a.nfc_card_number) doorCardIssued.add(a.entity_id);
     if (a.valid_until && !doorValidUntil.has(a.entity_id)) doorValidUntil.set(a.entity_id, a.valid_until);
     const list = doorStatuses.get(a.entity_id) ?? [];
     list.push(a.enrollment_status);
@@ -146,6 +150,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         : null,
       doorIssuedAt: c.source_member_id ? (doorAt.get(c.source_member_id) ?? null) : null,
       doorValidUntil: c.source_member_id ? (doorValidUntil.get(c.source_member_id) ?? null) : null,
+      // Set up only on card-only readers: no PIN applies, staff issue an access card.
+      doorCardOnly: !!c.source_member_id && liveStatuses.length > 0 && !doorHasFingerprintReader.has(c.source_member_id),
+      doorCardIssued: !!c.source_member_id && doorCardIssued.has(c.source_member_id),
       doorPin: (() => {
         const v = c.source_member_id ? pinByMember.get(c.source_member_id) : undefined;
         if (!v) return null;

@@ -30,7 +30,7 @@ export async function provisionMemberDoor(
 
   const { data: devices } = await admin
     .from("cosec_devices")
-    .select("id, device_ip, device_port, device_password")
+    .select("id, device_ip, device_port, device_password, supports_biometric")
     .eq("location_id", contract.location_id)
     .eq("is_enabled", true)
     .eq("device_category", "entry_point"); // business_centre devices (conference/meeting rooms) are excluded
@@ -79,10 +79,12 @@ export async function provisionMemberDoor(
   });
 
   const provisioned = results.filter((r) => r.status === "fulfilled").length;
-  // Only tell the member once the PIN is actually live on at least one device.
+  // Wording depends on the reader: on a fingerprint reader the PIN starts the fingerprint
+  // set-up; on a card-only reader it is the way in until the member's card is issued.
+  const onBiometricReader = devices.some((d, i) => results[i].status === "fulfilled" && d.supports_biometric !== false);
   const pinEmail = provisioned > 0
     ? await sendDoorPinEmail({
-        to: member.email, name: member.name, pin, purpose: "enrollment",
+        to: member.email, name: member.name, pin, purpose: onBiometricReader ? "enrollment" : "fallback",
         record: { admin, contractId: contract.id, memberId: member.id, performedBy: issuedBy, validUntil: contract.end_date },
       })
     : null;

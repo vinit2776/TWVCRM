@@ -123,7 +123,7 @@ export async function POST(
       try {
         const { data: devices } = await admin
           .from("cosec_devices")
-          .select("id, device_ip, device_port, device_password")
+          .select("id, device_ip, device_port, device_password, supports_biometric")
           .eq("location_id", contract.location_id)
           .eq("is_enabled", true)
           .eq("device_category", "entry_point"); // business_centre devices (conference/meeting rooms) are excluded
@@ -136,7 +136,7 @@ export async function POST(
         const validUntil  = contract.end_date ? new Date(contract.end_date) : undefined;
         const now         = new Date().toISOString();
 
-        await Promise.allSettled(devices.map(async (dev) => {
+        const provisionedOk = await Promise.all(devices.map(async (dev) => {
           try {
             await provisionUser(
               { ip: dev.device_ip, port: dev.device_port, password: dev.device_password },
@@ -162,15 +162,22 @@ export async function POST(
               provisioned_at:    now,
               updated_at:        now,
             }, { onConflict: "device_id,cosec_user_id" });
+            return true;
           } catch (err) {
             console.error(`[members] provision failed on device ${dev.id}:`, err);
+            return false;
           }
         }));
+
+        // Wording depends on the reader: a fingerprint reader's PIN starts the fingerprint
+        // set-up; on a card-only reader it is the way in until the member's card is issued.
+        if (!provisionedOk.some(Boolean)) return;
+        const onBiometricReader = devices.some((d, i) => provisionedOk[i] && d.supports_biometric !== false);
 
         // Email the enrollment PIN. Not SMS: the only SMS template that fits is the
         // OTP one, which told tenants' staff "Your OTP … do not share" for a door PIN.
         await sendDoorPinEmail({
-          to: parsed.data.email, name: parsed.data.name, pin, purpose: "enrollment",
+          to: parsed.data.email, name: parsed.data.name, pin, purpose: onBiometricReader ? "enrollment" : "fallback",
           record: { admin, contractId, memberId: member.id, performedBy: dbUser?.id ?? null, validUntil: contract.end_date ?? null },
         });
 

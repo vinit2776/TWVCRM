@@ -600,7 +600,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Failed to add member"); return; }
-      toast.success(`${form.name} added${contractStatus === "active" ? " — enrollment PIN emailed" : ""}`);
+      toast.success(`${form.name} added${contractStatus === "active" ? " — door PIN is being emailed" : ""}`);
       setDialogOpen(false);
       setForm({ name: "", phone: "", email: "" });
       await load();
@@ -910,7 +910,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                 placeholder="9876543210"
                 type="tel"
               />
-              <p className="text-xs text-muted-foreground">Their door enrollment PIN is emailed to the address below</p>
+              <p className="text-xs text-muted-foreground">Needed for the door PIN and the WiFi voucher</p>
             </div>
             <div className="space-y-1.5">
               <Label>Email <span className="text-red-600 text-xs">*</span></Label>

@@ -43,7 +43,11 @@ export async function sendDoorPinEmail(params: {
   to: string | null | undefined;
   name: string;
   pin: string;
-  /** enrollment: first-time fingerprint set-up. fallback: PIN to enter with when the card or finger isn't working. */
+  /**
+   * enrollment: first-time fingerprint set-up (readers with a fingerprint scanner).
+   * fallback: a PIN to type on the keypad instead of a card, e.g. until the card is issued
+   * (card-only readers) or when the card or finger isn't working.
+   */
   purpose: DoorPinPurpose;
   record?: DoorPinRecord;
 }): Promise<DoorPinEmailResult> {
@@ -88,13 +92,13 @@ async function deliverDoorPinEmail(params: {
   const label = enrollment ? "Your enrollment PIN" : "Your access PIN";
   const intro = enrollment
     ? `You have been given door access to your office at The WorkVilla. This is <strong>not a login code</strong> &mdash; it is the one-time PIN for setting up your fingerprint on the door reader.`
-    : `Here is a PIN you can use to open the door at The WorkVilla when your card or fingerprint is not working. This is <strong>not a login code</strong>.`;
+    : `Here is a PIN you can use to open the door at The WorkVilla if you do not have your access card yet, or it is not working. This is <strong>not a login code</strong>.`;
   const steps = enrollment
     ? `<li>Go to the door reader and type this PIN on the keypad.</li>
             <li>The reader will then ask you to scan your finger a few times.</li>
             <li>After that, your fingerprint opens the door &mdash; you will not need the PIN again.</li>`
     : `<li>Go to the door reader and type this PIN on the keypad.</li>
-            <li>The door will open. Use your card or fingerprint as usual next time.</li>`;
+            <li>The door will open. Once you have your access card, use it as usual.</li>`;
 
   try {
     const result = await resend.emails.send({
