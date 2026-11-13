@@ -20,6 +20,7 @@ const VALUES_RECORDED = [
   'REPORT_EMAILS',
   'REPORT_EMAIL_FROM',
   'SHIFT_RULES_EFFECTIVE_FROM',
+  'CERTIFICATE_CHECK',
 ];
 
 // The credentials. ZK_DEVICE_SN is one too: the ADMS push protocol has no header
@@ -28,6 +29,7 @@ const VALUES_NEVER_RECORDED = [
   'PUNCH_API_KEY',
   'LOCATIONIQ_API_KEY',
   'RESEND_API_KEY',
+  'ANTHROPIC_API_KEY',
   'ZK_DEVICE_SN',
 ];
 
