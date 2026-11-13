@@ -83,6 +83,10 @@
       "schedule": "15 4 * * *"
     },
     {
+      "path": "/api/cron/vo-address-watch",
+      "schedule": "15 5 * * *"
+    },
+    {
       "path": "/api/cron/auto-renew",
       "schedule": "30 0 * * *"
     },
