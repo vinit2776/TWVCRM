@@ -47,9 +47,11 @@ export async function PUT(
 
   const body = await request.json();
 
-  // A sales rep may set the location's agreement wording and nothing else.
-  const agreementTermsOnly = dbUser.role === "sales_rep";
-  if (agreementTermsOnly && Object.keys(body).some((k) => k !== "agreement_terms")) {
+  // A sales rep may set the location's customer-facing wording (agreement terms, proposal terms and
+  // defaults, proposal amenities) and nothing else.
+  const SALES_REP_FIELDS = ["agreement_terms", "proposal_terms", "proposal_defaults", "proposal_amenity_icons"];
+  const salesRepFieldsOnly = dbUser.role === "sales_rep";
+  if (salesRepFieldsOnly && Object.keys(body).some((k) => !SALES_REP_FIELDS.includes(k))) {
     return NextResponse.json({ error: "Admin, Manager or IT Manager access required" }, { status: 403 });
   }
   const {
@@ -135,13 +137,13 @@ export async function PUT(
     }
   }
 
-  // Proposal terms and defaults seed every new proposal for the location: admin and manager only.
+  // Proposal terms and defaults seed every new proposal for the location: admin, manager and sales rep.
   // null / empty puts the location back on the standard terms (or no defaults).
   let cleanedProposalTerms: string | null | undefined;
   let cleanedProposalDefaults: unknown;
   if (proposal_terms !== undefined || proposal_defaults !== undefined) {
     if (!canEditProposalSettings(dbUser.role)) {
-      return NextResponse.json({ error: "Only an admin or manager can change proposal settings" }, { status: 403 });
+      return NextResponse.json({ error: "Only an admin, manager or sales rep can change proposal settings" }, { status: 403 });
     }
     if (proposal_terms !== undefined) {
       if (proposal_terms !== null && typeof proposal_terms !== "string") {
@@ -188,8 +190,8 @@ export async function PUT(
   if (proposal_defaults !== undefined) updates.proposal_defaults = cleanedProposalDefaults;
 
   // The locations update policy is admin/manager/IT manager only, so the sales-rep path
-  // writes with the service client — safe because the body was limited to agreement_terms above.
-  const writer = agreementTermsOnly ? createAdminClient() : supabase;
+  // writes with the service client — safe because the body was limited to SALES_REP_FIELDS above.
+  const writer = salesRepFieldsOnly ? createAdminClient() : supabase;
   const { data, error } = await writer
     .from("locations")
     .update(updates)
