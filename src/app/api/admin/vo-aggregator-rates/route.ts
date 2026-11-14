@@ -49,7 +49,7 @@ const money = z.number().min(0).max(100_000_000);
 const rowSchema = z.object({
   aggregator_id: z.string().uuid(),
   purpose: z.enum(VO_RATE_PURPOSES),
-  location_id: z.string().uuid().nullable(),
+  location_id: z.guid("Invalid location ID").nullable(),
   pricing_type: z.enum(["open", "fixed"]),
   share_percent: z.number().min(1).max(99).nullable(),
   min_customer_price: money.nullable(),

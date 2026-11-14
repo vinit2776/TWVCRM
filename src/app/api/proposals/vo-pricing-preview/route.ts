@@ -9,7 +9,7 @@ const ROLES = ["admin", "manager", "sales_rep"];
 
 const querySchema = z.object({
   purpose: z.enum(VO_RATE_PURPOSES),
-  location_id: z.string().uuid().nullable(),
+  location_id: z.guid("Invalid location ID").nullable(),
   term: z.coerce.number().int().refine(isAllowedVoTerm, { message: "Term must be 11, 12, 24, 36 or 48 months" }),
   quoted: z.coerce.number().positive().nullable(),
 });
