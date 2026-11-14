@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import type { DepositBreakdown } from "@/lib/deposit-breakdown";
 import { DepositBreakdownTable } from "@/components/contracts/deposit-breakdown-table";
 import { toast } from "sonner";
+import { formatDate } from "@/lib/utils";
 import { Link2, Banknote, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,7 +54,7 @@ export function DepositCollectDialog({ contractId, open, onOpenChange, prefillSh
   const [paymentReference, setPaymentReference] = useState("");
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [info, setInfo] = useState<{ contract_number: string; customer_name: string; company: string | null; breakdown: DepositBreakdown } | null>(null);
+  const [info, setInfo] = useState<{ contract_number: string; start_date: string | null; end_date: string | null; customer_name: string; company: string | null; breakdown: DepositBreakdown } | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
 
   // The working behind the balance — what the customer will see in the email.
@@ -83,7 +84,12 @@ export function DepositCollectDialog({ contractId, open, onOpenChange, prefillSh
         variant: {
           title: "Security Deposit - Balance",
           intro: "Please find below how your security deposit is worked out and the balance to pay.",
-          rows: [["Contract", info.contract_number], ["Balance to pay", `₹${amt.toLocaleString("en-IN")}`]],
+          rows: [
+            ...(info.company ? [["Company", info.company] as [string, string]] : []),
+            ["Contract", info.contract_number],
+            ...(info.start_date && info.end_date ? [["Contract period", `${formatDate(info.start_date)} - ${formatDate(info.end_date)}`] as [string, string]] : []),
+            ["Balance to pay", `₹${amt.toLocaleString("en-IN")}`],
+          ],
           breakdown: breakdownRows(info.breakdown),
           paymentReference: info.contract_number,
         },

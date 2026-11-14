@@ -21,7 +21,7 @@ export async function GET(
 
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, lead_id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
+    .select("id, lead_id, contract_number, start_date, end_date, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
     .eq("id", contractId)
     .maybeSingle();
   if (!contract) return NextResponse.json({ error: "Contract not found" }, { status: 404 });
@@ -32,6 +32,8 @@ export async function GET(
     return NextResponse.json({
       data: {
         contract_number: contract.contract_number,
+        start_date: contract.start_date,
+        end_date: contract.end_date,
         customer_name: [lead?.first_name, lead?.last_name].filter(Boolean).join(" "),
         company: lead?.company ?? null,
         breakdown: summary.breakdown,

@@ -1,11 +1,13 @@
 import { DEPOSIT_TOPUP_CATEGORY_LABELS, type DepositTopupCategory } from "@/types";
 import { depositShortfall } from "@/lib/deposit-requirement";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 
 export interface BreakdownContract {
   id: string;
   contract_number: string;
   status: string;
+  start_date?: string | null;
+  end_date?: string | null;
   deposit_carried_from: string | null;
   deposit_payment_status: string | null;
   deposit_payment_amount: number | string | null;
@@ -48,6 +50,13 @@ interface Input<C extends BreakdownContract> {
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
+/** "TWV-C-0137 (Nov 1, 2026 – Oct 31, 2027)": the contract and the term the deposit is for. */
+export function contractTermLabel(c: { contract_number: string; start_date?: string | null; end_date?: string | null }): string {
+  return c.start_date && c.end_date
+    ? `${c.contract_number} (${formatDate(c.start_date)} – ${formatDate(c.end_date)})`
+    : c.contract_number;
+}
+
 /**
  * The customer-readable working behind Required / Available / Shortfall:
  * every live contract's deposit (with a renewal split into the previous term
@@ -64,13 +73,13 @@ export function buildDepositBreakdown<C extends BreakdownContract>(i: Input<C>):
     const need = r2(i.requiredFor(c));
     totalRequired += need;
     if (need <= 0) continue; // a contract with no deposit adds nothing to explain
-    required.push({ label: c.contract_number, amount: need, kind: "total" });
+    required.push({ label: contractTermLabel(c), amount: need, kind: "total" });
     const parent = c.deposit_carried_from ? byId.get(c.deposit_carried_from) : undefined;
     if (!parent) continue;
     const previous = r2(i.requiredFor(parent));
     if (previous <= 0 || previous === need) continue;
     const change = r2(need - previous);
-    required.push({ label: `Previous term (${parent.contract_number})`, amount: previous, kind: "component" });
+    required.push({ label: `Previous term: ${contractTermLabel(parent)}`, amount: previous, kind: "component" });
     required.push({
       label: change > 0 ? "Rate escalation on renewal" : "Rate reduction on renewal",
       amount: change,

@@ -10,11 +10,11 @@ const base = {
 } as const;
 
 const parent: BreakdownContract = {
-  ...base, id: "p", contract_number: "TWV-C-0040", status: "renewed",
+  ...base, id: "p", contract_number: "TWV-C-0040", status: "renewed", start_date: "2025-11-01", end_date: "2026-10-31",
   deposit_payment_status: "paid", deposit_payment_amount: 52000, security_deposit_amount: 63064,
 };
 const renewal: BreakdownContract = {
-  ...base, id: "r", contract_number: "TWV-C-0137", status: "active", deposit_carried_from: "p",
+  ...base, id: "r", contract_number: "TWV-C-0137", status: "active", deposit_carried_from: "p", start_date: "2026-11-01", end_date: "2027-10-31",
 };
 const need: Record<string, number> = { p: 63064, r: 66216 };
 
@@ -25,8 +25,8 @@ describe("buildDepositBreakdown", () => {
       requiredFor: (c) => need[c.id], paidTopups: [], committed: 0, available: 52000,
     });
     expect(b.required.map((l) => [l.label, l.amount])).toEqual([
-      ["TWV-C-0137", 66216],
-      ["Previous term (TWV-C-0040)", 63064],
+      ["TWV-C-0137 (Nov 1, 2026 – Oct 31, 2027)", 66216],
+      ["Previous term: TWV-C-0040 (Nov 1, 2025 – Oct 31, 2026)", 63064],
       ["Rate escalation on renewal", 3152],
     ]);
     expect(b.total_required).toBe(66216);

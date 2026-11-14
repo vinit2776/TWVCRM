@@ -5,6 +5,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
 import { escapeHtml } from "@/lib/html";
+import { formatDate } from "@/lib/utils";
 import { loadDepositSummary } from "@/lib/deposit-summary-server";
 import { depositBreakdownHtml } from "@/lib/deposit-breakdown";
 
@@ -59,7 +60,7 @@ export async function POST(
 
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, lead_id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile)")
+    .select("id, lead_id, contract_number, start_date, end_date, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile)")
     .eq("id", contractId)
     .single();
 
@@ -176,7 +177,9 @@ export async function POST(
         <p style="color:#333;font-size:14px;">Please pay the additional refundable security deposit below for contract <strong>${contract.contract_number}</strong>.</p>
         ${customerMessageBlock}
         <table style="border-collapse:collapse;margin:20px 0;width:100%;background:#f0faf5;border-radius:6px;">
+          ${lead?.company ? `<tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Company</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${escapeHtml(lead.company)}</td></tr>` : ""}
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Contract</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${contract.contract_number}</td></tr>
+          ${contract.start_date && contract.end_date ? `<tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Contract period</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${formatDate(contract.start_date)} – ${formatDate(contract.end_date)}</td></tr>` : ""}
           <tr><td style="padding:10px 16px;color:#666;">Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;font-size:18px;">₹${amount.toLocaleString("en-IN")}</td></tr>
         </table>
         ${breakdownBlock}
