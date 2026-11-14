@@ -9,8 +9,11 @@
  */
 
 import { useEffect, useState } from "react";
+import type { DepositBreakdown } from "@/lib/deposit-breakdown";
+import { DepositBreakdownTable } from "@/components/contracts/deposit-breakdown-table";
 import { toast } from "sonner";
-import { Link2, Banknote } from "lucide-react";
+import { formatDate } from "@/lib/utils";
+import { Link2, Banknote, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -51,6 +54,52 @@ export function DepositCollectDialog({ contractId, open, onOpenChange, prefillSh
   const [paymentReference, setPaymentReference] = useState("");
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [info, setInfo] = useState<{ contract_number: string; start_date: string | null; end_date: string | null; customer_name: string; company: string | null; breakdown: DepositBreakdown } | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+
+  // The working behind the balance — what the customer will see in the email.
+  useEffect(() => {
+    if (!open) return;
+    setInfo(null);
+    fetch(`/api/contracts/${contractId}/deposit-breakdown`)
+      .then((r) => r.json())
+      .then((j) => setInfo(j.data ?? null))
+      .catch(() => setInfo(null));
+  }, [open, contractId]);
+
+  // PDF to share by hand; sends nothing. Built in the browser so jsPDF loads only on click.
+  async function downloadPdf() {
+    if (!info) return;
+    const amt = Number(amount);
+    if (!amt || amt <= 0) { toast.error("Enter the amount first"); return; }
+    setPdfBusy(true);
+    try {
+      const { generateDepositRequestPDF } = await import("@/lib/deposit-request-pdf");
+      const { breakdownRows } = await import("@/lib/deposit-breakdown");
+      const due = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+      const doc = await generateDepositRequestPDF({
+        proposal_number: info.contract_number, amount: amt, security_deposit_months: 0,
+        customer_name: info.customer_name, company: info.company, customer_message: customerMessage.trim(),
+        deposit_link_url: null, due_date: due,
+        variant: {
+          title: "Security Deposit - Balance",
+          intro: "Please find below how your security deposit is worked out and the balance to pay.",
+          rows: [
+            ...(info.company ? [["Company", info.company] as [string, string]] : []),
+            ["Contract", info.contract_number],
+            ...(info.start_date && info.end_date ? [["Contract period", `${formatDate(info.start_date)} - ${formatDate(info.end_date)}`] as [string, string]] : []),
+            ["Balance to pay", `₹${amt.toLocaleString("en-IN")}`],
+          ],
+          breakdown: breakdownRows(info.breakdown),
+          paymentReference: info.contract_number,
+        },
+      });
+      doc.save(`Security-Deposit-Balance-${info.contract_number}.pdf`);
+      toast.success("PDF downloaded — share it with the customer");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -114,9 +163,9 @@ export function DepositCollectDialog({ contractId, open, onOpenChange, prefillSh
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onOpenChange(false); }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Collect Additional Deposit</DialogTitle>
+          <DialogTitle>Collect balance deposit</DialogTitle>
           <DialogDescription>
             No approval is required — this takes effect as soon as payment is confirmed.
           </DialogDescription>
@@ -140,6 +189,14 @@ export function DepositCollectDialog({ contractId, open, onOpenChange, prefillSh
               <Banknote className="h-3.5 w-3.5 mr-1.5" /> Record Manually
             </Button>
           </div>
+
+          {info && (
+            <div className="space-y-1.5">
+              <Label>How the deposit is worked out</Label>
+              <DepositBreakdownTable breakdown={info.breakdown} />
+              <p className="text-xs text-muted-foreground">The customer sees this same working in the payment-link email.</p>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label>Amount (₹)</Label>
@@ -237,6 +294,9 @@ export function DepositCollectDialog({ contractId, open, onOpenChange, prefillSh
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={downloadPdf} disabled={!info || pdfBusy || !amount}>
+            {pdfBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Download className="mr-1.5 h-3.5 w-3.5" />} Download PDF
+          </Button>
           <Button onClick={handleCollect} disabled={submitting || !amount || categoryNote.trim().length < 10}>
             {submitting ? "Submitting…" : method === "razorpay_link" ? "Send Link" : "Record Payment"}
           </Button>

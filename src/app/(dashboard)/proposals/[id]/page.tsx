@@ -69,6 +69,7 @@ import { partialDepositState, partialDepositWarning, type PartialDepositState } 
 import type { DepositPosition } from "@/lib/deposit-instalments";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
+import { LeadDepositSummary } from "@/components/leads/lead-deposit-summary";
 import { DepositPartsPanel } from "@/components/proposals/deposit-parts-panel";
 import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
 import dynamic from "next/dynamic";
@@ -1487,6 +1488,10 @@ export default function ProposalDetailPage({
                       </button>
                     )}
                   </div>
+                )}
+
+                {proposal.lead_id && (
+                  <LeadDepositSummary leadId={proposal.lead_id} currentUserRole={currentUser?.role ?? undefined} />
                 )}
 
                 <DepositPartsPanel
