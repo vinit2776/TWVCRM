@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { getCachedSettings } from "@/lib/app-settings-cache";
+import { loadAggBillingMode } from "@/lib/aggregator-invoicing";
 import {
   AGG_BILLABLE_CASE_STATUSES,
-  AGG_BILLING_MODE_KEY,
-  parseAggBillingMode,
   previewLegacyVsNew,
   type BilledTerm,
 } from "@/lib/aggregator-term-billing";
@@ -62,14 +60,14 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const settings = await getCachedSettings(admin, [AGG_BILLING_MODE_KEY]);
+  const currentMode = await loadAggBillingMode(admin);
   const rows = previewLegacyVsNew({ cases: cases ?? [], periodMonth: month, periodYear: year, alreadyBilled });
   const round = (n: number) => Math.round(n * 100) / 100;
   const legacy = round(rows.reduce((s, r) => s + r.legacy, 0));
   const oncePerTenure = round(rows.reduce((s, r) => s + r.oncePerTenure, 0));
 
   return NextResponse.json({
-    currentMode: parseAggBillingMode(settings[AGG_BILLING_MODE_KEY]),
+    currentMode,
     ledgerAvailable,
     period: { month, year },
     cases: rows,
