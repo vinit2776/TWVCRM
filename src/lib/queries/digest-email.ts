@@ -20,6 +20,7 @@ const BADGE_STYLE: Record<DigestBadgeKind, { bg: string; fg: string }> = {
   new: { bg: "#ccfbf1", fg: "#015E65" },
   replied: { bg: "#dbeafe", fg: "#1d4ed8" },
   resolved: { bg: "#dcfce7", fg: "#15803d" },
+  auto_resolved: { bg: "#fef3c7", fg: "#b45309" },
   payment_verified: { bg: "#dcfce7", fg: "#15803d" },
   payment_rejected: { bg: "#fee2e2", fg: "#b91c1c" },
   payment_not_found: { bg: "#fef3c7", fg: "#b45309" },
