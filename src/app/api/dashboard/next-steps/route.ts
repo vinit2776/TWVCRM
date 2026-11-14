@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { listOpenJourneys } from "@/lib/journey/open-journeys";
 import { ownersForRole } from "@/lib/journey/roles";
+import { istDate } from "@/lib/journey/due";
 
 export interface NextStepItem {
   leadId: string;
@@ -15,6 +16,8 @@ export interface NextStepItem {
   ctaLabel?: string;
   /** false = waiting on someone else; shown muted. */
   actionable: boolean;
+  /** YYYY-MM-DD an onboarding step is due (activation + 2 days). */
+  due?: string;
   since: string;
 }
 
@@ -57,14 +60,23 @@ export async function GET() {
           href: s.href,
           ctaLabel: s.ctaLabel,
           actionable: s.actionable,
+          due: s.due,
           since: o.since,
         });
       }
     }
   }
 
-  // Doable first, then oldest first so the longest-waiting customer is on top.
-  items.sort((a, b) => Number(b.actionable) - Number(a.actionable) || a.since.localeCompare(b.since));
+  // Doable first; within those, steps past their due date first (most overdue
+  // on top), then oldest first so the longest-waiting customer is on top.
+  const today = istDate(new Date());
+  const lateness = (i: NextStepItem) => (i.due && i.due < today ? i.due : "9999-12-31");
+  items.sort(
+    (a, b) =>
+      Number(b.actionable) - Number(a.actionable) ||
+      lateness(a).localeCompare(lateness(b)) ||
+      a.since.localeCompare(b.since)
+  );
 
   return NextResponse.json({ data: items.slice(0, 50) });
 }
