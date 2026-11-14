@@ -128,7 +128,7 @@ export async function GET(request: NextRequest) {
       vendorBillIds.length > 0
         ? supabase
             .from("vendor_bills")
-            .select("id, invoice_number, total_amount, amount_paid, payment_status, approval_status, due_date, vendor:procurement_vendors(id, name)")
+            .select("id, invoice_number, total_amount, amount_paid, payment_status, approval_status, due_date, invoice_file_url, vendor:procurement_vendors(id, name), documents:vendor_bill_documents(file_url, doc_type)")
             .in("id", vendorBillIds)
         : Promise.resolve({ data: [] as Record<string, unknown>[] }),
       !canSeeRebilling
@@ -140,6 +140,7 @@ export async function GET(request: NextRequest) {
           customer_units_billed, customer_utility_pct, customer_generator_pct,
           customer_utility_rate, customer_generator_rate,
           customer_subtotal, customer_cgst, customer_sgst, customer_round_off, gst_rate, confirmed_at, updated_at,
+          billing_profile:electricity_billing_profiles(id, name, utility_markup_type, utility_markup_value, generator_markup_type, generator_markup_value),
           contract:contracts(id, contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)),
           billing_statement:billing_statements(id, statement_number, status, payment_status, total_amount, handoff_state, finalized_at, due_date)
         `)
@@ -147,7 +148,30 @@ export async function GET(request: NextRequest) {
         .eq("bill_side", "customer"),
     ]);
 
-    const vendorBillMap = new Map((vendorBillsRes.data ?? []).map((v) => [(v as { id: string }).id, v]));
+    // The invoice bucket can be private, so a stored public URL may not open; sign it the way the vendor
+    // bill page does, falling back to the stored URL.
+    const signInvoice = async (stored: string | null): Promise<string | null> => {
+      if (!stored) return null;
+      try {
+        const objectPath = new URL(stored).pathname.split("/object/public/")[1];
+        if (!objectPath) return stored;
+        const [bucket, ...rest] = objectPath.split("/");
+        const { data: signed } = await supabase.storage.from(bucket).createSignedUrl(decodeURIComponent(rest.join("/")), 3600);
+        return signed?.signedUrl ?? stored;
+      } catch {
+        return stored;
+      }
+    };
+    const vendorBillRows = await Promise.all(
+      ((vendorBillsRes.data ?? []) as Record<string, unknown>[]).map(async (v) => {
+        const docs = (v.documents as { file_url: string; doc_type: string }[] | null) ?? [];
+        const stored = docs.find((d) => d.doc_type === "invoice")?.file_url ?? (v.invoice_file_url as string | null);
+        const { documents: _documents, invoice_file_url: _file, ...rest } = v;
+        void _documents; void _file;
+        return { ...rest, invoice_url: await signInvoice(stored ?? null) };
+      }),
+    );
+    const vendorBillMap = new Map(vendorBillRows.map((v) => [v.id as string, v]));
     const customerBillsByLandlord = new Map<string, Record<string, unknown>[]>();
     for (const cb of (customerBillsRes.data ?? []) as Record<string, unknown>[]) {
       const key = cb.landlord_bill_id as string;
