@@ -85,6 +85,8 @@ export function LeadDepositSummary({ leadId, currentUserRole }: Props) {
   if (!data || data.contracts.length === 0) return null;
 
   const multiContract = data.contracts.length > 1;
+  // The deposit is one pool, so there is one balance to collect; it is recorded against the contract carrying the shortfall.
+  const collectTarget = data.contracts.find((c) => c.shortfall > 0);
 
   return (
     <Card id="security-deposit">
@@ -94,6 +96,15 @@ export function LeadDepositSummary({ leadId, currentUserRole }: Props) {
           <h3 className="text-sm font-semibold">
             Security deposit{multiContract ? " (consolidated across all contracts)" : ""}
           </h3>
+          {collectTarget && canCollect && (
+            <Button
+              size="sm"
+              className="ml-auto h-7 text-xs"
+              onClick={() => setCollectFor({ contractId: collectTarget.contract_id, shortfall: data.total_shortfall })}
+            >
+              Collect balance
+            </Button>
+          )}
         </div>
 
         <div className="grid grid-cols-3 gap-2">
@@ -128,16 +139,6 @@ export function LeadDepositSummary({ leadId, currentUserRole }: Props) {
                       {c.refunded > 0 && <> · refunded {formatCurrency(c.refunded)}</>}
                       {c.shortfall > 0 && <> · <span className="text-amber-700">shortfall {formatCurrency(c.shortfall)}</span></>}
                     </span>
-                    {c.shortfall > 0 && canCollect && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 text-[10px] px-2 border-amber-300 text-amber-800 hover:bg-amber-50"
-                        onClick={() => setCollectFor({ contractId: c.contract_id, shortfall: c.shortfall })}
-                      >
-                        Collect Now
-                      </Button>
-                    )}
                   </span>
                 </div>
                 {c.start_date && c.end_date && (

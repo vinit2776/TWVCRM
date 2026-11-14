@@ -159,7 +159,7 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
             <span>Deposit shortfall: <strong>{formatCurrency(depositShortfall ?? 0)}</strong> still to collect</span>
           </div>
           <Button size="sm" className="h-7 text-xs shrink-0" onClick={() => openCollectDialog(true)}>
-            Collect Now
+            Collect balance
           </Button>
         </div>
       )}
