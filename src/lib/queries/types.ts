@@ -181,9 +181,11 @@ export interface QueryListItem extends QueryTargeting {
    * Null whenever awaiting_viewer is false.
    */
   awaiting_reason: "needs_answer" | "awaiting_close" | "verify_payment" | null;
+  /** Someone else has posted since this viewer last opened the thread. */
+  unread: boolean;
 }
 
-export interface QueryThread extends Omit<QueryListItem, "last_message"> {
+export interface QueryThread extends Omit<QueryListItem, "last_message" | "unread"> {
   messages: QueryMessage[];
   /** Names resolved for audience_user_ids, so the thread header can show
    *  "→ Priya S" without the client doing a second lookup. */
@@ -201,6 +203,8 @@ export interface QueryTemplate {
 
 export interface QueryStats {
   awaiting_you: number;
+  /** Open threads you are part of where the next move is someone else's. */
+  waiting_others: number;
   overdue: number;
   open: number;
   resolved_this_week: number;
