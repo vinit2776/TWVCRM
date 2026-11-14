@@ -5,6 +5,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
 import { escapeHtml } from "@/lib/html";
+import { loadDepositSummary } from "@/lib/deposit-summary-server";
+import { depositBreakdownHtml } from "@/lib/deposit-breakdown";
 
 const ALLOWED_ROLES = ["admin", "manager", "accounts"];
 const VALID_CATEGORIES = ["seat_expansion", "risk_buffer", "customer_requested", "renewal_escalation", "other"];
@@ -57,7 +59,7 @@ export async function POST(
 
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile)")
+    .select("id, lead_id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile)")
     .eq("id", contractId)
     .single();
 
@@ -153,6 +155,15 @@ export async function POST(
        </div>`
     : "";
 
+  // The working behind the amount. A failure here must not stop the link going out.
+  let breakdownBlock = "";
+  try {
+    const summary = await loadDepositSummary(admin, admin, contract.lead_id);
+    breakdownBlock = depositBreakdownHtml(summary.breakdown);
+  } catch (e) {
+    console.error("deposit breakdown for email failed", e instanceof Error ? e.message : e);
+  }
+
   const subject = `Additional Security Deposit — ${contract.contract_number} — The WorkVilla`;
   const html = `
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
@@ -168,6 +179,7 @@ export async function POST(
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Contract</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${contract.contract_number}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;">Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;font-size:18px;">₹${amount.toLocaleString("en-IN")}</td></tr>
         </table>
+        ${breakdownBlock}
         <div style="text-align:center;margin:24px 0;">
           <a href="${linkUrl}" style="background:#015E65;color:white;padding:14px 40px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:15px;">Pay Additional Deposit</a>
           <p style="color:#666;font-size:11px;margin:8px 0 0;">Secure payment via Razorpay</p>

@@ -43,6 +43,7 @@ interface DepositSummary {
   total_shortfall: number;
   unavailable_reason: string | null;
   contracts: ContractBreakdownRow[];
+  breakdown: { unallocated: number };
 }
 
 interface Props {
@@ -107,7 +108,7 @@ export function LeadDepositSummary({ leadId, currentUserRole }: Props) {
           )}
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className={`grid gap-2 ${data.breakdown?.unallocated > 0 ? "grid-cols-4" : "grid-cols-3"}`}>
           <Tile label="Required" value={formatCurrency(data.total_required)} tone="slate" />
           <Tile label="Available" value={formatCurrency(data.available)} tone="emerald" />
           <Tile
@@ -115,6 +116,9 @@ export function LeadDepositSummary({ leadId, currentUserRole }: Props) {
             value={formatCurrency(data.total_shortfall)}
             tone={data.total_shortfall > 0 ? "amber" : "blue"}
           />
+          {data.breakdown?.unallocated > 0 && (
+            <Tile label="Unallocated" value={formatCurrency(data.breakdown.unallocated)} tone="blue" />
+          )}
         </div>
 
         {multiContract && (
