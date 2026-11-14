@@ -100,6 +100,8 @@ export async function loadJourney(
       .neq("status", "voided")
       .limit(1)
       .maybeSingle();
+    // `kind` exists only after migration 00683, so read it on its own: a failed read means "not a VO proposal".
+    const { data: kindRow } = await admin.from("proposals").select("kind").eq("id", proposal.id as string).maybeSingle();
     input.proposal = {
       id: proposal.id as string,
       number: (proposal.proposal_number as string) ?? null,
@@ -109,6 +111,7 @@ export async function loadJourney(
       paymentStatus: (proposal.payment_status as string) ?? null,
       rejectionReason: (proposal.rejection_reason as string) ?? null,
       waiverVerified: !!proposal.deposit_waiver_verified_at,
+      waiverExempt: kindRow?.kind === "virtual_office",
       prorataInvoiceSent: !!pi,
     };
   }

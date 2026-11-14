@@ -1949,7 +1949,7 @@ export default function ProposalDetailPage({
           </Card>
 
           {/* Deposit Waiver Gate — shown for zero-deposit proposals */}
-          {isZeroDeposit && (
+          {isZeroDeposit && !isVoKind && (
             <div id="deposit-waiver-gate">
               <DepositWaiverGate
                 proposalId={proposal.id}
