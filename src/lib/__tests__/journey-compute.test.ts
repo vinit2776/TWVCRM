@@ -81,6 +81,18 @@ describe("computeJourney", () => {
     expect(send.hint).toMatch(/waiver/i);
   });
 
+  it("does not ask for a deposit waiver on a Virtual Office proposal", () => {
+    const j = computeJourney(
+      input({
+        leadStatus: "proposal_sent",
+        proposal: { ...baseProposal, status: "draft", depositMonths: 0, depositStatus: "not_required", paymentStatus: "pending", prorataInvoiceSent: false, waiverExempt: true },
+      }),
+    );
+    const send = step(j, "proposal_sent");
+    expect(send.state).not.toBe("blocked");
+    expect(send.hint ?? "").not.toMatch(/waiver/i);
+  });
+
   it("flags a rejected proposal instead of waiting forever", () => {
     const j = computeJourney(
       input({ leadStatus: "negotiating", proposal: { ...baseProposal, status: "rejected", depositStatus: "pending", paymentStatus: "pending" } }),
