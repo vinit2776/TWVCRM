@@ -8,8 +8,23 @@
  */
 import { nextRenewalTerm, type RenewalTerm } from "@/lib/vo-renewal-term";
 
-export const RENEWAL_DURATIONS = [6, 12, 24, 36] as const;
+export const RENEWAL_DURATIONS = [6, 11, 12, 24, 36, 48] as const;
 export type RenewalDuration = (typeof RENEWAL_DURATIONS)[number];
+
+/** "Choose 6, 11, 12, 24, 36 or 48 months" — for validation messages. */
+export const RENEWAL_DURATIONS_TEXT = `${RENEWAL_DURATIONS.slice(0, -1).join(", ")} or ${RENEWAL_DURATIONS[RENEWAL_DURATIONS.length - 1]} months`;
+
+/**
+ * Whole-term fee under the owner's rule: cases.rate is the whole-term fee for
+ * a term of 12 months or less, and the ANNUAL rate for a longer one.
+ *
+ * Not used by renewalOffer(), which still scales rate pro rata as if it were
+ * always the whole-term fee. The two differ whenever a term longer than 12
+ * months is involved; see the PR notes.
+ */
+export function termFee(rate: number, tenureMonths: number): number {
+  return tenureMonths > 12 ? Math.round((rate * tenureMonths) / 12) : rate;
+}
 
 export const RENEWAL_ESCALATION_MODES = ["agreed", "none", "custom"] as const;
 export type RenewalEscalationMode = (typeof RENEWAL_ESCALATION_MODES)[number];
