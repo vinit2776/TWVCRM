@@ -6,6 +6,7 @@ import { PROPOSAL_EDITABLE_STATUSES } from "@/lib/constants";
 import { validateCommitmentTerms } from "@/lib/proposal-terms";
 import { voSendBlockedReason } from "@/lib/vo-pricing-server";
 import { voExpiryFrom } from "@/lib/vo-proposal";
+import { snapshotProposalTermsOnSend } from "@/lib/vo-terms-server";
 
 const CONTENT_FIELDS = [
   "items",
@@ -195,6 +196,11 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Mark as Sent comes through here too: freeze the clauses this VO proposal went out with, as the email route does.
+  if (oldProposal.kind === "virtual_office" && body.status === "sent" && oldProposal.status !== "sent") {
+    await snapshotProposalTermsOnSend(createAdminClient(), id);
+  }
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
   if (dbUser?.id && oldProposal) {
