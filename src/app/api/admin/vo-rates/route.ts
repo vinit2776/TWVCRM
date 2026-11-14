@@ -39,7 +39,8 @@ export async function GET(request: NextRequest) {
 const postSchema = z
   .object({
     purpose: z.enum(VO_RATE_PURPOSES),
-    location_id: z.string().uuid().nullable(),
+    // guid, not uuid: the Default Center id (00000000-...-000000000001) has no RFC version digit.
+    location_id: z.guid("Invalid location ID").nullable(),
     guide_fee: z.number().min(0).max(100_000_000),
     floor_fee: z.number().min(0).max(100_000_000).nullable(),
     default_term_months: z.number().refine((n) => (VO_RATE_TERM_OPTIONS as readonly number[]).includes(n), "Unsupported term"),
