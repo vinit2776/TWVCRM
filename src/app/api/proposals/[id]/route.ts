@@ -4,6 +4,8 @@ import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { updateProposalSchema } from "@/lib/validations";
 import { PROPOSAL_EDITABLE_STATUSES } from "@/lib/constants";
 import { validateCommitmentTerms } from "@/lib/proposal-terms";
+import { voSendBlockedReason } from "@/lib/vo-pricing-server";
+import { voExpiryFrom } from "@/lib/vo-proposal";
 
 const CONTENT_FIELDS = [
   "items",
@@ -90,7 +92,18 @@ export async function PATCH(
     return NextResponse.json({ error: "A superseded proposal can't be changed." }, { status: 400 });
   }
 
+  // Mark as Sent comes through here, so it needs the same below-floor gate as the email route.
+  // Without it a quote under the floor reaches the customer, who can accept it, with no manager approval.
+  if (oldProposal.kind === "virtual_office" && oldProposal.status === "draft" && ["sent", "viewed", "accepted"].includes(body.status)) {
+    const blockedReason = await voSendBlockedReason(createAdminClient(), oldProposal);
+    if (blockedReason) return NextResponse.json({ error: blockedReason }, { status: 403 });
+  }
+
   if (body.status) allowedFields.status = body.status;
+  // VO proposals lapse 7 days after each send, whichever route sent them.
+  if (oldProposal.kind === "virtual_office" && body.status === "sent") {
+    allowedFields.expires_at = voExpiryFrom(body.sent_at ?? new Date()).toISOString();
+  }
   if (body.location_id !== undefined) allowedFields.location_id = body.location_id || null;
   if (body.sent_at) allowedFields.sent_at = body.sent_at;
   if (body.viewed_at) allowedFields.viewed_at = body.viewed_at;
