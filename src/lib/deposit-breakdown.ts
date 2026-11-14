@@ -63,6 +63,7 @@ export function buildDepositBreakdown<C extends BreakdownContract>(i: Input<C>):
     if (i.excludedIds.has(c.id)) continue;
     const need = r2(i.requiredFor(c));
     totalRequired += need;
+    if (need <= 0) continue; // a contract with no deposit adds nothing to explain
     required.push({ label: c.contract_number, amount: need, kind: "total" });
     const parent = c.deposit_carried_from ? byId.get(c.deposit_carried_from) : undefined;
     if (!parent) continue;
