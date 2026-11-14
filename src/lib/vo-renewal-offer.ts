@@ -8,10 +8,11 @@
  */
 import { nextRenewalTerm, type RenewalTerm } from "@/lib/vo-renewal-term";
 
-export const RENEWAL_DURATIONS = [6, 11, 12, 24, 36, 48] as const;
+/** A renewal term is one year at least. Cases that already run 6 or 11 months can still renew for 12 or more. */
+export const RENEWAL_DURATIONS = [12, 24, 36, 48] as const;
 export type RenewalDuration = (typeof RENEWAL_DURATIONS)[number];
 
-/** "Choose 6, 11, 12, 24, 36 or 48 months" — for validation messages. */
+/** "Choose 12, 24, 36 or 48 months" — for validation messages. */
 export const RENEWAL_DURATIONS_TEXT = `${RENEWAL_DURATIONS.slice(0, -1).join(", ")} or ${RENEWAL_DURATIONS[RENEWAL_DURATIONS.length - 1]} months`;
 
 /**
