@@ -2825,13 +2825,24 @@ function salaryWalletCard(wallet, employee, dayStatus, todayShift, lang) {
     return '';
   };
   const tappable = new Set(['secured', 'half', 'lost', 'paid', 'hold']);
+  // A day that cost the employee money has to say how to get it back, not just that it is
+  // gone. A missed check-out needs the check-out time; an absent or half day needs both
+  // punches. Unpaid leave and days on hold are deliberately left without a link — a
+  // correction request is not the way to undo either.
+  const CORRECTION_KIND_FOR = { 'Missed Checkout': 'check_out', 'Half Day': 'both', Absent: 'both' };
+  const correctionUrlFor = b => {
+    const kind = CORRECTION_KIND_FOR[b.status];
+    if (!kind || (b.outcome !== 'half' && b.outcome !== 'lost')) return '';
+    return `/corrections?employee_id=${encodeURIComponent(employee.id)}&date=${encodeURIComponent(b.date)}&kind=${kind}`;
+  };
   const blocks = wallet.blocks.map(b => {
     const dateLabel = new Date(`${b.date}T00:00:00`).toLocaleDateString(lang === 'ta' ? 'ta-IN' : 'en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
     const style = `${WALLET_BLOCK_STYLE[b.outcome] || WALLET_BLOCK_STYLE.upcoming}height:22px;border-radius:4px;font-size:10px;font-weight:700;line-height:22px;text-align:center;font-variant-numeric:tabular-nums;`;
     if (!tappable.has(b.outcome)) return `<div style="${style}" title="${escapeHtml(dateLabel)}">${b.day}</div>`;
     const statusText = b.label && b.status === 'On Leave' ? b.label : t(lang, `status.${b.status}`);
     return `<div role="button" tabindex="0" class="wallet-day" style="${style}cursor:pointer;" title="${escapeHtml(dateLabel)}"
-      data-date="${escapeHtml(dateLabel)}" data-status="${escapeHtml(statusText)}" data-detail="${escapeHtml(detailFor(b))}">${b.day}</div>`;
+      data-date="${escapeHtml(dateLabel)}" data-status="${escapeHtml(statusText)}" data-detail="${escapeHtml(detailFor(b))}"
+      data-fix="${escapeHtml(correctionUrlFor(b))}">${b.day}</div>`;
   }).join('');
 
   let todayLine = '';
@@ -2891,12 +2902,15 @@ function salaryWalletCard(wallet, employee, dayStatus, todayShift, lang) {
         var detail = document.getElementById('walletDetail');
         var calLink = ${JSON.stringify(t(lang, 'wallet.see_calendar'))};
         var calUrl = ${JSON.stringify(calendarUrl)};
+        var fixLink = ${JSON.stringify(t(lang, 'wallet.request_correction'))};
         function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
         function pick(el) {
           card.querySelectorAll('.wallet-day.sel').forEach(function (x) { x.classList.remove('sel'); });
           el.classList.add('sel');
           detail.innerHTML = '<span><b style="color:#1B2430;">' + esc(el.dataset.date) + '</b> · ' + esc(el.dataset.status) + ' · <span class="money">' + esc(el.dataset.detail) + '</span></span>'
-            + '<a href="' + esc(calUrl) + '" style="color:#1565C0;font-weight:600;text-decoration:none;">' + esc(calLink) + '</a>';
+            + (el.dataset.fix
+              ? '<a href="' + esc(el.dataset.fix) + '" style="background:#1565C0;color:#fff;border-radius:6px;padding:4px 10px;font-weight:600;text-decoration:none;white-space:nowrap;">' + esc(fixLink) + '</a>'
+              : '<a href="' + esc(calUrl) + '" style="color:#1565C0;font-weight:600;text-decoration:none;">' + esc(calLink) + '</a>');
         }
         card.querySelectorAll('.wallet-day').forEach(function (el) {
           el.addEventListener('click', function () { pick(el); });
