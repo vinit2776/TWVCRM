@@ -1053,7 +1053,9 @@ export async function GET(req: NextRequest) {
       duration_hours: t.booking?.duration_hours ?? null,
       pricing_model: t.booking?.pricing_model ?? null,
       base_amount: isSupplement ? 0 : Number(t.booking?.total_amount ?? 0),
-      gst_amount: isSupplement ? 0 : Number(t.booking?.gst_amount ?? 0),
+      // Room GST plus the GST on the extras this task covers, so the card's lines add up to its total.
+      gst_amount: (isSupplement ? 0 : Number(t.booking?.gst_amount ?? 0))
+        + rowAddons.reduce((s, a) => s + Number(a.gst_amount ?? 0), 0),
       gst_rate: Number(t.booking?.gst_rate ?? 18),
       addons: rowAddons,
       task_kind: (isSupplement ? "supplement" : "main") as "main" | "supplement",

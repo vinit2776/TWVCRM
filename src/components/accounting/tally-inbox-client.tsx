@@ -2259,6 +2259,8 @@ function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentCo
   }
   const latest = confirmations[0];
   const ref = latest.razorpay_payment_id ?? latest.payment_reference;
+  // A booking paid in two goes (e.g. UPI, then cash for an extra) must not read as just the last mode.
+  const modeLabels = [...new Set(confirmations.map((c) => paymentModeLabel(c.payment_mode)))];
 
   const handleViewScreenshot = async () => {
     setLoading(true);
@@ -2277,7 +2279,7 @@ function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentCo
     <>
       <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 text-green-800 border border-green-200 flex-shrink-0">
         <CheckCircle2 className="h-2.5 w-2.5" />
-        Paid · {paymentModeLabel(latest.payment_mode)}{ref ? ` · ${ref.slice(-8)}` : ""}
+        Paid · {modeLabels.join(" + ")}{modeLabels.length === 1 && ref ? ` · ${ref.slice(-8)}` : ""}
         {latest.screenshot_path && (
           <button
             type="button"
@@ -2826,6 +2828,9 @@ function BookingInboxRowItem({
                       : a.quantity > 1
                         ? ` × ${a.quantity}`
                         : ""}
+                    <span className="block text-[10px]">
+                      GST {formatCurrency(a.gst_amount)} @ {a.gst_rate}% · incl. {formatCurrency(a.total_with_gst)}
+                    </span>
                   </td>
                   <td className="text-right tabular-nums">{formatCurrency(a.amount)}</td>
                 </tr>
