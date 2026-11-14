@@ -45,14 +45,9 @@ describe("escalationFor", () => {
   });
 });
 
-describe("durations 11 and 48", () => {
-  it("offers 11 and 48 months", () => {
-    expect([...RENEWAL_DURATIONS]).toEqual([6, 11, 12, 24, 36, 48]);
-  });
-  it("scales pro rata for 11 months", () => {
-    const o = renewalOffer({ ...BASE, durationMonths: 11, mode: "none" });
-    expect(o.fee).toBe(16500);
-    expect(o.term).toEqual({ start: "2026-12-19", end: "2027-11-18" });
+describe("renewal durations start at one year", () => {
+  it("offers 12, 24, 36 and 48 months only", () => {
+    expect([...RENEWAL_DURATIONS]).toEqual([12, 24, 36, 48]);
   });
   it("scales pro rata for 48 months", () => {
     const o = renewalOffer({ ...BASE, durationMonths: 48, mode: "none" });
