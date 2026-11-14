@@ -2,6 +2,8 @@ import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
+import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { paymentStatusForTotal, postCheckoutExtrasAllowed } from "@/lib/booking-extras";
 import { logAudit } from "@/lib/audit";
 
 const VALID_TYPES = ["extended_time", "service", "food_beverage", "other"] as const;
@@ -55,38 +57,43 @@ export async function POST(
   // only refresh `total_amount_with_gst` to reflect charges added/removed).
   const { data: booking, error: bErr } = await supabase
     .from("bookings")
-    .select("id, total_amount, gst_rate, gst_amount, total_amount_with_gst, status, payment_status")
+    .select("id, total_amount, gst_rate, gst_amount, total_amount_with_gst, status, payment_status, customer_type, contract_id")
     .eq("id", id).single();
   if (bErr || !booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
-  // Lock add-ons under the same rules as the rate edit. Adding charges
-  // after the customer has paid creates a balance due that the receipt
-  // doesn't reflect; same shape mismatch as silently changing the rate.
-  if (["cancelled", "checked_out", "no_show"].includes(booking.status)) {
+  // Before checkout, add-ons are locked under the same rules as the rate edit: adding a
+  // charge after the customer has paid would create a balance the receipt does not
+  // reflect. After checkout, a walk-in or guest booking takes an extra as a line on the
+  // booking itself: that reopens the balance, which is collected like any other and
+  // reaches the booking's GST invoice. Contract holders keep the monthly-invoice route.
+  const postCheckout = postCheckoutExtrasAllowed(booking);
+  if (["cancelled", "checked_out", "no_show"].includes(booking.status) && !postCheckout) {
     return NextResponse.json(
-      { error: `Cannot add charges to a ${booking.status} booking` },
+      { error: `Cannot add charges to a ${booking.status} booking${booking.status === "checked_out" ? " billed to a contract. Use Add Charge to put it on the next monthly invoice." : ""}` },
       { status: 400 }
     );
   }
-  if (booking.payment_status === "paid") {
-    return NextResponse.json(
-      { error: "Cannot add charges — payment has already been collected. Use 'Add Charge' on the booking detail page to record a post-checkout charge." },
-      { status: 400 }
-    );
-  }
-  // Defence in depth — payment_status can be stale; verified booking_payments
-  // is the truth.
-  const { data: paidPayments } = await supabase
-    .from("booking_payments")
-    .select("id")
-    .eq("booking_id", id)
-    .eq("status", "verified")
-    .limit(1);
-  if (paidPayments && paidPayments.length > 0) {
-    return NextResponse.json(
-      { error: "Cannot add charges — verified payments exist for this booking" },
-      { status: 400 }
-    );
+  if (!postCheckout) {
+    if (booking.payment_status === "paid") {
+      return NextResponse.json(
+        { error: "Cannot add charges — payment has already been collected." },
+        { status: 400 }
+      );
+    }
+    // Defence in depth — payment_status can be stale; verified booking_payments
+    // is the truth.
+    const { data: paidPayments } = await supabase
+      .from("booking_payments")
+      .select("id")
+      .eq("booking_id", id)
+      .eq("status", "verified")
+      .limit(1);
+    if (paidPayments && paidPayments.length > 0) {
+      return NextResponse.json(
+        { error: "Cannot add charges — verified payments exist for this booking" },
+        { status: 400 }
+      );
+    }
   }
 
   const body = await request.json();
@@ -160,7 +167,7 @@ export async function POST(
     // duration is still adjustable via Reschedule — which already recomputes
     // the full charge for the new time slot, so an extended_time addon on
     // top of that double-bills the same hours (see TWV-B-0219).
-    if (addon_type === "extended_time" && booking.status !== "checked_in") {
+    if (addon_type === "extended_time" && booking.status !== "checked_in" && !postCheckout) {
       return NextResponse.json(
         { error: "Extended-time charges can only be added after check-in. To change the booking's time before check-in, use Reschedule instead — it already recalculates the full charge for the new duration." },
         { status: 400 },
@@ -193,6 +200,7 @@ export async function POST(
       total_with_gst: totalWithGst,
       notes: it.notes || null,
       added_by: dbUser.id,
+      added_after_checkout: postCheckout,
     });
   }
 
@@ -203,7 +211,11 @@ export async function POST(
     .select();
   if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
 
-  await recomputeBookingTotal(supabase, id, booking);
+  const newTotal = await recomputeBookingTotal(supabase, id, booking);
+
+  if (postCheckout) {
+    await reopenBalanceAfterExtra(id, newTotal, Number(booking.total_amount_with_gst), dbUser.id);
+  }
 
   // Audit one row per inserted addon — keeps the existing per-addon timeline
   // contract intact (callers consuming audit_trail don't need to learn a new
@@ -235,7 +247,7 @@ async function recomputeBookingTotal(
   supabase: Awaited<ReturnType<typeof createClient>>,
   bookingId: string,
   baseBooking: { total_amount: number; gst_amount: number; total_amount_with_gst: number },
-) {
+): Promise<number> {
   const { data: addons } = await supabase
     .from("booking_addons")
     .select("amount, gst_amount, total_with_gst")
@@ -253,9 +265,49 @@ async function recomputeBookingTotal(
   const baseAmount = Number(baseBooking.total_amount);
   const baseGst = Number(baseBooking.gst_amount);
 
-  await supabase.from("bookings").update({
-    total_amount_with_gst: roundToRupee(baseAmount + baseGst + addonSum.total),
-  }).eq("id", bookingId);
+  const total = roundToRupee(baseAmount + baseGst + addonSum.total);
+  await supabase.from("bookings").update({ total_amount_with_gst: total }).eq("id", bookingId);
   // Keep the PI's Receivables statement at the booking's new total.
   await syncBookingPiStatement(createAdminClient(), bookingId);
+  return total;
+}
+
+/**
+ * An extra added after checkout lifts the total above what was collected, so a booking
+ * that was paid goes back to Pending Collection for the difference. The Tally task is
+ * held by the same state: it only goes ahead once the booking is paid again.
+ *
+ * Only a booking that is "paid" with money actually collected is reopened. Waived,
+ * complimentary and prepaid bookings keep the status they were given on purpose.
+ * The flip is a compare-and-set on payment_status, so a payment that lands at the same
+ * moment is not overwritten. The old payment link is cleared only because it was already
+ * spent on the earlier amount; the next Send link or PI makes a fresh one for the balance.
+ */
+async function reopenBalanceAfterExtra(bookingId: string, total: number, previousTotal: number, userId: string) {
+  const admin = createAdminClient();
+  const { data: current } = await admin
+    .from("bookings").select("payment_status").eq("id", bookingId).maybeSingle();
+  if (current?.payment_status !== "paid") return;
+
+  const { data: payments } = await admin
+    .from("booking_payments").select("amount").eq("booking_id", bookingId).eq("status", "verified");
+  const paid = (payments || []).reduce((s: number, p: { amount: number | string }) => s + Number(p.amount), 0);
+  if (paid <= 0) return;
+
+  const status = paymentStatusForTotal(total, paid, total - previousTotal);
+  if (status === "pending") {
+    const { data: flipped } = await admin.from("bookings")
+      .update({ payment_status: "pending", razorpay_payment_link_id: null, razorpay_payment_link_url: null })
+      .eq("id", bookingId)
+      .eq("payment_status", "paid")
+      .select("id");
+    if (!flipped || flipped.length === 0) return;
+    await syncBookingPiStatement(admin, bookingId);
+    void logAudit(admin, {
+      entityType: "booking", entityId: bookingId, action: "update", performedBy: userId,
+      changes: { payment_status: { old: "paid", new: "pending (extra added after checkout)" } },
+    });
+  } else {
+    await maybeCreateBookingGstTask(admin, bookingId);
+  }
 }

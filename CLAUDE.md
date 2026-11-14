@@ -244,6 +244,10 @@ Lets the final vendor invoice drift from the PO value without a hard block (migr
 - GST tax rates are locked to each contract's `tax_percentage` — never recalculate dynamically.
 - `BillingLifecycleStatus` component (`src/components/billing/billing-lifecycle-status.tsx`) renders the 6-step progress indicator on list views.
 
+### Post-checkout extras (walk-in / guest bookings)
+
+An extra found after checkout (overtime, damage, missed F&B) is added as a booking add-on (`added_after_checkout`; contract holders keep the monthly-invoice route). It reopens a **paid** booking with money collected to `pending` for the difference (compare-and-set; waived/complimentary/prepaid bookings keep their status), the old spent payment link is cleared, and the PI statement follows. A booking can have several `booking_gst_tasks` (`kind` main/supplement, `sequence`, own `amount_with_gst`): an unissued task is refreshed to include the extra and **held** (shown as in-flight) until the booking is paid; once accounts issued the invoice, a supplement task is created for the difference. Add-ons are claimed (`gst_task_id`) when an invoice is uploaded; a claimed extra can't be removed. Rules: `src/lib/booking-extras.ts`, `booking-gst-task.ts`. Removing a paid extra leaves the money in place and returns an `overpaid` warning (refund is manual).
+
 ### Usage Invoices (contract/month grouped)
 
 Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.ts`; API under `/api/usage-billing/` (`unbilled`, `prepare`, `send`, `cancel`; admin/manager/accounts).

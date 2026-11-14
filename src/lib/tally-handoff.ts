@@ -540,6 +540,10 @@ export interface BookingInboxRow {
   payment_confirmations: BookingPaymentConfirmation[];
   is_voided: boolean;
   void_reason: string | null;
+  /** A supplement invoices an extra raised after the main GST invoice was issued. */
+  task_kind: "main" | "supplement";
+  /** Why an unissued task is waiting (an unpaid extra), or null when it can go ahead. */
+  held_reason: string | null;
 }
 
 export interface InboxStats {

@@ -147,7 +147,7 @@ export async function syncBookingPiStatement(admin: SupabaseClient, bookingId: s
 
     const { data: booking } = await admin
       .from("bookings")
-      .select("id, booking_number, status, payment_status, total_amount, gst_rate, gst_amount, total_amount_with_gst, duration_hours, space:spaces!bookings_space_id_fkey(name), addons:booking_addons(*)")
+      .select("id, booking_number, status, payment_status, total_amount, gst_rate, gst_amount, total_amount_with_gst, duration_hours, razorpay_payment_link_id, razorpay_payment_link_url, space:spaces!bookings_space_id_fkey(name), addons:booking_addons(*)")
       .eq("id", bookingId)
       .maybeSingle();
     if (!booking) return;
@@ -218,6 +218,10 @@ export async function syncBookingPiStatement(admin: SupabaseClient, bookingId: s
       .from("billing_statements")
       .update({
         payment_status: next,
+        // Follows the booking's link: an extra after checkout gets a fresh one for the balance.
+        // Including none: a cleared link must not leave the statement pointing at a spent one.
+        razorpay_payment_link_id: booking.razorpay_payment_link_id ?? null,
+        razorpay_payment_link_url: booking.razorpay_payment_link_url ?? null,
         total_amount: totals.total,
         subtotal: totals.subtotal,
         fixed_amount: totals.subtotal,
