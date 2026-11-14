@@ -44,7 +44,7 @@ export function validateVoForm(values: VoFormValues, view: VoPricingView): strin
   if (!values.title.trim()) return "Please enter a proposal title";
   if (!values.purpose) return "Choose the purpose (GST new or GST existing)";
   if (!values.locationId) return "Choose the location";
-  if (values.termMonths === null || !isAllowedVoTerm(values.termMonths)) return "Choose a term (11, 12, 24, 36 or 48 months)";
+  if (values.termMonths === null || !isAllowedVoTerm(values.termMonths)) return "Choose a term (12, 24, 36 or 48 months)";
   if (view.state === "loading") return "Wait for the rate card price to load";
   if (view.state === "no_rate") return view.message;
   const rate = parseQuotedRate(values.quotedRate);
