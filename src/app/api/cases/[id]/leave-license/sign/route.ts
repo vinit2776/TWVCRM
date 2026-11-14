@@ -75,6 +75,13 @@ export async function POST(
         );
       }
 
+      // Signing cannot start until the case invoice is paid — same rule as
+      // execution, checked before any Leegality call creates a signing link.
+      const unpaidMessage = await checkVoExecutionPaymentGate(supabase, caseId);
+      if (unpaidMessage) {
+        return NextResponse.json({ error: unpaidMessage }, { status: 403 });
+      }
+
       if (!(await isLeegalitySigningEnabled(adminSupabase))) {
         return NextResponse.json(
           { error: "E-signing via Leegality is currently turned off. Use company stamp or upload a manually signed document instead." },
