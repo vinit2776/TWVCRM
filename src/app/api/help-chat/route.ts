@@ -12,7 +12,7 @@ import { normalizePagePath } from "@/lib/help/page-path";
 // Overridable via env so the model can be bumped without a redeploy for this
 // one call site — mirrors the pattern in src/lib/email-parser.ts and the
 // other Anthropic call sites (validate-internal-note, suggest-description).
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+const DEFAULT_MODEL = "claude-haiku-5-5";
 const MODEL = process.env.ANTHROPIC_HELP_CHAT_MODEL || DEFAULT_MODEL;
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -113,7 +113,9 @@ export async function POST(request: NextRequest) {
     const message = await anthropic.messages.create(
       {
         model: MODEL,
-        max_tokens: 500,
+        // Haiku 5.5 thinks by default and those tokens come out of max_tokens, so this
+        // cap is headroom for thinking ahead of the short answer, not a target length.
+        max_tokens: 2000,
         system: systemPrompt,
         messages: [...history, { role: "user", content: question }],
       },
