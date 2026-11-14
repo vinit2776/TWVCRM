@@ -25,7 +25,7 @@ export async function voProposalColumnsPresent(): Promise<boolean> {
       cached = { value: true, at: Date.now() };
       return true;
     }
-    if (error.code === "42703" || error.code === "42P01") {
+    if (["42703", "42P01", "PGRST204", "PGRST205"].includes(error.code ?? "")) {
       cached = { value: false, at: Date.now() };
       return false;
     }

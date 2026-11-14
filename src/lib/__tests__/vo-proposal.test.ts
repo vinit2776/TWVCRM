@@ -14,8 +14,8 @@ import {
 const SENT = "2026-11-01T00:00:00.000Z";
 
 describe("validateVoTerm", () => {
-  it.each([11, 12, 24, 36, 48])("accepts %i", (m) => expect(validateVoTerm(m)).toBeNull());
-  it.each([0, 6, 13, 60, 12.5, "12", null])("rejects %s", (m) => expect(validateVoTerm(m)).not.toBeNull());
+  it.each([12, 24, 36, 48])("accepts %i", (m) => expect(validateVoTerm(m)).toBeNull());
+  it.each([0, 6, 11, 13, 60, 12.5, "12", null])("rejects %s", (m) => expect(validateVoTerm(m)).not.toBeNull());
 });
 
 describe("termFee", () => {
