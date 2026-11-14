@@ -157,7 +157,7 @@ export function DepositCollectDialog({ contractId, open, onOpenChange, prefillSh
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onOpenChange(false); }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Collect balance deposit</DialogTitle>
           <DialogDescription>
