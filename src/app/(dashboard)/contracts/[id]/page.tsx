@@ -294,6 +294,24 @@ export default function ContractDetailPage({
       .catch(() => { if (!cancelled) setPoolShortfall(null); });
     return () => { cancelled = true; };
   }, [poolDepositApplied, contract?.lead_id]);
+  // The customer's deposit shortfall is Required − Available across their live
+  // contracts (deposit-summary), not the contract's own rate-increase top-up
+  // (deposit_shortfall), which assumed the parent's deposit was fully collected.
+  const contractIsLive = contract?.status === "active" || contract?.status === "renewal_in_progress";
+  const [leadDepositShortfall, setLeadDepositShortfall] = useState<number | null>(null);
+  const [depositTick, setDepositTick] = useState(0);
+  useEffect(() => {
+    if (!contractIsLive || !contract?.lead_id) { setLeadDepositShortfall(null); return; }
+    let cancelled = false;
+    fetch(`/api/leads/${contract.lead_id}/deposit-summary`)
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setLeadDepositShortfall(j.data?.total_shortfall ?? null); })
+      .catch(() => { if (!cancelled) setLeadDepositShortfall(null); });
+    return () => { cancelled = true; };
+  }, [contractIsLive, contract?.lead_id, contract?.deposit_shortfall, depositTick]);
+  const effectiveDepositShortfall = contractIsLive && leadDepositShortfall !== null
+    ? leadDepositShortfall
+    : contract?.deposit_shortfall;
   const poolUncovered = contract
     ? Math.max(0, Number(contract.security_deposit_amount || 0) - poolDepositApplied)
     : 0;
@@ -1621,9 +1639,9 @@ export default function ContractDetailPage({
                 </Link>
               </div>
               {contract.deposit_carried_from && (
-                Number(contract.deposit_shortfall || 0) > 0 ? (
+                Number(effectiveDepositShortfall || 0) > 0 ? (
                   <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
-                    Deposit shortfall: {formatCurrency(Number(contract.deposit_shortfall || 0))}
+                    Deposit shortfall: {formatCurrency(Number(effectiveDepositShortfall || 0))}
                   </Badge>
                 ) : (
                   <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
@@ -1797,9 +1815,9 @@ export default function ContractDetailPage({
                       ✓ {formatCurrency(poolDepositApplied)} applied from customer&apos;s pooled deposit
                     </p>
                   )}
-                  {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
+                  {effectiveDepositShortfall != null && effectiveDepositShortfall > 0 && (
                     <p className="text-[10px] text-amber-600 mt-0.5">
-                      Shortfall: {formatCurrency(contract.deposit_shortfall)}
+                      Shortfall: {formatCurrency(effectiveDepositShortfall)}
                     </p>
                   )}
                 </div>
@@ -1842,11 +1860,12 @@ export default function ContractDetailPage({
               even when no proposal is (or ever was) linked. */}
           {(linkedProposal || (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) && (
             <ContractDepositSection
+              key={depositTick}
               proposal={linkedProposal}
               contract={contract}
               depositCarriedFrom={contract.deposit_carried_from}
               leadId={contract.lead_id || undefined}
-              depositShortfall={contract.deposit_shortfall}
+              depositShortfall={effectiveDepositShortfall}
             />
           )}
 
@@ -1855,8 +1874,8 @@ export default function ContractDetailPage({
           <ContractDepositTopupsSection
             contractId={id}
             currentUserRole={userRole ?? ""}
-            depositShortfall={contract.deposit_shortfall}
-            onShortfallCollected={() => fetchContract(false)}
+            depositShortfall={effectiveDepositShortfall}
+            onShortfallCollected={() => { fetchContract(false); setDepositTick((t) => t + 1); }}
             openCollectSignal={depositOpenSignal}
           />
           </div>
@@ -2306,11 +2325,11 @@ export default function ContractDetailPage({
                     <span className="text-xs text-green-700">Pooled with customer</span>
                   </div>
                 )}
-                {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
+                {effectiveDepositShortfall != null && effectiveDepositShortfall > 0 && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground text-xs">Deposit Shortfall</span>
                     <span className="text-xs text-amber-700 font-medium">
-                      {formatCurrency(contract.deposit_shortfall)}
+                      {formatCurrency(effectiveDepositShortfall)}
                     </span>
                   </div>
                 )}
@@ -3406,7 +3425,7 @@ export default function ContractDetailPage({
         leadId={contract.lead_id}
         userRole={userRole}
         contractStatus={contractDisplayStatus(contract)}
-        depositShortfall={contract.deposit_shortfall}
+        depositShortfall={effectiveDepositShortfall}
         locationId={contract.location_id}
         onOpenAddon={() => setAddonOpenSignal((n) => n + 1)}
         onOpenDeposit={() => setDepositOpenSignal((n) => n + 1)}

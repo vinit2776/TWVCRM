@@ -44,6 +44,7 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom,
   const [siblingCount, setSiblingCount] = useState<number | null>(null);
   const [pooledAvailable, setPooledAvailable] = useState<number | null>(null);
   const [pooledShortfall, setPooledShortfall] = useState<number | null>(null);
+  const [pooledRequired, setPooledRequired] = useState<number | null>(null);
   useEffect(() => {
     if (!leadId) return;
     fetch(`/api/leads/${leadId}/deposit-summary`)
@@ -52,8 +53,9 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom,
         setSiblingCount(j.data?.contracts?.length ?? null);
         setPooledAvailable(j.data?.available ?? null);
         setPooledShortfall(j.data?.total_shortfall ?? null);
+        setPooledRequired(j.data?.total_required ?? null);
       })
-      .catch(() => { setSiblingCount(null); setPooledAvailable(null); setPooledShortfall(null); });
+      .catch(() => { setSiblingCount(null); setPooledAvailable(null); setPooledShortfall(null); setPooledRequired(null); });
   }, [leadId]);
 
   // total_shortfall is Required − Available across every contract the
@@ -91,7 +93,11 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom,
   // matters for the activation gate (see contracts/[id]/route.ts) — it's no
   // longer what determines this number.
   if (depositCarriedFrom) {
-    const hasShortfall = Number(depositShortfall || 0) > 0;
+    // Required − Available across the customer's live contracts. The contract's
+    // own deposit_shortfall (the rate-increase top-up) is only the fallback
+    // while the summary loads or if it can't be fetched.
+    const shortfall = pooledShortfall ?? Number(depositShortfall || 0);
+    const hasShortfall = shortfall > 0;
     return (
       <Card>
         <CardHeader className="pb-3">
@@ -115,13 +121,13 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom,
               {hasShortfall ? (
                 <>
                   <AlertTriangle className="h-3 w-3 inline -mt-0.5 mr-1" />
-                  This renewal&apos;s rate increase requires an additional <strong>{formatCurrency(Number(depositShortfall))}</strong>, not yet collected.
+                  <strong>{formatCurrency(shortfall)}</strong> of the deposit is still to collect.
                 </>
               ) : (
                 "No new collection required for this contract."
               )}
-              {pooledAvailable !== null && (
-                <> Customer&apos;s available deposit: <strong>{formatCurrency(pooledAvailable)}</strong></>
+              {pooledRequired !== null && pooledAvailable !== null && (
+                <> Required: <strong>{formatCurrency(pooledRequired)}</strong> · Available: <strong>{formatCurrency(pooledAvailable)}</strong></>
               )}
             </span>
           </div>

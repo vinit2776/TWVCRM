@@ -15,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { CONTRACT_QUOTA_LOCKED_STATUSES } from "@/lib/constants";
+import { contractDepositRequirement, depositShortfall } from "@/lib/deposit-requirement";
 
 export async function GET(
   _request: Request,
@@ -27,7 +28,7 @@ export async function GET(
 
   const { data: contracts, error } = await supabase
     .from("contracts")
-    .select("id, contract_number, status, proposal_id, security_deposit_amount, deposit_payment_status, deposit_payment_amount, deposit_refunded_amount, deposit_carried_from, deposit_shortfall, start_date, end_date, tenure_months")
+    .select("id, contract_number, status, proposal_id, security_deposit_amount, security_deposit_months, subtotal, total_amount, deposit_payment_status, deposit_payment_amount, deposit_refunded_amount, deposit_carried_from, deposit_shortfall, start_date, end_date, tenure_months")
     .eq("lead_id", leadId)
     .order("created_at");
 
@@ -114,37 +115,29 @@ export async function GET(
     (proposalRows ?? []).forEach((p) => proposalRequirementById.set(p.id, Number(p.security_deposit_amount || 0)));
   }
 
-  const requiredAmountFor = (c: (typeof contracts)[number]) => {
-    const isActivated = (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(c.status);
-    if (isActivated || !c.proposal_id) return Number(c.security_deposit_amount || 0);
-    return proposalRequirementById.get(c.proposal_id) ?? 0;
-  };
-
-  // deposit_shortfall (renewal-escalation top-up, see renew/route.ts) is a
-  // real outstanding ask tracked in its own column, separate from
-  // security_deposit_amount — a carried-from renewal typically snapshots
-  // security_deposit_amount as 0/not_required since it collects no deposit
-  // of its own, so without this the shortfall would be invisible here even
-  // though it's genuinely still owed against the pool.
+  // One rule: a live contract (active, or mid-renewal) requires its whole
+  // deposit. Required is the sum of those, Available is what the customer's
+  // pool holds, and the shortfall is the difference. The renewal-escalation
+  // top-up (deposit_shortfall) is no longer added on top: it only measured
+  // the rate increase and assumed the parent's deposit had been collected in
+  // full, so it disagreed with this total whenever it hadn't been.
   const requiredFor = (c: (typeof contracts)[number]) =>
-    requiredAmountFor(c) + Number(c.deposit_shortfall || 0);
+    contractDepositRequirement(
+      c,
+      c.proposal_id ? proposalRequirementById.get(c.proposal_id) ?? 0 : null,
+    );
 
   const totalRequired = contracts.reduce(
     (sum, c) => (excludedFromRequiredIds.has(c.id) ? sum : sum + requiredFor(c)),
     0
   );
 
-  // The aggregate Shortfall tile must equal Required − Available by
-  // construction, or the three tiles contradict each other on screen. It
-  // used to be summed from contracts.deposit_shortfall alone — a real
-  // column, but a narrower concept (only the renewal-escalation top-up
-  // amount). That undercounted whenever Required also included money owed
-  // for a completely uncollected contract (e.g. a second contract off a
-  // shared proposal that hasn't paid its own deposit at all — nothing to do
-  // with any renewal). The per-contract `shortfall` field below stays tied
-  // to the real deposit_shortfall column — that one still drives the
-  // "Collect Now" pre-fill for the renewal-escalation flow specifically.
-  const totalShortfall = Math.max(0, totalRequired - Number(balance.available || 0));
+  const totalShortfall = depositShortfall(totalRequired, Number(balance.available || 0));
+
+  // A top-up lands in the customer's pool whichever contract it is raised on,
+  // so the pool's shortfall is attached to the newest live contract for the
+  // Collect Now button.
+  const collectOnId = [...contracts].reverse().find((c) => !excludedFromRequiredIds.has(c.id))?.id;
 
   const breakdown = contracts.map((c) => ({
     contract_id: c.id,
@@ -155,7 +148,7 @@ export async function GET(
       ? Number(c.deposit_payment_amount || c.security_deposit_amount || 0)
       : 0,
     refunded: Number(c.deposit_refunded_amount || 0),
-    shortfall: Number(c.deposit_shortfall || 0),
+    shortfall: c.id === collectOnId ? totalShortfall : 0,
     is_renewal_child: !!c.deposit_carried_from,
     is_superseded: supersededIds.has(c.id),
     start_date: c.start_date,
