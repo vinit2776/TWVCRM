@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeVoPricing, classifyRate, rateCardPurposeFor, buildDirectSnapshot, computeAggregatorCasePricing } from "@/lib/vo-pricing";
+import { computeVoPricing, classifyRate, rateCardPurposeFor, buildDirectSnapshot, computeAggregatorCasePricing, voPriceChangedReason } from "@/lib/vo-pricing";
 
 const row = (purpose: string, location_id: string | null, guide = 10000, floor: number | null = 8000, version = 3) => ({
   id: `${purpose}-${location_id}`, purpose, location_id, guide_fee: guide, floor_fee: floor, default_term_months: 12, version,
@@ -95,5 +95,24 @@ describe("computeAggregatorCasePricing", () => {
     expect(f.ok && f.snapshot).toMatchObject({ pricing_type: "fixed", our_amount: 3000, card_match: "exact" });
     const low = computeAggregatorCasePricing({ purpose: "gst_new", locationId: null, termMonths: 12, customerRate: 4000, rows: agg });
     expect(low.ok && low.snapshot.below_minimum).toBe(true);
+  });
+});
+
+describe("voPriceChangedReason", () => {
+  const snap = { quoted_term_fee: 12000 };
+  it("is clear when the proposal still carries the priced fee", () => {
+    expect(voPriceChangedReason({ vo_price_snapshot: snap, subtotal: "12000.00", discount_percentage: 0 })).toBeNull();
+  });
+  it("blocks when the line items were edited after pricing", () => {
+    expect(voPriceChangedReason({ vo_price_snapshot: snap, subtotal: "9000.00", discount_percentage: 0 })).toMatch(/changed/i);
+    expect(voPriceChangedReason({ vo_price_snapshot: snap, subtotal: 20000, discount_percentage: 0 })).toMatch(/changed/i);
+  });
+  it("blocks a discount, which would sit below the checked price", () => {
+    expect(voPriceChangedReason({ vo_price_snapshot: snap, subtotal: 12000, discount_percentage: 10 })).toMatch(/changed/i);
+  });
+  it("does not block proposals that have no snapshot or fee to compare", () => {
+    expect(voPriceChangedReason({ vo_price_snapshot: null, subtotal: 5000 })).toBeNull();
+    expect(voPriceChangedReason({ vo_price_snapshot: {}, subtotal: 5000 })).toBeNull();
+    expect(voPriceChangedReason({ vo_price_snapshot: snap, subtotal: null })).toBeNull();
   });
 });

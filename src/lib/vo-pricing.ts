@@ -185,3 +185,21 @@ function buildAggregatorSnapshot(
     captured_at: (input.capturedAt ?? new Date()).toISOString(),
   };
 }
+
+/**
+ * The price on the proposal must still be the price that was rate-card checked. The approval is keyed to the
+ * stored quoted rate, so a later edit of the line items would otherwise go out under an approval for a different
+ * (or no longer below-floor) price. Fails closed: re-create the quote instead of editing its price.
+ */
+export function voPriceChangedReason(proposal: {
+  vo_price_snapshot?: { quoted_term_fee?: number | null } | null;
+  subtotal?: number | string | null;
+  discount_percentage?: number | string | null;
+}): string | null {
+  const snap = proposal.vo_price_snapshot;
+  if (!snap || snap.quoted_term_fee == null || proposal.subtotal == null) return null;
+  const priceMoved = Math.abs(Number(proposal.subtotal) - Number(snap.quoted_term_fee)) >= 0.5;
+  const discounted = Number(proposal.discount_percentage ?? 0) > 0;
+  if (priceMoved || discounted) return "The price was changed after it was checked against the rate card. Create a new Virtual Office proposal at the price you want.";
+  return null;
+}

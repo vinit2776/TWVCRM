@@ -15,7 +15,7 @@ async function load(id: string) {
   const admin = createAdminClient();
   const { data: proposal } = await admin
     .from("proposals")
-    .select("id, kind, proposal_number, location_id, vo_term_months, vo_quoted_price, vo_price_snapshot")
+    .select("id, kind, proposal_number, location_id, vo_term_months, vo_quoted_price, vo_price_snapshot, subtotal, discount_percentage")
     .eq("id", id)
     .maybeSingle();
   if (!proposal || proposal.kind !== "virtual_office") {

@@ -93,7 +93,7 @@ export async function POST(
   // ── Below-floor gate (VO kind): a quote under the floor needs an approved request first.
   // Own query: before migration 00688 vo_price_snapshot does not exist, and then there is nothing to gate.
   {
-    const { data: voRow } = await supabase.from("proposals").select("id, kind, vo_price_snapshot").eq("id", id).maybeSingle();
+    const { data: voRow } = await supabase.from("proposals").select("id, kind, vo_price_snapshot, subtotal, discount_percentage").eq("id", id).maybeSingle();
     if (voRow) {
       const blockedReason = await voSendBlockedReason(createAdminClient(), voRow);
       if (blockedReason) return NextResponse.json({ error: blockedReason }, { status: 403 });
