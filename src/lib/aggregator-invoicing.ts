@@ -3,19 +3,29 @@ import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
 import { caseDisplayName } from "@/lib/case-workflow";
-import { getCachedSettings } from "@/lib/app-settings-cache";
 import {
   AGG_BILLABLE_CASE_STATUSES,
   AGG_BILLING_MODE_KEY,
   billableCasesForPeriod,
   legacyLineAmount,
   parseAggBillingMode,
+  type AggBillingMode,
   type BilledTerm,
 } from "@/lib/aggregator-term-billing";
 
 // 42P01 is Postgres; PGRST205 is PostgREST saying the table is not in its schema cache.
 const TABLE_MISSING_CODES = ["42P01", "PGRST205"];
 let warnedTermsTableMissing = false;
+
+/**
+ * The billing mode is read live, not through the 5-minute settings cache: a flip made in the database
+ * or the admin screen must apply to the very next run, on every server instance, or that run can bill
+ * the old way. It is read once per invoice run, so the extra query costs nothing.
+ */
+export async function loadAggBillingMode(supabase: SupabaseClient): Promise<AggBillingMode> {
+  const { data } = await supabase.from("app_settings").select("value").eq("key", AGG_BILLING_MODE_KEY).maybeSingle();
+  return parseAggBillingMode(data?.value);
+}
 
 export interface GenerateConsolidatedInvoiceParams {
   supabase: SupabaseClient;
@@ -115,8 +125,7 @@ export async function generateConsolidatedInvoice({
   // once_per_tenure bills each case once per term; anything else is the
   // legacy monthly behaviour. The ledger table may not exist yet (deploy
   // precedes migration), in which case we stay on legacy.
-  const settings = await getCachedSettings(supabase, [AGG_BILLING_MODE_KEY]);
-  let oncePerTenure = parseAggBillingMode(settings[AGG_BILLING_MODE_KEY]) === "once_per_tenure";
+  let oncePerTenure = (await loadAggBillingMode(supabase)) === "once_per_tenure";
   let alreadyBilled: BilledTerm[] = [];
   if (oncePerTenure) {
     const { data: billedRows, error: billedError } = await supabase
