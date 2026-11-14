@@ -12,7 +12,8 @@ export const PROPOSAL_KINDS = ["standard", "virtual_office"] as const;
 export type ProposalKind = (typeof PROPOSAL_KINDS)[number];
 
 export const VO_PROPOSAL_VALIDITY_DAYS = 7;
-export const VO_ALLOWED_TERMS = [11, 12, 24, 36, 48] as const;
+/** One year is the minimum term for a new Virtual Office quote. */
+export const VO_ALLOWED_TERMS = [12, 24, 36, 48] as const;
 export const VO_PROPOSAL_EXPIRY_CRON_MODE_SETTING = "vo_proposal_expiry_cron_mode";
 
 export const isVoProposal = (p: { kind?: string | null }): boolean => p.kind === "virtual_office";
