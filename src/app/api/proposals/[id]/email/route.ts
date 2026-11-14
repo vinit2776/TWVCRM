@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { logEmailActivity } from "@/lib/audit";
+import { logEmailActivity, logAudit } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { voExpiryFrom } from "@/lib/vo-proposal";
 import { voSendBlockedReason } from "@/lib/vo-pricing-server";
+import { snapshotProposalTermsOnSend } from "@/lib/vo-terms-server";
 
 // Allow larger request bodies for PDF attachments (default is 4.5MB)
 export const maxDuration = 30; // seconds
@@ -303,6 +304,20 @@ export async function POST(
     // until migration 00683, so this is a no-op for standard proposals and before it.
     if (proposal.kind === "virtual_office") sentUpdate.expires_at = voExpiryFrom(sentUpdate.sent_at as string).toISOString();
     await supabase.from("proposals").update(sentUpdate).eq("id", id);
+
+    // Terms library (vo_terms_library_mode = on): freeze the exact clauses this proposal went out with.
+    if (proposal.kind === "virtual_office") {
+      const termsSnapshot = await snapshotProposalTermsOnSend(createAdminClient(), id);
+      if (termsSnapshot && sender?.id) {
+        logAudit(supabase, {
+          entityType: "proposal",
+          entityId: id,
+          action: "update",
+          performedBy: sender.id,
+          changes: { vo_terms_snapshot: { old: null, new: termsSnapshot.clauses.map((c) => `${c.code} v${c.version}`) } },
+        });
+      }
+    }
 
     // Log email activity
     if (proposal.lead_id && sender?.id) {
