@@ -20,7 +20,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
   PROCUREMENT_DEPARTMENTS,
-  ITEM_CATALOG_DEPARTMENTS,
+  NEW_CATALOG_ITEM_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
   ITEM_UNIT_GROUPS,
@@ -667,7 +667,11 @@ export default function CatalogPage() {
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {ITEM_CATALOG_DEPARTMENTS.map((d) => (
+                    {/* "Asset" is not offered for new items; one already tagged that way keeps it so it can still be edited. */}
+                    {(editItem?.department === "asset"
+                      ? ([...NEW_CATALOG_ITEM_DEPARTMENTS, "asset"] as const)
+                      : NEW_CATALOG_ITEM_DEPARTMENTS
+                    ).map((d) => (
                       <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
                     ))}
                   </SelectContent>

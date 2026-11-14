@@ -1888,6 +1888,14 @@ export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 export const ITEM_CATALOG_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
 
 /**
+ * Departments offered when a catalog item is created or suggested. "asset" is left out: the catalog holds
+ * what is bought and consumed, and a physical asset needs serial, location and more, which Facility → Assets
+ * already holds. Existing items tagged "asset" stay (and stay editable); requests still use the department
+ * for capex purchases, so ITEM_CATALOG_DEPARTMENTS and PROCUREMENT_DEPARTMENTS are unchanged.
+ */
+export const NEW_CATALOG_ITEM_DEPARTMENTS = ["pantry", "maintenance", "administration"] as const;
+
+/**
  * Departments that are purchased centrally (from NUN 5th floor) and then
  * distributed to individual centers for consumption. These can have an
  * optional per-center monthly budget in addition to the company-wide cap, and

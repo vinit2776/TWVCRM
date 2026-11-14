@@ -23,6 +23,7 @@ import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog"
 import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_EXAMPLES,
   PROCUREMENT_DEPARTMENT_COLORS, CENTER_SCOPED_DEPARTMENTS,
+  NEW_CATALOG_ITEM_DEPARTMENTS,
   ITEM_UNIT_GROUPS,
   ITEM_UNIT_LABELS,
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
@@ -1785,7 +1786,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                             <SelectValue placeholder="Select a department" />
                           </SelectTrigger>
                           <SelectContent>
-                            {(["pantry", "maintenance", "administration", "asset"] as const).map((d) => (
+                            {NEW_CATALOG_ITEM_DEPARTMENTS.map((d) => (
                               <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
                             ))}
                           </SelectContent>
