@@ -326,6 +326,14 @@ export async function POST(request: NextRequest) {
       unitRate = dr;
     }
     quantity = Math.max(1, Number(input.num_seats ?? 1));
+    // A day-pass seat is one person's desk, so more seats than attendees would over-bill.
+    const attendees = input.num_attendees ? Number(input.num_attendees) : 0;
+    if (attendees > 0 && quantity > attendees) {
+      return NextResponse.json(
+        { error: `Seats (${quantity}) can't be more than attendees (${attendees}). Raise attendees or lower seats.` },
+        { status: 400 },
+      );
+    }
   } else {
     unitRate = (input.hourly_rate !== undefined && input.hourly_rate >= 0)
       ? input.hourly_rate
