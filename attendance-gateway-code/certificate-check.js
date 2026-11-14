@@ -10,7 +10,7 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 
-const CERTIFICATE_CHECK_MODEL = 'claude-opus-5-5';
+const CERTIFICATE_CHECK_MODEL = 'claude-haiku-5-5';
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const EXTRACTION_SCHEMA = {
@@ -66,11 +66,11 @@ function buildCertificateRequest({ employeeName, leaveStart, leaveEnd, today, co
     : { type: 'image', source: { type: 'base64', media_type: contentType, data: dataBase64 } };
   return {
     model: CERTIFICATE_CHECK_MODEL,
-    // Thinking can't be turned off on this model and its tokens count against this cap,
-    // so leave plenty of room for it before the JSON answer.
+    // This model thinks by default and those tokens count against this cap, so leave
+    // plenty of room for them before the JSON answer. Reading dates off a photo is
+    // worth a little thinking ("rest for 3 days from today" has to become dates), so
+    // it stays on at the lowest effort rather than being switched off.
     max_tokens: 16000,
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
     system: SYSTEM_PROMPT,
     output_config: { effort: 'low', format: { type: 'json_schema', schema: EXTRACTION_SCHEMA } },
     messages: [{
@@ -136,9 +136,11 @@ async function checkCertificate({ apiKey, employeeName, leaveStart, leaveEnd, to
   if (!apiKey && !client) return { status: 'error', summary: 'No Anthropic API key is set, so the certificate was not checked.', findings: [] };
   try {
     const anthropic = client || new Anthropic({ apiKey, timeout: 25000, maxRetries: 1 });
-    const response = await anthropic.beta.messages.create(
+    const response = await anthropic.messages.create(
       buildCertificateRequest({ employeeName, leaveStart, leaveEnd, today, contentType, dataBase64 })
     );
+    // No server-side fallback exists for this model, so a decline is the end of it;
+    // the manager reads the summary and judges the certificate themselves.
     if (response.stop_reason === 'refusal') return { status: 'error', summary: 'The check declined to read this document.', findings: [] };
     if (response.stop_reason === 'max_tokens') return { status: 'error', summary: 'The check ran out of room before it finished its answer. Try again.', findings: [] };
     const text = (response.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
