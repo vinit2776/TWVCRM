@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createCaseSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { DOCUMENT_CHECKLISTS, COMPLIANCE_CHECKLISTS } from "@/lib/constants";
+import { redactCaseSecrets } from "@/lib/case-pii";
 import { caseEndDate } from "@/lib/case-workflow";
 import { EXPIRY_RELEVANT_STATUSES } from "@/lib/constants";
 
@@ -77,7 +78,7 @@ export async function GET(request: NextRequest) {
   }
 
   const caseIds = (data ?? []).map((c) => c.id);
-  let enriched = data ?? [];
+  let enriched = (data ?? []).map((c) => redactCaseSecrets(c));
 
   if (caseIds.length > 0) {
     const [agreementsRes, billingRes] = await Promise.all([
@@ -112,7 +113,7 @@ export async function GET(request: NextRequest) {
     }
 
     enriched = (data ?? []).map((c) => ({
-      ...c,
+      ...redactCaseSecrets(c),
       agreement: latestProposal.get(c.id) ?? null,
       ll_agreement: latestLlAgreement.get(c.id) ?? null,
       billing_statement: latestBilling.get(c.id) ?? null,
@@ -241,10 +242,10 @@ export async function POST(request: NextRequest) {
         entityId: data.id,
         action: "create",
         performedBy: dbUser.id,
-        changes: { record: { old: null, new: data } },
+        changes: { record: { old: null, new: redactCaseSecrets(data) } },
       });
     }
   }
 
-  return NextResponse.json({ data }, { status: 201 });
+  return NextResponse.json({ data: data ? redactCaseSecrets(data) : data }, { status: 201 });
 }

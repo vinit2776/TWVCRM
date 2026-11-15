@@ -11,6 +11,7 @@ import {
   resetAgreementsForNewAddress,
   type SignedAgreementRow,
 } from "@/lib/agreement-reset";
+import { redactCaseChanges, redactCaseSecrets } from "@/lib/case-pii";
 import { caseEndDate } from "@/lib/case-workflow";
 import { generateDocumentChecklist } from "@/lib/compliance";
 import type { EntityType, VoPurpose } from "@/types";
@@ -88,7 +89,7 @@ export async function GET(
 
   return NextResponse.json({
     data: {
-      ...caseRes.data,
+      ...redactCaseSecrets(caseRes.data),
       documents: docsRes.data || [],
       compliance_checks: complianceRes.data || [],
       agreement: agreementRes.data?.[0] || null,
@@ -268,7 +269,7 @@ export async function PATCH(
     }
     if (outcome.failed.length > 0) {
       return NextResponse.json(
-        { data, warning: "The address was saved, but the signed agreement could not be reset. Try saving the case again." },
+        { data: redactCaseSecrets(data), warning: "The address was saved, but the signed agreement could not be reset. Try saving the case again." },
         { status: 207 }
       );
     }
@@ -280,9 +281,12 @@ export async function PATCH(
       entityId: id,
       action: "update",
       performedBy: dbUser.id,
-      changes: diffChanges(
-        oldCase as Record<string, unknown>,
-        result.data as Record<string, unknown>
+      changes: redactCaseChanges(
+        diffChanges(
+          oldCase as Record<string, unknown>,
+          result.data as Record<string, unknown>
+        ),
+        result.data.represented_by_id_type ?? oldCase.represented_by_id_type
       ),
     });
   }
@@ -299,7 +303,7 @@ export async function PATCH(
     regenerateTab = types.includes("leave_license") ? "agreement" : types.includes("proposal") ? "proposal" : null;
   }
 
-  return NextResponse.json({ data, ...(regenerateTab ? { regenerate_tab: regenerateTab } : {}) });
+  return NextResponse.json({ data: redactCaseSecrets(data), ...(regenerateTab ? { regenerate_tab: regenerateTab } : {}) });
 }
 
 export async function DELETE(
@@ -417,7 +421,7 @@ export async function DELETE(
       entityId: id,
       action: "delete",
       performedBy: dbUser.id,
-      changes: { record: { old: oldCase, new: null } },
+      changes: { record: { old: oldCase ? redactCaseSecrets(oldCase) : oldCase, new: null } },
     });
   }
 
