@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ACCOUNTING_HEADS } from "@/lib/constants";
+import { looksMaskedAadhaar } from "@/lib/case-pii";
 import { PROPOSAL_MAX_NOTICE_MONTHS, PROPOSAL_MAX_TENURE_MONTHS, validateCommitmentTerms } from "@/lib/proposal-terms";
 
 export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; details: Record<string, string[] | undefined> } {
@@ -754,7 +755,12 @@ const caseFieldsSchema = z.object({
   represented_by_name: z.string().optional(),
   represented_by_designation: z.string().optional(),
   represented_by_id_type: z.enum(["pan", "aadhaar"]).optional(),
-  represented_by_id_number: z.string().optional(),
+  // The API shows a stored Aadhaar masked; a masked value coming back in a
+  // save must never overwrite the real number.
+  represented_by_id_number: z
+    .string()
+    .refine((v) => !looksMaskedAadhaar(v), "Enter the full number — a masked value cannot be saved")
+    .optional(),
   rate: z.number().positive("Rate must be positive").optional(),
   tenure_months: z.number().int().positive(),
   start_date: z.string().optional(),
