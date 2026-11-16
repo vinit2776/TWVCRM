@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { loadDepositCollection } from "@/lib/deposit-instalment-server";
 import { partialDepositWarning } from "@/lib/deposit-activation";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { syncAddonsToContractTerm } from "@/lib/contract-addon-sync";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
@@ -604,6 +605,16 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Add-ons left on the default dates follow the term when it moves.
+  if (oldContract.start_date && oldContract.end_date && data?.start_date && data?.end_date) {
+    await syncAddonsToContractTerm(
+      createAdminClient(),
+      id,
+      { start: oldContract.start_date as string, end: oldContract.end_date as string },
+      { start: data.start_date as string, end: data.end_date as string }
+    );
+  }
 
   // Close the exit workflow when a live contract is terminated: marks the exit
   // completed and tells the team. A no-op when there was no exit.
