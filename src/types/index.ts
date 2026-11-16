@@ -834,6 +834,8 @@ export interface Contract {
   // Tiered rate phases
   phase_start_date?: string | null;
   rate_phases?: ContractRatePhase[];
+  /** Recurring add-ons (never escalated). Embedded by GET /api/contracts/[id]; absent elsewhere. */
+  recurring_addons?: ContractAddon[];
   // start_date is a placeholder until the linked proposal's pro-rata invoice
   // is paid — see supabase/migrations/00503_contract_start_date_confirmation.sql
   start_date_confirmed?: boolean;

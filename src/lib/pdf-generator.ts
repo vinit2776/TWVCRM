@@ -3,6 +3,7 @@ import { MEMBERSHIP_SPECIAL_CLAUSE_NUMBER, stripClauseHeading } from "@/lib/spec
 import autoTable from "jspdf-autotable";
 import type { Proposal, ProposalAddon, ProformaInvoice, Lead, LineItem, Contract, BillingStatement, Location } from "@/types";
 import { addonsMonthlyTotal, cleanAddons, escalationNote } from "@/lib/recurring-addons";
+import { addonScheduleText, agreementAddons, escalationClauses } from "@/lib/agreement-addons";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
@@ -1322,6 +1323,10 @@ export function generateMembershipAgreementPDF(
   const ifrsd = monthlyFee * securityDepositMonths;
   // The agreement's escalation, not a rate negotiated for one term only.
   const escalation = programmedEscalation(contract);
+  // Recurring add-ons are listed apart from the fee (item 8A) and sit outside the escalation.
+  const listedAddons = agreementAddons(contract.recurring_addons);
+  const hasAddons = listedAddons.length > 0;
+  const escalationWording = escalationClauses(escalation, contract.tenure_months, hasAddons);
   const noticePeriod = contract.notice_period_months || 2;
   // Fallback for contracts predating the lock_in_months column (migration 00222):
   // lock-in was previously implied as tenure minus notice period.
@@ -1490,6 +1495,10 @@ export function generateMembershipAgreementPDF(
       // contradicted the Escalation clause's stated renewal rate.
       return boundaries.map((b) => `${formatDateRange(b.start, b.end)}: ${formatCurrencyPDF(b.rate)} + GST per month`).join("\n");
     })()],
+    ...(hasAddons
+      ? [["8A", "Recurring Add-ons\n(not subject to escalation)",
+          addonScheduleText(listedAddons, contract.end_date, formatCurrencyPDF, formatDatePDF)] as [string, string, string]]
+      : []),
     ["9", "Commencement Date", formatDatePDF(contract.start_date)],
     ["10", "Term", `${contract.tenure_months} months from the Commencement Date`],
     ["11", "Lock-in Period",
@@ -1542,7 +1551,8 @@ export function generateMembershipAgreementPDF(
     },
     margin: { left: marginLeft, right: marginRight },
     didParseCell: (data) => {
-      if (data.column.index === 2 && [7, 12].includes(data.row.index)) {
+      // Rows 8 (fee) and 13 (deposit). Item 8A, when present, is an extra row between them.
+      if (data.column.index === 2 && [7, hasAddons ? 13 : 12].includes(data.row.index)) {
         data.cell.styles.fontStyle = "bold";
       }
     },
@@ -1554,8 +1564,8 @@ export function generateMembershipAgreementPDF(
   // Continue schedule rows 17-19
   const scheduleData2: [string, string, string][] = [
     ["17", "Changes/Modifications\nbefore move-in date\n(to be charged on actuals)", "The layout, highlighting the changes/Modification is annexed as Annexure-A to this Agreement (If applicable)."],
-    ["18", "Auto-renewal", `In case Notice for Termination (as defined below) is not served before the expiry of the Initial Term, the Membership Agreement will be auto-renewed for another Term, having the same Lock-in Period with escalation on Monthly Membership Fees & all other charges at ${escalation}.0 %.`],
-    ["19", "Escalation on monthly\nMembership Fees", `${escalation} % on Monthly Membership Fees and all products and services after expiry of ${contract.tenure_months}.0 months commencing from the Commencement Date.`],
+    ["18", "Auto-renewal", escalationWording.autoRenewal],
+    ["19", "Escalation on monthly\nMembership Fees", escalationWording.escalation],
   ];
 
   checkPageBreak(30);
