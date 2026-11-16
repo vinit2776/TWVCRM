@@ -10,6 +10,7 @@ import {
   logQueryAudit,
   threadParticipantIds,
 } from "@/lib/queries/server";
+import { deriveLifecycleState, lastSpeaker } from "@/lib/queries/lifecycle";
 import { ATTACHMENT_SELECT } from "@/lib/queries/attachments";
 import type { QueryAuthor, QueryKind, QueryMessage, QueryPaymentReport, QueryThread } from "@/lib/queries/types";
 
@@ -23,7 +24,7 @@ export const dynamic = "force-dynamic";
 
 const THREAD_SELECT = `
   id, entity_type, entity_id, status, kind, audience, audience_roles, audience_user_ids,
-  needed_by, created_at, updated_at, resolved_at, created_by,
+  needed_by, created_at, updated_at, resolved_at, created_by, resolution_kind, paid_nudged_at, bill_corrected_at,
   creator:users!queries_created_by_fkey(id, full_name, role),
   resolved_by:users!queries_resolved_by_fkey(id, full_name, role),
   messages:query_messages(
@@ -55,6 +56,9 @@ interface ThreadRow {
   created_at: string;
   updated_at: string;
   resolved_at: string | null;
+  resolution_kind: "payment" | null;
+  paid_nudged_at: string | null;
+  bill_corrected_at: string | null;
   created_by: string;
   creator: QueryAuthor;
   resolved_by: QueryAuthor | null;
@@ -81,7 +85,14 @@ async function fetchThread(
   const messages = [...row.messages].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
   );
-  const last = messages[messages.length - 1] ?? null;
+  // Automatic events carry the asker as stand-in author; they are not speech.
+  const last = lastSpeaker(messages.map((m) => ({ event_type: m.event_type, created_at: m.created_at, created_by: m.created_by.id })));
+  const lifecycle = deriveLifecycleState({
+    status: row.status,
+    created_by_id: row.created_by,
+    messages: messages.map((m) => ({ event_type: m.event_type, created_at: m.created_at, created_by: m.created_by.id })),
+  });
+  const answeredBy = lifecycle.answeredById ? messages.find((m) => m.created_by.id === lifecycle.answeredById)?.created_by ?? null : null;
 
   const targeting = {
     audience: row.audience,
@@ -105,7 +116,7 @@ async function fetchThread(
       ...targeting,
       status: row.status,
       created_by_id: row.created_by,
-      last_message_author_id: last?.created_by?.id ?? null,
+      last_message_author_id: last?.created_by ?? null,
     },
     def,
     viewer,
@@ -125,6 +136,11 @@ async function fetchThread(
       updated_at: row.updated_at,
       resolved_by: row.resolved_by,
       resolved_at: row.resolved_at,
+      resolution_kind: row.resolution_kind,
+      lifecycle: lifecycle.state,
+      answered_by: answeredBy,
+      paid_nudged_at: row.paid_nudged_at,
+      bill_corrected: !!row.bill_corrected_at,
       needed_by: row.needed_by,
       entity: (await loadEntity(admin, row.entity_type, row.entity_id))?.summary ?? null,
       messages,
@@ -240,7 +256,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
     const { error: updateErr } = await admin
       .from("queries")
-      .update({ status: "open", resolved_by: null, resolved_at: null, escalated_at: null })
+      .update({ status: "open", resolved_by: null, resolved_at: null, resolution_kind: null, escalated_at: null })
       .eq("id", id);
     if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
 

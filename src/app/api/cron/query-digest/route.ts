@@ -10,6 +10,7 @@ import { ESCALATE_AFTER_HOURS } from "@/lib/queries/chase";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { QUERY_KIND_LABELS, type QueryKind, type QueryTargeting } from "@/lib/queries/types";
 
+import { sweepPaidBillQueries } from "@/lib/queries/paid-bill-sweep";
 import { withCronHealth } from "@/lib/cron-ping";
 
 /**
@@ -69,6 +70,9 @@ async function handler(request: NextRequest) {
   const supabase = createAdminClient();
   const now = new Date();
   const windowStart = new Date(now.getTime() - DIGEST_LOOKBACK_HOURS * 3_600_000).toISOString();
+
+  // Before the digest load, so anything closed here is reported in today's digest.
+  const paidBillSweep = await sweepPaidBillQueries(supabase, now);
 
   // Every open thread (the chase looks at all of them), plus anything resolved
   // inside the window so the asker hears their question was answered.
@@ -228,6 +232,7 @@ async function handler(request: NextRequest) {
     digests_failed: emailsFailed,
     nudged,
     escalated,
+    paid_bill_queries: paidBillSweep,
     whatsapp_sent: whatsappSent,
     whatsapp_template_configured: !!WA_TEMPLATE_QUERY_ESCALATION,
   });

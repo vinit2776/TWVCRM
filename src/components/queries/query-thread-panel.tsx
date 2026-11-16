@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Search, Send, Users, XCircle } from "lucide-react";
+import { Bell, CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Search, Send, Users, XCircle } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -33,6 +33,11 @@ interface Props {
    * only ever flips true→true wouldn't trigger a re-run for.
    */
   focusReplyToken?: number;
+}
+
+/** An exact date for the closing record, which has to still read right in a year. */
+function closedOn(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
 function timeAgo(iso: string): string {
@@ -400,6 +405,22 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
         )}
       </div>
 
+      <div className="flex items-center gap-1.5 flex-wrap text-[11px]" data-testid="query-lifecycle-state">
+        {thread.lifecycle === "closed" ? (
+          thread.resolution_kind === "payment" ? (
+            <span className="px-1.5 py-0.5 rounded border bg-amber-50 border-amber-200 text-amber-800 font-medium">Resolved by payment</span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded border bg-green-50 border-green-200 text-green-700 font-medium">Closed</span>
+          )
+        ) : thread.lifecycle === "answered" ? (
+          <span className="px-1.5 py-0.5 rounded border bg-blue-50 border-blue-200 text-blue-800 font-medium">
+            Answered{thread.answered_by ? ` by ${thread.answered_by.full_name}` : ""} · waiting for {thread.created_by.full_name} to confirm
+          </span>
+        ) : (
+          <span className="px-1.5 py-0.5 rounded border bg-muted text-muted-foreground font-medium">Open</span>
+        )}
+      </div>
+
       <div className="space-y-2">
         {thread.messages.map((m) => {
           if (m.event_type !== "message") {
@@ -407,8 +428,24 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
             // chased daily would otherwise bury the real messages under them.
             // The events stay in the database; only the thread view skips them.
             if (m.event_type === "nudged") return null;
+            if (m.event_type === "paid_nudge") {
+              return (
+                <div key={m.id} className="text-[11px] text-amber-700 flex items-center gap-1 pl-1 flex-wrap">
+                  <Bell className="h-3 w-3" />
+                  Bill paid: {thread.created_by.full_name} was asked to confirm and close · {closedOn(m.created_at)}
+                </div>
+              );
+            }
+            if (m.event_type === "auto_resolved") {
+              return (
+                <div key={m.id} className="text-[11px] text-amber-800 flex items-center gap-1 pl-1 flex-wrap font-medium">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Closed automatically: {m.body ?? "bill paid"} · {closedOn(m.created_at)}
+                </div>
+              );
+            }
             const label =
-              m.event_type === "resolved" ? "Resolved"
+              m.event_type === "resolved" ? "Closed"
               : m.event_type === "reopened" ? "Reopened"
               : m.event_type === "payment_verified" ? "Payment verified and recorded"
               : m.event_type === "payment_rejected" ? "Closed — no such payment"
@@ -425,7 +462,7 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
                 ) : (
                   <RotateCcw className="h-3 w-3" />
                 )}
-                {label} by {m.created_by.full_name} · {timeAgo(m.created_at)}
+                {label} by {m.created_by.full_name} · {m.event_type === "resolved" ? closedOn(m.created_at) : timeAgo(m.created_at)}
                 {m.body && <span className="italic">— {m.body}</span>}
               </div>
             );

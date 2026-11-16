@@ -12,6 +12,7 @@ import {
   fanOutQueryEvent,
   logQueryAudit,
 } from "@/lib/queries/server";
+import { deriveLifecycleState, lastSpeaker } from "@/lib/queries/lifecycle";
 import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
 import { parseQueryRequest, storeAttachments } from "@/lib/queries/attachments";
 import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
@@ -38,7 +39,7 @@ type Tab = "awaiting_me" | "mine" | "open" | "overdue" | "resolved";
 
 const THREAD_SELECT = `
   id, entity_type, entity_id, status, kind, audience, audience_roles, audience_user_ids,
-  needed_by, created_at, updated_at, resolved_at,
+  needed_by, created_at, updated_at, resolved_at, resolution_kind, paid_nudged_at, bill_corrected_at,
   created_by:users!queries_created_by_fkey(id, full_name, role),
   resolved_by:users!queries_resolved_by_fkey(id, full_name, role),
   messages:query_messages(
@@ -69,6 +70,9 @@ interface QueryRow {
   created_at: string;
   updated_at: string;
   resolved_at: string | null;
+  resolution_kind: "payment" | null;
+  paid_nudged_at: string | null;
+  bill_corrected_at: string | null;
   created_by: QueryAuthor;
   resolved_by: QueryAuthor | null;
   payment_report: PaymentReportRow | PaymentReportRow[] | null;
@@ -97,8 +101,8 @@ function targetingOf(row: QueryRow) {
 
 /** One definition of "awaiting", used by both the list and the stat cards. */
 function computeAwaiting(row: QueryRow, def: QueryEntityDef, viewer: Viewer): boolean {
-  const messages = sortedMessages(row);
-  const last = messages[messages.length - 1] ?? null;
+  // Automatic events carry the asker as stand-in author; they are not speech.
+  const last = lastSpeaker(sortedMessages(row));
   return isAwaitingUser(
     {
       ...targetingOf(row),
@@ -138,6 +142,10 @@ function toListItem(
   const messages = sortedMessages(row);
   const last = messages[messages.length - 1] ?? null;
   const isAwaiting = computeAwaiting(row, def, viewer);
+  const lifecycle = deriveLifecycleState({ status: row.status, created_by_id: row.created_by.id, messages: row.messages.map((m) => ({ event_type: m.event_type, created_at: m.created_at, created_by: m.created_by })) });
+  const answeredBy = lifecycle.answeredById
+    ? row.messages.find((m) => m.created_by === lifecycle.answeredById)?.author ?? null
+    : null;
 
   return {
     id: row.id,
@@ -151,6 +159,11 @@ function toListItem(
     updated_at: row.updated_at,
     resolved_by: row.resolved_by,
     resolved_at: row.resolved_at,
+    resolution_kind: row.resolution_kind,
+    lifecycle: lifecycle.state,
+    answered_by: answeredBy,
+    paid_nudged_at: row.paid_nudged_at,
+    bill_corrected: !!row.bill_corrected_at,
     needed_by: row.needed_by,
     entity: entitySummary,
     // The claim, not the contract. Without this a payment report card reads

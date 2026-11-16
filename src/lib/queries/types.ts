@@ -9,6 +9,7 @@
  */
 
 import type { UserRole } from "@/types";
+import type { QueryLifecycleState, QueryResolutionKind } from "./lifecycle";
 
 /**
  * Every kind of transaction a query can hang off. Adding one is a registry
@@ -87,7 +88,9 @@ export type QueryMessageEventType =
   | "nudged"
   | "payment_verified"
   | "payment_rejected"
-  | "payment_not_found";
+  | "payment_not_found"
+  | "paid_nudge"
+  | "auto_resolved";
 
 export interface QueryAuthor {
   id: string;
@@ -158,6 +161,16 @@ export interface QueryListItem extends QueryTargeting {
   updated_at: string;
   resolved_by: QueryAuthor | null;
   resolved_at: string | null;
+  /** 'payment' when the system closed it (Resolved by payment); null for a close by a person. */
+  resolution_kind: QueryResolutionKind | null;
+  /** Open / Answered / Closed, derived from the thread. */
+  lifecycle: QueryLifecycleState;
+  /** Who answered, while lifecycle is 'answered'. */
+  answered_by: QueryAuthor | null;
+  /** When the asker was nudged that the bill is paid. */
+  paid_nudged_at: string | null;
+  /** True once the bill was corrected while this query was open. */
+  bill_corrected: boolean;
   needed_by: string | null;
   /** null when the underlying transaction can no longer be resolved — the
    *  card renders "transaction no longer available" rather than failing. */

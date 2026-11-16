@@ -97,7 +97,13 @@ export async function replyOnOpenBillQueries(params: {
         console.error(`[bill-edit] query reply failed for ${q.id}:`, error.message);
         continue;
       }
-      await admin.from("queries").update({ updated_at: new Date().toISOString(), escalated_at: null }).eq("id", q.id);
+      // bill_corrected_at is the evidence this query was about the amount/invoice,
+      // which is what later lets a paid-bill query be auto-closed (lifecycle.ts).
+      // A correction answers the query; it never closes it.
+      await admin
+        .from("queries")
+        .update({ updated_at: new Date().toISOString(), escalated_at: null, bill_corrected_at: new Date().toISOString() })
+        .eq("id", q.id);
 
       const [entity, participantIds] = await Promise.all([
         loadEntity(admin, "vendor_bill", q.entity_id),
