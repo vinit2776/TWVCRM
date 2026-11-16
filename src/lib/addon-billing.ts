@@ -176,3 +176,25 @@ export function applyAddonChange(
   const delta = round2(Number(added?.amount ?? 0) - Number(removed?.amount ?? 0));
   return { sections: next, delta, removed, added, placed };
 }
+
+/**
+ * The add-ons a billing run prices for a contract. Normally just its own. When
+ * the contract is being renewed and the renewal has carried its own add-ons, the
+ * renewal's are added and the contract's own stop at its end date, so an add-on
+ * that exists on both is never priced twice. With none carried, the contract's
+ * add-ons are returned exactly as they were.
+ */
+export function addonsForBillingRun<T extends { effective_until: string | null }>(
+  own: T[] | null,
+  renewalCarried: T[],
+  contractEnd: string
+): T[] | null {
+  if (renewalCarried.length === 0) return own;
+  return [
+    ...(own ?? []).map((a) => ({
+      ...a,
+      effective_until: !a.effective_until || a.effective_until > contractEnd ? contractEnd : a.effective_until,
+    })),
+    ...renewalCarried,
+  ];
+}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   addonLineForMonth,
+  addonsForBillingRun,
   addonTermKind,
   applyAddonChange,
   isAddonLiveOn,
@@ -145,5 +146,33 @@ describe("applyAddonChange", () => {
     applyAddonChange(original, valet, { ...valet, is_active: false }, JAN);
     expect(original[0].items).toHaveLength(2);
     expect(original[0].subtotal).toBe(43252);
+  });
+});
+
+describe("addonsForBillingRun", () => {
+  type Row = { id: string; effective_until: string | null };
+  const own: Row[] = [
+    { id: "valet", effective_until: null },
+    { id: "board", effective_until: "2027-02-28" },
+  ];
+  const carried: Row[] = [{ id: "valet-renewal", effective_until: "2027-11-18" }];
+
+  it("returns the contract's own add-ons untouched when the renewal carried none", () => {
+    expect(addonsForBillingRun(own, [], "2027-05-18")).toBe(own);
+    expect(addonsForBillingRun(null, [], "2027-05-18")).toBeNull();
+  });
+
+  it("adds the renewal's and stops the contract's own at its end date", () => {
+    const result = addonsForBillingRun(own, carried, "2027-05-18");
+    expect(result).toEqual([
+      { id: "valet", effective_until: "2027-05-18" },
+      { id: "board", effective_until: "2027-02-28" },
+      { id: "valet-renewal", effective_until: "2027-11-18" },
+    ]);
+  });
+
+  it("does not change the input rows", () => {
+    addonsForBillingRun(own, carried, "2027-05-18");
+    expect(own[0].effective_until).toBeNull();
   });
 });

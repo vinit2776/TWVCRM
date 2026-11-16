@@ -23,6 +23,7 @@
  * three call sites. Keeping it here means there's one source of truth.
  */
 
+import { addonsForBillingRun } from "@/lib/addon-billing";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { fixedShareOfItems, splitByShare } from "@/lib/rent-maintenance-split";
@@ -856,6 +857,26 @@ export async function generateRentProformas(
   const renewalDraftByParentId = await fetchActiveRenewalDraftsByParentId(adminSupabase, renewalInProgressIds);
   const draftIds = [...renewalDraftByParentId.values()].map((d) => d.id);
 
+  // A renewal carries the recurring add-ons chosen at renewal onto its own
+  // contract (never escalated). While the renewal is not yet active its rent is
+  // billed here, under the parent, so its add-ons have to be priced here too or
+  // they would be left off every invoice until activation. Same window and
+  // filters as the parent's own add-ons above.
+  if (draftIds.length > 0) {
+    const { data: draftAddonsRaw } = await adminSupabase
+      .from("contract_addons")
+      .select("id,description,amount,effective_from,effective_until,contract_id")
+      .in("contract_id", draftIds)
+      .eq("is_active", true)
+      .lte("effective_from", cycleWindowLastYmd)
+      .or(`effective_until.is.null,effective_until.gte.${prepaidFirstOfMonth}`);
+    for (const addon of (draftAddonsRaw ?? []) as AddonRow[]) {
+      const list = addonsByContractId.get(addon.contract_id) ?? [];
+      list.push(addon);
+      addonsByContractId.set(addon.contract_id, list);
+    }
+  }
+
   // Pre-fetch tiered rate phases, for contracts using tiered pricing
   // (includes renewal draft ids so escalated tiered contracts resolve correctly)
   const ratePhasesByContract = await fetchRatePhasesByContract(adminSupabase, [...contractIds, ...draftIds]);
@@ -911,7 +932,12 @@ export async function generateRentProformas(
       const draftSeatQty = renewalDraft ? (Number(renewalDraft.seats) || 1) : ownSeatQty;
       const allocations = spaceAllocationsByContract.get(cid) ?? [];
       const contractLocationName = locationNamesByContract.get(cid) ?? null;
-      const addons = addonsByContractId.get(cid) ?? null;
+      const ownAddons = addonsByContractId.get(cid) ?? null;
+      // When the renewal has carried its own add-ons, the parent's stop at its end
+      // date so nothing is priced twice; with none carried (older renewals, or all
+      // left unticked) the parent's add-ons behave exactly as before.
+      const draftAddons = renewalDraft ? (addonsByContractId.get(renewalDraft.id) ?? []) : [];
+      const addons = addonsForBillingRun(ownAddons, draftAddons, contract.end_date as string);
       // Rent / maintenance split on the invoice lines. Phased rates carry one
       // combined monthly_rate per phase, so a contract with phases is never split.
       const ownFixedShare = ratePhasesByContract.get(cid)?.length
