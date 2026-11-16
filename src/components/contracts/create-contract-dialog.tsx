@@ -904,6 +904,7 @@ export function CreateContractDialog({
                   type="number"
                   min={0}
                   max={100}
+                  step="0.5"
                   value={escalationPercentage}
                   onChange={(e) => setEscalationPercentage(Number(e.target.value) || 0)}
                 />
