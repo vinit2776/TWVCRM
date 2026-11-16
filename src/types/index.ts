@@ -336,6 +336,13 @@ export interface LineItem {
   escalates?: boolean;
 }
 
+/** A monthly add-on offered with a proposal (valet parking, name board, locker). Never escalated. */
+export interface ProposalAddon {
+  description: string;
+  /** Monthly amount, excluding GST. */
+  amount: number;
+}
+
 export interface ComplimentaryItem {
   name: string;
   unit: string;
@@ -366,7 +373,12 @@ export interface Proposal {
   status: ProposalStatus;
   description?: string;
   complimentary_items?: ComplimentaryItem[];
+  /** The monthly fee lines. These escalate. */
   items: LineItem[];
+  /** Monthly add-ons, never escalated, outside subtotal and the security deposit. Absent on older rows. */
+  recurring_addons?: ProposalAddon[];
+  /** Agreed annual escalation on the monthly fee. Absent on older rows (read as 10). */
+  escalation_percentage?: number;
   subtotal: number;
   tax_percentage: number;
   tax_amount: number;

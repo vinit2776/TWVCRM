@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { PROPOSAL_MAX_TENURE_MONTHS } from "@/lib/proposal-terms";
+import { cleanAddons } from "@/lib/recurring-addons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -179,6 +180,11 @@ export function CreateContractDialog({
       // pro-rata payment hasn't been recorded yet for some reason.
       if (selectedProposal.prorata_paid_date || selectedProposal.occupation_start_date) {
         setStartDate(selectedProposal.prorata_paid_date || selectedProposal.occupation_start_date || "");
+      }
+      // The escalation agreed on the proposal (10 unless negotiated). Still
+      // editable below if it changed again before the agreement.
+      if (selectedProposal.escalation_percentage != null) {
+        setEscalationPercentage(Number(selectedProposal.escalation_percentage));
       }
       // Prefill security deposit months from proposal
       if (selectedProposal.security_deposit_months) {
@@ -457,6 +463,9 @@ export function CreateContractDialog({
 
     const contractJson = await res.json();
     const newContractId: string = contractJson.data?.id;
+    if (contractJson.recurring_addons_error) {
+      toast.error(`Contract created, but the recurring add-ons weren't added: ${contractJson.recurring_addons_error}. Add them from the contract page before the first invoice.`);
+    }
     if (contractJson.special_clause_error) {
       toast.error(`Contract created, but the special clause wasn't saved: ${contractJson.special_clause_error}. Add it from the contract page.`);
     }
@@ -567,7 +576,23 @@ export function CreateContractDialog({
                       )}
                       <span className="text-muted-foreground pt-1 border-t border-[#015E65]/10 font-semibold">Total</span>
                       <span className="font-semibold tabular-nums pt-1 border-t border-[#015E65]/10">{formatCurrency(selectedProposal.total_amount)}</span>
+                      <span className="text-muted-foreground">Escalation on the monthly fee</span>
+                      <span className="font-medium tabular-nums">{Number(selectedProposal.escalation_percentage ?? 10)}%</span>
                     </div>
+                    {cleanAddons(selectedProposal.recurring_addons).length > 0 && (
+                      <div className="border-t border-[#015E65]/10 pt-2 space-y-1 text-xs">
+                        <p className="font-semibold text-[#015E65]">Recurring add-ons (not escalated)</p>
+                        {cleanAddons(selectedProposal.recurring_addons).map((a, i) => (
+                          <div key={i} className="flex justify-between">
+                            <span className="text-muted-foreground">{a.description}</span>
+                            <span className="font-medium tabular-nums">{formatCurrency(a.amount)} / month + GST</span>
+                          </div>
+                        ))}
+                        <p className="text-muted-foreground">
+                          Added to the contract for the full term. They can be switched off or ended from the contract page.
+                        </p>
+                      </div>
+                    )}
                     {proposalComplimentaryItems.length > 0 && (
                       <div className="pt-1 border-t border-[#015E65]/10 space-y-1">
                         <p className="text-[10px] font-semibold text-[#015E65] uppercase tracking-wide">
