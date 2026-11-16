@@ -56,6 +56,8 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
   const [ending, setEnding] = useState<ContractAddon | null>(null);
   const [endDate, setEndDate] = useState("");
   const [endReason, setEndReason] = useState("");
+  // Moving an Until date earlier in the Edit dialog is an early end too, so it asks for the same reason.
+  const [editReason, setEditReason] = useState("");
 
   const fetch = useCallback(async () => {
     const res = await window.fetch(`/api/contracts/${contractId}/addons`);
@@ -70,6 +72,7 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
 
   function openAdd() {
     setEditing(null);
+    setEditReason("");
     setForm(emptyForm(contractStartDate, contractEndDate));
     setDialogOpen(true);
   }
@@ -81,6 +84,7 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
 
   function openEdit(addon: ContractAddon) {
     setEditing(addon);
+    setEditReason("");
     setForm({
       description: addon.description,
       amount: String(addon.amount),
@@ -89,6 +93,9 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
     });
     setDialogOpen(true);
   }
+
+  const editShortens = !!editing && !!form.effective_until &&
+    form.effective_until < (editing.effective_until ?? contractEndDate ?? "9999-12-31");
 
   async function handleSave() {
     if (!form.description.trim()) { toast.error("Description is required"); return; }
@@ -114,6 +121,14 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
       }
     }
 
+    if (editShortens) {
+      if (!canEndBilling) { toast.error("Only admins, managers and sales reps can end an add-on early"); return; }
+      if (editReason.trim().length < MIN_END_REASON_LENGTH) {
+        toast.error(`Say why billing is ending early (at least ${MIN_END_REASON_LENGTH} characters)`);
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       const body = {
@@ -122,6 +137,7 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
         effective_from: form.effective_from,
         effective_until: form.effective_until || null,
         ...(editing ? { addon_id: editing.id } : {}),
+        ...(editShortens ? { end_reason: editReason.trim() } : {}),
       };
 
       const res = await window.fetch(`/api/contracts/${contractId}/addons`, {
@@ -361,6 +377,19 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
                 />
               </div>
             </div>
+            {editShortens && (
+              <div>
+                <Label htmlFor="addon-edit-reason">Why billing ends early, and who asked <span className="text-destructive">*</span></Label>
+                <Textarea
+                  id="addon-edit-reason"
+                  value={editReason}
+                  onChange={e => setEditReason(e.target.value)}
+                  placeholder="e.g. Customer gave up the slot, email of 9 Jan"
+                  className="mt-1"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Kept in the audit trail. At least {MIN_END_REASON_LENGTH} characters.</p>
+              </div>
+            )}
             {addonTermKind({ effective_from: form.effective_from, effective_until: form.effective_until || null }, contractStartDate, contractEndDate) === "full" ? (
               <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
                 Runs for the full contract term. Change a date only if the customer asked for a shorter or later period.
