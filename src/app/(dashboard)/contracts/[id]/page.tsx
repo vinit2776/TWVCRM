@@ -1829,17 +1829,6 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
-          {/* Recurring Add-ons */}
-          <div id="section-addons" className="scroll-mt-4">
-          <ContractAddonsSection
-            contractId={id}
-            contractStartDate={contract.start_date}
-            contractEndDate={contract.end_date}
-            taxPercentage={contract.tax_percentage ?? 18}
-            openAddSignal={addonOpenSignal}
-          />
-          </div>
-
           {/* Tiered Rate Schedule — only editable pre-activation, mirrors the
               API's own lock gate (same statuses as quota locking). */}
           <ContractRatePhasesSection
@@ -2044,7 +2033,12 @@ export default function ContractDetailPage({
           {/* Line Items Table */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Line Items</CardTitle>
+              <CardTitle className="text-base flex flex-wrap items-center gap-2">
+                Monthly billable
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                  escalates {Number(contract.escalation_percentage ?? 10)}% on renewal
+                </span>
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="rounded-md border overflow-x-auto">
@@ -2079,6 +2073,20 @@ export default function ContractDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Recurring Add-ons: kept with the monthly fee they sit beside, but never
+              escalated; each has its own dates and can be paused or ended. */}
+          <div id="section-addons" className="scroll-mt-4">
+          <ContractAddonsSection
+            contractId={id}
+            contractStartDate={contract.start_date}
+            contractEndDate={contract.end_date}
+            taxPercentage={contract.tax_percentage ?? 18}
+            monthlyFee={Number(contract.subtotal ?? 0)}
+            canEndBilling={["admin", "manager", "sales_rep"].includes(userRole ?? "")}
+            openAddSignal={addonOpenSignal}
+          />
+          </div>
 
           {/* Agreement document history — old executed versions stay
               visible/downloadable after a reupload (e.g. customer name

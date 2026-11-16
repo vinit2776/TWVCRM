@@ -72,7 +72,7 @@ All under `src/app/api/contracts/`:
 - `[id]/members/route.ts` — `GET`, `POST` (add member + COSEC provision), `DELETE` (deactivate + block)
 - `[id]/quotas/route.ts` — `GET`, `POST` (upsert), `DELETE`
 - `[id]/facilities/route.ts` — `GET`, `POST`, `DELETE`
-- `[id]/addons/route.ts` — `GET`, `POST`, `PATCH`, `DELETE`
+- `[id]/addons/route.ts` — `GET`, `POST`, `PATCH`. Recurring add-ons never escalate and sit beside `contracts.subtotal` (the escalating monthly fee), not inside it. Dates must lie inside the contract term. `PATCH` pauses/resumes (`is_active`) or ends billing early (a new `effective_until` before the old one, or before the contract end): ending early needs `admin`/`manager`/`sales_rep` and an `end_reason` of at least 10 characters, and is audit-logged as `contract_addon_ended`. Every add/edit/pause corrects unsent single-month draft rent statements in place (line and GST recomputed, `src/lib/contract-addon-server.ts`); issued statements are never edited and come back in the response `notice` instead.
 - `[id]/documents/route.ts` — `GET`, `POST`
 - `[id]/documents/init/route.ts` — `POST` (initialise KYC checklist from entity type)
 - `[id]/documents/[docId]/review/route.ts` — `POST` (approve/reject KYC doc)

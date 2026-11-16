@@ -13,9 +13,11 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, ToggleLeft, ToggleRight, Loader2 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Plus, Pencil, ToggleLeft, ToggleRight, Loader2, CalendarX2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { addonTermKind, isAddonLiveOn } from "@/lib/addon-billing";
 import type { ContractAddon } from "@/types";
 
 interface ContractAddonsSectionProps {
@@ -23,25 +25,37 @@ interface ContractAddonsSectionProps {
   contractStartDate?: string;
   contractEndDate?: string;
   taxPercentage?: number;
+  /** The contract's escalating monthly fee, for the running total. */
+  monthlyFee?: number;
+  /** Who may stop an add-on before its end date (admin, manager, sales rep). */
+  canEndBilling?: boolean;
   readOnly?: boolean;
   /** Bump to open the Add dialog (the contract page's Invoice wizard does this). */
   openAddSignal?: number;
 }
 
-const EMPTY_FORM = {
-  description: "",
-  amount: "",
-  effective_from: new Date().toISOString().split("T")[0],
-  effective_until: "",
-};
+const MIN_END_REASON_LENGTH = 10;
 
-export function ContractAddonsSection({ contractId, contractStartDate, contractEndDate, taxPercentage = 18, readOnly = false, openAddSignal = 0 }: ContractAddonsSectionProps) {
+/** A new add-on runs the whole contract term unless the customer asks otherwise. */
+function emptyForm(termStart?: string, termEnd?: string) {
+  return {
+    description: "",
+    amount: "",
+    effective_from: termStart ?? new Date().toISOString().split("T")[0],
+    effective_until: termEnd ?? "",
+  };
+}
+
+export function ContractAddonsSection({ contractId, contractStartDate, contractEndDate, taxPercentage = 18, monthlyFee, canEndBilling = false, readOnly = false, openAddSignal = 0 }: ContractAddonsSectionProps) {
   const [addons, setAddons] = useState<ContractAddon[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ContractAddon | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(() => emptyForm(contractStartDate, contractEndDate));
+  const [ending, setEnding] = useState<ContractAddon | null>(null);
+  const [endDate, setEndDate] = useState("");
+  const [endReason, setEndReason] = useState("");
 
   const fetch = useCallback(async () => {
     const res = await window.fetch(`/api/contracts/${contractId}/addons`);
@@ -56,7 +70,7 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
 
   function openAdd() {
     setEditing(null);
-    setForm(EMPTY_FORM);
+    setForm(emptyForm(contractStartDate, contractEndDate));
     setDialogOpen(true);
   }
 
@@ -123,6 +137,7 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
       }
 
       toast.success(editing ? "Add-on updated" : "Add-on added — will appear in next billing cycle");
+      await announceNotice(res);
       setDialogOpen(false);
       fetch();
     } finally {
@@ -137,13 +152,61 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
       body: JSON.stringify({ addon_id: addon.id, is_active: !addon.is_active }),
     });
     if (res.ok) {
-      toast.success(addon.is_active ? "Add-on deactivated" : "Add-on activated");
+      toast.success(addon.is_active ? "Billing paused for this add-on" : "Billing switched back on");
+      await announceNotice(res);
       fetch();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Could not change this add-on");
+    }
+  }
+
+  /** The server says which invoices a change could not reach; show that rather than staying silent. */
+  async function announceNotice(res: Response) {
+    const json = await res.clone().json().catch(() => null);
+    if (json?.notice) toast.warning(json.notice, { duration: 10000 });
+  }
+
+  function openEnd(addon: ContractAddon) {
+    setEnding(addon);
+    setEndDate("");
+    setEndReason("");
+  }
+
+  async function handleEndBilling() {
+    if (!ending) return;
+    if (!endDate) { toast.error("Pick the last day to bill"); return; }
+    if (endDate < ending.effective_from) { toast.error("The last day cannot be before billing started"); return; }
+    if (contractEndDate && endDate >= contractEndDate) { toast.error("That is the contract's last day already; nothing to end early"); return; }
+    if (endReason.trim().length < MIN_END_REASON_LENGTH) {
+      toast.error(`Say why billing is ending (at least ${MIN_END_REASON_LENGTH} characters)`);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await window.fetch(`/api/contracts/${contractId}/addons`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addon_id: ending.id, effective_until: endDate, end_reason: endReason.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Could not end billing");
+        return;
+      }
+      toast.success(`${ending.description} will be billed up to ${formatDate(endDate)}`);
+      await announceNotice(res);
+      setEnding(null);
+      fetch();
+    } finally {
+      setSaving(false);
     }
   }
 
   const active = addons.filter(a => a.is_active);
   const inactive = addons.filter(a => !a.is_active);
+  const today = new Date().toISOString().split("T")[0];
+  const billingNow = addons.filter(a => isAddonLiveOn(a, today)).reduce((sum, a) => sum + Number(a.amount), 0);
 
   return (
     <>
@@ -177,9 +240,17 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
                       <p className="text-muted-foreground text-xs mt-0.5">
                         {formatCurrency(addon.amount)} + {taxPercentage}% GST ({formatCurrency(gst)}) = {formatCurrency(addon.amount + gst)}/month
                       </p>
-                      <p className="text-muted-foreground text-xs">
-                        From {formatDate(addon.effective_from)}
-                        {addon.effective_until && ` · Until ${formatDate(addon.effective_until)}`}
+                      <p className="text-muted-foreground text-xs flex flex-wrap items-center gap-1.5">
+                        <span>
+                          From {formatDate(addon.effective_from)}
+                          {addon.effective_until && ` · Until ${formatDate(addon.effective_until)}`}
+                        </span>
+                        {(() => {
+                          const kind = addonTermKind(addon, contractStartDate, contractEndDate);
+                          if (kind === "full") return <Badge variant="secondary" className="bg-emerald-50 text-emerald-700">Full term</Badge>;
+                          if (kind === "ended_early") return <Badge variant="secondary" className="bg-amber-50 text-amber-800">Ends early</Badge>;
+                          return <Badge variant="secondary" className="bg-slate-100 text-slate-600">Custom dates</Badge>;
+                        })()}
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -191,17 +262,35 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
                           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(addon)}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => toggleActive(addon)}>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            title={addon.is_active ? "Pause billing for this add-on" : "Switch billing back on"}
+                            onClick={() => toggleActive(addon)}
+                          >
                             {addon.is_active
                               ? <ToggleRight className="h-4 w-4 text-green-600" />
                               : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}
                           </Button>
+                          {canEndBilling && addon.is_active && (
+                            <Button size="icon" variant="ghost" className="h-7 w-7" title="End billing on a date" onClick={() => openEnd(addon)}>
+                              <CalendarX2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                         </>
                       )}
                     </div>
                   </div>
                 );
               })}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/40 px-3 py-2 text-xs">
+                <span className="text-muted-foreground">Billing now (before GST)</span>
+                <span className="font-medium tabular-nums">
+                  {typeof monthlyFee === "number" && <>Monthly fee {formatCurrency(monthlyFee)} + add-ons {formatCurrency(billingNow)} = </>}
+                  {formatCurrency((monthlyFee ?? 0) + billingNow)}
+                </span>
+              </div>
             </div>
           )}
         </CardContent>
@@ -272,15 +361,65 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
                 />
               </div>
             </div>
-            <p className="text-xs text-muted-foreground bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
-              This add-on will automatically appear in every monthly bill. If the effective date falls mid-month, the first bill will be pro-rated accordingly.
-            </p>
+            {addonTermKind({ effective_from: form.effective_from, effective_until: form.effective_until || null }, contractStartDate, contractEndDate) === "full" ? (
+              <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
+                Runs for the full contract term. Change a date only if the customer asked for a shorter or later period.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
+                Custom dates. This add-on appears in every monthly bill between them; a mid-month date is pro-rated by day.
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {editing ? "Save Changes" : "Add to Contract"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!ending} onOpenChange={(open) => { if (!open) setEnding(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>End billing for {ending?.description}</DialogTitle>
+          </DialogHeader>
+          {ending && (
+            <div className="space-y-4 py-2">
+              <div>
+                <Label htmlFor="addon-end">Last day billed <span className="text-destructive">*</span></Label>
+                <Input
+                  id="addon-end"
+                  type="date"
+                  value={endDate}
+                  min={ending.effective_from}
+                  max={contractEndDate}
+                  onChange={e => setEndDate(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label htmlFor="addon-end-reason">Why, and who asked <span className="text-destructive">*</span></Label>
+                <Textarea
+                  id="addon-end-reason"
+                  value={endReason}
+                  onChange={e => setEndReason(e.target.value)}
+                  placeholder="e.g. Customer gave up the slot, email of 9 Jan"
+                  className="mt-1"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Kept in the audit trail. At least {MIN_END_REASON_LENGTH} characters.</p>
+              </div>
+              <p className="text-xs text-muted-foreground bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                Billing stops after this day and the last month is pro-rated by day. Invoices already sent are not changed; if any cover days after this date, you will be told which. To pause and resume later instead, use the switch.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEnding(null)}>Cancel</Button>
+            <Button onClick={handleEndBilling} disabled={saving}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              End billing
             </Button>
           </DialogFooter>
         </DialogContent>
