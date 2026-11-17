@@ -156,10 +156,10 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
         <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-amber-800">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>Renewal escalation shortfall: <strong>{formatCurrency(depositShortfall ?? 0)}</strong> still to collect</span>
+            <span>Deposit shortfall: <strong>{formatCurrency(depositShortfall ?? 0)}</strong> still to collect</span>
           </div>
           <Button size="sm" className="h-7 text-xs shrink-0" onClick={() => openCollectDialog(true)}>
-            Collect Now
+            Collect balance
           </Button>
         </div>
       )}

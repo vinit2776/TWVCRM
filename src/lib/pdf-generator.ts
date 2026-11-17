@@ -1,7 +1,9 @@
 import jsPDF, { GState } from "jspdf";
 import { MEMBERSHIP_SPECIAL_CLAUSE_NUMBER, stripClauseHeading } from "@/lib/special-clause/membership";
 import autoTable from "jspdf-autotable";
-import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatement, Location } from "@/types";
+import type { Proposal, ProposalAddon, ProformaInvoice, Lead, LineItem, Contract, BillingStatement, Location } from "@/types";
+import { addonsMonthlyTotal, cleanAddons, escalationNote } from "@/lib/recurring-addons";
+import { addonScheduleText, agreementAddons, escalationClauses } from "@/lib/agreement-addons";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
@@ -75,6 +77,8 @@ interface PDFOptions {
   showServicesIncluded?: boolean; // Show the "What's Included" icon strip (proposals only)
   amenityIcons?: string[]; // Icon keys to show in the amenities strip (falls back to default 4)
   serviceQuotas?: { name: string; unit_label: string; monthly_quota: number; overage_rate: number }[];
+  recurringAddons?: ProposalAddon[]; // Monthly add-ons, shown apart from the fee lines (proposals only)
+  escalationPercentage?: number | null; // Agreed escalation on the monthly fee (proposals only)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -551,6 +555,19 @@ function generatePDF(options: PDFOptions): jsPDF {
     y += note.length * 4 + 4;
   }
 
+  // The agreed escalation, and that add-ons sit outside it.
+  const addons = cleanAddons(options.recurringAddons);
+  const escalationText = options.showServicesIncluded ? escalationNote(options.escalationPercentage, addons.length > 0) : null;
+  if (escalationText) {
+    ensureSpace(14);
+    doc.setFontSize(8.5);
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(80, 80, 80);
+    const note = doc.splitTextToSize(escalationText, pageWidth - 28);
+    doc.text(note, 14, y);
+    y += note.length * 4 + 4;
+  }
+
   // ── Totals Section ──
   ensureSpace(44);
   const totalsX = pageWidth - 85;
@@ -600,6 +617,48 @@ function generatePDF(options: PDFOptions): jsPDF {
     align: "right",
   });
   y += 14;
+
+  // ── Recurring add-ons (proposals) ──
+  // Billed in addition to the monthly fee above; never escalated, so they sit in
+  // their own table rather than among the fee lines.
+  if (options.showServicesIncluded && addons.length > 0) {
+    ensureSpace(30);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text("Recurring Add-ons (not subject to escalation)", 14, y);
+    y += 6;
+
+    autoTable(doc, {
+      startY: y,
+      head: [["Add-on", { content: "Per month (excl. GST)", styles: { halign: "right" } }]],
+      body: [
+        ...addons.map((a) => [a.description, { content: formatCurrencyPDF(a.amount), styles: { halign: "right" as const } }]),
+        [
+          { content: "Add-ons total", styles: { fontStyle: "bold" as const } },
+          { content: formatCurrencyPDF(addonsMonthlyTotal(addons)), styles: { halign: "right" as const, fontStyle: "bold" as const } },
+        ],
+      ],
+      theme: "striped",
+      headStyles: { fillColor: BRAND_TEAL, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
+      alternateRowStyles: { fillColor: [240, 250, 245] },
+      bodyStyles: { fontSize: 8, textColor: BRAND_DARK },
+      columnStyles: { 0: { cellWidth: "auto" }, 1: { cellWidth: 52, halign: "right" } },
+      margin: { left: 14, right: 14, top: PAGE_TOP_Y, bottom: FOOTER_H + 6 },
+    });
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 4;
+
+    ensureSpace(12);
+    doc.setFontSize(8.5);
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(80, 80, 80);
+    const addonNote = doc.splitTextToSize(
+      "Add-ons are billed in addition to the monthly fee above, with GST at the same rate, for the contract term. They can be withdrawn on request.",
+      pageWidth - 28
+    );
+    doc.text(addonNote, 14, y);
+    y += addonNote.length * 4 + 6;
+  }
 
   // ── Description / Complimentary Services ──
   if (options.description) {
@@ -908,6 +967,8 @@ export function generateProposalPDF(
     razorpayPaymentLink: paymentOptions?.razorpayPaymentLink,
     preparedBy,
     showServicesIncluded: true,
+    recurringAddons: proposal.recurring_addons,
+    escalationPercentage: proposal.escalation_percentage,
     amenityIcons: proposal.location?.proposal_amenity_icons ?? undefined,
     serviceQuotas: allQuotas.length > 0 ? allQuotas : undefined,
   });
@@ -1262,6 +1323,10 @@ export function generateMembershipAgreementPDF(
   const ifrsd = monthlyFee * securityDepositMonths;
   // The agreement's escalation, not a rate negotiated for one term only.
   const escalation = programmedEscalation(contract);
+  // Recurring add-ons are listed apart from the fee (item 8A) and sit outside the escalation.
+  const listedAddons = agreementAddons(contract.recurring_addons);
+  const hasAddons = listedAddons.length > 0;
+  const escalationWording = escalationClauses(escalation, contract.tenure_months, hasAddons);
   const noticePeriod = contract.notice_period_months || 2;
   // Fallback for contracts predating the lock_in_months column (migration 00222):
   // lock-in was previously implied as tenure minus notice period.
@@ -1430,6 +1495,10 @@ export function generateMembershipAgreementPDF(
       // contradicted the Escalation clause's stated renewal rate.
       return boundaries.map((b) => `${formatDateRange(b.start, b.end)}: ${formatCurrencyPDF(b.rate)} + GST per month`).join("\n");
     })()],
+    ...(hasAddons
+      ? [["8A", "Recurring Add-ons\n(not subject to escalation)",
+          addonScheduleText(listedAddons, contract.end_date, formatCurrencyPDF, formatDatePDF)] as [string, string, string]]
+      : []),
     ["9", "Commencement Date", formatDatePDF(contract.start_date)],
     ["10", "Term", `${contract.tenure_months} months from the Commencement Date`],
     ["11", "Lock-in Period",
@@ -1482,7 +1551,8 @@ export function generateMembershipAgreementPDF(
     },
     margin: { left: marginLeft, right: marginRight },
     didParseCell: (data) => {
-      if (data.column.index === 2 && [7, 12].includes(data.row.index)) {
+      // Rows 8 (fee) and 13 (deposit). Item 8A, when present, is an extra row between them.
+      if (data.column.index === 2 && [7, hasAddons ? 13 : 12].includes(data.row.index)) {
         data.cell.styles.fontStyle = "bold";
       }
     },
@@ -1494,8 +1564,8 @@ export function generateMembershipAgreementPDF(
   // Continue schedule rows 17-19
   const scheduleData2: [string, string, string][] = [
     ["17", "Changes/Modifications\nbefore move-in date\n(to be charged on actuals)", "The layout, highlighting the changes/Modification is annexed as Annexure-A to this Agreement (If applicable)."],
-    ["18", "Auto-renewal", `In case Notice for Termination (as defined below) is not served before the expiry of the Initial Term, the Membership Agreement will be auto-renewed for another Term, having the same Lock-in Period with escalation on Monthly Membership Fees & all other charges at ${escalation}.0 %.`],
-    ["19", "Escalation on monthly\nMembership Fees", `${escalation} % on Monthly Membership Fees and all products and services after expiry of ${contract.tenure_months}.0 months commencing from the Commencement Date.`],
+    ["18", "Auto-renewal", escalationWording.autoRenewal],
+    ["19", "Escalation on monthly\nMembership Fees", escalationWording.escalation],
   ];
 
   checkPageBreak(30);

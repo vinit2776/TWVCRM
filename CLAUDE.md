@@ -192,8 +192,10 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 | Daily 10:30 IST | `/api/cron/enquiry-reconcile` | Auto-resolve enquiries: contract active → Converted, lead lost → Not interested, 21 quiet days → No response (only enquiries received after `app_settings.enquiry_auto_resolve_effective_from`) |
 | Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 | Daily 10:00 IST | `/api/cron/rent-gap-alert` | In-app + push alert to admin/manager/accounts/sales_rep for each new rent gap that can be raised from Billing → Unbilled → Rent gap (staff only, once per contract-month) |
-| Every 5 min, 08:30–12:29 IST, Mon–Sat | `/api/cron/attendance-punchin-reminder` | Pokes the attendance gateway's `/internal/punchin-reminder` so it can email anyone who hasn't punched in 10 min after their shift starts. Holds no attendance logic and no DB work — the gateway decides everything, including whether the feature is on. Needs `ATTENDANCE_CRON_SECRET` (the **gateway's** CRON_SECRET, not this project's); unset, it no-ops. The gateway is on Vercel Hobby, where cron runs at most daily, which is why the schedule lives here |
+| Every 15 min | `/api/cron/wa-reply-alert` | A customer has waited past the amber (1h) / red (3h) threshold (`src/lib/whatsapp-replies.ts`) on a WhatsApp enquiry someone took on: in-app + push to whoever took it, and red also to admin/manager; once per wait per level (dedupe = the notifications row). Staff only, never messages a customer; `?dry=1` writes nothing |
+| Daily 10:15 IST | `/api/cron/voucher-expiry-alert` | A UniFi voucher is capped at one year (`src/lib/voucher-validity.ts`), so on a longer contract it stops before the contract does. In-app + push alert to admin/manager/sales_rep 30 days ahead and again in the last week, per contract; staff then click **Replace** on the contract's Vouchers card (re-issues on the controller). Staff only — revokes, issues and emails nothing |
 | Hourly at :07 | `/api/cron/energy-ledger-capture` | Extend each OneGrid-enabled location's energy ledger (`location_energy_readings`) from its last stored row; feeds the Usage baseline |
+| Hourly at :14 | `/api/cron/energy-alerts` | Judges each enabled energy alert rule's new 15-minute slots against the usual for that slot (median of the last 30 same-kind days, from `location_energy_readings`) and records/emails staff when a deviation lasts. Episodes, not slots, are notified: one email on open, then only on a worsening step or a 2h/6h/24h reminder, with a daily cap per rule. Runs just after the :07 ledger capture. Emails only when `app_settings.energy_alerts_cron_mode` is `live` AND the rule is Live; default `dry_run` records decisions as `test` and contacts nobody. Staff only; `?dry=1` writes nothing. See `docs/energy-alerts.md` |
 | Hourly at :17 | `/api/cron/wifi-ledger-capture` | Copy each UniFi center's Wi-Fi usage (per device and site total) into `wifi_client_hourly` / `wifi_site_hourly` (console keeps ~7 days) and `wifi_client_daily` / `wifi_site_daily` (~90 days) before it ages out; read-only against UniFi, sends nothing |
 | Daily 03:00 IST | `/api/cron/customer-value` | Recompute every customer's monthly Value figures and today's score into `customer_value_monthly` / `customer_value_scores` (writes only those two tables; sends nothing) |
 | Daily 03:15 IST | `/api/cron/customer-value-margin` | Shadow margin after variable costs per customer-month into `customer_value_margin`, from the stored monthly figures and the cost rates in force; shown beside the score, never changes it (writes only that table; sends nothing) |
@@ -244,6 +246,10 @@ Lets the final vendor invoice drift from the PO value without a hard block (migr
 - GST tax rates are locked to each contract's `tax_percentage` — never recalculate dynamically.
 - `BillingLifecycleStatus` component (`src/components/billing/billing-lifecycle-status.tsx`) renders the 6-step progress indicator on list views.
 
+### Post-checkout extras (walk-in / guest bookings)
+
+An extra found after checkout (overtime, damage, missed F&B) is added as a booking add-on (`added_after_checkout`; contract holders keep the monthly-invoice route). It reopens a **paid** booking with money collected to `pending` for the difference (compare-and-set; waived/complimentary/prepaid bookings keep their status), the old spent payment link is cleared, and the PI statement follows. A booking can have several `booking_gst_tasks` (`kind` main/supplement, `sequence`, own `amount_with_gst`): an unissued task is refreshed to include the extra and **held** (shown as in-flight) until the booking is paid; once accounts issued the invoice, a supplement task is created for the difference. Add-ons are claimed (`gst_task_id`) when an invoice is uploaded; a claimed extra can't be removed. Rules: `src/lib/booking-extras.ts`, `booking-gst-task.ts`. Removing a paid extra leaves the money in place and returns an `overpaid` warning (refund is manual).
+
 ### Usage Invoices (contract/month grouped)
 
 Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.ts`; API under `/api/usage-billing/` (`unbilled`, `prepare`, `send`, `cancel`; admin/manager/accounts).
@@ -278,6 +284,15 @@ A live contract (`active`, or `renewal_in_progress` before its end date — `isC
 - **Renewal exception**: contracts with `deposit_carried_from` bypass the gate
 - Admin bypass: include `payment_override_reason` in PATCH body (logged to audit)
 - **Part-paid deposit (>50%)**: when the deposit is being collected in parts and **more than 50% of the adjusted required amount has actually been received** (`src/lib/deposit-activation.ts`), the deposit leg of the gate is satisfied with a warning: the PATCH must carry `acknowledge_partial_deposit: true` (else 409 `PARTIAL_DEPOSIT_ACK_REQUIRED`), the contract claims the proposal's deposit and snapshots it as `pending` with a note, and when the last part is paid `syncContractDepositFromParts` flips the contract's deposit to paid. The pro-rata / first invoice is still required, and the monthly GST invoice (`send-invoice`) follows the same >50% rule. Any role that can activate may do this. Exactly 50% is not enough. Both the proposal and the contract show a "deposit pending" warning until the balance is in.
+
+### Booking PI (optional proforma invoice for a walk-in/guest booking)
+
+Staff can send a PI with the booking's Razorpay link (Collect Payment → **Send PI + link**; `GET /api/bookings/[id]/pi` previews the PDF and sends nothing, `POST` emails it). It is optional: paying at the counter is unchanged.
+
+- Sending creates a billing statement owned by the booking (`created_via = booking_pi`, due **PI date + 7 days**) so it lists in Receivables as **Booking PI**. It shares the booking's link and is kept in step by `syncBookingPiStatement` (`src/lib/booking-pi-statement-server.ts`): payments (link, counter, accounts' verification), add-ons and rate edits, waive/complimentary all re-sync it; cancel or no-show voids it and cancels the link (a part-paid one is left, with a note, for an offline refund).
+- **One Tally handoff: the booking's own task** (after checkout, once paid). The statement never reaches the Tally Inbox (`handleStatementPaid` skips it). Recording a payment on it, sending it, or raising its GST invoice from Receivables is refused with a pointer to the booking.
+- Only **admin and accounts** can mark a reported manual payment paid (`PATCH /api/booking-payments/[id]`). Payments by link are marked paid by the Razorpay webhook with no action.
+- **Follow-ups:** the daily payment-reminder cron chases these in its second pass (`booking_pi` in `src/lib/receivable-fetch.ts`), on the **soft ladder** (friendly → gentle → firm, accounts CC'd, never management), from the due date. It sends only if the customer received the PI, a balance remains and the booking still owes it. The reminder reuses the booking's link and never makes a replacement (that would take a payment the booking never sees); a dead link goes without a Pay button. **Remind** on the Receivables row uses `/api/accounting/receivables/booking_pi/[id]/reminder`.
 
 ### Staged security deposit (parts)
 
@@ -331,7 +346,6 @@ MSG91_AUTH_KEY / MSG91_WHATSAPP_SENDER / MSG91_SMS_*
 B2_KEY_ID / B2_APPLICATION_KEY / B2_BUCKET / B2_ENDPOINT
 LEEGALITY_API_KEY / LEEGALITY_API_URL / LEEGALITY_PROFILE_ID / LEEGALITY_PRIVATE_SALT
 BACKUP_DB_HOST / BACKUP_DB_NAME / BACKUP_DB_USER / BACKUP_DB_PASSWORD / BACKUP_DB_PORT
-ATTENDANCE_CRON_SECRET   # the attendance gateway's CRON_SECRET, so /api/cron/attendance-punchin-reminder can call it
 ASSET_CREDENTIALS_ENCRYPTION_KEY   # encrypts facility_asset_credentials.password_encrypted; generate with `openssl rand -hex 32`
 ```
 
@@ -528,6 +542,21 @@ Staging is exactly what makes clicking through freely safe. Use it.
 - [ ] Migration rollback noted (if applicable)
 - [ ] Tested on staging (for anything touching auth, payments, or data) — see "Staging" above for how
 - [ ] Reviewed by at least one other person (once team is in place)
+
+---
+
+## Warnings Are Never Dead Ends
+
+Added 2026-11-12. Any warning, flag, chip or blocked-action message shown to a user must also give the **path to fix it**, so the user never has to work out what to do next and the warning clears once they have done it.
+
+- **Link or button right at the warning** to the exact place the fix is made (the page, dialog or action), named in plain words: "Record the delivery challan", not just "Delivery challan missing".
+- **Say what is wrong and what clears it** (which field, which document, which step first). If a prerequisite comes first ("mark the PO as ordered, then record the delivery"), say so in the same line.
+- **The warning disappears by itself once fixed** — it is derived from the data, never a dismissable note someone has to remember to clear. A flag stays visible until the underlying thing is done (e.g. an asset invoice missing stays flagged until it is uploaded).
+- **Do not show a warning that cannot be acted on.** If the user has no way to fix it on that screen or anywhere else, either build the path or do not show it; if a gap remains, say so in the PR so it is picked up, rather than shipping a dead end.
+- **Warn, don't block, unless told otherwise.** Prefer a visible warning with a way forward over a hard stop; blocks are only for the strictly enforced rules written elsewhere in this file.
+- A list row or chip that only summarises (e.g. a register chip) may leave the fix to the detail page, but that page must carry the full link/button.
+
+Applied first to the AMC warnings (item not received, delivery challan, asset details, line not an asset) in `src/lib/procurement/amc-received.ts` and the AMC contract page.
 
 ---
 
