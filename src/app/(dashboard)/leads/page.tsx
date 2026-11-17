@@ -31,6 +31,8 @@ const ImportLeadsDialog = dynamic(
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import { OverdueFollowupBanner, type FollowupSummary } from "@/components/leads/overdue-followup-banner";
 import { EnquiryTracker } from "@/components/leads/enquiry-tracker";
+import { InboundWhatsAppLog } from "@/components/leads/inbound-whatsapp-log";
+import { WhatsAppRepliesView } from "@/components/leads/whatsapp-replies-view";
 import { LeadListRow } from "@/components/leads/lead-list-row";
 import { LeadDayHeader } from "@/components/leads/lead-day-header";
 import { groupByDay, istDayKey, type DaySummary } from "@/lib/lead-days";
@@ -40,7 +42,7 @@ import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import type { TourGroup } from "@/lib/tours";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
-type LeadsTab = "enquiries" | "followups" | "tours" | "all";
+type LeadsTab = "enquiries" | "replies" | "followups" | "tours" | "all" | "whatsapp";
 
 export default function LeadsPage() {
   const router = useRouter();
@@ -59,6 +61,16 @@ export default function LeadsPage() {
   const [followupSummary, setFollowupSummary] = useState<FollowupSummary | null>(null);
   // Tours waiting for someone to say what happened, for the tab's badge.
   const [tourCounts, setTourCounts] = useState<Record<TourGroup, number> | null>(null);
+
+  // WhatsApp conversations waiting for a reply, for the Replies tab's badge.
+  const [replyCounts, setReplyCounts] = useState<{ mine: number; all: number } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/enquiries/replies?summary=true")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => json?.counts && setReplyCounts(json.counts))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch("/api/tours?counts=1")
@@ -210,7 +222,8 @@ export default function LeadsPage() {
       {/* ── View tabs: new enquiries stay discoverable instead of competing with the follow-up backlog ── */}
       <div className="flex flex-wrap gap-2">
         {([
-          { key: "enquiries", label: "New enquiries", count: activeCount, tone: "bg-emerald-500 text-white" },
+          { key: "enquiries", label: "New", count: activeCount, tone: "bg-emerald-500 text-white" },
+          { key: "replies", label: "Replies", count: replyCounts?.mine ?? 0, tone: "bg-blue-600 text-white" },
           {
             key: "followups",
             label: "Follow-ups",
@@ -219,6 +232,7 @@ export default function LeadsPage() {
           },
           { key: "tours", label: "Tours", count: tourCounts?.needs_update ?? 0, tone: "bg-violet-600 text-white" },
           { key: "all", label: "All leads", count: 0, tone: "" },
+          { key: "whatsapp", label: "WhatsApp log", count: 0, tone: "" },
         ] as const).map((t) => (
           <button
             key={t.key}
@@ -243,7 +257,11 @@ export default function LeadsPage() {
 
       {tab === "tours" && <ToursView onCounts={setTourCounts} />}
 
-      {tab !== "enquiries" && tab !== "tours" && (
+      {tab === "replies" && <WhatsAppRepliesView onCounts={setReplyCounts} />}
+
+      {tab === "whatsapp" && <InboundWhatsAppLog />}
+
+      {tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && (
         <>
       {tab === "all" && <OverdueFollowupBanner summary={followupSummary} onReview={handleReviewOverdue} />}
 

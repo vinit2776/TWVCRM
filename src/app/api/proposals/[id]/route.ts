@@ -8,6 +8,8 @@ import { snapshotProposalTermsOnSend } from "@/lib/vo-terms-server";
 
 const CONTENT_FIELDS = [
   "items",
+  "recurring_addons",
+  "escalation_percentage",
   "tax_percentage",
   "discount_percentage",
   "title",

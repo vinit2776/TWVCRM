@@ -254,7 +254,7 @@ export function LeadQuickActions({
                     setReason,
                   )}
                   <div className="text-xs text-muted-foreground">
-                    No next step is needed. The lead is closed and archived, and can be restored from its page.
+                    No next step is needed. The lead is closed, and stays in the list so it can be reopened.
                   </div>
                 </div>
               ) : (
@@ -342,7 +342,7 @@ export function LeadQuickActions({
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
               />
-              <div className="text-xs text-muted-foreground">The lead moves to the archive. It can be restored from its page.</div>
+              <div className="text-xs text-muted-foreground">The lead is marked Lost and stays in the list, so it can be reviewed or reopened.</div>
             </>
           )}
 
@@ -452,13 +452,13 @@ export function LeadQuickActions({
                       const err = await res.json().catch(() => ({}));
                       throw new Error(err.error || "Could not close the lead");
                     }
-                  }, "Lead closed and archived");
+                  }, "Lead closed");
                 }
               }}
             >
               {saving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
               {panel === "not_interested"
-                ? "Close and archive"
+                ? "Close lead"
                 : panel === "spoke" && outcome === "not_continuing"
                   ? "Save and close lead"
                   : panel === "tour"

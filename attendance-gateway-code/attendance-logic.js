@@ -42,6 +42,28 @@ function saturdayOccurrenceInMonth(dateStr) {
   return Math.ceil(Number(dateStr.split('-')[2]) / 7);
 }
 
+// How many days of a leave span are actually taken as leave. A Sunday or a declared
+// holiday inside the span is not one: nobody was due to work it, so it costs nothing.
+//
+// This is the same precedence computeDayStatus applies on read — holiday, then Sunday,
+// and only then approved leave — so counting the span any other way makes the Leave
+// Report and the employee's own balance disagree with the Calendar and the salary
+// figures computed from those statuses. 2nd and 4th Saturdays are working days on a
+// short shift, so they do count.
+//
+// `holidayDates` is a Set of 'YYYY-MM-DD' covering at least this span; the caller owns
+// the query so this stays pure and testable.
+function countLeaveDaysInRange(startDate, endDate, holidayDates = new Set()) {
+  const end = new Date(`${endDate}T00:00:00`);
+  let days = 0;
+  for (const d = new Date(`${startDate}T00:00:00`); d <= end; d.setDate(d.getDate() + 1)) {
+    const dateStr = todayStr(d);
+    if (isSunday(dateStr) || holidayDates.has(dateStr)) continue;
+    days++;
+  }
+  return days;
+}
+
 // A synthetic auto-checkout (source 'auto') only ever fills a gap — it never outranks
 // a real punch. The biometric device buffers punches and re-sends them when the office
 // relay or internet is down, so a real check-out stamped 18:30 can land *after* the 19:00
@@ -467,6 +489,7 @@ module.exports = {
   isSunday,
   isSaturday,
   saturdayOccurrenceInMonth,
+  countLeaveDaysInRange,
   effectivePunches,
   DEFAULT_SHIFT,
   AUTO_CHECKOUT_AFTER_SHIFT_MINUTES,

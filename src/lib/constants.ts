@@ -1099,7 +1099,8 @@ export const VO_RATE_PURPOSE_COLORS: Record<string, string> = {
   gst_existing: "bg-indigo-100 text-indigo-800",
 };
 
-export const VO_RATE_TERM_OPTIONS = [11, 12, 24, 36, 48] as const;
+/** New quotes start at one year; shorter terms exist only on older cases. */
+export const VO_RATE_TERM_OPTIONS = [12, 24, 36, 48] as const;
 
 // ==========================================
 // Entity Type Constants
@@ -2199,6 +2200,7 @@ export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
   cash: "Cash",
   upi: "UPI",
   bank_transfer: "Bank Transfer",
+  advance: "PO advance",
 };
 
 // Bill Approval

@@ -5,6 +5,8 @@ import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { logAudit } from "@/lib/audit";
 import { buildProrataLineItems } from "@/lib/prorata-correction";
 import { fixedShareOfItems } from "@/lib/rent-maintenance-split";
+import { prorataAddonLines, prorataAddonsTotal } from "@/lib/prorata-addons";
+import type { AddonTerms } from "@/lib/addon-billing";
 
 /**
  * POST /api/contracts/[id]/prorata-link
@@ -110,7 +112,25 @@ export async function POST(
 
   // Pro-rata amounts
   const monthlySubtotal = Number(contract.subtotal);
-  const prorataSubtotal = Math.round((monthlySubtotal / daysInMonth) * prorataDays * 100) / 100;
+  const feeProrata = Math.round((monthlySubtotal / daysInMonth) * prorataDays * 100) / 100;
+  // Recurring add-ons are not in the subtotal, and this invoice is the only bill for
+  // these days, so their share goes on it as its own lines.
+  const { data: addonRows } = await admin
+    .from("contract_addons")
+    .select("description, amount, effective_from, effective_until, is_active")
+    .eq("contract_id", id)
+    .eq("is_active", true);
+  const addonLines = prorataAddonLines(
+    (addonRows ?? []).map((a) => ({
+      description: String(a.description),
+      amount: Number(a.amount),
+      effective_from: String(a.effective_from),
+      effective_until: (a.effective_until as string | null) ?? null,
+      is_active: true,
+    })) as AddonTerms[],
+    contract.start_date
+  );
+  const prorataSubtotal = Math.round((feeProrata + prorataAddonsTotal(addonLines)) * 100) / 100;
   const taxPercentage = Number(contract.tax_percentage || 18);
   const taxAmount = Math.round(prorataSubtotal * (taxPercentage / 100) * 100) / 100;
   const totalAmount = prorataSubtotal + taxAmount;
@@ -127,9 +147,10 @@ export async function POST(
 
   const lineItems = buildProrataLineItems({
     startDate: contract.start_date,
-    prorataSubtotal,
+    prorataSubtotal: feeProrata,
     monthlySubtotal,
     fixedShare: fixedShareOfItems(contract.items),
+    addonLines,
   });
 
   const dueDate = new Date();
