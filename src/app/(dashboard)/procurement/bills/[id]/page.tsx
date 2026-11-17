@@ -1,5 +1,6 @@
 "use client";
 
+import { RetiredAmcBanner } from "@/components/procurement/retired-amc-banner";
 import { BillAmcPanel, type BillAmcPo } from "@/components/procurement/bill-amc-panel";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
@@ -612,6 +613,8 @@ export default function VendorBillDetailPage() {
         current={{ label: bill.bill_number }}
         fallbackParent={{ href: "/procurement/bills", label: "Vendor Bills" }}
       />
+      <RetiredAmcBanner po={chain?.po ?? null} billStatus={bill.approval_status} fullyPaid={bill.payment_status === "paid"} />
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
