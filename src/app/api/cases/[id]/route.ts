@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateCaseSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { isMissingEnumValueError, PURPOSE_MIGRATION_PENDING_MESSAGE } from "@/lib/vo-purpose";
 import { caseAddressText } from "@/lib/agreement-address-gate";
 import {
   AGREEMENT_RESET_MIN_REASON,
@@ -202,6 +203,9 @@ export async function PATCH(
     )
     .single();
 
+  if (isMissingEnumValueError(error)) {
+    return NextResponse.json({ error: PURPOSE_MIGRATION_PENDING_MESSAGE }, { status: 409 });
+  }
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

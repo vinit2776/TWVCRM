@@ -1054,12 +1054,16 @@ export const AGGREGATOR_BILLING_METHOD_COLORS: Record<string, string> = {
 // ==========================================
 // Virtual Office Purpose Constants
 // ==========================================
+// gst_new / gst_existing were added by migration 00684; the original five stay valid
+// (see src/lib/vo-purpose.ts for the legacy mapping).
 export const VO_PURPOSES = [
-  "gst_registration", "mca_registration", "branch_office",
+  "gst_new", "gst_existing", "gst_registration", "mca_registration", "branch_office",
   "mail_handling", "business_address",
 ] as const;
 
 export const VO_PURPOSE_LABELS: Record<string, string> = {
+  gst_new: "GST Registration (New)",
+  gst_existing: "GST Additional Place (Existing GSTIN)",
   gst_registration: "GST Registration",
   mca_registration: "MCA/Company Registration",
   branch_office: "Branch Office",
@@ -1068,6 +1072,8 @@ export const VO_PURPOSE_LABELS: Record<string, string> = {
 };
 
 export const VO_PURPOSE_COLORS: Record<string, string> = {
+  gst_new: "bg-blue-100 text-blue-800",
+  gst_existing: "bg-indigo-100 text-indigo-800",
   gst_registration: "bg-blue-100 text-blue-800",
   mca_registration: "bg-purple-100 text-purple-800",
   branch_office: "bg-indigo-100 text-indigo-800",

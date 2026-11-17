@@ -4,6 +4,7 @@ import { getNewMessages, getGmailMessage } from "@/lib/gmail";
 import { verifyPubSubPush } from "@/lib/gmail-push-auth";
 import { parseAggregatorEmail, isHighConfidence } from "@/lib/email-parser";
 import { DOCUMENT_CHECKLISTS, COMPLIANCE_CHECKLISTS } from "@/lib/constants";
+import { legacyPurposeFor } from "@/lib/vo-purpose";
 
 type AdminClient = Awaited<ReturnType<typeof createAdminClient>>;
 
@@ -343,7 +344,7 @@ async function createCaseFromEmail(
 
   // Auto-generate document checklist
   const docChecklist =
-    DOCUMENT_CHECKLISTS[parsed.purpose]?.[parsed.client_entity_type] || [];
+    DOCUMENT_CHECKLISTS[legacyPurposeFor(parsed.purpose)]?.[parsed.client_entity_type] || [];
   const docRows = docChecklist.map((doc) => ({
     case_id: newCase.id,
     document_type: doc.type,
@@ -369,7 +370,7 @@ async function createCaseFromEmail(
   }
 
   // Auto-generate compliance checks
-  const compChecklist = COMPLIANCE_CHECKLISTS[parsed.purpose] || [];
+  const compChecklist = COMPLIANCE_CHECKLISTS[legacyPurposeFor(parsed.purpose)] || [];
   if (compChecklist.length > 0) {
     const compRows = compChecklist.map((check) => ({
       case_id: newCase.id,

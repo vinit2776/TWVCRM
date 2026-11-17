@@ -24,6 +24,7 @@ import {
 // Note: COMPANY_ADDRESS is an array of address lines
 import { formatDate } from "@/lib/utils";
 import { VO_PURPOSE_LABELS } from "@/lib/constants";
+import { legacyPurposeFor } from "@/lib/vo-purpose";
 
 autoTable; // suppress unused import
 
@@ -365,7 +366,7 @@ export function generateAuthorityLetter(params: AuthorityLetterParams & {
 // ---------------------------------------------------------------------------
 
 export function getAuthoritiesForPurpose(purpose: string): Authority[] {
-  return AUTHORITY_MAP[purpose] ?? [];
+  return AUTHORITY_MAP[legacyPurposeFor(purpose)] ?? [];
 }
 
 // ---------------------------------------------------------------------------
