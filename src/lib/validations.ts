@@ -223,12 +223,21 @@ export const lineItemSchema = z.object({
   escalates: z.boolean().optional(),
 });
 
+export const proposalAddonSchema = z.object({
+  description: z.string().trim().min(1, "Add-on description is required").max(200),
+  amount: z.number().positive("Add-on amount must be more than zero"),
+});
+
 const proposalBaseSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
   location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   title: z.string().min(1, "Title is required"),
   description: z.string().optional(),
   items: z.array(lineItemSchema).min(1, "At least one line item is required"),
+  // Monthly add-ons: outside the subtotal, the deposit and any escalation.
+  recurring_addons: z.array(proposalAddonSchema).max(20).optional(),
+  // The agreed annual escalation on the monthly fee; 10 unless negotiated.
+  escalation_percentage: z.number().min(0).max(100).optional(),
   tax_percentage: z.number().min(0).max(100),
   discount_percentage: z.number().min(0).max(100),
   valid_until: z.string().optional(),
