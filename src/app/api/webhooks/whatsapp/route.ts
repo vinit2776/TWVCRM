@@ -362,6 +362,12 @@ export async function POST(request: NextRequest) {
       // A WhatsApp message from a new number is a new lead; from a known one, a re-enquiry.
       // Never lets a failure here break delivery-report handling or the 200 back to MSG91.
       let intakeLeadId: string | null = null;
+      let intakeOutcome: string | null = null;
+      let intakeKind: string | null = null;
+      let enquiryReference: string | null = null;
+      if (inboundChannel === "whatsapp" && isOwnNumber(digits)) {
+        intakeOutcome = "not_processed";
+      }
       if (inboundChannel === "whatsapp" && !isOwnNumber(digits)) {
         try {
           const intake = await ingestInboundWhatsAppEnquiry(supabase, {
@@ -374,14 +380,18 @@ export async function POST(request: NextRequest) {
             referral,
           });
           intakeLeadId = intake?.leadId ?? null;
+          intakeOutcome = intake?.outcome ?? "not_processed";
+          intakeKind = intake?.kind ?? null;
+          enquiryReference = intake?.reference ?? null;
         } catch (err) {
+          intakeOutcome = "intake_error";
           console.error("[webhook] whatsapp enquiry intake failed:", err instanceof Error ? err.message : "unknown");
         }
       }
       const messageLeadId = matchedLeadId ?? intakeLeadId;
 
       // Insert inbound message record
-      await supabase.from("whatsapp_messages").insert({
+      const inboundRow = {
         direction:    "inbound",
         channel:      inboundChannel,
         from_number:  senderNumber,
@@ -390,7 +400,22 @@ export async function POST(request: NextRequest) {
         status:       "delivered",
         entity_type:  messageLeadId ? "lead" : null,
         entity_id:    messageLeadId ?? null,
+      };
+      // What the CRM did with it, so the Inbound WhatsApp log can show it. Only WhatsApp goes
+      // through the enquiry intake; an SMS reply carries no outcome.
+      const { error: insertError } = await supabase.from("whatsapp_messages").insert({
+        ...inboundRow,
+        intake_outcome:    intakeOutcome,
+        intake_kind:       intakeKind,
+        enquiry_reference: enquiryReference,
+        is_ad_reply:       !!referral,
+        ad_headline:       referral?.headline ?? null,
       });
+      // Code can ship before migration 00728: never lose the message over the extra columns.
+      if (insertError) {
+        console.error("[webhook] inbound insert with outcome failed, retrying without it:", insertError.message);
+        await supabase.from("whatsapp_messages").insert(inboundRow);
+      }
 
       // An ad reply is a fresh inbound lead — surface where it came from, since
       // the number often won't match any existing lead.

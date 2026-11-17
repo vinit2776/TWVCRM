@@ -30,17 +30,17 @@ export async function isBookingPaymentMethodLocked(
   adminClient: SupabaseClient,
   bookingId: string,
 ): Promise<boolean> {
-  const { data: task } = await adminClient
+  // A booking can have a main task and supplements; any issued invoice locks the method.
+  const { data: tasks } = await adminClient
     .from("booking_gst_tasks")
     .select("id")
-    .eq("booking_id", bookingId)
-    .maybeSingle();
-  if (!task) return false;
+    .eq("booking_id", bookingId);
+  if (!tasks || tasks.length === 0) return false;
 
   const { count, error } = await adminClient
     .from("gst_invoice_uploads")
     .select("id", { count: "exact", head: true })
-    .eq("booking_gst_task_id", task.id)
+    .in("booking_gst_task_id", tasks.map((t) => t.id as string))
     .is("superseded_by", null);
 
   // Fail closed: if we can't tell, don't allow a change to a possibly-invoiced payment.

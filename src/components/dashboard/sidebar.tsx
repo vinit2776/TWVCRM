@@ -255,10 +255,11 @@ const navSections: NavSection[] = [
     label: "Admin",
     icon: Settings,
     items: [
-      { href: "/locations",                        label: "Locations",              icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager", "it_manager"] },
+      { href: "/locations",                        label: "Locations",              icon: MapPin,        roles: ["admin", "manager", "sales_rep", "fms", "floor_manager", "it_manager"] },
       { href: "/admin/user-locations",             label: "User Locations",          icon: UsersRound,    roles: ["admin", "manager"] },
       { href: "/admin/transfer-billing-policies",  label: "Transfer Billing",        icon: ArrowLeftRight, roles: ["admin"] },
       { href: "/admin/electricity-billing-profiles", label: "Electricity Profiles",  icon: Zap,            roles: ["admin", "manager"] },
+      { href: "/admin/energy-alerts",              label: "Energy Alerts",           icon: Zap,            roles: ["admin", "manager", "it_manager", "fms"] },
       { href: "/admin/customer-value",             label: "Customer Value",          icon: TrendingUp,     roles: ["admin"] },
       { href: "/admin/cost-parameters",             label: "Value Cost Settings",    icon: Calculator,     roles: ["admin"] },
       { href: "/audit-logs",                       label: "Audit Logs",              icon: ClipboardList, roles: ["admin", "manager"] },

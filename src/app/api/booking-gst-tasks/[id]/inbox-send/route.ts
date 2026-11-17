@@ -43,7 +43,7 @@ export async function POST(
   const { data: taskRow } = await adminClient
     .from("booking_gst_tasks")
     .select(`
-      id, handoff_state, tally_delivered_at, booking_id,
+      id, handoff_state, tally_delivered_at, booking_id, amount_with_gst,
       booking:bookings!booking_gst_tasks_booking_id_fkey(
         id, booking_number, total_amount_with_gst,
         guest_name, guest_email,
@@ -60,6 +60,7 @@ export async function POST(
     handoff_state: string;
     tally_delivered_at: string | null;
     booking_id: string;
+    amount_with_gst: number | string | null;
     booking: {
       id: string;
       booking_number: string | null;
@@ -95,9 +96,11 @@ export async function POST(
 
   // Fix #3: Re-validate amount at send time — booking total may have changed
   // since upload, and client-side canSend check is bypassable via direct POST.
-  if (task.booking && Math.round(Number(upload.invoice_amount)) !== Math.round(Number(task.booking.total_amount_with_gst))) {
+  // The task carries its own amount: a supplement is only the extra, not the booking's whole total.
+  const expectedAmount = task.amount_with_gst != null ? Number(task.amount_with_gst) : Number(task.booking?.total_amount_with_gst ?? 0);
+  if (task.booking && Math.round(Number(upload.invoice_amount)) !== Math.round(expectedAmount)) {
     return NextResponse.json(
-      { error: `Invoice amount ₹${upload.invoice_amount} no longer matches booking total ₹${task.booking.total_amount_with_gst}. Re-upload the corrected invoice.` },
+      { error: `Invoice amount ₹${upload.invoice_amount} no longer matches the amount due ₹${expectedAmount}. Re-upload the corrected invoice.` },
       { status: 409 },
     );
   }

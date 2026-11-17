@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
       payment_status, razorpay_payment_link_id, razorpay_payment_link_url,
       reminder_count, last_reminder_sent_at, voided_at,
       issuance_channel, tally_delivered_at, proforma_sent_at, emailed_at,
-      gst_invoice_number, gst_invoice_path, pi_cancelled_at,
+      gst_invoice_number, gst_invoice_path, pi_cancelled_at, created_via,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
@@ -115,6 +115,9 @@ export async function GET(request: NextRequest) {
   // overdue invoices gets ONE email listing all of them, not one per invoice.
   const candidates: ReminderCandidate<(typeof ordered)[number]>[] = [];
   for (const s of ordered) {
+    // A booking's PI is chased in the second pass (it has no contract, proposal or
+    // invoice to find the customer through), so it is not counted as skipped here.
+    if (s.created_via === "booking_pi") continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const contract: any = s.contract;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
