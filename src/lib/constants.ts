@@ -2190,6 +2190,7 @@ export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
   cash: "Cash",
   upi: "UPI",
   bank_transfer: "Bank Transfer",
+  advance: "PO advance",
 };
 
 // Bill Approval

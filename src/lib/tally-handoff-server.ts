@@ -275,6 +275,8 @@ export async function handleStatementPaid(
       invoice_id,
       case_id,
       aggregator_id,
+      booking_id,
+      created_via,
       contract:contracts!billing_statements_contract_id_fkey(billing_mode),
       case:cases!billing_statements_case_id_fkey(billing_mode, aggregator:aggregators!cases_aggregator_id_fkey(billing_mode)),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(billing_mode)
@@ -286,6 +288,11 @@ export async function handleStatementPaid(
     console.warn(`[tally-handoff] handleStatementPaid: statement ${statementId} not found`);
     return;
   }
+
+  // A booking's PI statement is chased in Receivables only. The booking's own
+  // GST task is the one Tally handoff, so this must never queue a second one.
+  const owner = statement as unknown as { booking_id: string | null; created_via: string | null };
+  if (owner.booking_id && owner.created_via === "booking_pi") return;
 
   // Supabase types nested FKs as arrays even when the FK is single-row.
   const contract = (statement as unknown as {

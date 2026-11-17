@@ -97,6 +97,13 @@ export function ContractPricingSplitDialog({ open, onOpenChange, contract, onSuc
           <DialogDescription>
             Split the monthly rate into components. A component marked fixed (e.g. maintenance)
             is skipped when the contract is renewed with an escalation. Invoices already issued are not changed.
+            {contract.status === "accepted" && (
+              <span className="mt-2 block text-amber-800">
+                This renewal is accepted but not active yet. A recurring add-on, such as parking, does not belong in
+                these lines: remove it here and add it under Recurring add-ons, so it is not escalated and not counted
+                in the security deposit. Do this before the agreement goes out and before the first-month invoice is raised.
+              </span>
+            )}
           </DialogDescription>
         </DialogHeader>
 
