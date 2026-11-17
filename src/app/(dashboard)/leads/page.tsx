@@ -31,6 +31,7 @@ const ImportLeadsDialog = dynamic(
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import { OverdueFollowupBanner, type FollowupSummary } from "@/components/leads/overdue-followup-banner";
 import { EnquiryTracker } from "@/components/leads/enquiry-tracker";
+import { InboundWhatsAppLog } from "@/components/leads/inbound-whatsapp-log";
 import { LeadListRow } from "@/components/leads/lead-list-row";
 import { LeadDayHeader } from "@/components/leads/lead-day-header";
 import { groupByDay, istDayKey, type DaySummary } from "@/lib/lead-days";
@@ -40,7 +41,7 @@ import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import type { TourGroup } from "@/lib/tours";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
-type LeadsTab = "enquiries" | "followups" | "tours" | "all";
+type LeadsTab = "enquiries" | "followups" | "tours" | "all" | "whatsapp";
 
 export default function LeadsPage() {
   const router = useRouter();
@@ -219,6 +220,7 @@ export default function LeadsPage() {
           },
           { key: "tours", label: "Tours", count: tourCounts?.needs_update ?? 0, tone: "bg-violet-600 text-white" },
           { key: "all", label: "All leads", count: 0, tone: "" },
+          { key: "whatsapp", label: "WhatsApp log", count: 0, tone: "" },
         ] as const).map((t) => (
           <button
             key={t.key}
@@ -243,7 +245,9 @@ export default function LeadsPage() {
 
       {tab === "tours" && <ToursView onCounts={setTourCounts} />}
 
-      {tab !== "enquiries" && tab !== "tours" && (
+      {tab === "whatsapp" && <InboundWhatsAppLog />}
+
+      {tab !== "enquiries" && tab !== "tours" && tab !== "whatsapp" && (
         <>
       {tab === "all" && <OverdueFollowupBanner summary={followupSummary} onReview={handleReviewOverdue} />}
 
