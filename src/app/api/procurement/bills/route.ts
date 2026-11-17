@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
     .from("vendor_bills")
     .select(
       `*, procurement_vendors(id, name, contact_email, gstin),
-       purchase_orders(id, po_number, po_type, expected_delivery_date, purchase_requests(department, expenditure_type)),
+       purchase_orders(id, po_number, po_type, status, amc_terminated_at, amc_termination_reason, expected_delivery_date, purchase_requests(department, expenditure_type)),
        companies(id, name, brand_name),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
        vendor_bill_payments(id, payment_reference, reversed_at)`,
