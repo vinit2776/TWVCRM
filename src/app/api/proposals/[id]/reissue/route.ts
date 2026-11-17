@@ -4,6 +4,8 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { revisionProposalNumber } from "@/lib/proposal-revision";
 import { voProposalColumnsPresent, VO_PROPOSAL_NOT_READY, proposalPiPaymentBlock, retireProposalPayments } from "@/lib/vo-proposal-server";
+import { priceVoQuote, buildDirectSnapshot, requestFloorApproval, isMissingColumn } from "@/lib/vo-pricing-server";
+import { VO_RATE_PURPOSES } from "@/lib/constants";
 import { VO_REISSUABLE, VO_ALLOWED_TERMS, termFee, voReissueBlockedReason } from "@/lib/vo-proposal";
 
 const ROLES = ["admin", "manager", "sales_rep"];
@@ -15,6 +17,10 @@ const bodySchema = z.object({
   /** The rate: the term fee up to 12 months, the ANNUAL rate above 12. */
   quoted_price: z.number().positive().optional(),
   note: z.string().trim().max(500).optional(),
+  /** Rate card purpose; taken from the old version's price snapshot when omitted. */
+  purpose: z.enum(VO_RATE_PURPOSES).optional(),
+  /** Required when the new price is below the floor. */
+  below_floor_reason: z.string().trim().min(5, "Say why this quote is below the floor").max(500).optional(),
 });
 
 /**
@@ -65,12 +71,28 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const taxAmount = subtotal * (Number(old.tax_percentage) / 100);
   const discountAmount = subtotal * (Number(old.discount_percentage || 0) / 100);
 
+  // Rate card pricing (W2-4): the new version is priced against the current card and gets its own
+  // snapshot (and below-floor approval, if needed). Skipped while the card tables are not migrated.
+  let snapshot: ReturnType<typeof buildDirectSnapshot> | null = null;
+  let guidePrice = old.vo_guide_price;
+  const purpose = parsed.data.purpose ?? (old.vo_price_snapshot?.purpose as string | undefined);
+  if (term && rate != null && (purpose || repriced)) {
+    const priced = await priceVoQuote(admin, { purpose: purpose ?? "", locationId: old.location_id ?? null, termMonths: term, quotedRate: rate });
+    if (priced.setUp) {
+      if (!purpose) return NextResponse.json({ error: "Choose the purpose (GST new or GST existing) so the rate card price can be looked up." }, { status: 400 });
+      if (!priced.result.ok) return NextResponse.json({ error: priced.result.message }, { status: 422 });
+      if (priced.result.quote?.requiresApproval && !parsed.data.below_floor_reason) {
+        return NextResponse.json({ error: "This quote is below the floor price. Add a reason so a manager can approve it." }, { status: 400 });
+      }
+      guidePrice = priced.result.guide;
+      snapshot = buildDirectSnapshot(priced.result);
+    }
+  }
+
   const nextRevision = Number(old.revision_number ?? 1) + 1;
   const newNumber = revisionProposalNumber(old.proposal_number, Number(old.revision_number ?? 1));
 
-  const { data: revision, error: insertErr } = await admin
-    .from("proposals")
-    .insert({
+  const revisionRow = {
       lead_id: old.lead_id,
       location_id: old.location_id,
       title: old.title,
@@ -94,16 +116,23 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       notice_period_months: old.notice_period_months,
       kind: "virtual_office",
       vo_term_months: term,
-      vo_guide_price: old.vo_guide_price,
+      vo_guide_price: guidePrice,
       vo_quoted_price: rate,
       proposal_number: newNumber,
       status: "draft",
       revision_of: old.id,
       revision_number: nextRevision,
       created_by: actor.id,
-    })
+  };
+  let { data: revision, error: insertErr } = await admin
+    .from("proposals")
+    .insert(snapshot ? { ...revisionRow, vo_price_snapshot: snapshot } : revisionRow)
     .select("*")
     .single();
+  // Deployed before migration 00688: save without the snapshot column rather than fail.
+  if (insertErr && snapshot && isMissingColumn(insertErr)) {
+    ({ data: revision, error: insertErr } = await admin.from("proposals").insert(revisionRow).select("*").single());
+  }
   if (insertErr || !revision) {
     if (insertErr?.code === "23505") {
       return NextResponse.json({ error: "This proposal has already been reissued. Refresh to see the latest version." }, { status: 409 });
@@ -125,6 +154,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   await retireProposalPayments(admin, old, actor.id, `Proposal reissued as ${newNumber}`);
+
+  if (snapshot?.requires_approval) {
+    const approval = await requestFloorApproval(admin, {
+      proposalId: revision.id,
+      proposalNumber: revision.proposal_number,
+      requestedBy: actor.id,
+      reason: parsed.data.below_floor_reason ?? "",
+      snapshot,
+      locationId: revision.location_id ?? null,
+    });
+    if ("error" in approval) console.error("[vo-reissue] could not raise below-floor approval:", approval.error);
+    else {
+      logAudit(supabase, {
+        entityType: "proposal",
+        entityId: revision.id,
+        action: "update",
+        performedBy: actor.id,
+        changes: { vo_floor_approval_requested: { old: null, new: approval.id } },
+      });
+    }
+  }
 
   logAudit(supabase, {
     entityType: "proposal",

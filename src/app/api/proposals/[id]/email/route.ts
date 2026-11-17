@@ -5,6 +5,7 @@ import { logEmailActivity } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { voExpiryFrom } from "@/lib/vo-proposal";
+import { voSendBlockedReason } from "@/lib/vo-pricing-server";
 
 // Allow larger request bodies for PDF attachments (default is 4.5MB)
 export const maxDuration = 30; // seconds
@@ -85,6 +86,16 @@ export async function POST(
         { error: "This proposal has zero security deposit and requires admin OTP approval before it can be sent. Please request and verify the OTP first." },
         { status: 403 }
       );
+    }
+  }
+
+  // ── Below-floor gate (VO kind): a quote under the floor needs an approved request first.
+  // Own query: before migration 00688 vo_price_snapshot does not exist, and then there is nothing to gate.
+  {
+    const { data: voRow } = await supabase.from("proposals").select("id, kind, vo_price_snapshot").eq("id", id).maybeSingle();
+    if (voRow) {
+      const blockedReason = await voSendBlockedReason(createAdminClient(), voRow);
+      if (blockedReason) return NextResponse.json({ error: blockedReason }, { status: 403 });
     }
   }
 

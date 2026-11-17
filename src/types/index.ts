@@ -1246,6 +1246,8 @@ export type AuditEntityType =
   | "energy_alert_episode"
   | "value_cost_parameter"
   | "lead_rate_card"
+  | "vo_direct_rate"
+  | "vo_aggregator_rate"
   | "lead_promotion"
   | "lead"
   | "activity"
