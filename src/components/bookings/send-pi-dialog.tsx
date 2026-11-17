@@ -7,9 +7,10 @@
  * "Send PI" is clicked.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { RecipientFields, recipientsValid } from "@/components/bookings/recipient-fields";
 import { FileText, Loader2, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
@@ -31,6 +32,11 @@ export function SendPiDialog({
 }: Props) {
   const [previewing, setPreviewing] = useState(false);
   const [sending, setSending] = useState(false);
+  const [recipient, setRecipient] = useState(customerEmail ?? "");
+  const [cc, setCc] = useState("");
+  // Starts from the booking's email each time the dialog opens.
+  useEffect(() => { if (open) { setRecipient(customerEmail ?? ""); setCc(""); } }, [open, customerEmail]);
+  const recipientValid = recipientsValid(recipient, cc);
 
   const preview = async () => {
     setPreviewing(true);
@@ -63,15 +69,23 @@ export function SendPiDialog({
         toast.error(json?.error || "Couldn't create the payment link");
         return;
       }
-      const res = await fetch(`/api/bookings/${bookingId}/pi`, { method: "POST" });
+      const res = await fetch(`/api/bookings/${bookingId}/pi`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: recipient.trim(), cc }),
+      });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
         toast.error(json?.error || "Couldn't send the PI");
         return;
       }
-      toast.success(`PI emailed to ${json.data.pi_sent_to}`, {
-        description: "Payment status updates by itself when the customer pays.",
-      });
+      if (json.data.warning) {
+        toast.warning(`PI emailed to ${json.data.pi_sent_to}`, { description: json.data.warning, duration: 15000 });
+      } else {
+        toast.success(`PI emailed to ${json.data.pi_sent_to}`, {
+          description: "Payment status updates by itself when the customer pays.",
+        });
+      }
       onSent();
       onOpenChange(false);
     } finally {
@@ -90,17 +104,12 @@ export function SendPiDialog({
           <div className="rounded-lg border bg-card p-3 space-y-1">
             <div className="flex justify-between"><span className="text-muted-foreground">PI number</span><span className="font-medium">{piNumber}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Amount payable</span><span className="font-semibold">{formatCurrency(amountDue)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Email to</span><span>{customerEmail ?? "No email on file"}</span></div>
           </div>
+          <RecipientFields to={recipient} cc={cc} onTo={setRecipient} onCc={setCc} savedEmail={customerEmail} idPrefix="pi" />
           <p className="text-xs text-muted-foreground">
             The PI is optional. The customer can pay with the link in advance or at the counter on arrival.
-            It is not a tax invoice; the GST invoice still follows after checkout.
+            It is not a tax invoice. Over usage and additional facilities are charged as applicable, and the GST invoice is provided on full payment.
           </p>
-          {!customerEmail && (
-            <p className="text-xs text-amber-700">
-              Add an email to the customer to send this, or preview the PDF and share it by hand.
-            </p>
-          )}
         </div>
 
         <div className="flex justify-between gap-2 pt-1">
@@ -110,7 +119,7 @@ export function SendPiDialog({
           </Button>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button size="sm" onClick={send} disabled={sending || !customerEmail}>
+            <Button size="sm" onClick={send} disabled={sending || !recipientValid}>
               {sending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Mail className="mr-1 h-4 w-4" />}
               Send PI
             </Button>

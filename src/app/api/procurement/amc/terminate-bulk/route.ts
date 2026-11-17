@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { withdrawOpenBillsOfTerminatedAmc } from "@/lib/procurement/terminate-open-bills-server";
 import { getChainState } from "@/lib/procurement/chain-lock";
 import {
   BULK_TERMINATE_ROLES,
@@ -108,6 +109,7 @@ export async function POST(request: NextRequest) {
         bulk_terminate: { old: null, new: true },
       },
     });
+    await withdrawOpenBillsOfTerminatedAmc(createAdminClient(), id, dbUser.id, reason);
     results.push({ ...base, terminated: true, skipped_reason: null });
   }
 

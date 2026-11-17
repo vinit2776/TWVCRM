@@ -16,7 +16,7 @@ import {
 
 type RollbackAction =
   | "unorder" | "unmark_received" | "restore_cancelled"
-  | "restore_partial_cancel" | "reopen_advance" | "reverse_advance" | "cancel_advance" | "reinstate_amc";
+  | "restore_partial_cancel" | "reopen_advance" | "reverse_advance" | "cancel_advance" | "reinstate_amc" | "withdraw_open_bills";
 
 type Props = {
   poId: string;
@@ -105,6 +105,19 @@ const COPY: Record<RollbackAction, { menu: string; title: string; button: string
       "Refused if the purchase order itself is cancelled — restore that first",
     ],
   },
+  withdraw_open_bills: {
+    menu: "Withdraw its unpaid bills…",
+    title: "Withdraw unpaid bills",
+    button: "Withdraw bills",
+    done: "unpaid bills withdrawn",
+    intro: "This order is cancelled or its AMC is terminated, but bills raised on it are still waiting to be paid.",
+    impact: [
+      "Every bill with no real payment recorded is withdrawn (approved ones are un-approved first) and leaves the payables queue",
+      "Advance credit those bills were showing is cleared; no money moves",
+      "The invoice numbers can be uploaded again on the replacement AMC",
+      "A bill with a payment recorded is left alone. Reverse that payment first",
+    ],
+  },
   cancel_advance: {
     menu: "Cancel advance (never paid)…",
     title: "Cancel advance",
@@ -156,6 +169,7 @@ export function PoCorrectMenu({ poId, poNumber, status, advanceStatus, advanceAp
   else if (advanceApprovalStatus === "approved" || advanceApprovalStatus === "rejected") available.push("reopen_advance");
 
   if (amcTerminated) available.push("reinstate_amc");
+  if (amcTerminated || status === "cancelled") available.push("withdraw_open_bills");
 
   const invoiced = status === "invoice_received" || status === "invoice_approved";
   if (available.length === 0 && !invoiced) return null;
@@ -181,6 +195,12 @@ export function PoCorrectMenu({ poId, poNumber, status, advanceStatus, advanceAp
         return;
       }
       toast.success(`${poNumber} ${COPY[action].done}`);
+      if (action === "withdraw_open_bills") {
+        const gone: string[] = json.bills_withdrawn ?? [];
+        const left: Array<{ bill_number: string; why: string }> = json.bills_left ?? [];
+        toast.info(gone.length ? `Withdrawn: ${gone.join(", ")}` : "No bills needed withdrawing");
+        if (left.length) toast.warning(`Left open: ${left.map((l) => `${l.bill_number} ${l.why}`).join("; ")}`, { duration: 15000 });
+      }
       setAction(null);
       onDone();
     } finally {

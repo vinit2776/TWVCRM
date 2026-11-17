@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { upsertBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
-import { buildBookingPi, bookingPiNumber, piBalanceDue } from "@/lib/booking-pi";
+import { BOOKING_PI_NOTES, buildBookingPi, bookingPiNumber, piBalanceDue } from "@/lib/booking-pi";
 import { generateBookingPiPdf, type BookingPiPdfInput } from "@/lib/booking-pi-pdf";
 import { formatCurrency } from "@/lib/utils";
+import { validateRecipients } from "@/lib/email-recipients";
+import { bookingContactEmail } from "@/lib/booking-contact";
 
 export const dynamic = "force-dynamic";
 
@@ -92,7 +95,7 @@ async function loadPi(id: string): Promise<Loaded> {
     booking,
     input,
     balanceDue,
-    customerEmail: lead?.email || booking.guest_email || null,
+    customerEmail: bookingContactEmail(booking),
     sender: { id: sender.id, full_name: sender.full_name },
     supabase,
   };
@@ -124,11 +127,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
  * customer gets one message, this one). Sending records who, when and to whom;
  * it never changes payment_status.
  */
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const loaded = await loadPi(id);
   if (!loaded.ok) return loaded.response;
-  const { booking, input, balanceDue, customerEmail, sender, supabase } = loaded;
+  const { booking, input, balanceDue, sender, supabase } = loaded;
+
+  // Staff can send it to another address (their own, to check it, or one the customer
+  // gave them); otherwise it goes to the email on the booking.
+  const body = (await req.json().catch(() => ({}))) as { to?: unknown; cc?: unknown };
+  const recipients = validateRecipients({ to: body.to, cc: body.cc });
+  if (!recipients.ok) return NextResponse.json({ error: recipients.error }, { status: 400 });
+  const customerEmail = recipients.to || loaded.customerEmail;
 
   if (!customerEmail) {
     return NextResponse.json({ error: "No customer email on file. Add one to the customer, or download the PI and share it by hand." }, { status: 400 });
@@ -144,6 +154,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     from: EMAIL_FROM,
     replyTo: EMAIL_REPLY_TO,
     to: customerEmail,
+    cc: recipients.cc.length > 0 ? recipients.cc : undefined,
     subject: `Proforma invoice ${input.pi_number} for your booking - The WorkVilla`,
     patient: true,
     html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
@@ -151,7 +162,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       <p>Your booking <b>${input.booking_number ?? ""}</b> (${input.space_name}, ${input.location_name}) is confirmed. The proforma invoice is attached.</p>
       <p>You can pay <b>${formatCurrency(balanceDue)}</b> in advance with this secure link, or at the counter when you arrive:</p>
       <p><a href="${input.payment_link_url}">${input.payment_link_url}</a></p>
-      <p>This is not a tax invoice. A GST invoice follows after your visit.</p>
+      <p>This is not a tax invoice. ${BOOKING_PI_NOTES.map((n) => n).join(" ")}</p>
       <p>The WorkVilla</p></div>`,
     attachments: [{ filename: `${input.pi_number}.pdf`, content: pdf, contentType: "application/pdf" }],
   });
@@ -162,16 +173,30 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const sentAt = new Date().toISOString();
   await supabase
     .from("bookings")
-    .update({ pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_by: sender.id, pi_sent_to: customerEmail })
+    .update({ pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_by: sender.id, pi_sent_to: recipients.cc.length > 0 ? `${customerEmail} · cc ${recipients.cc.join(", ")}` : customerEmail })
     .eq("id", id);
+
+  // Lists the PI in Receivables as pending and lets the follow-up ladder chase
+  // it. Never blocks the send: the email has already gone.
+  const { statementId } = await upsertBookingPiStatement(createAdminClient(), {
+    bookingId: id,
+    leadId: booking.lead_id ?? null,
+    piNumber: input.pi_number,
+    totals: input.totals,
+    gstRate: Number(booking.gst_rate) || 0,
+    linkId: booking.razorpay_payment_link_id ?? null,
+    linkUrl: input.payment_link_url,
+  });
 
   void logAudit(supabase, {
     entityType: "booking",
     entityId: id,
     action: "update",
     performedBy: sender.id,
-    changes: { pi_number: { old: booking.pi_number ?? null, new: input.pi_number }, pi_sent_to: { old: null, new: customerEmail } },
+    changes: { pi_number: { old: booking.pi_number ?? null, new: input.pi_number }, pi_sent_to: { old: null, new: customerEmail }, ...(recipients.cc.length > 0 ? { pi_cc: { old: null, new: recipients.cc.join(", ") } } : {}) },
   });
 
-  return NextResponse.json({ data: { pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_to: customerEmail } });
+  return NextResponse.json({ data: { pi_number: input.pi_number, pi_sent_at: sentAt, pi_sent_to: recipients.cc.length > 0 ? `${customerEmail} · cc ${recipients.cc.join(", ")}` : customerEmail, statement_id: statementId,
+      // The email has gone; say so if it could not be listed in Receivables, or nobody will chase it.
+      warning: statementId ? null : "The PI was emailed but could not be added to Receivables. Send it again to retry, or tell accounts." } });
 }

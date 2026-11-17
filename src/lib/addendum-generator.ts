@@ -6,7 +6,7 @@
  * negotiated renewal terms (escalation, tenure, seats, etc.)
  */
 import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import autoTable, { type RowInput } from "jspdf-autotable";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   BRAND_TEAL,
@@ -24,6 +24,7 @@ import {
   createPdfContext,
 } from "@/lib/pdf-utils";
 import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
+import { addonsClauseText, classifyAddons, feeScheduleRows, type AddendumAddon } from "@/lib/addendum-addons";
 
 export interface AddendumData {
   // Renewal (new) contract
@@ -46,6 +47,8 @@ export interface AddendumData {
   renewal_rate_phases?: { phase_order: number; duration_months: number; monthly_rate: number; end_date?: string | null }[];
   /** Phase-clock anchor for renewal_rate_phases — the renewal's own phase_start_date (falls back to renewal_start_date). */
   renewal_phase_start_date?: string;
+  /** Recurring add-ons on the renewal (never escalated). Absent or empty: the addendum reads as it always has. */
+  renewal_addons?: AddendumAddon[];
 
   // Parent (original) contract
   parent_contract_number: string;
@@ -55,6 +58,8 @@ export interface AddendumData {
   parent_seats: number;
   parent_tenure_months: number;
   parent_agreement_date?: string;
+  /** Recurring add-ons the parent was billing, to say which continue and which stop. */
+  parent_addons?: AddendumAddon[];
 
   // Client details
   client_name: string; // Company or individual name
@@ -251,8 +256,38 @@ export function generateAddendumPdf(data: AddendumData): jsPDF {
       ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5
     );
   }
+  const renewalAddons = data.renewal_addons ?? [];
+  const parentAddons = data.parent_addons ?? [];
+  if (renewalAddons.length > 0 || parentAddons.length > 0) {
+    ctx.y += 2;
+    ctx.addWrappedText(
+      "Recurring add-ons are not subject to escalation and are dealt with in the clause that follows.",
+      ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5
+    );
+  }
   ctx.y += 5;
   clauseNum++;
+
+  // Recurring add-ons: which continue, which are new, which stop.
+  const addonsText = addonsClauseText(
+    classifyAddons(parentAddons, renewalAddons, data.parent_end_date),
+    data.parent_end_date,
+    (n) => formatCurrency(n).replace("Rs. ", "INR "),
+    formatDate,
+    data.renewal_end_date
+  );
+  if (addonsText) {
+    ctx.checkPageBreak(20);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_DARK);
+    doc.text(`${clauseNum}.`, ctx.marginLeft, ctx.y);
+    doc.text("Recurring Add-ons", ctx.marginLeft + 6, ctx.y);
+    ctx.y += 5;
+    ctx.addWrappedText(addonsText, ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5);
+    ctx.y += 5;
+    clauseNum++;
+  }
 
   // Clause 3: Seats (if changed)
   if (data.renewal_seats !== data.parent_seats) {
@@ -282,24 +317,27 @@ export function generateAddendumPdf(data: AddendumData): jsPDF {
   ctx.y += 5;
   clauseNum++;
 
-  const tableBody = data.renewal_items.map((item, idx) => [
-    String(idx + 1),
-    item.description,
-    String(item.quantity),
-    formatCurrency(item.unit_price),
-    formatCurrency(item.total),
-  ]);
-  tableBody.push(["", "", "", "Subtotal", formatCurrency(data.renewal_subtotal)]);
-  if (data.renewal_tax_percentage > 0) {
-    tableBody.push(["", "", "", `GST @ ${data.renewal_tax_percentage}%`, formatCurrency(data.renewal_tax_amount)]);
-  }
-  tableBody.push(["", "", "", "Total (incl. tax)", formatCurrency(data.renewal_total_amount)]);
+  // Two sections when the renewal carries recurring add-ons (the escalating fee, then the
+  // add-ons that never escalate); the table it always was when it does not.
+  const tableBody = feeScheduleRows({
+    items: data.renewal_items,
+    subtotal: data.renewal_subtotal,
+    taxPercentage: data.renewal_tax_percentage,
+    taxAmount: data.renewal_tax_amount,
+    totalAmount: data.renewal_total_amount,
+    addons: renewalAddons,
+    renewalEnd: data.renewal_end_date,
+    formatMoney: formatCurrency,
+    formatDate,
+  });
 
   autoTable(doc, {
     startY: ctx.y,
     margin: { left: ctx.marginLeft + 6, right: ctx.marginRight },
     head: [["#", "Description", "Qty", "Unit Price", "Amount"]],
-    body: tableBody,
+    body: tableBody as unknown as RowInput[],
+    // A fee line carries its dates on a second line; never leave them on the next page.
+    rowPageBreak: "avoid",
     theme: "grid",
     headStyles: {
       fillColor: BRAND_TEAL,
@@ -540,6 +578,26 @@ export async function buildAddendumPdfBuffer(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const location = contract.location as any;
 
+  // Recurring add-ons on both terms, so the addendum can say which continue.
+  const loadAddons = async (id: string): Promise<AddendumAddon[]> => {
+    const { data } = await supabase
+      .from("contract_addons")
+      .select("description, amount, effective_from, effective_until")
+      .eq("contract_id", id)
+      .eq("is_active", true)
+      .order("effective_from", { ascending: true });
+    return (data ?? []).map((a) => ({
+      description: String(a.description),
+      amount: Number(a.amount),
+      effective_from: String(a.effective_from),
+      effective_until: (a.effective_until as string | null) ?? null,
+    }));
+  };
+  const [renewalAddonRows, parentAddonRows] = await Promise.all([
+    loadAddons(contract.id as string),
+    loadAddons(contract.parent_contract_id as string),
+  ]);
+
   const addendumData: AddendumData = {
     renewal_contract_number: contract.contract_number,
     renewal_start_date: contract.start_date,
@@ -557,6 +615,7 @@ export async function buildAddendumPdfBuffer(
     renewal_items: (contract.items || []) as AddendumData["renewal_items"],
     renewal_rate_phases: (contract.rate_phases || []) as AddendumData["renewal_rate_phases"],
     renewal_phase_start_date: contract.phase_start_date || contract.start_date,
+    renewal_addons: renewalAddonRows,
 
     parent_contract_number: parentData.contract_number,
     parent_start_date: parentData.start_date,
@@ -565,6 +624,7 @@ export async function buildAddendumPdfBuffer(
     parent_seats: parentData.seats || 1,
     parent_tenure_months: parentData.tenure_months || 12,
     parent_agreement_date: parentData.agreement_date,
+    parent_addons: parentAddonRows,
 
     client_name: clientName,
     client_contact_person: contactPerson,

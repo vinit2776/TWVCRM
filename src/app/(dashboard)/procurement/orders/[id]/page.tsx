@@ -524,6 +524,14 @@ export default function PurchaseOrderDetailPage() {
         terminate_amc: "AMC terminated — events history preserved",
       };
       toast.success(msgs[action] ?? "Done");
+      if (action === "terminate_amc") {
+        const gone: string[] = json.bills_withdrawn ?? [];
+        const left: Array<{ bill_number: string; why: string }> = json.bills_left ?? [];
+        if (gone.length) toast.success(`Withdrew ${gone.length} unpaid bill${gone.length > 1 ? "s" : ""}: ${gone.join(", ")}`);
+        if (left.length) {
+          toast.warning(`Still open on this AMC: ${left.map((l) => `${l.bill_number} ${l.why}`).join("; ")}`, { duration: 15000 });
+        }
+      }
       setActionDialog(null);
       setPartialCancelQtys({});
       setForceCancelStep(1);
@@ -2321,6 +2329,7 @@ export default function PurchaseOrderDetailPage() {
                 <li>No new breakdowns or service reports can be logged on this AMC</li>
                 <li>Existing event history stays visible as institutional memory</li>
                 <li>Pending advances will not be processed</li>
+                <li>Bills still waiting for approval are withdrawn, so their invoice numbers can be uploaded again on the new AMC. Approved or paid bills stay, and are listed for you to correct</li>
                 <li>To resume AMC, create a new Material Request</li>
               </ul>
             </div>

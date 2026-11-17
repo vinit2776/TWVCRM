@@ -2,7 +2,7 @@ import jsPDF from "jspdf";
 import QRCode from "qrcode";
 import { BRAND_DARK, BRAND_TEAL, addBrandHeader, addFooter, formatCurrency, formatDate } from "@/lib/pdf-utils";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
-import type { BookingPiTotals } from "@/lib/booking-pi";
+import { BOOKING_PI_NOTES, type BookingPiTotals } from "@/lib/booking-pi";
 
 export interface BookingPiPdfInput {
   pi_number: string;
@@ -40,7 +40,7 @@ export async function generateBookingPiPdf(input: BookingPiPdfInput): Promise<js
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(102, 102, 102);
-  doc.text("This is not a tax invoice. A GST invoice follows after your visit.", right, y, { align: "right" });
+  doc.text("This is not a tax invoice.", right, y, { align: "right" });
   y += 9;
 
   doc.setFontSize(10);
@@ -109,7 +109,22 @@ export async function generateBookingPiPdf(input: BookingPiPdfInput): Promise<js
     doc.text(value, right, y, { align: "right" });
     y += 6;
   });
-  y += 6;
+  y += 4;
+
+  // Terms the customer should see before paying.
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("Notes", left, y);
+  y += 5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(...BRAND_DARK);
+  for (const note of BOOKING_PI_NOTES) {
+    doc.text(clean(`- ${note}`), left, y);
+    y += 5;
+  }
+  y += 5;
 
   if (input.payment_link_url) {
     doc.setFont("helvetica", "bold");

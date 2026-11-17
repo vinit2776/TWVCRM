@@ -27,6 +27,15 @@ two. The CRM's only reference to this app is an outbound link in the sidebar.
   (shift matching, half-day/late rules, breaks, holidays, leave). The only part
   with unit tests, in [test/](test/).
 - **[i18n.js](i18n.js)** — English and Tamil strings, chosen per employee.
+- **[request-notes.js](request-notes.js)** — rules shared by every
+  apply/approve flow: the employee's reason and the manager's note are required,
+  and a rejected request can be filed again (`previous_request_id` links the
+  attempts into one thread).
+- **[certificate-check.js](certificate-check.js)** — optional Claude check of a
+  Sick Leave medical certificate (name, dates, signature against the request).
+  Advice for the manager only; off unless the `CERTIFICATE_CHECK` setting is on,
+  and it needs `ANTHROPIC_API_KEY`. Turning it on sends the certificate image to
+  Anthropic's API.
 - **[api/index.js](api/index.js)** — Vercel entry point. `vercel.json` rewrites
   every path here, so the router in `server.js` runs unchanged.
 - **[relay/](relay/)** — office-LAN proxy for the biometric device. See below.
@@ -205,12 +214,36 @@ that, an approved correction fixes the times but the day stays a Half Day. They
 also get 1 full-day correction a month for a day with no punches at all; any
 other such day stays Absent. The limits live in `attendance-logic.js`.
 
+## Field trips
+
+An employee adds every place they went, in order, and can tick "Return to first
+stop" for a round trip. Their own branch is filled in as the starting point. The
+server sends all the stops to LocationIQ's driving directions in one call and stores
+the road distance of each leg and the total. Whatever distance the browser showed
+is ignored: the route is worked out again when the trip is submitted. The coordinates
+behind each stop are only taken from the browser where they fall inside the
+`PLACES_VIEWBOX` area that address search itself is bounded to — otherwise the stop's
+address is geocoded on the server instead, so the places an approver reads are always
+the places that were measured. Up to 6 photos
+(receipts, parking slips) can be attached; the phone shrinks them to a 1000px JPEG
+first and they are stored in `field_trip_photos`.
+
+The amount is the distance times `FIELD_TRIP_RATE_PER_KM`. The rate and amount are
+saved on the trip when it is submitted, so changing the rate never changes a trip
+already submitted, and a rejected trip submitted again keeps its original rate.
+Managers see each leg's km and a "Check in Google Maps" link through the same
+points. Rules and limits live in `field-trip.js`.
+
 ## Configuration
 
 Operational settings live in the database, editable by an admin at
 **/admin/settings** — office public IPs, the biometric device serial, the device
-clock correction, the punch API key, the LocationIQ key, and address-search
-biasing. Each resolves in this order:
+clock correction, the punch API key, the LocationIQ key, address-search
+biasing, the field trip rate per km (`FIELD_TRIP_RATE_PER_KM`, 0 by default, which
+shows distance only), whether a trip needs a photo (`FIELD_TRIP_PHOTO_REQUIRED`) and
+the most stops a trip can have (`FIELD_TRIP_MAX_STOPS`), and the medical certificate
+check (`CERTIFICATE_CHECK`, off by default, with its `ANTHROPIC_API_KEY`). Each
+resolves in this order:
 
 1. the `app_settings` table (the admin UI)
 2. the environment variable of the same name (a deploy-time default)

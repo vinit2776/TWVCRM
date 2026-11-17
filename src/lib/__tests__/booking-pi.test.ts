@@ -7,7 +7,7 @@ describe("buildBookingPi", () => {
       booking_number: "BK-0412",
       space_name: "Meeting room 2",
       duration_hours: 2,
-      total_amount: 2500,
+      total_amount: 2000,
       gst_rate: 18,
       gst_amount: 360,
       total_amount_with_gst: 2950,
