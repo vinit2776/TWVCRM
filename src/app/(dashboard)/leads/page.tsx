@@ -222,7 +222,7 @@ export default function LeadsPage() {
       {/* ── View tabs: new enquiries stay discoverable instead of competing with the follow-up backlog ── */}
       <div className="flex flex-wrap gap-2">
         {([
-          { key: "enquiries", label: "New enquiries", count: activeCount, tone: "bg-emerald-500 text-white" },
+          { key: "enquiries", label: "New", count: activeCount, tone: "bg-emerald-500 text-white" },
           { key: "replies", label: "Replies", count: replyCounts?.mine ?? 0, tone: "bg-blue-600 text-white" },
           {
             key: "followups",
