@@ -16,7 +16,7 @@
  */
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Banknote, Link2 } from "lucide-react";
+import { Banknote, FileText, Link2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 
 interface Props {
@@ -27,10 +27,12 @@ interface Props {
   onPickCounter: () => void;
   /** Called when staff picks "Send link" — parent opens SharePaymentLinkDialog. */
   onPickLink: () => void;
+  /** Called when staff picks "Send PI + link" — parent opens SendPiDialog. */
+  onPickPi?: () => void;
 }
 
 export function GetPaymentChooser({
-  open, onOpenChange, amountDue, onPickCounter, onPickLink,
+  open, onOpenChange, amountDue, onPickCounter, onPickLink, onPickPi,
 }: Props) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -78,6 +80,26 @@ export function GetPaymentChooser({
               </div>
             </div>
           </button>
+
+          {/* Send PI + link */}
+          {onPickPi && (
+            <button
+              type="button"
+              onClick={() => { onPickPi(); onOpenChange(false); }}
+              className="rounded-lg border bg-card p-4 text-left hover:bg-muted/40 active:scale-[0.99] transition flex gap-3 items-start"
+            >
+              <div className="rounded-md bg-emerald-100 p-2 shrink-0">
+                <FileText className="h-5 w-5 text-emerald-700" />
+              </div>
+              <div>
+                <div className="font-semibold">Send PI + link</div>
+                <div className="text-[12px] text-muted-foreground mt-0.5">
+                  Email a proforma invoice with the payment link so the customer can pay in
+                  advance. Optional — preview it first.
+                </div>
+              </div>
+            </button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

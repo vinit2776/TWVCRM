@@ -5,7 +5,7 @@ import { pickStageForKind, sendReceivableReminder } from "@/lib/receivable-remin
 import { fetchDunnableReceivables, type DunnableKind } from "@/lib/receivable-fetch";
 
 const ALLOWED_ROLES = ["admin", "manager", "accounts"];
-const KINDS: DunnableKind[] = ["deposit", "topup", "adhoc_invoice"];
+const KINDS: DunnableKind[] = ["deposit", "topup", "adhoc_invoice", "booking_pi"];
 
 function isKind(v: string): v is DunnableKind {
   return (KINDS as string[]).includes(v);

@@ -37,3 +37,14 @@ export function adjustDepositShortfall(
 ): number {
   return Math.max(0, round2(oldShortfall + (newSubtotal - oldSubtotal) * depositMonths));
 }
+
+/**
+ * Whose pricing an admin may correct: a live contract, or a renewal that has been
+ * accepted but not yet activated (its fee and deposit are still open to correction
+ * before the agreement goes out for signature). Returns the reason when not.
+ */
+export function pricingCorrectionBlocker(c: { status: string; is_renewal?: boolean | null }): string | null {
+  if (c.status === "active") return null;
+  if (c.status === "accepted" && c.is_renewal) return null;
+  return "Only an active contract's pricing, or an accepted renewal awaiting activation, can be changed here";
+}

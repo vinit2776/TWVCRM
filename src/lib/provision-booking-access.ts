@@ -41,7 +41,13 @@ export interface ProvisionResult {
  * - Sends PIN via WhatsApp → DLT SMS → email (best-effort, logged on failure).
  * - Idempotent: can be called multiple times safely (upsert on device_id,cosec_user_id).
  */
-export async function provisionBookingAccess(booking_id: string): Promise<ProvisionResult> {
+export async function provisionBookingAccess(
+  booking_id: string,
+  // Staff can send the PIN email to another address or copy others on a resend.
+  // deliver: false provisions the PIN on the door devices but sends nothing, so staff send
+  // it from the booking only when it is needed. Defaults to true for the manual button.
+  opts: { emailTo?: string | null; emailCc?: string[]; deliver?: boolean } = {},
+): Promise<ProvisionResult> {
   const admin = createAdminClient();
 
   // Load booking + space + lead
@@ -165,7 +171,9 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = booking.lead as any;
   const contactPhone = (booking.booker_phone as string | null) ?? (booking.guest_phone as string | null) ?? lead?.phone;
-  const contactEmail = (booking.guest_email as string | null) ?? lead?.email;
+  // Booking-specific contact first (as for the phone above): the address entered for
+  // this booking, then the customer record's.
+  const contactEmail = opts.emailTo || (booking.guest_email as string | null) || lead?.email;
   const leadFullName = `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim();
   const contactName  = (booking.guest_name as string | null) ?? (leadFullName || "Guest");
 
@@ -176,7 +184,9 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
     email:    "skipped",
   };
 
-  if (contactPhone) {
+  const deliver = opts.deliver !== false;
+
+  if (deliver && contactPhone) {
     // WhatsApp — held pending template approval in MSG91 dashboard.
     // Re-enable by uncommenting once "booking_access_pin" template is approved.
     // messaging.bookingAccessPin(contactPhone, contactName, bookingRef, startFmt, endFmt, pin, booking_id)
@@ -198,15 +208,16 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
       delivery.sms = "failed";
       console.warn("[provision-booking-access] SMS delivery failed:", smsResult.error);
     }
-  } else {
+  } else if (deliver) {
     console.warn("[provision-booking-access] No phone on booking", booking_id, "— SMS skipped.");
   }
 
   // Email (SMTP primary → Resend fallback)
-  if (contactEmail) {
+  if (deliver && contactEmail) {
     const emailResult = await resend.emails.send({
       from: EMAIL_FROM,
       to: contactEmail,
+      cc: opts.emailCc && opts.emailCc.length > 0 ? opts.emailCc : undefined,
       subject: `Your WorkVilla Access PIN — Booking ${bookingRef}`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
@@ -239,7 +250,7 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
       delivery.email = "sent";
       console.info("[provision-booking-access] Email delivered to", contactEmail);
     }
-  } else {
+  } else if (deliver) {
     console.warn("[provision-booking-access] No email on booking", booking_id, "— email skipped.");
   }
 
