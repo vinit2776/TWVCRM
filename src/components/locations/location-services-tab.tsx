@@ -34,11 +34,13 @@ interface LocationServicesTabProps {
   canEdit: boolean;
   /** Sales reps may set agreement wording without editing the rest of the location. */
   canEditAgreementTerms?: boolean;
+  /** Amenity icons are customer-facing wording, so sales reps may set them too. */
+  canEditAmenities?: boolean;
   initialAmenityIcons?: string[];
   initialAgreementTerms?: AgreementTerms | null;
 }
 
-export function LocationServicesTab({ locationId, canEdit, canEditAgreementTerms = canEdit, initialAmenityIcons, initialAgreementTerms }: LocationServicesTabProps) {
+export function LocationServicesTab({ locationId, canEdit, canEditAgreementTerms = canEdit, canEditAmenities = canEdit, initialAmenityIcons, initialAgreementTerms }: LocationServicesTabProps) {
   // ── Billable services ──────────────────────────────────────────────────────
   const [services, setServices] = useState<LocationService[]>([]);
   const [loading, setLoading] = useState(true);
@@ -203,8 +205,8 @@ export function LocationServicesTab({ locationId, canEdit, canEditAgreementTerms
               return (
                 <button
                   key={key}
-                  onClick={() => canEdit && toggleAmenity(key)}
-                  disabled={!canEdit}
+                  onClick={() => canEditAmenities && toggleAmenity(key)}
+                  disabled={!canEditAmenities}
                   className={`flex flex-col items-center gap-2 rounded-lg border-2 p-3 text-center text-xs font-medium transition-colors ${
                     active
                       ? "border-[#015E65] bg-[#015E65]/5 text-[#015E65]"
@@ -220,7 +222,7 @@ export function LocationServicesTab({ locationId, canEdit, canEditAgreementTerms
           {amenityIcons.length > 4 && (
             <p className="text-xs text-amber-600">Only the first 4 selected icons will appear in the PDF.</p>
           )}
-          {canEdit && (
+          {canEditAmenities && (
             <div className="flex justify-end">
               <Button size="sm" onClick={saveAmenities} disabled={savingAmenities}>
                 {savingAmenities ? "Saving…" : "Save Amenities"}

@@ -13,7 +13,7 @@ export const DEPOSIT_DUE_DAYS = 7;
 /** An invoice older than this is almost certainly abandoned and needs triage. */
 export const STALE_AFTER_DAYS = 90;
 
-export type ReceivableKind = "statement" | "deposit" | "topup" | "adhoc_invoice";
+export type ReceivableKind = "statement" | "deposit" | "topup" | "adhoc_invoice" | "booking_pi";
 
 /**
  * Deposits and top-ups use the soft ladder: stages 0-2 only (friendly →
@@ -28,6 +28,8 @@ export function ladderMaxStageFor(kind: ReceivableKind): number | null {
   switch (kind) {
     case "deposit":
     case "topup":
+    // A booking PI is a small, routine ask, so it never escalates to management.
+    case "booking_pi":
       return SOFT_LADDER_MAX_STAGE;
     case "adhoc_invoice":
     case "statement":
@@ -40,6 +42,7 @@ export const RECEIVABLE_KIND_LABELS: Record<ReceivableKind, string> = {
   deposit: "Security deposit",
   topup: "Deposit top-up",
   adhoc_invoice: "Ad-hoc invoice",
+  booking_pi: "Booking PI",
 };
 
 /** A receivable normalised across all four source tables for the AR list. */

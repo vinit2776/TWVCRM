@@ -125,14 +125,16 @@ interface FieldProps {
   duplicate?: string | null;
   entered: EnteredBill;
   onApply: (field: SuggestionField, value: string) => void;
+  /** Editing an existing bill: the invoice is already on file, so choosing one only replaces it. */
+  replace?: boolean;
 }
 
-export function LandlordInvoiceField({ invoice, duplicate, entered, onApply }: FieldProps) {
+export function LandlordInvoiceField({ invoice, duplicate, entered, onApply, replace }: FieldProps) {
   const { file, check, inputRef, pick, clear } = invoice;
   const findings = invoice.findingsFor(entered);
   return (
     <div className="space-y-2">
-      <Label>Landlord invoice <span className="text-red-500">*</span></Label>
+      <Label>{replace ? "Replace landlord invoice" : <>Landlord invoice <span className="text-red-500">*</span></>}</Label>
       {file ? (
         <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
           <Paperclip className="h-4 w-4 text-muted-foreground" />
@@ -147,7 +149,7 @@ export function LandlordInvoiceField({ invoice, duplicate, entered, onApply }: F
           onClick={() => inputRef.current?.click()}
           className="flex w-full items-center justify-center gap-2 rounded-md border-2 border-dashed border-muted-foreground/25 px-4 py-4 text-sm text-muted-foreground hover:border-muted-foreground/50"
         >
-          <Paperclip className="h-4 w-4" /> Upload the landlord&apos;s invoice — required, checked against your entries (PDF, JPG, PNG, max 10 MB)
+          <Paperclip className="h-4 w-4" />{replace ? " Upload the corrected invoice — optional, leave empty to keep the current one (PDF, JPG, PNG, max 10 MB)" : " Upload the landlord&apos;s invoice — required, checked against your entries (PDF, JPG, PNG, max 10 MB)"}
         </button>
       )}
       <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="sr-only" onChange={pick} />

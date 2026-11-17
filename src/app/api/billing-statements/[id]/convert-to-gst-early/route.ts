@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectIfBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { setHandoffState } from "@/lib/tally-handoff-server";
@@ -44,6 +45,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const piBlock = await rejectIfBookingPiStatement(id);
+  if (piBlock) return piBlock;
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

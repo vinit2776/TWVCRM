@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { loadAdvanceUsage } from "@/lib/procurement/po-advance";
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 export async function GET(
   _req: NextRequest,
@@ -46,6 +48,9 @@ export async function GET(
   let mr = null;
   let deliveryChallans: unknown[] = [];
   let serviceReports: unknown[] = [];
+  // Every live bill on the same PO and the visits logged, so the approver can read the AMC's history.
+  let poBills: unknown[] = [];
+  let visitsLogged = 0;
 
   if (bill.po_id) {
     const { data: poData } = await supabase
@@ -53,7 +58,10 @@ export async function GET(
       .select(`
         id, po_number, status, po_type, created_at, total_ordered_amount,
         expected_delivery_date, actual_delivery_date, notes,
-        billing_cycle, cycle_count, unit_cost_per_cycle,
+        billing_cycle, cycle_count, unit_cost_per_cycle, opening_cycles,
+        amc_coverage_type, amc_start_date, amc_end_date, amc_visits_covered, amc_visits_used,
+        amc_status, amc_terminated_at, amc_termination_reason,
+        amc_contact_name, amc_helpline_number, amc_contact_email,
         payment_terms, terms_and_conditions,
         advance_amount, advance_status, advance_payment_mode,
         advance_payment_reference, advance_payment_date,
@@ -66,7 +74,7 @@ export async function GET(
           approver:users!purchase_requests_approved_by_fkey(id, full_name),
           purchase_request_items(id, item_name, quantity, unit, estimated_price, total_estimated, notes)
         ),
-        purchase_order_items(id, item_name, quantity_ordered, unit_price, unit)
+        purchase_order_items(id, item_name, quantity_ordered, unit_price, unit, linked_asset:facility_assets(id, name, asset_code, serial_number, make, model, location:locations(name)))
       `)
       .eq("id", bill.po_id)
       .single();
@@ -76,7 +84,7 @@ export async function GET(
       mr = (poData.purchase_requests as unknown) ?? null;
 
       // Fetch delivery challans (goods) or service reports (services) in parallel
-      const [dcRes, srRes] = await Promise.all([
+      const [dcRes, srRes, billsRes, visitsRes] = await Promise.all([
         supabase
           .from("po_delivery_receipts")
           .select(`
@@ -95,7 +103,21 @@ export async function GET(
           `)
           .eq("po_id", bill.po_id)
           .order("cycle_number", { ascending: true }),
+
+        supabase
+          .from("vendor_bills")
+          .select("id, bill_number, total_amount, approval_status, payment_status, service_report_id, invoice_date")
+          .eq("po_id", bill.po_id)
+          .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)
+          .order("created_at", { ascending: true }),
+
+        supabase
+          .from("amc_service_events")
+          .select("id", { count: "exact", head: true })
+          .eq("po_id", bill.po_id),
       ]);
+      poBills = billsRes.data ?? [];
+      visitsLogged = visitsRes.count ?? 0;
 
       deliveryChallans = dcRes.data ?? [];
       serviceReports = srRes.data ?? [];
@@ -189,11 +211,19 @@ export async function GET(
     .in("entity_id", entityIds)
     .order("created_at", { ascending: true });
 
+  // What is left of the PO's advance, so the bill page can offer to apply it.
+  const advanceUsage = bill.po_id && po && (po as { advance_status?: string }).advance_status === "processed"
+    ? await loadAdvanceUsage(createAdminClient(), bill.po_id as string)
+    : null;
+
   return NextResponse.json({
     data: {
+      advanceUsage,
       bill: { ...bill, invoice_signed_url: invoiceSignedUrl },
       vendor,
       po,
+      poBills,
+      visitsLogged,
       mr,
       deliveryChallans: challansWithUrls,
       serviceReports: reportsWithUrls,

@@ -18,6 +18,7 @@
 import { unstable_cache } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/server";
 import { decryptSecret } from "@/lib/crypto-secrets";
+import { MAX_UNIFI_VOUCHER_MINUTES } from "@/lib/voucher-validity";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -468,11 +469,25 @@ export function isUnifiLocation(location: {
 /**
  * Calculate exact voucher duration in minutes from now until a contract/booking end date.
  * Adds a buffer (default 60 min) so sessions don't cut out at the stroke of midnight.
+ * Never more than MAX_UNIFI_VOUCHER_DAYS.
  */
 export function calcVoucherMinutes(endDate: string | Date, bufferMinutes = 60): number {
   const end = new Date(endDate);
   const now = new Date();
   const diffMs = end.getTime() - now.getTime();
   const diffMinutes = Math.ceil(diffMs / 60_000);
-  return Math.max(diffMinutes + bufferMinutes, 1);
+  // Capped: UniFi refuses an over-long duration outright. Longer contracts are
+  // renewed before this voucher runs out (see voucher-validity.ts).
+  return Math.min(Math.max(diffMinutes + bufferMinutes, 1), MAX_UNIFI_VOUCHER_MINUTES);
+}
+
+/**
+ * The part of a failed UniFi call worth showing staff ("400: api.err.IncorrectNumberRange"),
+ * so the screen says what the console objected to instead of blaming credentials.
+ * Only the status and the console's own message — never the URL or key.
+ */
+export function unifiFailureReason(err: unknown): string {
+  const msg = err instanceof Error ? err.message : "";
+  const m = msg.match(/→ (\d{3}: .+)$/);
+  return m ? m[1] : "no response from the UniFi console";
 }

@@ -58,12 +58,17 @@ export interface Location {
   unifi_console_id?: string | null;
   /** 'repository' (default) = issue from pre-uploaded pool; 'unifi_api' | 'ruijie_api' = generate on-demand. */
   wifi_voucher_mode?: string | null;
+  wifi_ssid?: string | null;
   /** Ruijie Cloud network group ID (site identifier). Set only for ruijie_api locations. */
   ruijie_group_id?: number | null;
   /** Icon keys shown in the proposal PDF amenities strip. Defaults to ["wifi","coffee","printer","meeting"]. */
   proposal_amenity_icons?: string[];
   /** Per-location wording for the agreement Schedule; null = standard wording. See src/lib/agreement-terms.ts. */
   agreement_terms?: import("@/lib/agreement-terms").AgreementTerms | null;
+  /** Terms & conditions a new proposal for this location starts from; null = DEFAULT_PROPOSAL_TERMS. */
+  proposal_terms?: string | null;
+  /** Commitment / validity numbers a new proposal for this location starts from. */
+  proposal_defaults?: import("@/lib/location-proposal-settings").ProposalDefaults | null;
   created_at: string;
   updated_at: string;
 }
@@ -331,6 +336,13 @@ export interface LineItem {
   escalates?: boolean;
 }
 
+/** A monthly add-on offered with a proposal (valet parking, name board, locker). Never escalated. */
+export interface ProposalAddon {
+  description: string;
+  /** Monthly amount, excluding GST. */
+  amount: number;
+}
+
 export interface ComplimentaryItem {
   name: string;
   unit: string;
@@ -361,7 +373,12 @@ export interface Proposal {
   status: ProposalStatus;
   description?: string;
   complimentary_items?: ComplimentaryItem[];
+  /** The monthly fee lines. These escalate. */
   items: LineItem[];
+  /** Monthly add-ons, never escalated, outside subtotal and the security deposit. Absent on older rows. */
+  recurring_addons?: ProposalAddon[];
+  /** Agreed annual escalation on the monthly fee. Absent on older rows (read as 10). */
+  escalation_percentage?: number;
   subtotal: number;
   tax_percentage: number;
   tax_amount: number;
@@ -828,6 +845,8 @@ export interface Contract {
   // Tiered rate phases
   phase_start_date?: string | null;
   rate_phases?: ContractRatePhase[];
+  /** Recurring add-ons (never escalated). Embedded by GET /api/contracts/[id]; absent elsewhere. */
+  recurring_addons?: ContractAddon[];
   // start_date is a placeholder until the linked proposal's pro-rata invoice
   // is paid — see supabase/migrations/00503_contract_start_date_confirmation.sql
   start_date_confirmed?: boolean;
@@ -1221,8 +1240,10 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "payment_report_withdrawn" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded" | "statement_held" | "statement_hold_released" | "booking_facility_override" | "commitment_terms_overridden" | "commitment_terms_recorded" | "rent_month_waived" | "rent_month_waiver_revoked" | "exit_started" | "exit_updated" | "exit_cancelled" | "exit_completed" | "exit_charge_added" | "exit_charge_updated" | "exit_charge_removed" | "exit_cleared" | "exit_approved" | "exit_returned" | "exit_paid" | "exit_owed_handled" | "rollback" | "special_clause_submitted" | "special_clause_approved" | "special_clause_changes_requested" | "special_clause_withdrawn" | "auto_renewal_stopped" | "auto_renewal_enabled" | "auto_renewal_paused" | "auto_renewal_revised" | "auto_renewal_notice_prepared" | "auto_renewal_notice_edited" | "auto_renewal_notice_approved" | "auto_renewal_notice_sent" | "auto_renewal_notice_send_failed" | "auto_renewal_notice_cancelled" | "auto_renewal_next_term_prepared";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "contract_addon_ended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "payment_report_withdrawn" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded" | "statement_held" | "statement_hold_released" | "booking_facility_override" | "commitment_terms_overridden" | "commitment_terms_recorded" | "rent_month_waived" | "rent_month_waiver_revoked" | "exit_started" | "exit_updated" | "exit_cancelled" | "exit_completed" | "exit_charge_added" | "exit_charge_updated" | "exit_charge_removed" | "exit_cleared" | "exit_approved" | "exit_returned" | "exit_paid" | "exit_owed_handled" | "rollback" | "special_clause_submitted" | "special_clause_approved" | "special_clause_changes_requested" | "special_clause_withdrawn" | "auto_renewal_stopped" | "auto_renewal_enabled" | "auto_renewal_paused" | "auto_renewal_revised" | "auto_renewal_notice_prepared" | "auto_renewal_notice_edited" | "auto_renewal_notice_approved" | "auto_renewal_notice_sent" | "auto_renewal_notice_send_failed" | "auto_renewal_notice_cancelled" | "auto_renewal_next_term_prepared";
 export type AuditEntityType =
+  | "energy_alert_rule"
+  | "energy_alert_episode"
   | "value_cost_parameter"
   | "lead_rate_card"
   | "vo_direct_rate"
@@ -1513,6 +1534,11 @@ export interface Booking {
   // Razorpay Payment Links
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;
+  // Optional proforma invoice sent with the payment link
+  pi_number?: string | null;
+  pi_sent_at?: string | null;
+  pi_sent_to?: string | null;
+  pi_sender?: { full_name: string } | null;
   // Prepaid package redemption
   prepaid_purchase_id?: string;
   prepaid_credits_used?: number;
@@ -2537,6 +2563,8 @@ export interface PoServiceReport {
   cycle_number: number;
   period_from: string;
   period_to: string;
+  /** The day the visit happened; older reports only have the cycle's period. */
+  service_date?: string | null;
   report_file_url?: string | null;
   notes?: string | null;
   recorded_by?: string | null;
@@ -2733,6 +2761,10 @@ export interface AssetDocument {
   mime_type?: string | null;
   notes?: string | null;
   uploaded_by?: string | null;
+  /** 'invoice' marks the asset's purchase invoice. */
+  doc_kind?: "invoice" | null;
+  /** Rows created from one upload share this id (one invoice covering several assets). */
+  invoice_group_id?: string | null;
   created_at: string;
   updated_at: string;
   uploader?: { id: string; full_name: string } | null;
@@ -3597,6 +3629,8 @@ export interface FacilityAsset {
   open_issue_count?: number;
   total_issue_count?: number;
   last_issue_at?: string | null;
+  /** True when no purchase invoice is attached; undefined when it could not be checked. */
+  invoice_missing?: boolean;
 }
 
 // Non-secret fields only — the decrypted password is never part of this
