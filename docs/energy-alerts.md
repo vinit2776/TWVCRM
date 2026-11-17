@@ -3,6 +3,14 @@
 Admin → Energy Alerts (`/admin/energy-alerts`). Tells staff when a location's power use strays
 from what is usual for that 15-minute slot, without emailing on every slot.
 
+## What it watches
+
+One thing: the **average power (kW) of the location's default OneGrid meter for each 15-minute slot**
+(derived from the difference between consecutive cumulative-energy readings). It does not watch voltage,
+current, power factor, cost or the day's total kWh; the ledger only stores energy readings. The rule editor
+says this at the top, names the meter, and draws today's usual kW with the band where the rule triggers
+(`GET /api/energy-alerts/curve`, band applied client-side so the sliders redraw instantly).
+
 ## How it decides
 
 - **Usual** = median kW of the same slot over the last 30 days of the same kind of day

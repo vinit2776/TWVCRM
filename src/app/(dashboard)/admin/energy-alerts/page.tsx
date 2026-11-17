@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Zap } from "lucide-react";
+import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { REMINDER_LABELS, type ReminderSchedule } from "@/lib/energy-alerts/engine";
 import { ACK_REASONS } from "@/lib/energy-alerts/schema";
 import type { BacktestResult } from "@/lib/energy-alerts/backtest";
+import type { CurvePreview } from "@/lib/energy-alerts/preview";
 
 interface Rule {
   id: string; name: string; location_id: string; location: { name: string } | null;
@@ -29,6 +31,9 @@ interface Episode {
   rule: { name: string; mode: string } | null; location: { name: string } | null; events: Ev[];
 }
 type Mode = "off" | "dry_run" | "live";
+type Curve = CurvePreview & { meter: { name: string; deviceId: string } };
+const TEAL = "#015E65";
+const BAND = "#9FC9CC";
 type Form = Omit<Rule, "id" | "location" | "emails_7d" | "has_open_episode" | "muted_until" | "recipients"> & { id: string | null; recipients: string };
 
 const MODE_LABEL: Record<Mode, string> = { off: "Off", dry_run: "Dry run — nothing is emailed", live: "Live — Live rules email" };
@@ -82,6 +87,7 @@ export default function EnergyAlertsPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  const meterOf = (locationId: string) => locations.find((l) => l.id === locationId)?.onegrid_default_device_id ?? null;
   const openEpisodes = episodes.filter((e) => e.status === "open" && !e.acked_at).length;
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => (f ? { ...f, [k]: v } : f));
@@ -169,7 +175,10 @@ export default function EnergyAlertsPage() {
                       <td className="py-2 pr-3">
                         <div className="font-medium">{r.name}</div>
                         <div className="text-xs text-muted-foreground">
-                          ±{r.tolerance_pct}% and ≥{r.min_kw} kW for {r.persist_slots * 15} min
+                          Average power (kW){meterOf(r.location_id) ? <> of meter {meterOf(r.location_id)}</> : null}, per 15-min slot vs usual
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Triggers beyond ±{r.tolerance_pct}% and ≥{r.min_kw} kW, for {r.persist_slots * 15} min
                           {r.has_open_episode && <Badge variant="outline" className="ml-2 bg-red-50 text-red-800 border-red-300">Open</Badge>}
                           {r.muted_until && new Date(r.muted_until) > new Date() && <Badge variant="outline" className="ml-2">Muted until {ist(r.muted_until)}</Badge>}
                         </div>
@@ -290,7 +299,35 @@ function RuleEditor({ form, set, locations, saving, onSave, onCancel }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` captures exactly the inputs the check depends on
   }, [key]);
 
-  const dirText = form.direction === "both" ? "away from" : form.direction === "high" ? "above" : "below";
+  const [curve, setCurve] = useState<Curve | null>(null);
+  const [curveErr, setCurveErr] = useState<string | null>(null);
+  const [curveBusy, setCurveBusy] = useState(false);
+  useEffect(() => {
+    if (!form.location_id) return;
+    let live = true;
+    setCurveBusy(true);
+    api<{ data: Curve }>(`/api/energy-alerts/curve?location_id=${form.location_id}`)
+      .then((r) => { if (live) { setCurve(r.data); setCurveErr(null); } })
+      .catch((err) => { if (live) { setCurve(null); setCurveErr(err instanceof Error ? err.message : "Could not load the usual curve"); } })
+      .finally(() => { if (live) setCurveBusy(false); });
+    return () => { live = false; };
+  }, [form.location_id]);
+
+  // The band is applied here, not on the server, so dragging a slider redraws instantly.
+  const chart = useMemo(() => (curve?.slots ?? []).map((sl) => {
+    const t = sl.typical;
+    const half = t == null ? null : Math.max((t * form.tolerance_pct) / 100, form.min_kw);
+    const hi = t == null || half == null ? null : form.direction === "low" ? t : t + half;
+    const lo = t == null || half == null ? null : form.direction === "high" ? t : Math.max(0, t - half);
+    const out = sl.actual != null && t != null && half != null &&
+      ((form.direction !== "low" && sl.actual > t + half) || (form.direction !== "high" && sl.actual < t - half));
+    return { k: sl.k, time: sl.time, typical: t, actual: sl.actual, band: lo != null && hi != null ? [lo, hi] : null, lo, hi, outActual: out ? sl.actual : null };
+  }), [curve, form.tolerance_pct, form.min_kw, form.direction]);
+  const latest = curve?.lastSlot != null ? chart[curve.lastSlot] : null;
+  const fmtKw = (n: number | null | undefined) => (n == null ? "—" : `${n.toFixed(1)} kW`);
+
+  const meterText = curve ? `meter ${curve.meter.deviceId} at ${curve.meter.name}` : "the location's default OneGrid meter";
+  const dirText = form.direction === "both" ? "above or below" : form.direction === "high" ? "above" : "below";
   const perDay = bt && bt.days > 0 ? bt.emails / bt.days : null;
   const loc = locations.find((l) => l.id === form.location_id);
 
@@ -298,6 +335,12 @@ function RuleEditor({ form, set, locations, saving, onSave, onCancel }: {
     <Card>
       <CardHeader><CardTitle className="text-base">{form.id ? "Edit rule" : "New rule"}</CardTitle></CardHeader>
       <CardContent className="space-y-4">
+        <div className="rounded-md border border-[#9FC9CC] bg-[#E6F2F3] p-3 text-sm">
+          <b>What this watches:</b> the <b>average power (kW)</b> of {curve ? <><b>meter {curve.meter.deviceId}</b> at <b>{curve.meter.name}</b></> : "the location's default OneGrid meter"},
+          measured for each <b>15-minute slot</b> and compared with what is <b>usual for that same slot</b>. Nothing else (not voltage, cost or the day&apos;s total) is monitored.
+          {curveBusy && <Loader2 className="ml-2 inline h-3 w-3 animate-spin" />}
+          {curveErr && <span className="block text-red-700 mt-1">{curveErr}</span>}
+        </div>
         <div className="grid gap-4 md:grid-cols-2">
           <div><Label>Rule name</Label><Input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Perungudi slot deviation" /></div>
           <div><Label>Location</Label>
@@ -348,9 +391,60 @@ function RuleEditor({ form, set, locations, saving, onSave, onCancel }: {
             <Label className="m-0">{form.mode === "live" ? "Live — emails the recipients (when global mode is Live)" : "Test — records alerts, emails nobody"}</Label></div>
         </div>
 
+        {curve && (
+          <div className="rounded-md border p-3 space-y-2">
+            <div className="text-sm font-medium">Today at {curve.meter.name}: usual power and where this rule would trigger</div>
+            {!curve.enough && (
+              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded p-2">
+                Only {curve.peers} comparable day{curve.peers === 1 ? "" : "s"} of history so far for {curve.dayLabel} (need {curve.minPeers}). Until there are enough,
+                no usual can be worked out and this rule will not fire. It fills in as the ledger grows.
+              </p>
+            )}
+            {curve.enough && (
+              <>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                  <span><span className="inline-block h-2 w-2 rounded-sm mr-1.5" style={{ background: TEAL }} />Today&apos;s kW</span>
+                  <span><span className="inline-block h-2 w-2 rounded-sm mr-1.5" style={{ background: BAND }} />Stays quiet inside this band</span>
+                  <span>- - - Usual for the slot</span>
+                  <span><span className="inline-block h-2 w-2 rounded-full mr-1.5 bg-red-700" />Would trigger</span>
+                </div>
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={chart}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="k" type="number" domain={[0, 95]} ticks={[0, 24, 48, 72, 95]} tickFormatter={(k) => (k === 95 ? "24:00" : `${String(k / 4).padStart(2, "0")}:00`)} tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} unit=" kW" width={64} />
+                      <Tooltip
+                        labelFormatter={(k) => `${chart[Number(k)]?.time ?? ""} IST`}
+                        formatter={(v, name) => {
+                          if (name === "band") return Array.isArray(v) ? [`${Number(v[0]).toFixed(1)}–${Number(v[1]).toFixed(1)} kW`, "Quiet between"] : [String(v), "Quiet between"];
+                          return [`${Number(v).toFixed(1)} kW`, name === "actual" ? "Today" : name === "typical" ? "Usual" : "Would trigger"];
+                        }}
+                      />
+                      <Area dataKey="band" stroke="none" fill={BAND} fillOpacity={0.55} isAnimationActive={false} />
+                      <Line dataKey="typical" stroke="#2B7A80" strokeWidth={1.4} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
+                      <Line dataKey="actual" stroke={TEAL} strokeWidth={2.4} dot={false} isAnimationActive={false} />
+                      <Line dataKey="outActual" stroke="none" dot={{ r: 3, fill: "#b42318", stroke: "none" }} activeDot={false} isAnimationActive={false} />
+                      {curve.lastSlot != null && <ReferenceLine x={curve.lastSlot} stroke={TEAL} strokeDasharray="3 3" strokeOpacity={0.6} />}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Usual = median of this slot over the last 30 days, from {curve.peers} comparable day{curve.peers === 1 ? "" : "s"} ({curve.dayLabel}).
+                  {latest && latest.typical != null && curve.lastSlot != null && (
+                    <> Latest completed slot {latest.time}: <b>{fmtKw(latest.actual)}</b> against a usual of <b>{fmtKw(latest.typical)}</b>; this rule triggers{" "}
+                      {form.direction !== "low" && <>above <b>{fmtKw(latest.hi)}</b></>}{form.direction === "both" && " or "}{form.direction !== "high" && <>below <b>{fmtKw(latest.lo)}</b></>} for this slot
+                      {latest.outActual != null ? " — so it is outside the band right now." : " — so it is inside the band."}</>
+                  )}
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="rounded-md bg-muted/50 p-3 text-sm">
-          <b>In plain words:</b> email <b>{form.recipients || "nobody yet"}</b> when <b>{loc?.name ?? "the location"}</b> runs more than <b>{form.tolerance_pct}%</b> (and at
-          least <b>{form.min_kw} kW</b>) {dirText} its usual for that slot, for <b>{form.persist_slots * 15} minutes</b> in a row. Then stay quiet: reminders {REMINDER_LABELS[form.reminder_schedule]},
+          <b>In plain words:</b> email <b>{form.recipients || "nobody yet"}</b> when the average power (kW) of <b>{meterText}</b> is <b>{dirText}</b> the usual for that 15-minute slot
+          by more than <b>{form.tolerance_pct}%</b> and by at least <b>{form.min_kw} kW</b>, for <b>{form.persist_slots * 15} minutes</b> in a row. Then stay quiet: reminders {REMINDER_LABELS[form.reminder_schedule]},
           fixed after <b>{form.recover_slots * 15} minutes</b> back to normal, at most <b>{form.daily_cap}</b> emails a day. {form.mode === "test" ? <b>Test mode: nothing is sent.</b> : <b>Live.</b>}
         </div>
 
