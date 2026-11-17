@@ -16,8 +16,17 @@ const {
   LAUNCH_DATE,
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
   effectivePunches, autoCheckoutDue, dayEndTimestamp, mostCommonShift, DEFAULT_SHIFT, SATURDAY_HALF_SHIFT, BRANCH_SHIFT_RULES_FROM, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
+  countLeaveDaysInRange,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
+const { cleanNote, ordinal, earlierAttempts, reapplyError, decisionNoteSuffix, NOTE_MAX_LENGTH } = require('./request-notes');
+const { checkCertificate } = require('./certificate-check');
+const {
+  MAX_STOPS_LIMIT: FIELD_TRIP_MAX_STOPS_LIMIT, DEFAULT_MAX_STOPS: FIELD_TRIP_DEFAULT_MAX_STOPS, MAX_PHOTOS: FIELD_TRIP_MAX_PHOTOS, BACKDATE_DAYS: FIELD_TRIP_BACKDATE_DAYS,
+  cleanStops, routePoints, directionsCoords, parseRouteLegs, parseRate, validateRate, parseMaxStops, validateMaxStops,
+  parseViewbox, stopNeedsGeocode,
+  reimbursement, formatInr, cleanTripDate, cleanPhotos, tripStops, googleMapsUrl,
+} = require('./field-trip');
 const {
   DEVICE_POLL_SECONDS, DEVICE_OFFLINE_MINUTES, DEVICE_COMMAND_TIMEOUT_MINUTES, RESYNC_OVERLAP_MINUTES,
   shiftTs, minutesSince, formatDuration, isDeviceOffline, shouldShowOfflineAlert,
@@ -25,10 +34,10 @@ const {
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
 const { createDailyReport, renderReportEmail, parseRecipients, sendEmail, reportKindFromPath, REPORTS: DAILY_REPORTS } = require('./daily-report');
-const { createPunchinReminder, renderReminderEmail, WINDOW_MODES: REMINDER_WINDOW_MODES } = require('./punchin-reminder');
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
-  ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
+  ACTIVITY_CATEGORIES, categoryOf, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
+  fieldChanges, activitySentence, changesAndDetails,
 } = require('./activity-log');
 const {
   formatEmployeeId, parseEmployeeNumber, nextEmployeeNumber, renameEmployeeStatements,
@@ -298,6 +307,10 @@ const SETTING_DEFS = [
     label: 'Biometric device serial number',
     help: "The ZKTeco ADMS push protocol has no header authentication — the device is identified only by this serial, which makes it the sole credential on /iclock/*. While it is empty those endpoints reject every push, so leave it blank until the device is installed. Setting it to the wrong value silently drops real punches.",
     fallback: '',
+    // Not `secret`: a wrong serial drops real punches silently, so an admin has to be
+    // able to read the current one back and check it against the device. It is still a
+    // credential, so its value never reaches the activity log or the CSV export.
+    logValue: false,
   },
   {
     key: 'DEVICE_CLOCK_OFFSET_MINUTES',
@@ -339,6 +352,29 @@ const SETTING_DEFS = [
     fallback: '79.95,12.75,80.35,13.35',
   },
   {
+    key: 'FIELD_TRIP_RATE_PER_KM',
+    label: 'Field trip rate per km (₹)',
+    help: "Multiplied by each field trip's road distance to show the amount to reimburse. Each trip keeps the rate in force on the day it was submitted, so changing this only affects trips submitted afterwards. 0 hides amounts and shows distance only.",
+    fallback: '0',
+    parse: parseRate,
+    validate: validateRate,
+  },
+  {
+    key: 'FIELD_TRIP_PHOTO_REQUIRED',
+    label: 'Field trip photo',
+    help: 'Whether employees must attach at least one photo (a receipt, parking slip or site photo) to submit a field trip. Up to 6 photos can always be attached.',
+    fallback: 'off',
+    options: [{ value: 'off', label: 'Optional' }, { value: 'on', label: 'Required' }],
+  },
+  {
+    key: 'FIELD_TRIP_MAX_STOPS',
+    label: 'Field trip maximum stops',
+    help: `How many stops one field trip can have, including the starting point. Between 2 and ${FIELD_TRIP_MAX_STOPS_LIMIT}.`,
+    fallback: String(FIELD_TRIP_DEFAULT_MAX_STOPS),
+    parse: parseMaxStops,
+    validate: validateMaxStops,
+  },
+  {
     key: 'REPORT_EMAILS',
     label: 'Daily report recipients',
     help: 'Who gets the 10 AM punch-in and 7 PM punch-out emails, separated by commas. Empty stops both emails.',
@@ -359,13 +395,6 @@ const SETTING_DEFS = [
     fallback: 'TWV Attendance <contact@theworkvilla.com>',
   },
   {
-    key: 'PUNCHIN_REMINDERS',
-    label: 'Punch-in reminder emails',
-    help: "Emails each employee 10 minutes after their shift starts if they haven't punched in, 5 minutes before the 15-minute grace ends. Skips Sundays, holidays, approved leave, people already in, and anyone without an email. Uses the Resend key and sender above.",
-    fallback: 'off',
-    options: [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }],
-  },
-  {
     key: 'SHIFT_RULES_EFFECTIVE_FROM',
     label: 'Branch shift rules apply from',
     help: "YYYY-MM-DD. Attendance on and after this date is measured against the branch timings and per-branch half Saturdays below; earlier days keep the rule that was in force when they were worked (one company-wide half shift on the 2nd and 4th Saturday, everyone on their own saved timings). Statuses are worked out each time a report is opened and nothing records what a day's shift was, so moving this date backwards re-measures days that have already been reported on — a Saturday that read Present can become a Half Day. Only move it back for a period whose branch timings are genuinely what was worked.",
@@ -379,14 +408,18 @@ const SETTING_DEFS = [
     },
   },
   {
-    key: 'PUNCHIN_REMINDER_WINDOW',
-    label: 'Punch-in reminder window',
-    help: "When the every-5-minute check may send. Anyone whose reminder time falls outside the window doesn't get one.",
-    fallback: 'fixed',
-    options: [
-      { value: 'fixed', label: 'Fixed: 9:30 to 10:00 AM', help: 'Covers the standard 09:30 shift.' },
-      { value: 'shifts', label: 'Follow shift timings: earliest shift start to latest grace end', help: "Works out the window from everyone's shifts each day, so people on later or earlier shifts also get reminded." },
-    ],
+    key: 'CERTIFICATE_CHECK',
+    label: 'Check medical certificates with Claude',
+    help: "When on, each medical certificate attached to a Sick Leave request is sent to Anthropic's API (Claude) together with the employee's name and the leave dates. Claude reads the name, dates and signature, and managers see whether they match the leave next to the certificate. It's advice only: nothing is approved, rejected or blocked automatically. Needs the Anthropic API key below. While off, certificates still upload and show as not checked.",
+    fallback: 'off',
+    options: [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }],
+  },
+  {
+    key: 'ANTHROPIC_API_KEY',
+    label: 'Anthropic API key',
+    help: 'Used only by the medical certificate check above (console.anthropic.com). While empty no certificate is checked.',
+    secret: true,
+    fallback: '',
   },
 ];
 // A setting with fixed choices only accepts one of them.
@@ -402,6 +435,15 @@ const SETTING_DEFS_BY_KEY = Object.fromEntries(SETTING_DEFS.map(d => [d.key, d])
 // environment supplies one, so an unconfigured deployment is unusable by a device
 // rather than open to one — an attacker cannot guess it, and it changes every restart.
 const EPHEMERAL_PUNCH_API_KEY = crypto.randomBytes(24).toString('hex');
+
+// Whether a setting's value may be written into the activity log and its CSV export.
+// Two different properties, deliberately separate: `secret` also hides the value in
+// the form (never pre-filled, cleared by a checkbox), which suits an API key but not
+// a serial an admin has to verify against the device. `logValue: false` keeps a
+// setting readable on the page while still only ever recording that it changed.
+function hidesValue(def) {
+  return !!def.secret || def.logValue === false;
+}
 
 // Resolved settings, refreshed once per request (see loadSettings). Seeded from env
 // and fallbacks so that any code path reached before the first refresh — a crash
@@ -779,7 +821,8 @@ const SCHEMA_SQL = `
     target_id TEXT NOT NULL DEFAULT '',
     details TEXT NOT NULL DEFAULT '',
     ip TEXT NOT NULL DEFAULT '',
-    user_agent TEXT NOT NULL DEFAULT ''
+    user_agent TEXT NOT NULL DEFAULT '',
+    changes TEXT NOT NULL DEFAULT ''
   );
   CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at);
   CREATE INDEX IF NOT EXISTS idx_activity_log_emp_created ON activity_log(employee_id, created_at);
@@ -851,8 +894,8 @@ const SCHEMA_SQL = `
     sent_at TEXT NOT NULL,
     PRIMARY KEY (kind, date)
   );
-  -- One row per punch-in reminder actually sent, so the every-5-minute runs (and the
-  -- device check-ins that also trigger them) never email someone twice in a day.
+  -- Punch-in reminder emails were removed; this table is no longer written or read.
+  -- Kept so existing databases aren't altered.
   CREATE TABLE IF NOT EXISTS punchin_reminder_runs (
     employee_id TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -906,6 +949,25 @@ const SCHEMA_SQL = `
     uploaded_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_employee_documents_emp ON employee_documents(employee_id, doc_type);
+  -- Medical certificates attached to Sick Leave requests. An employee can replace one
+  -- while the request is pending, so the newest row per request is the one that counts.
+  -- check_* hold the optional Claude check (see certificate-check.js): 'not_checked',
+  -- 'ok', 'flagged' or 'error', with a one-line summary and the findings as JSON.
+  CREATE TABLE IF NOT EXISTS leave_certificates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    leave_request_id INTEGER NOT NULL,
+    employee_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    uploaded_at TEXT NOT NULL,
+    check_status TEXT NOT NULL DEFAULT 'not_checked',
+    check_summary TEXT NOT NULL DEFAULT '',
+    check_findings TEXT NOT NULL DEFAULT '[]',
+    checked_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_leave_certificates_req ON leave_certificates(leave_request_id, id);
 `;
 
 const {
@@ -915,9 +977,6 @@ const {
 } = createAttendanceLogic(db, { getBranches: () => CONFIG.BRANCH_LIST, getShiftRulesEffectiveFrom: () => CONFIG.SHIFT_RULES_EFFECTIVE_FROM });
 const dailyReport = createDailyReport(db, {
   getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate, getApprovedPermissionForDate,
-});
-const punchinReminder = createPunchinReminder(db, {
-  getPunchesForDay, getShiftForDate, getHoliday, getApprovedLeaveForDate,
 });
 
 const LEAVE_TYPES = ['Casual Leave', 'Sick Leave', 'Comp Off'];
@@ -994,6 +1053,8 @@ async function init() {
   // No longer read: anyone can punch from outside the office now (as 'remote'). Kept
   // so older databases still match the schema.
   try { await db.exec('ALTER TABLE employees ADD COLUMN onsite_enabled INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
+  // Before → after for an edit, as JSON (see activity-log.js). '' on older entries.
+  try { await db.exec("ALTER TABLE activity_log ADD COLUMN changes TEXT NOT NULL DEFAULT ''"); } catch { /* already exists */ }
   try { await db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
   // The biometric device's own enrolled user ID (small integer, e.g. "1"), distinct
   // from this app's EMP-00N id, so ADMS pushes can be matched to an employee.
@@ -1117,6 +1178,42 @@ async function init() {
     await db.exec("UPDATE field_trips SET status = 'approved'");
   } catch { /* already exists */ }
   try { await db.exec('ALTER TABLE field_trips ADD COLUMN decided_at TEXT'); } catch { /* already exists */ }
+
+  // Every apply/approve flow keeps the manager's note and who decided, and a request
+  // filed again after a rejection points back at the one it replaces (see
+  // request-notes.js). Older decisions simply have no note. Field trips get the
+  // employee's reason too, which they never had. One try per column, as above.
+  for (const table of ['leave_requests', 'permission_requests', 'correction_requests', 'overtime_requests', 'field_trips']) {
+    for (const col of ['decision_note TEXT', 'decided_by TEXT', 'previous_request_id INTEGER']) {
+      try { await db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch { /* already exists */ }
+    }
+    try { await db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_prev ON ${table}(previous_request_id)`); } catch { /* column missing on a very old db */ }
+  }
+  try { await db.exec("ALTER TABLE field_trips ADD COLUMN reason TEXT DEFAULT ''"); } catch { /* already exists */ }
+  // How many Claude certificate checks a leave request has used (CERTIFICATE_CHECK_LIMIT).
+  try { await db.exec('ALTER TABLE leave_requests ADD COLUMN certificate_checks INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
+
+  // Multi-stop trips (field-trip.js). stops is a JSON array of { address, lat, lon, km }
+  // where km is the road distance from the stop before; from/to_address keep the first
+  // and last place so notifications and older views still read. rate_per_km and amount
+  // are frozen when the trip is submitted, so a later rate change never alters a trip
+  // already in the books; both stay NULL while no rate is set and on older trips.
+  for (const col of ['stops TEXT', 'round_trip INTEGER NOT NULL DEFAULT 0', 'rate_per_km REAL', 'amount REAL']) {
+    try { await db.exec(`ALTER TABLE field_trips ADD COLUMN ${col}`); } catch { /* already exists */ }
+  }
+  // Photos attached to a field trip (receipts, parking slips, site photos), shrunk on
+  // the phone before upload. Same storage as Sick Leave certificates.
+  await db.exec(`CREATE TABLE IF NOT EXISTS field_trip_photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL,
+    employee_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    uploaded_at TEXT NOT NULL
+  )`);
+  await db.exec('CREATE INDEX IF NOT EXISTS idx_field_trip_photos_trip ON field_trip_photos(trip_id, id)');
 
   // India's three compulsory national holidays (Republic Day, Independence Day, Gandhi
   // Jayanti) — fixed Gregorian dates, mandated nationwide regardless of state, unlike
@@ -1328,7 +1425,10 @@ async function ingestAttlogText(sn, text, cmdId = null) {
     received++;
     const employee = await getEmployeeByDevicePin(record.pin);
     if (!employee) {
-      logSecurityEvent('adms_unmapped_pin', { pin: record.pin, timestamp: record.timestamp });
+      // Not the PIN itself: "unmapped" only means no employee has it *yet*, so this
+      // is routinely a real enrollee's live credential waiting to be mapped. The
+      // timestamp is what diagnoses the gap; /admin/device-pins has the mapping.
+      logSecurityEvent('adms_unmapped_pin', { timestamp: record.timestamp });
       continue;
     }
     const { inserted } = await ingestBiometricPunch(employee.id, correctDeviceTimestamp(record.timestamp));
@@ -1367,12 +1467,12 @@ const requestContext = new AsyncLocalStorage();
 
 // Never lets a logging failure break the action being logged — the punch or approval
 // already happened; a missing log line is the lesser problem.
-async function writeActivity({ category, action, employeeId = null, actorUsername, actorRole, targetType = '', targetId = '', details = '' }) {
+async function writeActivity({ category, action, employeeId = null, actorUsername, actorRole, targetType = '', targetId = '', details = '', changes = null }) {
   const ctx = requestContext.getStore() || {};
   const user = ctx.user;
   try {
     await db.prepare(
-      'INSERT INTO activity_log (created_at, category, action, employee_id, actor_username, actor_role, target_type, target_id, details, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO activity_log (created_at, category, action, employee_id, actor_username, actor_role, target_type, target_id, details, ip, user_agent, changes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       formatTimestamp(new Date()), category, action, employeeId || null,
       actorUsername !== undefined ? actorUsername : (user ? user.username : ''),
@@ -1380,6 +1480,7 @@ async function writeActivity({ category, action, employeeId = null, actorUsernam
       targetType, String(targetId), details,
       ctx.req ? getClientIp(ctx.req) : '',
       ctx.req ? String(ctx.req.headers['user-agent'] || '').slice(0, 300) : '',
+      Array.isArray(changes) ? JSON.stringify(changes) : '',
     );
   } catch (err) {
     console.error('[activity-log] could not record', action, err && err.message);
@@ -1389,9 +1490,11 @@ async function writeActivity({ category, action, employeeId = null, actorUsernam
 async function logActivity(action, employeeId, details = '', actor = {}) {
   await writeActivity({ category: categoryOf(action), action, employeeId, details, ...actor });
 }
-// employeeId is whose record the action concerns, when it concerns one.
-async function logAdminAction(actorUsername, action, targetType, targetId, details = '', employeeId = targetType === 'employee' ? targetId : null) {
-  await writeActivity({ category: 'admin', action, employeeId, actorUsername, targetType, targetId, details });
+// employeeId is whose record the action concerns, when it concerns one. `changes` is
+// the before → after list from fieldChanges() for an edit; values of secrets must be
+// marked hidden there, since the log is readable in-app and exported to CSV.
+async function logAdminAction(actorUsername, action, targetType, targetId, details = '', employeeId = targetType === 'employee' ? targetId : null, changes = null) {
+  await writeActivity({ category: 'admin', action, employeeId, actorUsername, targetType, targetId, details, changes });
 }
 async function getNotifications(employeeId) {
   return await db.prepare('SELECT * FROM notifications WHERE employee_id = ? ORDER BY created_at DESC').all(employeeId);
@@ -1428,7 +1531,7 @@ async function getLeaveBalanceDisplay(employeeId) {
     for (const r of requests) {
       const clippedStart = r.start_date < monthStart ? monthStart : r.start_date;
       const clippedEnd = r.end_date > monthEnd ? monthEnd : r.end_date;
-      takenThisMonth += countLeaveDays(clippedStart, clippedEnd);
+      takenThisMonth += await countLeaveDays(clippedStart, clippedEnd);
     }
     const unpaidThisMonth = Math.max(0, takenThisMonth - MONTHLY_PAID_LEAVE_CAP);
     result.push({
@@ -1452,10 +1555,17 @@ async function getLeaveRequests(employeeId) {
 async function getAllLeaveRequests() {
   return await db.prepare('SELECT * FROM leave_requests ORDER BY requested_at DESC').all();
 }
-function countLeaveDays(startDate, endDate) {
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  return Math.round((end - start) / 86400000) + 1;
+// Days of leave actually taken across a span: Sundays and declared holidays inside it
+// are not leave days, because nobody was due to work them. The rule and the reasoning
+// live in countLeaveDaysInRange; this only fetches the holidays it needs.
+//
+// Until 2026-11-12 this counted raw calendar days, so a Mon-Sun Casual Leave was
+// reported as 7 days (6 of them unpaid past the monthly cap) while the Calendar and
+// every status-derived figure saw 6 On Leave days and one Week Off. The status is the
+// one the employee is shown, so the count moved to match it, not the other way round.
+async function countLeaveDays(startDate, endDate) {
+  const holidays = await db.prepare('SELECT date FROM holidays WHERE date BETWEEN ? AND ?').all(startDate, endDate);
+  return countLeaveDaysInRange(startDate, endDate, new Set(holidays.map(h => h.date)));
 }
 async function getPermissionRequests(employeeId) {
   return await db.prepare('SELECT * FROM permission_requests WHERE employee_id = ? ORDER BY requested_at DESC').all(employeeId);
@@ -1483,7 +1593,9 @@ const CORRECTION_KINDS = ['check_in', 'check_out', 'both'];
 // between. forApproval skips the "current month, not in the future" window, which only
 // limits what an employee can file — a request filed on the 31st can be approved on the 1st.
 // Returns null if valid, else { key, vars } for an i18n 'corrections.err_*' message.
-async function validateCorrection(employee, c, { excludeId = null, forApproval = false } = {}) {
+// refiling: an "Apply again" for the same date as a rejected request that was filed in
+// time — the manager's rejection may come after the window closed, so it's waived.
+async function validateCorrection(employee, c, { excludeId = null, forApproval = false, refiling = false } = {}) {
   const err = (key, vars) => ({ key: `corrections.err_${key}`, vars });
   if (!CORRECTION_KINDS.includes(c.kind)) return err('kind');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(c.date || '')) return err('date');
@@ -1494,7 +1606,7 @@ async function validateCorrection(employee, c, { excludeId = null, forApproval =
   if (needOut && !isTime(c.check_out_time)) return err('out_time');
   if (c.kind === 'both' && c.check_out_time <= c.check_in_time) return err('out_before_in');
   const today = todayStr();
-  if (!forApproval) {
+  if (!forApproval && !refiling) {
     if (c.date > today) return err('future_date');
     if (c.date.slice(0, 7) !== today.slice(0, 7)) return err('other_month');
     if (employee.date_joined && c.date < employee.date_joined) return err('before_joining');
@@ -1555,6 +1667,276 @@ async function getOvertimeRequests(employeeId) {
 }
 async function getAllOvertimeRequests() {
   return await db.prepare('SELECT * FROM overtime_requests ORDER BY requested_at DESC').all();
+}
+
+// --- Reasons, manager notes and filing again (shared by leave, permission, corrections,
+// overtime and field trips; rules in request-notes.js) ---
+// Only these table names are ever interpolated into the SQL below.
+const REQUEST_TABLE_NAMES = new Set(['leave_requests', 'permission_requests', 'correction_requests', 'overtime_requests', 'field_trips']);
+function requestTable(table) {
+  if (!REQUEST_TABLE_NAMES.has(table)) throw new Error(`Unknown request table ${table}`);
+  return table;
+}
+async function getRequestById(table, id) {
+  return await db.prepare(`SELECT * FROM ${requestTable(table)} WHERE id = ?`).get(id);
+}
+// Ids of requests that have already been filed again, so their "Apply again" is gone.
+async function reappliedIds(table, employeeId) {
+  const rows = await db.prepare(`SELECT previous_request_id AS id FROM ${requestTable(table)} WHERE employee_id = ? AND previous_request_id IS NOT NULL`).all(employeeId);
+  return new Set(rows.map(r => r.id));
+}
+// The rejected request an "Apply again" form points at, checked: { previous } or { errorKey }.
+// No previous_request_id at all is a fresh application: { previous: null }.
+async function resolveReapply(table, rawPreviousId, employeeId) {
+  if (!rawPreviousId) return { previous: null };
+  const previous = await getRequestById(table, rawPreviousId);
+  const reapplied = previous
+    ? !!(await db.prepare(`SELECT id FROM ${requestTable(table)} WHERE previous_request_id = ? LIMIT 1`).get(previous.id))
+    : false;
+  const errorKey = reapplyError(previous, employeeId, reapplied);
+  return errorKey ? { errorKey } : { previous };
+}
+// Records the decision only while the request is still pending, so a double-click or two
+// managers deciding at once can't decide it twice. Returns true if this call decided it.
+async function claimDecision(table, id, status, note, user) {
+  const result = await db.prepare(
+    `UPDATE ${requestTable(table)} SET status = ?, decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ? AND status = 'pending'`
+  ).run(status, formatTimestamp(new Date()), user.username, note, id);
+  return !!result.changes;
+}
+// The note a manager typed on a decide form: { action, note } or { error } (i18n key).
+function readDecision(form) {
+  const action = form.action === 'approve' || form.action === 'reject' ? form.action : null;
+  if (!action) return { error: 'notes.err_action' };
+  const note = cleanNote(form.note);
+  return note.error ? { error: note.error } : { action, note: note.value };
+}
+async function sendDecisionError(res, user, errorKey, backPath, activeNav) {
+  return sendHtml(res, await pageShell('Note needed', '', activeNav, `
+    <div class="card" style="color:#C62828;">${escapeHtml(t(langOf(user), errorKey, { max: NOTE_MAX_LENGTH }))}</div>
+    <div class="card"><a href="${escapeHtml(backPath)}">&larr; Back</a></div>`, user));
+}
+// When claimDecision loses (someone else decided first), say who and how, and hand the
+// manager their note back so it isn't silently lost.
+async function sendAlreadyDecided(res, user, table, id, note, backPath, activeNav) {
+  const r = await getRequestById(table, id);
+  const who = r && r.decided_by ? r.decided_by : 'someone else';
+  const when = r && r.decided_at ? ` on ${r.decided_at.slice(0, 16)}` : '';
+  return sendHtml(res, await pageShell('Already decided', '', activeNav, `
+    <div class="card" style="color:#C62828;">This request was already ${escapeHtml(r ? r.status : 'decided')} by ${escapeHtml(who)}${escapeHtml(when)}, so your decision wasn't saved.</div>
+    ${r && r.decision_note ? `<div class="card"><strong>Their note:</strong> ${escapeHtml(r.decision_note)}</div>` : ''}
+    <div class="card"><strong>Your note (not saved):</strong> ${escapeHtml(note)}</div>
+    <div class="card"><a href="${escapeHtml(backPath)}">&larr; Back to the list</a></div>`, user));
+}
+// Approve/Reject with the required note, replacing the old one-click buttons.
+function decideFormHtml(actionPath, fields) {
+  const inputs = Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(String(v))}">`).join('');
+  return `<form method="POST" action="${actionPath}" class="decide-form" style="min-width:140px;">${inputs}
+    <textarea name="note" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" rows="2" placeholder="Note for the employee (required)" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;border:1px solid #D0D5DA;font:inherit;font-size:0.9em;"></textarea>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">
+      <button type="submit" name="action" value="approve" style="padding:5px 12px;border-radius:6px;border:1px solid #2E7D32;background:#fff;color:#2E7D32;font-weight:600;cursor:pointer;">Approve</button>
+      <button type="submit" name="action" value="reject" style="padding:5px 12px;border-radius:6px;border:1px solid #C62828;background:#fff;color:#C62828;font-weight:600;cursor:pointer;">Reject</button>
+    </div>
+  </form>`;
+}
+// Earlier attempts behind a request, each with what the employee said and why it was
+// turned down. byId is a Map of already-loaded rows; anything older is fetched.
+async function earlierAttemptsHtml(table, request, byId, lang = 'en', describe = null) {
+  const chain = await earlierAttempts(request, async id => byId.get(id) || await getRequestById(table, id));
+  if (!chain.length) return '';
+  const items = chain.map((r, i) => `
+    <div style="margin-top:4px;">
+      <span style="font-weight:600;">${escapeHtml(t(lang, 'notes.attempt', { n: ordinal(i + 1) }))}${describe ? ` · ${escapeHtml(describe(r))}` : ''}</span><br>
+      ${escapeHtml(t(lang, 'notes.their_reason'))} ${escapeHtml(r.reason || '—')}<br>
+      ${escapeHtml(t(lang, 'notes.rejected_by', { who: r.decided_by || '—', date: (r.decided_at || '').slice(0, 10) }))} ${escapeHtml(r.decision_note || '—')}
+    </div>`).join('');
+  return `<div style="border-left:3px solid #D0D5DA;padding:2px 0 2px 8px;margin-top:6px;font-size:0.85em;color:#5F6B7A;">${items}</div>`;
+}
+function attemptBadge(request, attemptsBefore, lang = 'en') {
+  if (!request.previous_request_id) return '';
+  return ` <span style="display:inline-block;padding:1px 8px;border-radius:999px;font-size:0.78em;font-weight:600;background:#FFF4E5;color:#8A5300;">${escapeHtml(t(lang, 'notes.attempt', { n: ordinal(attemptsBefore + 1) }))}</span>`;
+}
+// The manager's note on a decided request, for history tables.
+function decisionNoteHtml(r) {
+  if (!r.decision_note) return '<span style="color:#9AA5B1;">—</span>';
+  return `${escapeHtml(r.decision_note)}${r.decided_by ? `<br><span style="color:#9AA5B1;font-size:0.85em;">${escapeHtml(r.decided_by)}</span>` : ''}`;
+}
+// What sits under a rejected request on the employee's own page.
+function reapplyLinkHtml(href, r, reapplied, lang) {
+  if (r.status !== 'rejected') return '';
+  if (reapplied.has(r.id)) return `<div style="font-size:0.82em;color:#7C8896;margin-top:4px;">${escapeHtml(t(lang, 'notes.reapplied'))}</div>`;
+  return `<div style="margin-top:6px;"><a href="${escapeHtml(href)}" style="font-weight:600;color:#1565C0;">${escapeHtml(t(lang, 'notes.apply_again'))} &rarr;</a></div>`;
+}
+// Banner above a form opened from "Apply again".
+function reapplyBannerHtml(previous, lang, describe) {
+  return `<div style="background:#FFF4E5;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:0.9em;">
+    <div style="font-weight:700;margin-bottom:4px;">${escapeHtml(t(lang, 'notes.reapply_title', { what: describe(previous) }))}</div>
+    <div>${escapeHtml(t(lang, 'notes.your_reason'))} ${escapeHtml(previous.reason || '—')}</div>
+    <div>${escapeHtml(t(lang, 'notes.manager_note', { who: previous.decided_by || '—' }))} ${escapeHtml(previous.decision_note || '—')}</div>
+    <div style="color:#7C8896;margin-top:4px;">${escapeHtml(t(lang, 'notes.reapply_hint'))}</div>
+  </div>`;
+}
+
+// --- Medical certificates on Sick Leave ---
+const CERTIFICATE_LEAVE_TYPE = 'Sick Leave';
+const MAX_CERTIFICATE_FORM_BYTES = 3.5 * 1024 * 1024; // a 2MB file, base64, url-encoded
+// Newest certificate per leave request, without the file itself.
+async function latestCertificatesByRequest(requestIds) {
+  if (!requestIds.length) return new Map();
+  const rows = await db.prepare(
+    `SELECT id, leave_request_id, filename, content_type, size_bytes, uploaded_at, check_status, check_summary, check_findings, checked_at
+     FROM leave_certificates WHERE leave_request_id IN (${requestIds.map(() => '?').join(',')}) ORDER BY id ASC`
+  ).all(...requestIds);
+  return new Map(rows.map(r => [r.leave_request_id, r]));
+}
+// From the hidden certificate_* fields a leave form fills in before submitting:
+// { file } (or { file: null } when none was chosen) or { errorKey }.
+function readCertificateFields(form) {
+  if (!form.certificate_data) return { file: null };
+  const contentType = String(form.certificate_type || '');
+  if (!ALLOWED_DOCUMENT_CONTENT_TYPES.includes(contentType)) return { errorKey: 'leave.cert_err_type' };
+  let data;
+  try { data = Buffer.from(String(form.certificate_data), 'base64'); } catch { return { errorKey: 'leave.cert_err_type' }; }
+  if (data.length === 0 || data.length > MAX_DOCUMENT_BYTES) return { errorKey: 'leave.cert_err_size' };
+  return { file: { filename: String(form.certificate_name || 'certificate').slice(0, 255), contentType, data } };
+}
+// Saves the certificate and deletes the one it replaces, so a request only ever holds
+// its newest file (a replaced 2 MB photo isn't kept around).
+async function saveCertificate(leaveRequest, file) {
+  const result = await db.prepare(
+    'INSERT INTO leave_certificates (leave_request_id, employee_id, filename, content_type, size_bytes, data, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(leaveRequest.id, leaveRequest.employee_id, file.filename, file.contentType, file.data.length, file.data, formatTimestamp(new Date()));
+  const id = Number(result.lastInsertRowid);
+  await db.prepare('DELETE FROM leave_certificates WHERE leave_request_id = ? AND id != ?').run(leaveRequest.id, id);
+  return id;
+}
+// Claude checks per leave request, automatic and "Check again" together, so retries
+// (a blurry photo replaced ten times, a manager re-clicking) can't run up the bill.
+const CERTIFICATE_CHECK_LIMIT = 3;
+// Runs the Claude check on one stored certificate if the setting is on, and stores the
+// result. A failure is stored as 'error' (the manager can press Check again); a function
+// timeout leaves it 'not_checked', which offers the same button.
+async function runCertificateCheck(certificateId) {
+  if (CONFIG.CERTIFICATE_CHECK !== 'on') return null;
+  const cert = await db.prepare('SELECT * FROM leave_certificates WHERE id = ?').get(certificateId);
+  if (!cert) return null;
+  const request = await getRequestById('leave_requests', cert.leave_request_id);
+  const employee = request && await getEmployee(request.employee_id);
+  if (!employee) return null;
+  // Take a slot first, atomically, so two uploads at once can't both slip under the limit.
+  // Only when there is a key to call: without one checkCertificate returns straight away
+  // having called nothing, and switching the check on before pasting the key is the
+  // obvious order (the settings page lists them that way). Spending slots on those
+  // no-ops would leave a request with none left by the time the key arrived. The result
+  // is still recorded either way, so the manager reads why it didn't run.
+  if (CONFIG.ANTHROPIC_API_KEY) {
+    const slot = await db.prepare('UPDATE leave_requests SET certificate_checks = certificate_checks + 1 WHERE id = ? AND certificate_checks < ?')
+      .run(request.id, CERTIFICATE_CHECK_LIMIT);
+    if (!slot.changes) return null;
+  }
+  const data = Buffer.isBuffer(cert.data) ? cert.data : Buffer.from(cert.data);
+  const result = await checkCertificate({
+    apiKey: CONFIG.ANTHROPIC_API_KEY,
+    employeeName: employee.name,
+    leaveStart: request.start_date,
+    leaveEnd: request.end_date,
+    today: todayStr(),
+    contentType: cert.content_type,
+    dataBase64: data.toString('base64'),
+  });
+  await db.prepare('UPDATE leave_certificates SET check_status = ?, check_summary = ?, check_findings = ?, checked_at = ? WHERE id = ?')
+    .run(result.status, result.summary, JSON.stringify(result.findings || []), formatTimestamp(new Date()), certificateId);
+  return result;
+}
+// The manager's view of a Sick Leave request's certificate: link, check result, and a
+// Check button when the check is on.
+function certificateCellHtml(request, cert) {
+  if (request.leave_type !== CERTIFICATE_LEAVE_TYPE) return '';
+  if (!cert) return `<div style="margin-top:6px;font-size:0.85em;color:#9AA5B1;">No medical certificate attached</div>`;
+  const link = `<a href="/leave/certificate?id=${cert.id}" target="_blank" rel="noopener" style="font-weight:600;">View medical certificate</a>`;
+  const styles = { ok: ['#E8F5E9', '#2E7D32', 'Check: looks right'], flagged: ['#FDECEA', '#C62828', 'Check: needs a look'], error: ['#FFF4E5', '#8A5300', "Check: couldn't run"] };
+  let check = '';
+  if (styles[cert.check_status]) {
+    const [bg, fg, label] = styles[cert.check_status];
+    let findings = [];
+    try { findings = JSON.parse(cert.check_findings || '[]'); } catch { /* shown as summary only */ }
+    const list = findings.length
+      ? `<ul style="margin:4px 0 0 16px;padding:0;">${findings.map(f => `<li style="color:${f.ok ? '#2E7D32' : '#C62828'};">${escapeHtml(f.text)}</li>`).join('')}</ul>`
+      : `<div>${escapeHtml(cert.check_summary)}</div>`;
+    check = `<div style="margin-top:4px;background:${bg};color:${fg};border-radius:6px;padding:6px 8px;font-size:0.85em;"><strong>${label}</strong>${list}<div style="color:#7C8896;margin-top:3px;">Advice only. You decide.</div></div>`;
+  } else if (CONFIG.CERTIFICATE_CHECK !== 'on') {
+    check = `<div style="font-size:0.82em;color:#9AA5B1;margin-top:2px;">Not checked (automatic check is off)</div>`;
+  } else {
+    check = `<div style="font-size:0.82em;color:#9AA5B1;margin-top:2px;">Not checked yet</div>`;
+  }
+  const limitReached = (request.certificate_checks || 0) >= CERTIFICATE_CHECK_LIMIT;
+  if (limitReached && CONFIG.CERTIFICATE_CHECK === 'on' && request.status === 'pending') {
+    check += `<div style="font-size:0.82em;color:#8A5300;margin-top:2px;">All ${CERTIFICATE_CHECK_LIMIT} automatic checks for this request are used. Open the certificate above and review it yourself.</div>`;
+  }
+  const recheck = CONFIG.CERTIFICATE_CHECK === 'on' && request.status === 'pending' && !limitReached
+    ? actionButton('/leave/certificate/check', { id: cert.id }, cert.check_status === 'not_checked' ? 'Check now' : 'Check again', '#1565C0')
+    : '';
+  return `<div style="margin-top:6px;font-size:0.9em;">${link}${check}${recheck ? `<div style="margin-top:4px;font-size:0.85em;">${recheck}</div>` : ''}</div>`;
+}
+// Client side of the certificate picker: shrinks photos (a phone camera shot can be
+// several MB) and puts the file into hidden fields, since these forms are plain posts.
+// A function, not a constant: MAX_DOCUMENT_BYTES is declared further down the file.
+function certificateFormScript() {
+  return `
+<script>
+function certResize(file) {
+  return new Promise(function (resolve, reject) {
+    var img = new Image(), url = URL.createObjectURL(file);
+    img.onload = function () {
+      var w = img.naturalWidth, h = img.naturalHeight, max = 1600;
+      if (w > max || h > max) { if (w > h) { h = Math.round(h * max / w); w = max; } else { w = Math.round(w * max / h); h = max; } }
+      var c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h); URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+    };
+    img.onerror = function () { reject(new Error('read')); };
+    img.src = url;
+  });
+}
+function certFileToBase64(file) {
+  return new Promise(function (resolve, reject) {
+    var r = new FileReader();
+    r.onload = function () { resolve(String(r.result).split(',')[1]); };
+    r.onerror = reject; r.readAsDataURL(file);
+  });
+}
+document.querySelectorAll('form[data-cert-form]').forEach(function (form) {
+  var busy = false;
+  form.addEventListener('submit', function (e) {
+    var input = form.querySelector('input[type=file]');
+    var file = input && input.files[0];
+    if (busy || !file || form.dataset.ready) return;
+    e.preventDefault();
+    var err = form.querySelector('.cert-error'), btn = form.querySelector('button[type=submit]');
+    var isPdf = file.type === 'application/pdf';
+    if (!isPdf && !/^image\\//.test(file.type)) { err.textContent = form.dataset.errType; return; }
+    busy = true; if (btn) { btn.disabled = true; btn.textContent = form.dataset.busy; }
+    (isPdf ? certFileToBase64(file) : certResize(file)).then(function (b64) {
+      if (b64.length * 0.75 > ${MAX_DOCUMENT_BYTES}) throw new Error('size');
+      form.querySelector('[name=certificate_data]').value = b64;
+      form.querySelector('[name=certificate_type]').value = isPdf ? 'application/pdf' : 'image/jpeg';
+      form.querySelector('[name=certificate_name]').value = file.name;
+      input.value = ''; form.dataset.ready = '1'; form.submit();
+    }).catch(function (x) {
+      busy = false; if (btn) { btn.disabled = false; btn.textContent = form.dataset.label; }
+      err.textContent = x && x.message === 'size' ? form.dataset.errSize : form.dataset.errType;
+    });
+  });
+});
+</script>`;
+}
+function certificateFieldsHtml() {
+  return `<input type="file" accept="image/*,application/pdf" style="font-size:0.85em;max-width:230px;">
+    <input type="hidden" name="certificate_data"><input type="hidden" name="certificate_type"><input type="hidden" name="certificate_name">
+    <div class="cert-error" style="color:#C62828;font-size:0.82em;"></div>`;
+}
+function certificateFormData(lang, label) {
+  return `data-cert-form data-busy="${escapeHtml(t(lang, 'leave.cert_uploading'))}" data-label="${escapeHtml(label)}" data-err-type="${escapeHtml(t(lang, 'leave.cert_err_type'))}" data-err-size="${escapeHtml(t(lang, 'leave.cert_err_size'))}"`;
 }
 async function getApprovedOvertimeForDate(employeeId, dateStr) {
   return await db.prepare(
@@ -1840,7 +2222,7 @@ async function computeLeaveReport(year, month) {
       // count days that fall outside the month being reported.
       const clippedStart = r.start_date < monthStart ? monthStart : r.start_date;
       const clippedEnd = r.end_date > monthEnd ? monthEnd : r.end_date;
-      perType[r.leave_type] = (perType[r.leave_type] || 0) + countLeaveDays(clippedStart, clippedEnd);
+      perType[r.leave_type] = (perType[r.leave_type] || 0) + await countLeaveDays(clippedStart, clippedEnd);
     }
     const totalDays = Object.values(perType).reduce((sum, v) => sum + v, 0);
     // Casual/Sick beyond the monthly paid cap is unpaid — see MONTHLY_PAID_LEAVE_TYPES.
@@ -2061,45 +2443,6 @@ async function runDailyReport(kind) {
   console.log(`Daily ${kind} report sent to ${to.length} recipients`);
   return 'sent';
 }
-
-// --- Punch-in reminder emails (see punchin-reminder.js) ---
-// Sends whatever is due right now. Called by /internal/punchin-reminder (an outside
-// every-5-minute schedule) and on the biometric device's check-ins.
-async function runPunchinReminders(now = new Date()) {
-  if (CONFIG.PUNCHIN_REMINDERS !== 'on') return { outcome: 'off' };
-  if (!CONFIG.RESEND_API_KEY) return { outcome: 'not_configured' };
-  const date = todayStr(now);
-  const mode = REMINDER_WINDOW_MODES.includes(CONFIG.PUNCHIN_REMINDER_WINDOW) ? CONFIG.PUNCHIN_REMINDER_WINDOW : 'fixed';
-  const result = await punchinReminder.dueReminders(date, now.getHours() * 60 + now.getMinutes(), mode);
-  if (result.skipped) return { outcome: 'skipped', reason: result.skipped };
-  let sent = 0;
-  let failed = 0;
-  for (const reminder of result.due) {
-    // Claim first so two overlapping runs can't both send; a failed send releases it
-    // so the next run (still inside the 5-minute gap) can try again.
-    const claim = await db.prepare('INSERT OR IGNORE INTO punchin_reminder_runs (employee_id, date, sent_at) VALUES (?, ?, ?)')
-      .run(reminder.employeeId, date, formatTimestamp(new Date()));
-    if (!claim.changes) continue;
-    try {
-      const email = renderReminderEmail(reminder, { appUrl: 'https://twv-attendance.vercel.app' });
-      await sendEmail({ apiKey: CONFIG.RESEND_API_KEY, from: CONFIG.REPORT_EMAIL_FROM, to: [reminder.email], ...email });
-      sent++;
-    } catch (err) {
-      await db.prepare('DELETE FROM punchin_reminder_runs WHERE employee_id = ? AND date = ?').run(reminder.employeeId, date);
-      console.error(`punch-in reminder for ${reminder.employeeId} failed:`, err.message);
-      failed++;
-    }
-  }
-  if (sent > 0) console.log(`Punch-in reminders sent: ${sent}`);
-  return { outcome: 'ran', sent, failed };
-}
-// Only the outside every-5-minute schedule calls this. The device's check-ins used to
-// as well, which couldn't work: the device polls about every 15 minutes while each
-// person is due for only 5, so it caught a given window perhaps a third of the time.
-// What it did do was put email latency on the device's critical path — the send loop
-// is sequential with a 15-second timeout per message, awaited inside the punch-upload
-// handler, with no maxDuration set. Killed partway, the claims already written have no
-// email behind them and the next run skips those people, so they silently get nothing.
 
 // The in-process timer (long-lived server only; on Vercel the callers above do this).
 async function checkAndRunAutoCheckout() {
@@ -2401,6 +2744,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
          it was intercepting taps before they reached the links. */
       @media (max-width: 640px) {
         .main { margin-left: 0; }
+        .activity-changes { grid-template-columns: 1fr !important; }
         .wrap { padding: calc(56px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom)); }
         .topbar-mobile { display: flex; justify-content: flex-end; align-items: center; gap: 14px; margin-bottom: 10px; }
         nav {
@@ -3071,37 +3415,63 @@ async function renderCalendar(employee, year, month, user) {
   return pageShell(t(lang, 'calendar.title'), employee.id, 'calendar', body, user);
 }
 
-async function renderLeave(employee, balances, requests, user, error) {
+async function renderLeave(employee, balances, requests, user, error, prefill = {}) {
   const isAdmin = isManagementRole(user);
   const lang = langOf(user);
   const balanceCards = leaveBalanceCardsHtml(balances, lang);
+  const previous = prefill.previous || null;
+  const selectedType = prefill.leave_type || (previous && previous.leave_type) || '';
 
-  const typeOptions = LEAVE_TYPES.map(lt => `<option value="${escapeHtml(lt)}">${escapeHtml(t(lang, `leave_type.${lt}`))}</option>`).join('');
+  const typeOptions = LEAVE_TYPES.map(lt => `<option value="${escapeHtml(lt)}" ${lt === selectedType ? 'selected' : ''}>${escapeHtml(t(lang, `leave_type.${lt}`))}</option>`).join('');
 
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const reapplied = await reappliedIds('leave_requests', employee.id);
+  const certs = await latestCertificatesByRequest(requests.filter(r => r.leave_type === CERTIFICATE_LEAVE_TYPE).map(r => r.id));
+  const describe = r => `${t(lang, `leave_type.${r.leave_type}`)}, ${r.start_date} – ${r.end_date}`;
+  const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('leave_requests', id))).length;
 
-  const pendingRows = pending.map(r => `
+  // An employee's own Sick Leave: whether a certificate is on file, and a picker to add
+  // or replace one while the request is pending. The check result is for managers only.
+  const certificateStateHtml = r => {
+    if (r.leave_type !== CERTIFICATE_LEAVE_TYPE) return '';
+    const cert = certs.get(r.id);
+    const state = cert
+      ? `<div style="font-size:0.85em;color:#2E7D32;margin-top:4px;">✓ ${escapeHtml(t(lang, 'leave.cert_attached'))}</div>`
+      : `<div style="font-size:0.85em;color:#7C8896;margin-top:4px;">${escapeHtml(t(lang, 'leave.cert_none'))}</div>`;
+    if (r.status !== 'pending' || isAdmin) return state;
+    const label = t(lang, cert ? 'leave.cert_replace' : 'leave.cert_add');
+    return `${state}<form method="POST" action="/leave/certificate" ${certificateFormData(lang, label)} style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <input type="hidden" name="leave_request_id" value="${r.id}">${certificateFieldsHtml()}
+      ${CONFIG.CERTIFICATE_CHECK === 'on' ? `<div style="flex-basis:100%;font-size:0.78em;color:#5F6B7A;">${escapeHtml(t(lang, 'leave.cert_hint_ai'))}</div>` : ''}
+      <button type="submit" style="padding:4px 10px;border-radius:6px;border:1px solid #1565C0;background:#fff;color:#1565C0;font-weight:600;font-size:0.85em;">${escapeHtml(label)}</button>
+    </form>`;
+  };
+
+  const pendingRows = (await Promise.all(pending.map(async r => `
     <tr>
-      <td>${escapeHtml(t(lang, `leave_type.${r.leave_type}`))}</td>
+      <td>${escapeHtml(t(lang, `leave_type.${r.leave_type}`))}${attemptBadge(r, await attemptsBefore(r), lang)}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('leave_requests', r, byId, lang)}</td>
       <td>
         ${isAdmin
-          ? actionButton('/leave/decide', { id: r.id, action: 'approve', employee_id: employee.id }, 'Approve', '#2E7D32', true) +
-            actionButton('/leave/decide', { id: r.id, action: 'reject', employee_id: employee.id }, 'Reject', '#C62828')
+          ? decideFormHtml('/leave/decide', { id: r.id, employee_id: employee.id })
           : statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)}
+        ${certificateStateHtml(r)}
       </td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'leave.no_pending')}</td></tr>`;
+    </tr>`))).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'leave.no_pending')}</td></tr>`;
 
   const historyRows = history.map(r => `
     <tr>
       <td>${escapeHtml(t(lang, `leave_type.${r.leave_type}`))}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
-      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'leave.no_history')}</td></tr>`;
+      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}${certificateStateHtml(r)}${isAdmin ? '' : reapplyLinkHtml(`/leave?reapply=${r.id}`, r, reapplied, lang)}</td>
+      <td>${decisionNoteHtml(r)}</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'leave.no_history')}</td></tr>`;
 
+  const applyLabel = t(lang, previous ? 'notes.submit_again' : 'leave.apply_btn');
   const body = `
     ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
     <div class="card">
@@ -3109,28 +3479,48 @@ async function renderLeave(employee, balances, requests, user, error) {
       <div style="display:flex;gap:12px;flex-wrap:wrap;">${balanceCards}</div>
     </div>
     ${isAdmin ? `<div class="card" style="color:#7C8896;font-size:0.9em;">Employees apply for their own leave — admin can only review and approve/reject below.</div>` : `
-    <div class="card">
+    <div class="card" id="apply">
       <div style="font-weight:700;margin-bottom:12px;">${t(lang, 'leave.apply_title')}</div>
-      <form method="POST" action="/leave/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      ${previous ? reapplyBannerHtml(previous, lang, describe) : ''}
+      <form method="POST" action="/leave/apply" ${certificateFormData(lang, applyLabel)} style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="employee_id" value="${escapeHtml(employee.id)}">
+        ${previous ? `<input type="hidden" name="previous_request_id" value="${previous.id}">` : ''}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.type')}</label>
-          <select name="leave_type" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;">${typeOptions}</select>
+          <select name="leave_type" id="leaveType" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;">${typeOptions}</select>
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.from')}</label>
-          <input type="date" name="start_date" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="start_date" required value="${escapeHtml(prefill.start_date || (previous && previous.start_date) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.to')}</label>
-          <input type="date" name="end_date" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="end_date" required value="${escapeHtml(prefill.end_date || (previous && previous.end_date) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div style="flex:1;min-width:140px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.reason')}</label>
-          <input type="text" name="reason" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.reason')} *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'leave.apply_btn')}</button>
+        <div id="certField" style="flex-basis:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'leave.cert_label')}</label>
+          ${certificateFieldsHtml()}
+          <div style="font-size:0.78em;color:#9AA5B1;">${t(lang, previous && certs.get(previous.id) ? 'leave.cert_hint_reapply' : 'leave.cert_hint')}</div>
+          ${CONFIG.CERTIFICATE_CHECK === 'on' ? `<div style="font-size:0.78em;color:#5F6B7A;margin-top:2px;">${escapeHtml(t(lang, 'leave.cert_hint_ai'))}</div>` : ''}
+          <noscript><div style="font-size:0.78em;color:#C62828;">${escapeHtml(t(lang, 'leave.cert_needs_js'))}</div></noscript>
+        </div>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${escapeHtml(applyLabel)}</button>
       </form>
+      <script>
+        (function () {
+          var type = document.getElementById('leaveType'), field = document.getElementById('certField');
+          function update() {
+            var sick = type.value === ${JSON.stringify(CERTIFICATE_LEAVE_TYPE)};
+            field.style.display = sick ? '' : 'none';
+            if (!sick) field.querySelector('input[type=file]').value = '';
+          }
+          type.addEventListener('change', update); update();
+        })();
+      </script>
     </div>`}
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'leave.pending')}</div>
@@ -3138,15 +3528,21 @@ async function renderLeave(employee, balances, requests, user, error) {
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'leave.history')}</div>
-      <table><tr><th>${t(lang, 'leave.type')}</th><th>${t(lang, 'leave.dates')}</th><th>${t(lang, 'leave.reason')}</th><th>${t(lang, 'leave.status')}</th></tr>${historyRows}</table>
-    </div>`;
+      <table><tr><th>${t(lang, 'leave.type')}</th><th>${t(lang, 'leave.dates')}</th><th>${t(lang, 'leave.reason')}</th><th>${t(lang, 'leave.status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${historyRows}</table>
+    </div>
+    ${certificateFormScript()}`;
   return pageShell(t(lang, 'leave.title'), employee.id, 'leave', body, user);
 }
 
-async function renderPermission(employee, requests, monthlySummary, user, error) {
+async function renderPermission(employee, requests, monthlySummary, user, error, prefill = {}) {
   const lang = langOf(user);
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const previous = prefill.previous || null;
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const reapplied = await reappliedIds('permission_requests', employee.id);
+  const describe = r => t(lang, 'notes.describe_permission', { time: r.leave_time, date: r.date });
+  const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('permission_requests', id))).length;
 
   const hoursCell = r => {
     const h = computePermissionHours(employee, r.date, r.leave_time);
@@ -3155,14 +3551,14 @@ async function renderPermission(employee, requests, monthlySummary, user, error)
       : `${h}h`;
   };
 
-  const pendingRows = pending.map(r => `
+  const pendingRows = (await Promise.all(pending.map(async r => `
     <tr>
-      <td>${escapeHtml(r.date)}</td>
+      <td>${escapeHtml(r.date)}${attemptBadge(r, await attemptsBefore(r), lang)}</td>
       <td>${escapeHtml(r.leave_time)}</td>
       <td>${hoursCell(r)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('permission_requests', r, byId, lang)}</td>
       <td>${statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'permission.no_pending')}</td></tr>`;
+    </tr>`))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'permission.no_pending')}</td></tr>`;
 
   const historyRows = history.map(r => `
     <tr>
@@ -3170,8 +3566,9 @@ async function renderPermission(employee, requests, monthlySummary, user, error)
       <td>${escapeHtml(r.leave_time)}</td>
       <td>${hoursCell(r)}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
-      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'permission.no_history')}</td></tr>`;
+      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}${reapplyLinkHtml(`/permission?reapply=${r.id}`, r, reapplied, lang)}</td>
+      <td>${decisionNoteHtml(r)}</td>
+    </tr>`).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">${t(lang, 'permission.no_history')}</td></tr>`;
 
   const summaryCard = `
     <div class="card">
@@ -3194,21 +3591,23 @@ async function renderPermission(employee, requests, monthlySummary, user, error)
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'permission.apply_title')}</div>
       <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'permission.apply_hint')}</p>
+      ${previous ? reapplyBannerHtml(previous, lang, describe) : ''}
       <form method="POST" action="/permission/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="employee_id" value="${escapeHtml(employee.id)}">
+        ${previous ? `<input type="hidden" name="previous_request_id" value="${previous.id}">` : ''}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'permission.date')}</label>
-          <input type="date" name="date" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="date" required value="${escapeHtml(prefill.date || (previous && previous.date) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'permission.leaving_at')}</label>
-          <input type="time" name="leave_time" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="time" name="leave_time" required value="${escapeHtml(prefill.leave_time || (previous && previous.leave_time) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div style="flex:1;min-width:140px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'permission.reason')}</label>
-          <input type="text" name="reason" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'permission.reason')} *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'permission.apply_btn')}</button>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, previous ? 'notes.submit_again' : 'permission.apply_btn')}</button>
       </form>
     </div>
     <div class="card">
@@ -3217,31 +3616,37 @@ async function renderPermission(employee, requests, monthlySummary, user, error)
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'permission.history')}</div>
-      <table><tr><th>${t(lang, 'permission.col_date')}</th><th>${t(lang, 'permission.col_leaving_at')}</th><th>${t(lang, 'permission.col_hours')}</th><th>${t(lang, 'permission.col_reason')}</th><th>${t(lang, 'permission.col_status')}</th></tr>${historyRows}</table>
+      <table><tr><th>${t(lang, 'permission.col_date')}</th><th>${t(lang, 'permission.col_leaving_at')}</th><th>${t(lang, 'permission.col_hours')}</th><th>${t(lang, 'permission.col_reason')}</th><th>${t(lang, 'permission.col_status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${historyRows}</table>
     </div>`;
   return pageShell(t(lang, 'permission.title'), employee.id, 'permission', body, user);
 }
 
-async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAuthorized, user, error) {
+async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAuthorized, user, error, prefill = {}) {
   const lang = langOf(user);
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const previous = prefill.previous || null;
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const reapplied = await reappliedIds('overtime_requests', employee.id);
+  const describe = r => t(lang, 'notes.describe_overtime', { hours: r.planned_hours, date: r.date });
+  const attemptsBefore = async r => (await earlierAttempts(r, async id => byId.get(id) || await getRequestById('overtime_requests', id))).length;
 
-  const pendingRows = pending.map(r => `
+  const pendingRows = (await Promise.all(pending.map(async r => `
     <tr>
-      <td>${escapeHtml(r.date)}</td>
+      <td>${escapeHtml(r.date)}${attemptBadge(r, await attemptsBefore(r), lang)}</td>
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('overtime_requests', r, byId, lang)}</td>
       <td>${statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'overtime.no_pending')}</td></tr>`;
+    </tr>`))).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'overtime.no_pending')}</td></tr>`;
 
   const historyRows = history.map(r => `
     <tr>
       <td>${escapeHtml(r.date)}</td>
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
-      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'overtime.no_history')}</td></tr>`;
+      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang)}${reapplyLinkHtml(`/overtime?reapply=${r.id}`, r, reapplied, lang)}</td>
+      <td>${decisionNoteHtml(r)}</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'overtime.no_history')}</td></tr>`;
 
   const todayCard = todayOvertimeMinutes > 0 ? `
     <div class="card">
@@ -3260,21 +3665,23 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'overtime.request_title')}</div>
       <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'overtime.request_hint')}</p>
+      ${previous ? reapplyBannerHtml(previous, lang, describe) : ''}
       <form method="POST" action="/overtime/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="employee_id" value="${escapeHtml(employee.id)}">
+        ${previous ? `<input type="hidden" name="previous_request_id" value="${previous.id}">` : ''}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'overtime.date')}</label>
-          <input type="date" name="date" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="date" required value="${escapeHtml(prefill.date || (previous && previous.date) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'overtime.planned_hours')}</label>
-          <input type="number" name="planned_hours" step="0.5" min="0.5" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:90px;">
+          <input type="number" name="planned_hours" step="0.5" min="0.5" required value="${escapeHtml(String(prefill.planned_hours || (previous && previous.planned_hours) || ''))}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:90px;">
         </div>
         <div style="flex:1;min-width:140px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'overtime.reason')}</label>
-          <input type="text" name="reason" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'overtime.reason')} *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'overtime.request_btn')}</button>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, previous ? 'notes.submit_again' : 'overtime.request_btn')}</button>
       </form>
     </div>
     <div class="card">
@@ -3283,195 +3690,485 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'overtime.history')}</div>
-      <table><tr><th>${t(lang, 'overtime.col_date')}</th><th>${t(lang, 'overtime.col_planned_hours')}</th><th>${t(lang, 'overtime.col_reason')}</th><th>${t(lang, 'overtime.col_status')}</th></tr>${historyRows}</table>
+      <table><tr><th>${t(lang, 'overtime.col_date')}</th><th>${t(lang, 'overtime.col_planned_hours')}</th><th>${t(lang, 'overtime.col_reason')}</th><th>${t(lang, 'overtime.col_status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${historyRows}</table>
     </div>`;
   return pageShell(t(lang, 'overtime.title'), employee.id, 'overtime', body, user);
 }
 
-async function renderFieldTrip(employeeId, trips, user) {
+// JSON for an inline <script>: < > & and the line separators escaped, so a value can
+// never close the script tag or break the line.
+function safeJson(value) {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+}
+// "LGF branch → Greenfield Tower → back, 27.8 km, ₹222.40" for notifications and logs.
+function tripSummaryText(trip) {
+  const names = tripStops(trip).map(st => String(st.address || '').split(',')[0].trim()).filter(Boolean);
+  const amount = trip.amount != null ? `, ${formatInr(trip.amount)}` : '';
+  return `${names.join(' → ')}${trip.round_trip ? ' → back' : ''}, ${trip.distance_km} km${amount}`;
+}
+// Photo ids per trip id, for the thumbnails in both trip tables.
+async function tripPhotoIds(trips) {
+  const ids = (trips || []).map(tr => tr.id);
+  const out = new Map(ids.map(id => [id, []]));
+  if (!ids.length) return out;
+  const rows = await db.prepare(`SELECT id, trip_id FROM field_trip_photos WHERE trip_id IN (${ids.map(() => '?').join(',')}) ORDER BY id`).all(...ids);
+  for (const r of rows) out.get(r.trip_id) && out.get(r.trip_id).push(r.id);
+  return out;
+}
+function tripPhotosHtml(photoIds) {
+  if (!photoIds || !photoIds.length) return '<span style="color:#9AA5B1;">—</span>';
+  return `<div style="display:flex;gap:4px;flex-wrap:wrap;">${photoIds.map(id =>
+    `<a href="/field-trip/photo?id=${id}" target="_blank" rel="noopener"><img src="/field-trip/photo?id=${id}" alt="Trip photo" loading="lazy" style="width:38px;height:38px;object-fit:cover;border-radius:6px;border:1px solid #D0D5DA;display:block;"></a>`).join('')}</div>`;
+}
+// The stops of a trip as a compact route with each leg's km, plus a Google Maps link
+// through the same points so the distance can be checked in one tap.
+function tripRouteHtml(trip, { mapsLink = false, lang = 'en' } = {}) {
+  const stops = tripStops(trip);
+  const parts = stops.map((st, i) => {
+    const name = String(st.address || '').split(',')[0].trim() || st.address || '—';
+    const km = i > 0 && st.km != null ? ` <span style="color:#9AA5B1;font-size:0.85em;white-space:nowrap;">(${escapeHtml(String(st.km))} km)</span>` : '';
+    return `<span title="${escapeHtml(st.address || '')}">${escapeHtml(name)}</span>${km}`;
+  });
+  if (trip.round_trip) {
+    // The return leg isn't a stop of its own: it's whatever the total has beyond the legs.
+    const legs = stops.reduce((sum, st) => sum + (Number(st.km) || 0), 0);
+    const backKm = Math.round((Number(trip.distance_km) - legs) * 100) / 100;
+    const km = backKm > 0 ? ` <span style="color:#9AA5B1;font-size:0.85em;white-space:nowrap;">(${backKm} km)</span>` : '';
+    parts.push(`<span style="color:#7C8896;">${escapeHtml(t(lang, 'fieldtrip.back_to_start'))}</span>${km}`);
+  }
+  const link = mapsLink ? `<div style="margin-top:3px;"><a href="${escapeHtml(googleMapsUrl(stops, !!trip.round_trip))}" target="_blank" rel="noopener" style="font-size:0.82em;">Check in Google Maps ↗</a></div>` : '';
+  return `<div style="line-height:1.5;">${parts.join(' <span style="color:#9AA5B1;">→</span> ')}</div>${link}`;
+}
+async function renderFieldTrip(employeeId, trips, user, error) {
   const lang = langOf(user);
+  const reapplied = await reappliedIds('field_trips', employeeId);
+  // A rejected trip is submitted again right in its row: same trip, new reason.
+  const resubmitHtml = trip => {
+    if (trip.status !== 'rejected') return '';
+    if (reapplied.has(trip.id)) return `<div style="font-size:0.82em;color:#7C8896;margin-top:4px;">${escapeHtml(t(lang, 'notes.reapplied'))}</div>`;
+    return `<form method="POST" action="/field-trip/reapply" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+      <input type="hidden" name="previous_request_id" value="${trip.id}">
+      <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" placeholder="${escapeHtml(t(lang, 'fieldtrip.reason_again_placeholder'))}" style="flex:1;min-width:150px;padding:5px;border-radius:6px;border:1px solid #D0D5DA;font-size:0.88em;">
+      <button type="submit" style="padding:4px 10px;border-radius:6px;border:1px solid #1565C0;background:#fff;color:#1565C0;font-weight:600;font-size:0.85em;">${escapeHtml(t(lang, 'notes.submit_again'))}</button>
+    </form>`;
+  };
+  const tripsById = new Map((trips || []).map(trip => [trip.id, trip]));
+  const attempts = new Map(await Promise.all((trips || []).map(async trip =>
+    [trip.id, (await earlierAttempts(trip, async id => tripsById.get(id) || await getRequestById('field_trips', id))).length])));
+  const photoIds = await tripPhotoIds(trips);
   const recentRows = (trips || []).map(trip => {
     const statusCell = trip.status === 'pending'
       ? statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)
       : statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${trip.status}`), lang);
+    const amount = trip.amount != null
+      ? `${escapeHtml(formatInr(trip.amount))}<div style="color:#9AA5B1;font-size:0.82em;font-weight:400;">${escapeHtml(formatInr(trip.rate_per_km))}/km</div>`
+      : '<span style="color:#9AA5B1;">—</span>';
+    const photosCell = (photoIds.get(trip.id) || []).length ? `<div style="margin-top:6px;">${tripPhotosHtml(photoIds.get(trip.id))}</div>` : '';
+    const note = trip.decision_note ? `<div style="margin-top:6px;font-size:0.85em;">${decisionNoteHtml(trip)}</div>` : '';
     return `
     <tr>
-      <td>${escapeHtml(trip.date)}</td>
-      <td>${escapeHtml(trip.from_address)}</td>
-      <td>${escapeHtml(trip.to_address)}</td>
-      <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km</td>
-      <td>${statusCell}</td>
+      <td style="white-space:nowrap;">${escapeHtml(trip.date)}${attemptBadge(trip, attempts.get(trip.id) || 0, lang)}</td>
+      <td style="min-width:180px;">${tripRouteHtml(trip, { lang })}<div style="color:#7C8896;font-size:0.85em;margin-top:2px;">${escapeHtml(trip.reason || '—')}</div>${photosCell}</td>
+      <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km<div style="margin-top:4px;">${amount}</div></td>
+      <td>${statusCell}${note}${resubmitHtml(trip)}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'fieldtrip.no_trips')}</td></tr>`;
+  }).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'fieldtrip.no_trips')}</td></tr>`;
+
+  // Offices as ready-made stops (the branch's saved location), with the employee's own
+  // branch filled in as the starting point when they have exactly one.
+  const offices = CONFIG.BRANCH_LIST.filter(b => b.location).map(b => ({ address: `The Work Villa — ${b.name}`, lat: b.location.lat, lon: b.location.lng }));
+  const employee = employeeId ? await getEmployee(employeeId) : null;
+  const ownBranches = employee ? employeeBranches(employee.branch) : { all: false, names: [] };
+  const homeOffice = !ownBranches.all && ownBranches.names.length === 1 ? offices.find(o => o.address === `The Work Villa — ${ownBranches.names[0]}`) : null;
+  const today = formatTimestamp(new Date()).split(' ')[0];
+  const earliest = (() => { const d = new Date(`${today}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - FIELD_TRIP_BACKDATE_DAYS); return d.toISOString().slice(0, 10); })();
+  const photoRequired = CONFIG.FIELD_TRIP_PHOTO_REQUIRED === 'on';
+  const L = key => t(lang, key);
+  const clientText = {
+    stopStart: L('fieldtrip.stop_start_placeholder'), stopNext: L('fieldtrip.address_placeholder'),
+    moveUp: L('fieldtrip.move_up'), moveDown: L('fieldtrip.move_down'), remove: L('fieldtrip.remove_stop'),
+    kmFrom: L('fieldtrip.km_from'), backTo: L('fieldtrip.back_to'), office: L('fieldtrip.office'),
+    calculating: L('fieldtrip.calculating'), couldNotCalculate: L('fieldtrip.could_not_calculate'),
+    somethingWrong: L('fieldtrip.something_wrong'), fillEvery: L('fieldtrip.fill_every_stop'),
+    addPhotoToSubmit: L('fieldtrip.add_photo_to_submit'), submit: L('fieldtrip.submit_btn'),
+    recording: L('fieldtrip.recording'), recorded: L('fieldtrip.recorded'), couldNotRecord: L('fieldtrip.could_not_record'),
+    reasonRequired: t(lang, 'notes.err_reason_required'), maxStops: L('fieldtrip.max_stops'), addStop: L('fieldtrip.add_stop'),
+    matched: L('fieldtrip.matched'), drivingAbout: L('fieldtrip.driving_about'), addPhoto: L('fieldtrip.add_photo'),
+    photoFailed: L('fieldtrip.photo_failed'), removePhoto: L('fieldtrip.remove_photo'), plusReturn: L('fieldtrip.plus_return'),
+  };
   const body = `
     <style>
-      .ac-wrap { position: relative; }
-      .ac-drop { display:none; position:absolute; left:0; right:0; top:100%; z-index:20; background:#fff; border:1px solid #D0D5DA; border-radius:6px; margin-top:2px; max-height:220px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,0.12); }
-      .ac-item { padding:8px 10px; font-size:0.9em; cursor:pointer; }
+      .ft-grid { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); gap:16px; align-items:start; }
+      @media (max-width: 860px) { .ft-grid { grid-template-columns:1fr; } }
+      .ft-label { display:block; font-size:0.8em; color:#7C8896; margin-bottom:4px; }
+      .ft-input { padding:8px; border-radius:6px; border:1px solid #D0D5DA; width:100%; box-sizing:border-box; font:inherit; }
+      .ft-stop { display:grid; grid-template-columns:26px minmax(0,1fr) auto; gap:8px; align-items:center; position:relative; padding:4px 0; }
+      .ft-stop:not(:last-child)::after { content:""; position:absolute; left:12px; top:28px; bottom:-6px; border-left:2px dotted #D0D5DA; }
+      .ft-pin { width:24px; height:24px; border-radius:50%; background:#1565C0; color:#fff; font-weight:700; font-size:0.72em; display:grid; place-items:center; z-index:1; }
+      .ft-stop.first .ft-pin { background:#2E7D32; } .ft-stop.last .ft-pin { background:#C62828; }
+      .ft-leg { grid-column:2 / 4; font-size:0.78em; color:#7C8896; margin-top:-2px; }
+      .ft-leg .warn { color:#B26A00; }
+      .ft-ib { border:0; background:transparent; color:#7C8896; cursor:pointer; width:28px; height:28px; border-radius:6px; font-size:1em; }
+      .ft-ib:hover:not(:disabled) { background:#EEF1F4; color:#1F2933; } .ft-ib:disabled { opacity:.3; cursor:default; }
+      .ac-wrap { position:relative; }
+      .ac-drop { display:none; position:absolute; left:0; right:0; top:100%; z-index:20; background:#fff; border:1px solid #D0D5DA; border-radius:6px; margin-top:2px; max-height:240px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,0.12); }
+      .ac-item { padding:8px 10px; font-size:0.9em; cursor:pointer; } .ac-item small { display:block; color:#7C8896; }
       .ac-item:hover, .ac-item.active { background:#E3F2FD; }
+      .ft-photos { display:grid; grid-template-columns:repeat(auto-fill, minmax(80px, 1fr)); gap:8px; }
+      .ft-ph { position:relative; aspect-ratio:1; border-radius:8px; overflow:hidden; background:#EEF1F4; }
+      .ft-ph img { width:100%; height:100%; object-fit:cover; display:block; }
+      .ft-ph button { position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:50%; border:0; background:rgba(0,0,0,.6); color:#fff; cursor:pointer; font-size:0.8em; }
+      .ft-addph { aspect-ratio:1; border:1.5px dashed #D0D5DA; border-radius:8px; background:#fff; color:#7C8896; font:inherit; font-size:0.8em; cursor:pointer; }
+      .ft-addph:hover { border-color:#1565C0; color:#1565C0; }
+      .ft-map { border:1px solid #D0D5DA; border-radius:8px; background:#F4F7F3; aspect-ratio:4/3; overflow:hidden; }
+      .ft-map svg { width:100%; height:100%; display:block; }
+      .ft-sum { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:1px; background:#D0D5DA; border:1px solid #D0D5DA; border-radius:8px; overflow:hidden; margin-top:12px; }
+      .ft-sum div { background:#fff; padding:10px 12px; } .ft-sum b { display:block; font-size:1.2em; font-variant-numeric:tabular-nums; }
+      .ft-sum span { font-size:0.75em; color:#7C8896; }
+      @media (max-width: 480px) { .ft-sum { grid-template-columns:1fr; } }
+      #ftSubmit:disabled { opacity:.55; cursor:not-allowed; }
     </style>
-    <div class="card">
-      <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'fieldtrip.title')}</div>
-      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'fieldtrip.hint')}</p>
-      <button id="startTripBtn" onclick="showTripForm()" style="padding:10px 20px;border-radius:8px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">${t(lang, 'fieldtrip.start_btn')}</button>
-      <div id="tripForm" style="display:none;margin-top:14px;">
-        <div class="ac-wrap" style="margin-bottom:10px;max-width:340px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'fieldtrip.from')}</label>
-          <input id="tripFrom" type="text" autocomplete="off" placeholder="${escapeHtml(t(lang, 'fieldtrip.address_placeholder'))}" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;width:100%;box-sizing:border-box;">
-          <input type="hidden" id="tripFromLat"><input type="hidden" id="tripFromLon">
-          <div id="tripFromDrop" class="ac-drop"></div>
+    ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
+    <div class="ft-grid">
+      <div class="card" style="min-width:0;">
+        <div style="font-weight:700;margin-bottom:6px;">${L('fieldtrip.title')}</div>
+        <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${L('fieldtrip.hint')}</p>
+        <div style="margin-bottom:12px;max-width:200px;">
+          <label class="ft-label" for="tripDate">${L('fieldtrip.col_date')}</label>
+          <input id="tripDate" class="ft-input" type="date" value="${today}" min="${earliest}" max="${today}">
         </div>
-        <div class="ac-wrap" style="margin-bottom:10px;max-width:340px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'fieldtrip.to')}</label>
-          <input id="tripTo" type="text" autocomplete="off" placeholder="${escapeHtml(t(lang, 'fieldtrip.address_placeholder'))}" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;width:100%;box-sizing:border-box;">
-          <input type="hidden" id="tripToLat"><input type="hidden" id="tripToLon">
-          <div id="tripToDrop" class="ac-drop"></div>
+        <label class="ft-label">${L('fieldtrip.stops_label')}</label>
+        <div id="ftStops"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center;margin:8px 0 14px;">
+          <button type="button" id="ftAddStop" style="padding:7px 14px;border-radius:6px;border:1px dashed #1565C0;background:#fff;color:#1565C0;font-weight:600;cursor:pointer;"></button>
+          <label style="display:inline-flex;gap:8px;align-items:center;font-size:0.9em;cursor:pointer;"><input type="checkbox" id="ftRound" style="width:16px;height:16px;"> ${L('fieldtrip.round_trip')}</label>
         </div>
-        <button id="calcTripBtn" onclick="calcTrip()" style="padding:9px 18px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">${t(lang, 'fieldtrip.calculate_btn')}</button>
-        <div id="tripResult" style="margin-top:12px;font-size:0.95em;"></div>
-        <button id="recordTripBtn" onclick="recordTrip()" style="display:none;margin-top:12px;padding:9px 18px;border-radius:6px;border:none;background:#2E7D32;color:#fff;font-weight:600;cursor:pointer;">${t(lang, 'fieldtrip.record_btn')}</button>
+        <div style="margin-bottom:14px;">
+          <label class="ft-label" for="tripReason">${L('fieldtrip.reason')} *</label>
+          <input id="tripReason" class="ft-input" type="text" maxlength="${NOTE_MAX_LENGTH}" placeholder="${escapeHtml(L('fieldtrip.reason_placeholder'))}">
+        </div>
+        <label class="ft-label">${L('fieldtrip.photos_label')} <span>${escapeHtml(t(lang, photoRequired ? 'fieldtrip.photos_required' : 'fieldtrip.photos_optional', { max: FIELD_TRIP_MAX_PHOTOS }))}</span></label>
+        <div class="ft-photos" id="ftPhotos"></div>
+        <input type="file" id="ftFile" accept="image/*" multiple hidden>
+        <p style="color:#7C8896;font-size:0.8em;margin:6px 0 0;">${L('fieldtrip.photos_hint')}</p>
+      </div>
+      <div class="card" style="min-width:0;">
+        <div class="ft-map" id="ftMap"></div>
+        <div class="ft-sum">
+          <div><b id="ftKm">—</b><span>${L('fieldtrip.total_distance')}</span></div>
+          <div><b id="ftStopCount">0</b><span>${L('fieldtrip.stops_label')}</span></div>
+          <div><b id="ftAmount" style="color:#2E7D32;">—</b><span id="ftRate"></span></div>
+        </div>
+        <div id="ftStatus" style="font-size:0.85em;color:#7C8896;margin:8px 0 12px;min-height:1.2em;"></div>
+        ${CONFIG.FIELD_TRIP_RATE_PER_KM > 0 ? `<p style="color:#7C8896;font-size:0.8em;margin:0 0 12px;">${L('fieldtrip.amount_note')}</p>` : ''}
+        <button type="button" id="ftSubmit" disabled style="width:100%;padding:10px 18px;border-radius:8px;border:none;background:#2E7D32;color:#fff;font-weight:600;cursor:pointer;"></button>
       </div>
     </div>
-    <div class="card">
-      <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'fieldtrip.recent_title')}</div>
-      <table><tr><th>${t(lang, 'fieldtrip.col_date')}</th><th>${t(lang, 'fieldtrip.col_from')}</th><th>${t(lang, 'fieldtrip.col_to')}</th><th>${t(lang, 'fieldtrip.col_distance')}</th><th>${t(lang, 'fieldtrip.col_status')}</th></tr>${recentRows}</table>
+    <div class="card" style="overflow-x:auto;">
+      <div style="font-weight:700;margin-bottom:10px;">${L('fieldtrip.recent_title')}</div>
+      <table><tr><th>${L('fieldtrip.col_date')}</th><th>${L('fieldtrip.col_route')}</th><th>${L('fieldtrip.col_distance')}</th><th>${L('fieldtrip.col_status')}</th></tr>${recentRows}</table>
     </div>
     <script>
-      function showTripForm() {
-        document.getElementById('tripForm').style.display = 'block';
-        document.getElementById('startTripBtn').style.display = 'none';
-        document.getElementById('tripFrom').focus();
+    (function () {
+      var T = ${safeJson(clientText)};
+      var OFFICES = ${safeJson(offices)};
+      var RATE = ${safeJson(CONFIG.FIELD_TRIP_RATE_PER_KM || 0)};
+      var MAX_STOPS = ${safeJson(CONFIG.FIELD_TRIP_MAX_STOPS)};
+      var MAX_PHOTOS = ${safeJson(FIELD_TRIP_MAX_PHOTOS)};
+      var PHOTO_REQUIRED = ${safeJson(photoRequired)};
+      var stops = [${homeOffice ? safeJson(homeOffice) : 'null'}, null];
+      var roundTrip = false, photos = [], route = null, calcSeq = 0, calcTimer = null, submitting = false;
+      var $ = function (id) { return document.getElementById(id); };
+      function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+      function inr(n) { var whole = Math.round(n * 100) % 100 === 0; return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 }); }
+      function letter(i) { return String.fromCharCode(65 + i); }
+      function short(a) { return String(a || '').split(',')[0]; }
+      function filled() { return stops.length >= 2 && stops.every(function (s) { return s && s.address; }); }
+
+      function renderStops() {
+        var el = $('ftStops'); el.innerHTML = '';
+        var n = stops.length;
+        stops.forEach(function (s, i) {
+          var row = document.createElement('div');
+          row.className = 'ft-stop' + (i === 0 ? ' first' : '') + (i === n - 1 && !roundTrip ? ' last' : '');
+          row.innerHTML = '<div class="ft-pin">' + letter(i) + '</div>'
+            + '<div class="ac-wrap"><input type="text" class="ft-input" autocomplete="off" id="ftStop' + i + '" placeholder="' + esc(i === 0 ? T.stopStart : T.stopNext) + '"><div class="ac-drop"></div></div>'
+            + '<div style="display:flex;"><button type="button" class="ft-ib" title="' + esc(T.moveUp) + '" aria-label="' + esc(T.moveUp) + '"' + (i === 0 ? ' disabled' : '') + ' data-up="' + i + '">↑</button>'
+            + '<button type="button" class="ft-ib" title="' + esc(T.moveDown) + '" aria-label="' + esc(T.moveDown) + '"' + (i === n - 1 ? ' disabled' : '') + ' data-down="' + i + '">↓</button>'
+            + '<button type="button" class="ft-ib" title="' + esc(T.remove) + '" aria-label="' + esc(T.remove) + '"' + (n <= 2 ? ' disabled' : '') + ' data-rm="' + i + '">✕</button></div>';
+          var leg = route && route.stops[i];
+          if (i > 0 && leg && s && s.address) {
+            var d = document.createElement('div'); d.className = 'ft-leg';
+            d.innerHTML = '↳ ' + esc(T.kmFrom.split('{{km}}').join(leg.km).split('{{from}}').join(letter(i - 1)));
+            if (leg.geocoded) d.innerHTML += ' · <span class="warn">' + esc(T.matched) + ' ' + esc(leg.address) + '</span>';
+            row.appendChild(d);
+          } else if (i === 0 && leg && leg.geocoded) {
+            var d0 = document.createElement('div'); d0.className = 'ft-leg';
+            d0.innerHTML = '<span class="warn">' + esc(T.matched) + ' ' + esc(leg.address) + '</span>';
+            row.appendChild(d0);
+          }
+          el.appendChild(row);
+          var input = row.querySelector('input');
+          input.value = s ? s.address : '';
+          attachAutocomplete(input, row.querySelector('.ac-drop'), i);
+        });
+        if (roundTrip && n >= 2) {
+          var back = document.createElement('div'); back.className = 'ft-stop last';
+          var backName = stops[0] && stops[0].address ? short(stops[0].address) : letter(0);
+          back.innerHTML = '<div class="ft-pin">A</div><div style="color:#7C8896;padding:8px 0;">' + esc(T.backTo.split('{{place}}').join(backName)) + '</div><div></div>';
+          if (route && route.returnKm != null) back.innerHTML += '<div class="ft-leg">↳ ' + esc(T.kmFrom.split('{{km}}').join(route.returnKm).split('{{from}}').join(letter(n - 1))) + '</div>';
+          el.appendChild(back);
+        }
+        el.querySelectorAll('[data-up]').forEach(function (b) { b.onclick = function () { var i = +b.dataset.up; var x = stops[i - 1]; stops[i - 1] = stops[i]; stops[i] = x; changed(); }; });
+        el.querySelectorAll('[data-down]').forEach(function (b) { b.onclick = function () { var i = +b.dataset.down; var x = stops[i + 1]; stops[i + 1] = stops[i]; stops[i] = x; changed(); }; });
+        el.querySelectorAll('[data-rm]').forEach(function (b) { b.onclick = function () { stops.splice(+b.dataset.rm, 1); changed(); }; });
+        var add = $('ftAddStop');
+        add.disabled = n >= MAX_STOPS;
+        add.textContent = n >= MAX_STOPS ? T.maxStops.split('{{max}}').join(MAX_STOPS) : T.addStop;
       }
-      function escapeText(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
-      // Wires LocationIQ type-ahead onto one input: debounced fetch, a suggestions dropdown,
-      // keyboard (up/down/enter/esc) + mouse selection. Each suggestion carries lat/lon, which
-      // we stash in hidden fields so the distance call can route between exact points.
-      function attachAutocomplete(inputId, dropId, latId, lonId) {
-        const input = document.getElementById(inputId);
-        const drop = document.getElementById(dropId);
-        const latEl = document.getElementById(latId);
-        const lonEl = document.getElementById(lonId);
-        let items = [], active = -1, timer = null;
+
+      // LocationIQ type-ahead on one stop: debounced fetch, keyboard and mouse selection.
+      // An empty box offers the offices. A pick carries exact coordinates; typing after a
+      // pick drops them, and the server geocodes whatever was typed instead.
+      function attachAutocomplete(input, drop, idx) {
+        var items = [], active = -1, timer = null;
         function close() { drop.style.display = 'none'; drop.innerHTML = ''; items = []; active = -1; }
         function render() {
           if (!items.length) { close(); return; }
-          drop.innerHTML = items.map(function(s, i) {
-            return '<div class="ac-item' + (i === active ? ' active' : '') + '" data-i="' + i + '">' + escapeText(s.description) + '</div>';
+          drop.innerHTML = items.map(function (s, i) {
+            return '<div class="ac-item' + (i === active ? ' active' : '') + '" data-i="' + i + '">' + esc(s.address) + (s.office ? '<small>' + esc(T.office) + '</small>' : '') + '</div>';
           }).join('');
           drop.style.display = 'block';
-          Array.prototype.forEach.call(drop.children, function(el) {
-            el.addEventListener('mousedown', function(e) { e.preventDefault(); select(parseInt(el.getAttribute('data-i'), 10)); });
+          Array.prototype.forEach.call(drop.children, function (el) {
+            el.addEventListener('mousedown', function (e) { e.preventDefault(); select(+el.getAttribute('data-i')); });
           });
         }
         function select(i) {
-          const s = items[i]; if (!s) return;
-          input.value = s.description; latEl.value = s.lat || ''; lonEl.value = s.lon || '';
-          close();
+          var s = items[i]; if (!s) return;
+          stops[idx] = { address: s.address, lat: s.lat, lon: s.lon };
+          close(); changed();
+          var next = $('ftStop' + (idx + 1));
+          if (next && !next.value) next.focus();
         }
-        input.addEventListener('input', function() {
-          latEl.value = ''; lonEl.value = ''; // typing after a pick invalidates the coords
-          const q = input.value.trim();
+        function offices(q) {
+          return OFFICES.filter(function (o) { return !q || o.address.toLowerCase().indexOf(q.toLowerCase()) >= 0; })
+            .map(function (o) { return { address: o.address, lat: o.lat, lon: o.lon, office: true }; });
+        }
+        input.addEventListener('focus', function () { if (!input.value.trim()) { items = offices(''); active = -1; render(); } });
+        input.addEventListener('input', function () {
+          var q = input.value.trim();
+          stops[idx] = q ? { address: q } : null; // typing drops any picked coordinates
+          route = null; refreshSummary();
           clearTimeout(timer);
-          if (q.length < 3) { close(); return; }
-          timer = setTimeout(function() {
+          if (q.length < 3) { items = offices(q); active = -1; render(); return; }
+          timer = setTimeout(function () {
             fetch('/api/places/autocomplete?q=' + encodeURIComponent(q))
-              .then(function(r) { return r.json(); })
-              .then(function(d) { items = d.suggestions || []; active = -1; render(); })
-              .catch(function() { close(); });
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (input.value.trim() !== q) return;
+                items = offices(q).concat((d.suggestions || []).map(function (s) { return { address: s.description, lat: s.lat, lon: s.lon }; }));
+                active = -1; render();
+              })
+              .catch(close);
           }, 250);
         });
-        input.addEventListener('keydown', function(e) {
+        input.addEventListener('keydown', function (e) {
           if (drop.style.display !== 'block') return;
           if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); render(); }
           else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); render(); }
           else if (e.key === 'Enter') { if (active >= 0) { e.preventDefault(); select(active); } }
           else if (e.key === 'Escape') { close(); }
         });
-        input.addEventListener('blur', function() { setTimeout(close, 150); });
+        input.addEventListener('blur', function () {
+          setTimeout(close, 150);
+          // A typed address that wasn't picked still needs a distance: work it out now.
+          if (stops[idx] && stops[idx].lat === undefined) scheduleCalc(0);
+        });
       }
-      var lastTripPayload = null;
-      ${(() => {
-        const [drivingPrefix, drivingSuffix] = t(lang, 'fieldtrip.driving_about').split('{{duration}}');
-        return `var DRIVING_PREFIX = ${JSON.stringify(drivingPrefix)}, DRIVING_SUFFIX = ${JSON.stringify(drivingSuffix)};`;
-      })()}
-      function calcTrip() {
-        const from = document.getElementById('tripFrom').value.trim();
-        const to = document.getElementById('tripTo').value.trim();
-        const result = document.getElementById('tripResult');
-        const btn = document.getElementById('calcTripBtn');
-        const recBtn = document.getElementById('recordTripBtn');
-        recBtn.style.display = 'none';
-        if (!from || !to) { result.innerHTML = '<span style="color:#C62828;">' + ${JSON.stringify(t(lang, 'fieldtrip.enter_both'))} + '</span>'; return; }
-        const payload = {
-          from: from, to: to,
-          from_lat: document.getElementById('tripFromLat').value, from_lon: document.getElementById('tripFromLon').value,
-          to_lat: document.getElementById('tripToLat').value, to_lon: document.getElementById('tripToLon').value
-        };
-        result.textContent = ${JSON.stringify(t(lang, 'fieldtrip.calculating'))}; btn.disabled = true;
+
+      function changed() { route = null; renderStops(); refreshSummary(); scheduleCalc(150); }
+      function scheduleCalc(delay) {
+        clearTimeout(calcTimer);
+        if (!filled()) { renderMap(); return; }
+        calcTimer = setTimeout(calc, delay);
+      }
+      function calc() {
+        if (!filled()) return;
+        var seq = ++calcSeq;
+        $('ftStatus').style.color = '#7C8896'; $('ftStatus').textContent = T.calculating;
         fetch('/api/field-trip/distance', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        }).then(r => r.json().then(d => ({ ok: r.ok, d: d }))).then(({ ok, d }) => {
-          btn.disabled = false;
-          if (!ok) { result.innerHTML = '<span style="color:#C62828;">' + escapeText(d.error || ${JSON.stringify(t(lang, 'fieldtrip.could_not_calculate'))}) + '</span>'; return; }
-          lastTripPayload = payload;
-          result.innerHTML = '<div style="font-size:1.5em;font-weight:700;color:#1565C0;">' + escapeText(String(d.distanceKm)) + ' km</div>'
-            + '<div style="color:#7C8896;font-size:0.85em;margin-top:4px;line-height:1.5;">'
-            + (d.durationText ? DRIVING_PREFIX + escapeText(d.durationText) + DRIVING_SUFFIX + '<br>' : '')
-            + '<strong>${escapeHtml(t(lang, 'fieldtrip.from_label'))}</strong> ' + escapeText(d.fromResolved) + '<br><strong>${escapeHtml(t(lang, 'fieldtrip.to_label'))}</strong> ' + escapeText(d.toResolved) + '</div>';
-          recBtn.style.display = 'inline-block'; recBtn.disabled = false; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.record_btn'))};
-        }).catch(() => { btn.disabled = false; result.innerHTML = '<span style="color:#C62828;">' + ${JSON.stringify(t(lang, 'fieldtrip.something_wrong'))} + '</span>'; });
+          body: JSON.stringify({ stops: stops, round_trip: roundTrip })
+        }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); }).then(function (res) {
+          if (seq !== calcSeq) return; // a newer edit is already being calculated
+          if (!res.ok) { route = null; $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = res.d.error || T.couldNotCalculate; refreshSummary(); renderMap(); return; }
+          route = res.d;
+          // Keep the exact points the server routed, so submitting routes the same ones.
+          route.stops.forEach(function (s, i) { stops[i] = { address: s.address, lat: s.lat, lon: s.lon }; });
+          $('ftStatus').textContent = route.durationText ? T.drivingAbout.split('{{duration}}').join(route.durationText) : '';
+          renderStops(); refreshSummary(); renderMap();
+        }).catch(function () { if (seq === calcSeq) { $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = T.somethingWrong; } });
       }
-      function recordTrip() {
-        if (!lastTripPayload) return;
-        const recBtn = document.getElementById('recordTripBtn');
-        const result = document.getElementById('tripResult');
-        recBtn.disabled = true; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.recording'))};
+
+      function refreshSummary() {
+        var count = stops.filter(function (s) { return s && s.address; }).length;
+        $('ftStopCount').textContent = count + (roundTrip && count >= 2 ? ' ' + T.plusReturn : '');
+        $('ftKm').textContent = route ? route.distanceKm + ' km' : '—';
+        $('ftAmount').textContent = route && route.amount != null ? inr(route.amount) : '—';
+        $('ftRate').textContent = RATE > 0 ? inr(RATE) + '/km' : '';
+        var btn = $('ftSubmit');
+        var needPhoto = PHOTO_REQUIRED && !photos.length;
+        btn.disabled = submitting || !route || needPhoto;
+        if (!submitting) btn.textContent = !filled() ? T.fillEvery : (needPhoto ? T.addPhotoToSubmit : T.submit);
+      }
+
+      // Route sketch from the stops' coordinates: pins in order, joined by the path.
+      // Straight lines between stops for orientation; the distance is the road distance.
+      function renderMap() {
+        var pts = route ? route.stops : stops.filter(function (s) { return s && s.lat !== undefined; });
+        var el = $('ftMap');
+        if (!pts.length) { el.innerHTML = ''; return; }
+        var lats = pts.map(function (p) { return +p.lat; }), lons = pts.map(function (p) { return +p.lon; });
+        var minLat = Math.min.apply(null, lats), maxLat = Math.max.apply(null, lats), minLon = Math.min.apply(null, lons), maxLon = Math.max.apply(null, lons);
+        var cosLat = Math.cos((minLat + maxLat) / 2 * Math.PI / 180);
+        var spanX = Math.max((maxLon - minLon) * cosLat, 0.002), spanY = Math.max(maxLat - minLat, 0.002);
+        var W = 400, H = 300, pad = 40, scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+        var cx = (minLon + maxLon) / 2, cy = (minLat + maxLat) / 2;
+        function xy(p) { return [W / 2 + (p.lon - cx) * cosLat * scale, H / 2 - (p.lat - cy) * scale]; }
+        var path = pts.map(function (p, i) { var c = xy(p); return (i ? 'L' : 'M') + c[0].toFixed(1) + ' ' + c[1].toFixed(1); }).join(' ');
+        if (route && route.roundTrip && pts.length > 1) { var c0 = xy(pts[0]); path += ' L' + c0[0].toFixed(1) + ' ' + c0[1].toFixed(1); }
+        var pins = pts.map(function (p, i) {
+          var c = xy(p), col = i === 0 ? '#2E7D32' : (i === pts.length - 1 && !(route && route.roundTrip) ? '#C62828' : '#1565C0');
+          return '<g transform="translate(' + c[0].toFixed(1) + ' ' + c[1].toFixed(1) + ')"><path d="M0 0 C-9 -12 -11 -16 -11 -21 A11 11 0 1 1 11 -21 C11 -16 9 -12 0 0Z" fill="' + col + '" stroke="#fff" stroke-width="2"/><text y="-17" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">' + letter(i) + '</text></g>';
+        }).join('');
+        el.innerHTML = '<svg viewBox="0 0 400 300" role="img" aria-label="Route sketch"><rect width="400" height="300" fill="#F4F7F3"/>'
+          + (pts.length > 1 ? '<path d="' + path + '" fill="none" stroke="#1565C0" stroke-width="3" stroke-dasharray="7 5" stroke-linejoin="round" opacity=".8"/>' : '') + pins + '</svg>';
+      }
+
+      // Photos are shrunk on the phone (max 1000px JPEG) before upload, like profile photos.
+      function shrink(file) {
+        return new Promise(function (resolve, reject) {
+          var img = new Image(), url = URL.createObjectURL(file);
+          img.onload = function () {
+            var w = img.naturalWidth, h = img.naturalHeight, max = 1000;
+            if (w > max || h > max) { if (w > h) { h = Math.round(h * max / w); w = max; } else { w = Math.round(w * max / h); h = max; } }
+            var c = document.createElement('canvas'); c.width = w; c.height = h;
+            c.getContext('2d').drawImage(img, 0, 0, w, h);
+            URL.revokeObjectURL(url);
+            var data = c.toDataURL('image/jpeg', 0.8);
+            if (data.length > 640000) data = c.toDataURL('image/jpeg', 0.6);
+            resolve({ filename: baseName(file.name) + '.jpg', content_type: 'image/jpeg', data_base64: data.split(',')[1], preview: data });
+          };
+          img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('unreadable')); };
+          img.src = url;
+        });
+      }
+      function baseName(name) { name = name || 'photo'; var dot = name.lastIndexOf('.'); return dot > 0 ? name.slice(0, dot) : name; }
+      function renderPhotos() {
+        var el = $('ftPhotos'); el.innerHTML = '';
+        photos.forEach(function (p, i) {
+          var d = document.createElement('div'); d.className = 'ft-ph';
+          d.innerHTML = '<img alt=""><button type="button" aria-label="' + esc(T.removePhoto) + '" title="' + esc(T.removePhoto) + '">✕</button>';
+          d.querySelector('img').src = p.preview;
+          d.querySelector('button').onclick = function () { photos.splice(i, 1); renderPhotos(); refreshSummary(); };
+          el.appendChild(d);
+        });
+        if (photos.length < MAX_PHOTOS) {
+          var b = document.createElement('button'); b.type = 'button'; b.className = 'ft-addph'; b.textContent = '📷 ' + T.addPhoto;
+          b.onclick = function () { $('ftFile').click(); };
+          el.appendChild(b);
+        }
+      }
+      $('ftFile').addEventListener('change', function (e) {
+        var files = Array.prototype.slice.call(e.target.files, 0, MAX_PHOTOS - photos.length);
+        e.target.value = '';
+        Promise.all(files.map(function (f) { return shrink(f).catch(function () { return null; }); })).then(function (list) {
+          if (list.some(function (x) { return !x; })) { $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = T.photoFailed; }
+          photos = photos.concat(list.filter(Boolean)).slice(0, MAX_PHOTOS);
+          renderPhotos(); refreshSummary();
+        });
+      });
+
+      $('ftAddStop').onclick = function () {
+        if (stops.length >= MAX_STOPS) return;
+        stops.push(null); route = null; renderStops(); refreshSummary();
+        var el = $('ftStop' + (stops.length - 1)); if (el) el.focus();
+      };
+      $('ftRound').onchange = function (e) { roundTrip = e.target.checked; changed(); };
+      $('ftSubmit').onclick = function () {
+        var reason = $('tripReason').value.trim();
+        if (reason.length < 3) { $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = T.reasonRequired; $('tripReason').focus(); return; }
+        if (!route) return;
+        submitting = true; var btn = $('ftSubmit'); btn.disabled = true; btn.textContent = T.recording;
         fetch('/api/field-trip/record', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(lastTripPayload)
-        }).then(r => r.json().then(d => ({ ok: r.ok, d: d }))).then(({ ok, d }) => {
-          if (!ok) { recBtn.disabled = false; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.record_btn'))}; result.innerHTML += '<div style="color:#C62828;margin-top:8px;">' + escapeText(d.error || ${JSON.stringify(t(lang, 'fieldtrip.could_not_record'))}) + '</div>'; return; }
-          recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.recorded'))};
-          setTimeout(function () { window.location.reload(); }, 900); // refresh the recent-trips list
-        }).catch(function () { recBtn.disabled = false; recBtn.textContent = ${JSON.stringify(t(lang, 'fieldtrip.record_btn'))}; });
-      }
-      attachAutocomplete('tripFrom', 'tripFromDrop', 'tripFromLat', 'tripFromLon');
-      attachAutocomplete('tripTo', 'tripToDrop', 'tripToLat', 'tripToLon');
+          body: JSON.stringify({
+            date: $('tripDate').value, stops: stops, round_trip: roundTrip, reason: reason,
+            photos: photos.map(function (p) { return { filename: p.filename, content_type: p.content_type, data_base64: p.data_base64 }; })
+          })
+        }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); }).then(function (res) {
+          if (!res.ok) { submitting = false; $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = res.d.error || T.couldNotRecord; refreshSummary(); return; }
+          btn.textContent = T.recorded;
+          setTimeout(function () { window.location.reload(); }, 900);
+        }).catch(function () { submitting = false; $('ftStatus').style.color = '#C62828'; $('ftStatus').textContent = T.somethingWrong; refreshSummary(); });
+      };
+
+      renderStops(); renderPhotos(); refreshSummary(); renderMap();
+    })();
     </script>`;
   return pageShell(t(lang, 'nav.field_trips'), employeeId || '', 'field-trip', body, user);
 }
 
 // Accounts-team view: every recorded field trip, for fuel reimbursement.
 async function renderAdminFieldTrips(trips, user) {
+  const byId = new Map(trips.map(trip => [trip.id, trip]));
+  const describe = trip => `${trip.date}, ${trip.distance_km} km${trip.amount != null ? `, ${formatInr(trip.amount)}` : ''}`;
+  const photoIds = await tripPhotoIds(trips);
   const rows = (await Promise.all(trips.map(async trip => {
     const emp = await getEmployee(trip.employee_id);
+    const before = await earlierAttempts(trip, async id => byId.get(id) || await getRequestById('field_trips', id));
     const statusCell = trip.status === 'pending'
-      ? actionButton('/field-trip/decide', { id: trip.id, action: 'approve' }, 'Approve', '#2E7D32', true) +
-        actionButton('/field-trip/decide', { id: trip.id, action: 'reject' }, 'Reject', '#C62828')
-      : statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', trip.status);
+      ? decideFormHtml('/field-trip/decide', { id: trip.id })
+      : `${statusBadge(trip.status === 'approved' ? 'Present' : 'Absent', trip.status)}<div style="margin-top:4px;font-size:0.9em;">${decisionNoteHtml(trip)}</div>`;
+    const amount = trip.amount != null
+      ? `${escapeHtml(formatInr(trip.amount))}<div style="color:#9AA5B1;font-size:0.82em;font-weight:400;">${escapeHtml(formatInr(trip.rate_per_km))}/km</div>`
+      : '<span style="color:#9AA5B1;">—</span>';
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : trip.employee_id)}</strong> <span style="color:#9AA5B1;">(${escapeHtml(trip.employee_id)})</span></td>
-      <td>${escapeHtml(trip.date)}</td>
-      <td>${escapeHtml(trip.from_address)}</td>
-      <td>${escapeHtml(trip.to_address)}</td>
-      <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km</td>
+      <td><strong>${escapeHtml(emp ? emp.name : trip.employee_id)}</strong><div style="color:#9AA5B1;font-size:0.85em;">${escapeHtml(trip.employee_id)}</div><div style="white-space:nowrap;margin-top:4px;">${escapeHtml(trip.date)}</div>${attemptBadge(trip, before.length)}</td>
+      <td style="min-width:200px;">
+        ${tripRouteHtml(trip, { mapsLink: true })}
+        <div style="color:#5F6B7A;font-size:0.88em;margin-top:6px;">${escapeHtml(trip.reason || '—')}</div>
+        ${trip.status === 'pending' ? await earlierAttemptsHtml('field_trips', trip, byId, 'en', describe) : ''}
+        ${(photoIds.get(trip.id) || []).length ? `<div style="margin-top:6px;">${tripPhotosHtml(photoIds.get(trip.id))}</div>` : ''}
+      </td>
+      <td style="white-space:nowrap;font-weight:600;">${escapeHtml(String(trip.distance_km))} km<div style="margin-top:4px;">${amount}</div></td>
       <td>${statusCell}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No field trips recorded yet</td></tr>`;
-  // Only approved distance counts toward the reimbursement total — pending/rejected
-  // trips shouldn't inflate the number accounts actually pays out on.
-  const approvedKm = Math.round(trips.filter(trip => trip.status === 'approved').reduce((s, trip) => s + (trip.distance_km || 0), 0) * 100) / 100;
+  }))).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">No field trips recorded yet</td></tr>`;
+  // Only approved trips count toward reimbursement — pending/rejected ones shouldn't
+  // inflate what accounts actually pays out. The month is the trip's own date.
+  const month = formatTimestamp(new Date()).slice(0, 7);
+  const sum = (list, f) => Math.round(list.reduce((s, trip) => s + (Number(trip[f]) || 0), 0) * 100) / 100;
+  const approved = trips.filter(trip => trip.status === 'approved');
+  const approvedThisMonth = approved.filter(trip => String(trip.date).startsWith(month));
+  const pending = trips.filter(trip => trip.status === 'pending');
+  const stat = (value, label) => `<div><div style="font-size:1.4em;font-weight:700;font-variant-numeric:tabular-nums;">${escapeHtml(value)}</div><div style="color:#7C8896;font-size:0.85em;">${escapeHtml(label)}</div></div>`;
+  const rateOn = CONFIG.FIELD_TRIP_RATE_PER_KM > 0;
   const body = `
-    <div class="card" style="color:#7C8896;font-size:0.9em;">
-      Distances recorded by employees for field trips (work travel away from the office), for fuel reimbursement.
-      A trip only counts toward reimbursement once approved — reject any trip the office didn't ask for.
-      Showing the ${trips.length} most recent — ${approvedKm} km approved so far.
+    <div class="card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">
+      ${stat(rateOn || pending.some(trip => trip.amount != null) ? formatInr(sum(pending, 'amount')) : `${sum(pending, 'distance_km')} km`, `Waiting for approval (${pending.length})`)}
+      ${stat(formatInr(sum(approvedThisMonth, 'amount')), 'Approved this month')}
+      ${stat(`${sum(approvedThisMonth, 'distance_km')} km`, 'Approved distance this month')}
     </div>
-    <div class="card">
+    <div class="card" style="color:#7C8896;font-size:0.9em;">
+      Trips employees made away from the office, for fuel reimbursement. The distance is the road route through every stop, worked out by the server when the trip was submitted; use "Check in Google Maps" to compare.
+      Each trip keeps the rate in force when it was submitted${rateOn ? ` (currently ${escapeHtml(formatInr(CONFIG.FIELD_TRIP_RATE_PER_KM))}/km, set in Settings)` : ' (no rate is set in Settings, so new trips show distance only)'}.
+      A trip only counts toward reimbursement once approved. Showing the ${trips.length} most recent — ${sum(approved, 'distance_km')} km approved in all.
+    </div>
+    <div class="card" style="overflow-x:auto;">
       <div style="font-weight:700;margin-bottom:10px;">Recorded Field Trips</div>
-      <table><tr><th>Employee</th><th>Date</th><th>From</th><th>To</th><th>Distance</th><th>Status</th></tr>${rows}</table>
+      <table><tr><th>Employee</th><th>Trip</th><th>Distance &amp; amount</th><th>Status</th></tr>${rows}</table>
     </div>`;
   return pageShell('Field Trips', '', 'field-trip', body, user);
 }
@@ -3644,22 +4341,23 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
   return pageShell(title, (rows[0] && rows[0].employee.id) || '', activeNav, body, user);
 }
 
-async function renderAdminLeave(requests, balanceRows, user) {
+async function renderAdminLeave(requests, balanceRows, user, error) {
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const certs = await latestCertificatesByRequest(requests.filter(r => r.leave_type === CERTIFICATE_LEAVE_TYPE).map(r => r.id));
+  const describe = r => `${r.leave_type}, ${r.start_date} – ${r.end_date}`;
 
   const pendingRows = (await Promise.all(pending.map(async r => {
     const emp = await getEmployee(r.employee_id);
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('leave_requests', id));
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span></td>
+      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span>${attemptBadge(r, before.length)}</td>
       <td>${escapeHtml(r.leave_type)}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
-      <td>
-        ${actionButton('/leave/decide', { id: r.id, action: 'approve', employee_id: r.employee_id }, 'Approve', '#2E7D32', true)}
-        ${actionButton('/leave/decide', { id: r.id, action: 'reject', employee_id: r.employee_id }, 'Reject', '#C62828')}
-      </td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('leave_requests', r, byId, 'en', describe)}${certificateCellHtml(r, certs.get(r.id))}</td>
+      <td>${decideFormHtml('/leave/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -3670,10 +4368,11 @@ async function renderAdminLeave(requests, balanceRows, user) {
       <td>${escapeHtml(emp ? emp.name : r.employee_id)} <span style="color:#9AA5B1;">(${escapeHtml(r.employee_id)})</span></td>
       <td>${escapeHtml(r.leave_type)}</td>
       <td>${escapeHtml(r.start_date)} &ndash; ${escapeHtml(r.end_date)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${certificateCellHtml(r, certs.get(r.id))}</td>
       <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
+      <td>${decisionNoteHtml(r)}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No history yet</td></tr>`;
+  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No history yet</td></tr>`;
 
   const typeHeaders = LEAVE_TYPES.map(t => `<th>${escapeHtml(t)}</th>`).join('');
   const balanceTableRows = balanceRows.map(r => {
@@ -3689,13 +4388,14 @@ async function renderAdminLeave(requests, balanceRows, user) {
   }).join('');
 
   const body = `
+    ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
-      <table><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Reason</th><th>Action</th></tr>${pendingRows}</table>
+      <table><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Reason</th><th>Decision</th></tr>${pendingRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
-      <table><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Reason</th><th>Status</th></tr>${historyRows}</table>
+      <table><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Reason</th><th>Status</th><th>Note</th></tr>${historyRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">Leave Balances — All Employees</div>
@@ -3720,19 +4420,19 @@ async function renderAdminPermission(requests, hoursReportRows, user) {
       : `${h}h`;
   };
 
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const describe = r => `leave at ${r.leave_time} on ${r.date}`;
   const pendingRows = (await Promise.all(pending.map(async r => {
     const emp = await getEmployee(r.employee_id);
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('permission_requests', id));
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span></td>
+      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span>${attemptBadge(r, before.length)}</td>
       <td>${escapeHtml(r.date)}</td>
       <td>${escapeHtml(r.leave_time)}</td>
       <td>${await hoursCell(r)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
-      <td>
-        ${actionButton('/permission/decide', { id: r.id, action: 'approve', employee_id: r.employee_id }, 'Approve', '#2E7D32', true)}
-        ${actionButton('/permission/decide', { id: r.id, action: 'reject', employee_id: r.employee_id }, 'Reject', '#C62828')}
-      </td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('permission_requests', r, byId, 'en', describe)}</td>
+      <td>${decideFormHtml('/permission/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -3746,8 +4446,9 @@ async function renderAdminPermission(requests, hoursReportRows, user) {
       <td>${await hoursCell(r)}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
       <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
+      <td>${decisionNoteHtml(r)}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No history yet</td></tr>`;
+  }))).join('') || `<tr><td colspan="7" style="color:#9AA5B1;">No history yet</td></tr>`;
 
   const reportRows = hoursReportRows.map(r => `
     <tr>
@@ -3761,11 +4462,11 @@ async function renderAdminPermission(requests, hoursReportRows, user) {
   const body = `
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Leaving At</th><th>Hours</th><th>Reason</th><th>Action</th></tr>${pendingRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Leaving At</th><th>Hours</th><th>Reason</th><th>Decision</th></tr>${pendingRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Leaving At</th><th>Hours</th><th>Reason</th><th>Status</th></tr>${historyRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Leaving At</th><th>Hours</th><th>Reason</th><th>Status</th><th>Note</th></tr>${historyRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Permission Hours — This Month</div>
@@ -3798,22 +4499,28 @@ async function renderCorrections(employee, requests, user, error, prefill = {}) 
   const monthPrefix = todayStr().slice(0, 7);
   const usage = summarizeCorrectionUsage(requests.filter(r => r.date.slice(0, 7) === monthPrefix && (r.status === 'pending' || r.status === 'approved')));
   const overLimit = correctionsOverLimitById(requests);
-  const kind = CORRECTION_KINDS.includes(prefill.kind) ? prefill.kind : 'check_out';
+  const previous = prefill.previous || null;
+  const kind = CORRECTION_KINDS.includes(prefill.kind) ? prefill.kind : (previous ? previous.kind : 'check_out');
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const reapplied = await reappliedIds('correction_requests', employee.id);
+  const describe = r => `${r.date}, ${t(lang, `corrections.kind.${r.kind}`)}`;
 
-  const rows = requests.map(r => {
+  const rows = (await Promise.all(requests.map(async r => {
     let statusHtml = r.status === 'pending'
       ? statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)
       : statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang);
     if (overLimit.has(r.id)) statusHtml += ` ${statusBadge('Half Day', t(lang, 'corrections.half_day_note'), lang)}`;
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('correction_requests', id));
     return `
     <tr>
-      <td>${escapeHtml(r.date)}</td>
+      <td>${escapeHtml(r.date)}${attemptBadge(r, before.length, lang)}</td>
       <td>${t(lang, `corrections.kind.${r.kind}`)}</td>
       <td>${escapeHtml(correctionTimesText(r, lang))}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
-      <td>${statusHtml}</td>
+      <td>${escapeHtml(r.reason || '—')}${r.status === 'pending' ? await earlierAttemptsHtml('correction_requests', r, byId, lang) : ''}</td>
+      <td>${statusHtml}${reapplyLinkHtml(`/corrections?reapply=${r.id}`, r, reapplied, lang)}</td>
+      <td>${decisionNoteHtml(r)}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'corrections.no_requests')}</td></tr>`;
+  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">${t(lang, 'corrections.no_requests')}</td></tr>`;
 
   const remaining = Math.max(0, CORRECTION_MONTHLY_LIMIT - usage.used);
   const fullDayLeft = Math.max(0, FULL_DAY_CORRECTION_MONTHLY_LIMIT - usage.fullDayUsed);
@@ -3839,10 +4546,12 @@ async function renderCorrections(employee, requests, user, error, prefill = {}) 
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'corrections.apply_title')}</div>
       <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'corrections.apply_hint', { limit: CORRECTION_MONTHLY_LIMIT })}</p>
+      ${previous ? reapplyBannerHtml(previous, lang, describe) : ''}
       <form method="POST" action="/corrections/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        ${previous ? `<input type="hidden" name="previous_request_id" value="${previous.id}">` : ''}
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.date')}</label>
-          <input type="date" name="date" required value="${escapeHtml(prefill.date || '')}" min="${monthPrefix}-01" max="${todayStr()}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="date" name="date" required value="${escapeHtml(prefill.date || (previous && previous.date) || '')}" ${previous ? `min="${escapeHtml(previous.date < `${monthPrefix}-01` ? previous.date : `${monthPrefix}-01`)}"` : `min="${monthPrefix}-01"`} max="${todayStr()}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.missed')}</label>
@@ -3852,23 +4561,23 @@ async function renderCorrections(employee, requests, user, error, prefill = {}) 
         </div>
         <div id="corrIn">
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.check_in_time')}</label>
-          <input type="time" name="check_in_time" value="${escapeHtml(prefill.check_in_time || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="time" name="check_in_time" value="${escapeHtml(prefill.check_in_time || (previous && previous.check_in_time) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div id="corrOut">
           <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.check_out_time')}</label>
-          <input type="time" name="check_out_time" value="${escapeHtml(prefill.check_out_time || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+          <input type="time" name="check_out_time" value="${escapeHtml(prefill.check_out_time || (previous && previous.check_out_time) || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
         </div>
         <div style="flex:1;min-width:160px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.reason')}</label>
-          <input type="text" name="reason" required value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.reason')} *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'corrections.submit')}</button>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, previous ? 'notes.submit_again' : 'corrections.submit')}</button>
       </form>
       ${usage.used >= CORRECTION_MONTHLY_LIMIT ? `<div style="background:#FBE7DE;border-radius:8px;padding:9px 12px;font-size:0.88em;margin-top:12px;">${t(lang, 'corrections.over_limit_warning', { limit: CORRECTION_MONTHLY_LIMIT })}</div>` : ''}
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'corrections.my_requests')}</div>
-      <table><tr><th>${t(lang, 'corrections.col_date')}</th><th>${t(lang, 'corrections.col_missed')}</th><th>${t(lang, 'corrections.col_corrected_to')}</th><th>${t(lang, 'corrections.col_reason')}</th><th>${t(lang, 'corrections.col_status')}</th></tr>${rows}</table>
+      <table><tr><th>${t(lang, 'corrections.col_date')}</th><th>${t(lang, 'corrections.col_missed')}</th><th>${t(lang, 'corrections.col_corrected_to')}</th><th>${t(lang, 'corrections.col_reason')}</th><th>${t(lang, 'corrections.col_status')}</th><th>${t(lang, 'notes.col_manager_note')}</th></tr>${rows}</table>
     </div>
     <script>
       (function () {
@@ -3892,8 +4601,11 @@ async function renderAdminCorrections(requests, user, error) {
   };
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const describe = r => `${r.date}, ${t('en', `corrections.kind.${r.kind}`)} (${correctionTimesText(r, 'en')})`;
 
   const pendingRows = (await Promise.all(pending.map(async r => {
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('correction_requests', id));
     const dayPunches = await getPunchesForDay(r.employee_id, r.date);
     const recorded = dayPunches.map(p => `${p.timestamp.slice(11, 16)}${p.source === 'auto' ? ' (auto)' : ''}`).join(', ') || 'No punches';
     // What the day will look like once approved, so a mis-filed request (e.g. a
@@ -3916,17 +4628,14 @@ async function renderAdminCorrections(requests, user, error) {
           : `${position} of ${CORRECTION_MONTHLY_LIMIT}`);
     return `
     <tr>
-      <td>${nameCell(r.employee_id)}</td>
+      <td>${nameCell(r.employee_id)}${attemptBadge(r, before.length)}</td>
       <td>${escapeHtml(r.date)}</td>
       <td>${t('en', `corrections.kind.${r.kind}`)}</td>
       <td>${escapeHtml(recorded)}</td>
       <td>${escapeHtml(afterText)}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('correction_requests', r, byId, 'en', describe)}</td>
       <td>${usageCell}</td>
-      <td>
-        ${actionButton('/corrections/decide', { id: r.id, action: 'approve' }, 'Approve', '#2E7D32', true)}
-        ${actionButton('/corrections/decide', { id: r.id, action: 'reject' }, 'Reject', '#C62828')}
-      </td>
+      <td>${decideFormHtml('/corrections/decide', { id: r.id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="8" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -3938,7 +4647,7 @@ async function renderAdminCorrections(requests, user, error) {
       <td>${escapeHtml(correctionTimesText(r, 'en'))}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
       <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
-      <td>${escapeHtml(r.decided_by || '—')}</td>
+      <td>${r.decision_note ? decisionNoteHtml(r) : escapeHtml(r.decided_by || '—')}</td>
     </tr>`).join('') || `<tr><td colspan="7" style="color:#9AA5B1;">No history yet</td></tr>`;
 
   const body = `
@@ -3950,11 +4659,11 @@ async function renderAdminCorrections(requests, user, error) {
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Recorded by App</th><th>After Approval</th><th>Reason</th><th>Used This Month</th><th>Action</th></tr>${pendingRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Recorded by App</th><th>After Approval</th><th>Reason</th><th>Used This Month</th><th>Decision</th></tr>${pendingRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Corrected To</th><th>Reason</th><th>Status</th><th>Decided By</th></tr>${historyRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Corrected To</th><th>Reason</th><th>Status</th><th>Note</th></tr>${historyRows}</table>
     </div>`;
   return pageShell('Corrections', '', 'corrections', body, user);
 }
@@ -3966,18 +4675,18 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
     `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`
   ).join('');
 
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const describe = r => `${r.planned_hours}h on ${r.date}`;
   const pendingRows = (await Promise.all(pending.map(async r => {
     const emp = await getEmployee(r.employee_id);
+    const before = await earlierAttempts(r, async id => byId.get(id) || await getRequestById('overtime_requests', id));
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span></td>
+      <td><strong>${escapeHtml(emp ? emp.name : r.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee_id)})</span>${attemptBadge(r, before.length)}</td>
       <td>${escapeHtml(r.date)}</td>
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
-      <td>${escapeHtml(r.reason || '—')}</td>
-      <td>
-        ${actionButton('/overtime/decide', { id: r.id, action: 'approve', employee_id: r.employee_id }, 'Approve', '#2E7D32', true)}
-        ${actionButton('/overtime/decide', { id: r.id, action: 'reject', employee_id: r.employee_id }, 'Reject', '#C62828')}
-      </td>
+      <td>${escapeHtml(r.reason || '—')}${await earlierAttemptsHtml('overtime_requests', r, byId, 'en', describe)}</td>
+      <td>${decideFormHtml('/overtime/decide', { id: r.id, employee_id: r.employee_id })}</td>
     </tr>`;
   }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No pending requests</td></tr>`;
 
@@ -3990,8 +4699,9 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
       <td>${r.planned_hours != null ? escapeHtml(String(r.planned_hours)) + 'h' : '—'}</td>
       <td>${escapeHtml(r.reason || '—')}</td>
       <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
+      <td>${decisionNoteHtml(r)}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No history yet</td></tr>`;
+  }))).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No history yet</td></tr>`;
 
   const reportRows = hoursReportRows.map(r => `
     <tr>
@@ -4021,19 +4731,19 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
           <input type="number" name="planned_hours" step="0.5" min="0.5" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:90px;">
         </div>
         <div style="flex:1;min-width:140px;">
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Reason</label>
-          <input type="text" name="reason" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Reason *</label>
+          <input type="text" name="reason" required minlength="3" maxlength="${NOTE_MAX_LENGTH}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
         <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">Record</button>
       </form>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Planned Hours</th><th>Reason</th><th>Action</th></tr>${pendingRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Planned Hours</th><th>Reason</th><th>Decision</th></tr>${pendingRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
-      <table><tr><th>Employee</th><th>Date</th><th>Planned Hours</th><th>Reason</th><th>Status</th></tr>${historyRows}</table>
+      <table><tr><th>Employee</th><th>Date</th><th>Planned Hours</th><th>Reason</th><th>Status</th><th>Note</th></tr>${historyRows}</table>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:4px;">Overtime Hours Worked — This Month</div>
@@ -4131,38 +4841,53 @@ async function queryActivity(filters, limit) {
   return await db.prepare(`SELECT * FROM activity_log ${where} ORDER BY created_at DESC, id DESC${limit ? ' LIMIT ?' : ''}`)
     .all(...args, ...(limit ? [limit] : []));
 }
+// Names for the sentences: employees by id, and which employee each login belongs to
+// (an admin's username isn't their employee id).
+async function activityLookups(employees) {
+  const names = Object.fromEntries(employees.map(e => [e.id, e.name]));
+  const accounts = Object.fromEntries((await db.prepare('SELECT username, employee_id FROM users').all())
+    .map(u => [u.username, u.employee_id || '']));
+  return { employeeName: (id) => names[id] || '', accountEmployee: (username) => accounts[username] || '' };
+}
+function renderActivityChanges(list) {
+  if (!list || !list.length) return '';
+  const cell = (c) => {
+    if (c.hidden) return '<span style="color:#7C8896;font-style:italic;">changed (value hidden)</span>';
+    if (c.note) return `<span style="color:#4C5A68;">${escapeHtml(c.note)}</span>`;
+    return `<span style="color:#9AA5B1;text-decoration:line-through;">${escapeHtml(c.from || '(none)')}</span><span style="color:#B0B8C1;margin:0 6px;">→</span><span style="font-weight:600;">${escapeHtml(c.to || '(none)')}</span>`;
+  };
+  return `<div class="activity-changes" style="margin-top:6px;border-left:3px solid #FFE0B2;padding:2px 0 2px 10px;display:grid;grid-template-columns:max-content 1fr;gap:3px 14px;font-size:0.9em;">
+    ${list.map(c => `<span style="color:#7C8896;">${escapeHtml(c.field)}</span><span>${cell(c)}</span>`).join('')}
+  </div>`;
+}
 async function renderActivityLog(user, filters) {
   const employees = await allEmployees();
-  const names = Object.fromEntries(employees.map(e => [e.id, e.name]));
+  const lookups = await activityLookups(employees);
   const rows = await queryActivity(filters, ACTIVITY_PAGE_LIMIT + 1);
   const truncated = rows.length > ACTIVITY_PAGE_LIMIT;
   const select = 'padding:6px;border-radius:6px;border:1px solid #D0D5DA;';
-  const who = (r) => {
-    const subject = r.employee_id
-      ? `<strong>${escapeHtml(names[r.employee_id] || r.employee_id)}</strong> <span style="color:#9AA5B1;">(${escapeHtml(r.employee_id)})</span>`
-      : '';
-    const actorName = r.actor_role === 'device' ? 'Biometric device'
-      : r.actor_role === 'system' ? 'System'
-      : names[r.actor_username] || r.actor_username;
-    // Only say who did it when it isn't the employee themselves.
-    const byOther = actorName && r.actor_username !== r.employee_id;
-    if (!subject) return escapeHtml(actorName || '—');
-    return `${subject}${byOther ? `<div style="color:#7C8896;font-size:0.85em;">by ${escapeHtml(actorName)}${r.actor_role && !['device', 'system'].includes(r.actor_role) ? ` (${escapeHtml(r.actor_role)})` : ''}</div>` : ''}`;
-  };
   const tableRows = rows.slice(0, ACTIVITY_PAGE_LIMIT).map(r => {
     const failed = r.action === 'login_failed' || r.action === 'login_blocked';
     const meta = [describeDevice(r.user_agent), r.ip].filter(Boolean).join(' · ');
+    const category = ACTIVITY_CATEGORIES.find(c => c.key === r.category);
+    const tag = failed ? 'Failed' : (category ? category.short : 'Other');
+    const sentence = activitySentence(r, lookups).map(p => (
+      p.kind === 'name' ? `<strong>${escapeHtml(p.text)}</strong>`
+        : p.kind === 'role' ? `<span style="color:#7C8896;">${escapeHtml(p.text)}</span>`
+          : escapeHtml(p.text)
+    )).join('');
+    const { changes, details } = changesAndDetails(r);
     return `
     <tr>
-      <td style="white-space:nowrap;color:#4C5A68;">${escapeHtml(r.created_at)}</td>
-      <td>${who(r)}</td>
-      <td>
-        <span style="display:inline-block;padding:2px 9px;border-radius:999px;font-size:0.85em;font-weight:600;${ACTIVITY_PILL_STYLE[failed ? 'failed' : r.category] || ACTIVITY_PILL_STYLE.other}">${escapeHtml(activityLabel(r))}</span>
-        ${r.details ? `<div style="margin-top:3px;">${escapeHtml(r.details)}</div>` : ''}
+      <td style="white-space:nowrap;color:#4C5A68;vertical-align:top;">${escapeHtml(String(r.created_at).slice(0, 10))}<br><span style="color:#7C8896;">${escapeHtml(String(r.created_at).slice(11, 16))}</span></td>
+      <td style="vertical-align:top;">
+        <div style="line-height:1.5;">${sentence} <span style="display:inline-block;margin-left:4px;padding:1px 8px;border-radius:999px;font-size:0.75em;font-weight:600;vertical-align:1px;${ACTIVITY_PILL_STYLE[failed ? 'failed' : r.category] || ACTIVITY_PILL_STYLE.other}">${escapeHtml(tag)}</span></div>
+        ${renderActivityChanges(changes)}
+        ${details ? `<div style="margin-top:3px;color:#4C5A68;font-size:0.92em;">${escapeHtml(details)}</div>` : ''}
         ${meta ? `<div style="color:#9AA5B1;font-size:0.82em;margin-top:2px;">${escapeHtml(meta)}</div>` : ''}
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="3" style="color:#9AA5B1;">No activity for these filters</td></tr>';
+  }).join('') || '<tr><td colspan="2" style="color:#9AA5B1;">No activity for these filters</td></tr>';
   const query = new URLSearchParams(Object.entries({ employee_id: filters.employeeId, category: filters.category, from: filters.from, to: filters.to }).filter(([, v]) => v)).toString();
 
   const body = `
@@ -4186,7 +4911,7 @@ async function renderActivityLog(user, filters) {
         <button type="submit" style="padding:7px 14px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Show</button>
       </form>
       ${truncated ? `<p style="color:#B26A00;font-size:0.88em;">Showing the latest ${ACTIVITY_PAGE_LIMIT}. Narrow the dates or pick an employee to see the rest, or download the CSV, which has everything.</p>` : ''}
-      <div style="overflow-x:auto;"><table><tr><th>Time</th><th>Who</th><th>What</th></tr>${tableRows}</table></div>
+      <div style="overflow-x:auto;"><table><tr><th>Time</th><th>What happened</th></tr>${tableRows}</table></div>
     </div>`;
   return pageShell('Activity Log', '', 'activity-log', body, user);
 }
@@ -5166,9 +5891,9 @@ async function readJsonBody(req) {
   const raw = await bufferBody(req);
   return raw ? JSON.parse(raw) : {};
 }
-async function readFormBody(req) {
+async function readFormBody(req, maxBytes = MAX_BODY_BYTES) {
   if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
-  return Object.fromEntries(new URLSearchParams(await bufferBody(req)));
+  return Object.fromEntries(new URLSearchParams(await bufferBody(req, maxBytes)));
 }
 // Like readFormBody, but a field posted more than once (one per table row) comes back
 // as an array of every value rather than just the last.
@@ -5196,6 +5921,14 @@ async function readTextBody(req) {
 // ~37% size overhead, not just the raw file size.
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024; // 2MB per file, enforced on the decoded size
 const MAX_DOCUMENT_UPLOAD_BODY_BYTES = 3 * 1024 * 1024; // covers base64 overhead + JSON wrapper
+// Up to 6 photos of at most 500 KB each, base64-encoded, plus the stops. Stays under
+// Vercel's 4.5 MB request limit.
+const MAX_FIELD_TRIP_BODY_BYTES = 4.2 * 1024 * 1024;
+async function readFieldTripBody(req) {
+  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  const raw = await bufferBody(req, MAX_FIELD_TRIP_BODY_BYTES);
+  return raw ? JSON.parse(raw) : {};
+}
 async function readDocumentUploadBody(req) {
   if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
   const raw = await bufferBody(req, MAX_DOCUMENT_UPLOAD_BODY_BYTES);
@@ -5337,19 +6070,12 @@ async function reverseGeocode(lat, lon) {
   } catch { return ''; }
 }
 
-// Driving distance between two coordinate pairs via LocationIQ Directions (OSRM). Note
-// the URL takes lon,lat order. Returns { distanceKm, durationText }.
-function parseDirections(data) {
-  if (!data || data.code !== 'Ok' || !Array.isArray(data.routes) || !data.routes.length) {
-    throw new Error('No driving route found between those two places.');
-  }
-  const r = data.routes[0];
-  return { distanceKm: Math.round((r.distance / 1000) * 100) / 100, durationText: formatDurationSeconds(r.duration) };
-}
-async function roadDistanceByCoords(fromLat, fromLon, toLat, toLon) {
+// Road route through every stop of a field trip via LocationIQ Directions (OSRM), in one
+// call. The URL takes lon,lat order. Each leg in the response is the road distance from
+// one point to the next, which is what each stop shows and what the total adds up.
+async function roadRouteByCoords(points) {
   if (!CONFIG.LOCATIONIQ_API_KEY) throw new Error('Maps API key is not configured on the server.');
-  const coords = `${fromLon},${fromLat};${toLon},${toLat}`;
-  const url = locationiqUrl('/directions/driving/' + coords);
+  const url = locationiqUrl('/directions/driving/' + directionsCoords(points));
   url.searchParams.set('key', CONFIG.LOCATIONIQ_API_KEY);
   url.searchParams.set('overview', 'false');
   let data;
@@ -5359,22 +6085,42 @@ async function roadDistanceByCoords(fromLat, fromLon, toLat, toLon) {
   } catch {
     throw new Error('Could not reach the maps service — check the server\'s internet connection.');
   }
-  return parseDirections(data);
+  return parseRouteLegs(data, points.length);
 }
 
-// Resolves a trip request { from, to, from_lat?, from_lon?, to_lat?, to_lon? } to a
-// driving distance + resolved addresses. A picked suggestion supplies coords; otherwise
-// the typed text is forward-geocoded. Throws Error (with .status) on bad input / no match.
-async function resolveTripDistance(body) {
-  const from = (body.from || '').trim();
-  const to = (body.to || '').trim();
-  if (!from || !to) { const e = new Error('Please enter both a "from" and a "to" location.'); e.status = 400; throw e; }
-  const fromLoc = (body.from_lat && body.from_lon) ? { lat: body.from_lat, lon: body.from_lon, display: from } : await forwardGeocode(from);
-  if (!fromLoc) { const e = new Error(`Could not find "${from}". Pick a suggestion from the list.`); e.status = 502; throw e; }
-  const toLoc = (body.to_lat && body.to_lon) ? { lat: body.to_lat, lon: body.to_lon, display: to } : await forwardGeocode(to);
-  if (!toLoc) { const e = new Error(`Could not find "${to}". Pick a suggestion from the list.`); e.status = 502; throw e; }
-  const dist = await roadDistanceByCoords(fromLoc.lat, fromLoc.lon, toLoc.lat, toLoc.lon);
-  return { distanceKm: dist.distanceKm, durationText: dist.durationText, fromResolved: fromLoc.display || from, toResolved: toLoc.display || to };
+function tripError(message, status) { const e = new Error(message); e.status = status; return e; }
+
+// Resolves { stops: [{ address, lat?, lon? }], round_trip } to the road route through them.
+// A picked suggestion supplies its coordinates; a typed address is geocoded here and the
+// match LocationIQ chose comes back as that stop's address, so the employee sees it
+// before submitting. Throws Error (with .status) on bad input / no match / no route.
+//
+// Coordinates arrive from the browser, and the distance they produce is what the trip
+// pays, so they are only used where they land inside the area addresses are bounded to
+// (stopNeedsGeocode); anything else is re-derived from the stop's own address. The
+// address an approver reads therefore always matches the points that were measured.
+async function resolveTripRoute(body) {
+  const cleaned = cleanStops(body && body.stops, CONFIG.FIELD_TRIP_MAX_STOPS);
+  if (cleaned.error) throw tripError(cleaned.error, 400);
+  const box = parseViewbox(CONFIG.PLACES_VIEWBOX);
+  const stops = [];
+  for (const s of cleaned.stops) {
+    if (!stopNeedsGeocode(s, box)) { stops.push(s); continue; }
+    const found = await forwardGeocode(s.address);
+    if (!found) throw tripError(`Could not find "${s.address}". Pick a suggestion from the list.`, 422);
+    stops.push({ address: found.display || s.address, lat: Number(found.lat), lon: Number(found.lon), geocoded: true });
+  }
+  const roundTrip = !!(body && (body.round_trip === true || body.round_trip === 1 || body.round_trip === '1' || body.round_trip === 'true'));
+  const route = await roadRouteByCoords(routePoints(stops, roundTrip));
+  const legs = stops.map((s, i) => ({ address: s.address, lat: s.lat, lon: s.lon, km: i === 0 ? 0 : route.legsKm[i - 1], geocoded: !!s.geocoded }));
+  const returnKm = roundTrip ? route.legsKm[route.legsKm.length - 1] : null;
+  const ratePerKm = CONFIG.FIELD_TRIP_RATE_PER_KM || 0;
+  return {
+    stops: legs, roundTrip, returnKm,
+    distanceKm: route.distanceKm,
+    durationText: formatDurationSeconds(route.durationSec),
+    ratePerKm, amount: reimbursement(route.distanceKm, ratePerKm),
+  };
 }
 
 async function getSessionUser(req) {
@@ -5411,6 +6157,38 @@ async function getSessionUser(req) {
 // exported to CSV, so a password that lands in it cannot be taken back out. Trying to
 // tell a password from a username by its shape doesn't work either — an API key and an
 // employee id are both just short printable strings. Matching against the users table is
+// --- Read-only JSON API (/api/employees, /api/attendance) ---
+// These two predate the login system and were open to the public internet until
+// 2026-11-12: /api/employees answered SELECT * for every employee (including the
+// biometric device_pin, mobile and email) and /api/attendance would then compute any
+// of those people's day for any date. Nothing in this repo or the CRM calls either
+// one, and neither is documented, so the fix is the same two trust levels /api/punch
+// already uses rather than deleting them: a machine with the punch API key, or a
+// logged-in session. An employee session is confined to its own record, matching how
+// every page in here already treats a logged-in employee.
+//
+// device_pin is deliberately not in the field list. It is the credential the device
+// authenticates a person by, so it belongs only to /admin/device-pins, never in a
+// JSON payload — see API_EMPLOYEE_FIELDS.
+const API_EMPLOYEE_FIELDS = 'id, name, shift_start, shift_end, shift_custom, onsite_enabled, date_joined, role, designation, reports_to, branch, mobile, email';
+
+// null means "no read at all" (401). { all: true } is every employee; { employeeId }
+// is that one only. Kept separate from the route so it can be unit-tested.
+function apiReadScope({ authorizedViaApiKey = false, user = null } = {}) {
+  if (authorizedViaApiKey) return { all: true };
+  if (!user) return null;
+  if (isManagementRole(user)) return { all: true };
+  if (user.employeeId) return { employeeId: user.employeeId };
+  return null;
+}
+
+// Same key and header as /api/punch: one shared secret for the device side of this
+// gateway. A request carrying it is never looked up as a session.
+async function apiReadAuth(req) {
+  const authorizedViaApiKey = req.headers['x-api-key'] === CONFIG.PUNCH_API_KEY;
+  return { authorizedViaApiKey, user: authorizedViaApiKey ? null : await getSessionUser(req) };
+}
+
 // the only test that can't be fooled, and a miss tells us all we need: someone tried an
 // account that doesn't exist. The IP, device and time are still recorded, so a real
 // intrusion attempt stays just as visible.
@@ -5585,40 +6363,66 @@ async function handleRequest(req, res) {
     }
   }
 
-  // POST /api/field-trip/distance { from, to, from_lat?, from_lon?, to_lat?, to_lon? } —
-  // driving distance. A picked suggestion supplies its coords; otherwise the typed text is
-  // forward-geocoded first. LocationIQ routing needs coordinates, so both ends resolve to
-  // lat/lon before the directions call. The key stays server-side.
+  // POST /api/field-trip/distance { stops: [{ address, lat?, lon? }], round_trip } — the
+  // road route through every stop, each leg's km, and the amount at today's rate. A
+  // picked suggestion supplies its coords; a typed address is geocoded first. The key
+  // stays server-side.
   if (parsed.pathname === '/api/field-trip/distance' && req.method === 'POST') {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser) return sendJson(res, 401, { error: 'Unauthorized' });
     let body;
     try { body = await readJsonBody(req); } catch (err) { if (err && err.statusCode === 413) return sendJson(res, 413, { error: 'Request body too large' }); return sendJson(res, 400, { error: 'Invalid JSON body' }); }
     try {
-      return sendJson(res, 200, await resolveTripDistance(body));
+      return sendJson(res, 200, await resolveTripRoute(body));
     } catch (e) {
       return sendJson(res, e.status || 502, { error: e.message || 'Could not calculate distance.' });
     }
   }
 
-  // POST /api/field-trip/record { from, to, from_lat?, ... } — recompute the distance
-  // server-side (so it can't be tampered with) and save the trip for the accounts team.
+  // POST /api/field-trip/record { date, stops, round_trip, reason, photos: [{ filename,
+  // content_type, data_base64 }] } — recomputes the route server-side (whatever distance
+  // the browser showed is ignored), freezes today's rate and the amount on the trip, and
+  // saves it with its photos for the manager to approve.
   if (parsed.pathname === '/api/field-trip/record' && req.method === 'POST') {
     const sessionUser = await getSessionUser(req);
     if (!sessionUser || !sessionUser.employeeId) return sendJson(res, 401, { error: 'Only an employee can record a field trip.' });
     let body;
-    try { body = await readJsonBody(req); } catch (err) { if (err && err.statusCode === 413) return sendJson(res, 413, { error: 'Request body too large' }); return sendJson(res, 400, { error: 'Invalid JSON body' }); }
+    try { body = await readFieldTripBody(req); } catch (err) { if (err && err.statusCode === 413) return sendJson(res, 413, { error: 'The photos are too large together. Remove one and try again.' }); return sendJson(res, 400, { error: 'Invalid JSON body' }); }
+    const reason = cleanNote(body && body.reason);
+    if (reason.error) return sendJson(res, 400, { error: t(langOf(sessionUser), reason.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }) });
+    const now = formatTimestamp(new Date());
+    const date = cleanTripDate(body && body.date, now.split(' ')[0]);
+    if (date.error) return sendJson(res, 400, { error: date.error });
+    const photos = cleanPhotos(body && body.photos, { required: CONFIG.FIELD_TRIP_PHOTO_REQUIRED === 'on' });
+    if (photos.error) return sendJson(res, 400, { error: photos.error });
+    let r;
     try {
-      const r = await resolveTripDistance(body);
-      const now = formatTimestamp(new Date());
-      await db.prepare(
-        'INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(sessionUser.employeeId, now.split(' ')[0], now, r.fromResolved, r.toResolved, r.distanceKm);
-      await logActivity('field_trip', sessionUser.employeeId, `${r.fromResolved} to ${r.toResolved}, ${r.distanceKm} km`);
-      return sendJson(res, 200, { recorded: true, ...r });
+      r = await resolveTripRoute(body);
     } catch (e) {
       return sendJson(res, e.status || 502, { error: e.message || 'Could not record the trip.' });
     }
+    const stored = r.stops.map(s => ({ address: s.address, lat: s.lat, lon: s.lon, km: s.km }));
+    const first = stored[0].address, last = r.roundTrip ? stored[0].address : stored[stored.length - 1].address;
+    const inserted = await db.prepare(
+      `INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km, reason, stops, round_trip, rate_per_km, amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(sessionUser.employeeId, date.value, now, first, last, r.distanceKm, reason.value, JSON.stringify(stored), r.roundTrip ? 1 : 0, r.ratePerKm || null, r.amount);
+    const tripId = inserted.lastInsertRowid;
+    if (photos.photos.length) {
+      try {
+        await db.batch(photos.photos.map(ph => ({
+          sql: 'INSERT INTO field_trip_photos (trip_id, employee_id, filename, content_type, size_bytes, data, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          args: [tripId, sessionUser.employeeId, ph.filename, ph.contentType, ph.data.length, ph.data, now],
+        })));
+      } catch {
+        // A trip without the photos it was submitted with would mislead the approver.
+        await db.prepare('DELETE FROM field_trips WHERE id = ?').run(tripId);
+        return sendJson(res, 502, { error: 'Could not save the photos. Try again.' });
+      }
+    }
+    const amountText = r.amount !== null ? ` · ${formatInr(r.amount)}` : '';
+    await logActivity('field_trip', sessionUser.employeeId, `${stored.map(s => s.address.split(',')[0]).join(' → ')}${r.roundTrip ? ' → back' : ''}, ${r.distanceKm} km${amountText} · ${reason.value}`);
+    return sendJson(res, 200, { recorded: true, id: tripId, ...r });
   }
 
   // --- ZKTeco ADMS push protocol (K40 Pro biometric device) ---
@@ -5723,14 +6527,33 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/api/employees' && req.method === 'GET') {
-    return sendJson(res, 200, await db.prepare('SELECT * FROM employees').all());
+    const scope = apiReadScope(await apiReadAuth(req));
+    if (!scope) {
+      logSecurityEvent('api_read_auth_failed', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+    const rows = scope.all
+      ? await db.prepare(`SELECT ${API_EMPLOYEE_FIELDS} FROM employees`).all()
+      : await db.prepare(`SELECT ${API_EMPLOYEE_FIELDS} FROM employees WHERE id = ?`).all(scope.employeeId);
+    return sendJson(res, 200, rows);
   }
 
   // GET /api/attendance?employee_id=EMP-001&date=2026-07-28
   if (parsed.pathname === '/api/attendance' && req.method === 'GET') {
-    const employee_id = parsed.searchParams.get('employee_id');
+    const scope = apiReadScope(await apiReadAuth(req));
+    if (!scope) {
+      logSecurityEvent('api_read_auth_failed', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+    const employee_id = parsed.searchParams.get('employee_id') || (scope.all ? '' : scope.employeeId);
     const date = parsed.searchParams.get('date');
     if (!employee_id) return sendJson(res, 400, { error: 'employee_id is required' });
+    // 404, not 403: an employee asking about a colleague learns nothing about whether
+    // that id exists, which is the same answer they get for a typo.
+    if (!scope.all && employee_id !== scope.employeeId) {
+      logSecurityEvent('api_read_scope_denied', { ip: getClientIp(req), path: parsed.pathname });
+      return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
+    }
     const status = await computeDayStatus(employee_id, date || todayStr());
     if (!status) return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
     return sendJson(res, 200, status);
@@ -5776,9 +6599,10 @@ async function handleRequest(req, res) {
     }
   }
 
-  // Punch-in reminders. Meant to be called every 5 minutes by an outside scheduler
-  // (Vercel Hobby cron can't run that often). Safe to call any time: it only sends
-  // what is due now, once per person per day. Same CRON_SECRET guard as above.
+  // Called every 5 minutes by the CRM's cron (/api/cron/attendance-punchin-reminder;
+  // Vercel Hobby cron can't run that often). It used to send punch-in reminder emails
+  // too; those were removed, so it now only runs the auto punch-out. Same CRON_SECRET
+  // guard as above.
   if (parsed.pathname === '/internal/punchin-reminder') {
     const expected = process.env.CRON_SECRET;
     const provided = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
@@ -5786,9 +6610,8 @@ async function handleRequest(req, res) {
       logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
-    // The same every-5-minute schedule also gives auto punch-outs their timing: each
-    // person's is due 15 minutes after their own shift end. Run first and on its own,
-    // so a reminder email failure never holds it up.
+    // This schedule gives auto punch-outs their timing: each person's is due 15
+    // minutes after their own shift end.
     let autoCheckout;
     try {
       autoCheckout = await runScheduledAutoCheckout();
@@ -5796,13 +6619,7 @@ async function handleRequest(req, res) {
       console.error('auto punch-out failed:', err.message);
       autoCheckout = { outcome: 'failed' };
     }
-    try {
-      const result = await runPunchinReminders();
-      return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', ...result, autoCheckout });
-    } catch (err) {
-      console.error('punch-in reminders failed:', err.message);
-      return sendJson(res, 502, { ok: false, error: 'Punch-in reminders failed' });
-    }
+    return sendJson(res, 200, { ok: true, ran: 'punchin-reminder', reminders: 'removed', autoCheckout });
   }
 
   // PWA static assets — unauthenticated on purpose: the browser fetches these
@@ -6012,34 +6829,65 @@ async function handleRequest(req, res) {
     const employeeId = await resolveEmployeeId();
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
-    return sendHtml(res, await renderLeave(employee, await getLeaveBalanceDisplay(employeeId), await getLeaveRequests(employeeId), user));
+    const lang = langOf(user);
+    const reapply = await resolveReapply('leave_requests', parsed.searchParams.get('reapply'), employeeId);
+    return sendHtml(res, await renderLeave(employee, await getLeaveBalanceDisplay(employeeId), await getLeaveRequests(employeeId), user,
+      reapply.errorKey ? t(lang, reapply.errorKey) : null, { previous: reapply.previous || null }));
   }
 
   if (parsed.pathname === '/leave/apply' && req.method === 'POST') {
     // Leave applications can only be filed by the employee themselves — not by admin on their behalf.
     if (user.role !== 'employee') { res.writeHead(403); return res.end('Only an employee can apply for their own leave.'); }
     const employeeId = user.employeeId;
-    const form = await readFormBody(req);
+    const lang = langOf(user);
+    let form;
+    try { form = await readFormBody(req, MAX_CERTIFICATE_FORM_BYTES); } catch (err) {
+      if (err && err.statusCode === 413) { res.writeHead(413); return res.end(t(lang, 'leave.cert_err_size')); }
+      throw err;
+    }
     const leaveType = form.leave_type;
     const startDate = form.start_date;
     const endDate = form.end_date;
-    const reason = form.reason || '';
     const employee = await getEmployee(employeeId);
-    if (!employee || !leaveType || !startDate || !endDate) {
+    if (!employee || !LEAVE_TYPES.includes(leaveType) || !startDate || !endDate) {
       res.writeHead(400); return res.end('Missing required fields');
     }
+    const reapply = await resolveReapply('leave_requests', form.previous_request_id, employeeId);
+    const previous = reapply.previous || null;
+    const showError = async message => sendHtml(res, await renderLeave(employee, await getLeaveBalanceDisplay(employeeId), await getLeaveRequests(employeeId), user,
+      message, { previous, leave_type: leaveType, start_date: startDate, end_date: endDate, reason: form.reason || '' }));
+    if (reapply.errorKey) return showError(t(lang, reapply.errorKey));
+    const reason = cleanNote(form.reason);
+    if (reason.error) return showError(t(lang, reason.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }));
+    if (endDate < startDate) return showError(t(lang, 'leave.err_dates'));
+    const certificate = leaveType === CERTIFICATE_LEAVE_TYPE ? readCertificateFields(form) : { file: null };
+    if (certificate.errorKey) return showError(t(lang, certificate.errorKey));
     const duplicate = await db.prepare(
       `SELECT id FROM leave_requests WHERE employee_id = ? AND leave_type = ? AND status = 'pending'
        AND date(start_date) <= date(?) AND date(end_date) >= date(?)`
     ).get(employeeId, leaveType, endDate, startDate);
-    if (duplicate) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(await renderLeave(employee, await getLeaveBalanceDisplay(employeeId), await getLeaveRequests(employeeId), user, 'You already have a pending request for these dates.'));
+    if (duplicate) return showError('You already have a pending request for these dates.');
+    const inserted = await db.prepare(
+      'INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(employeeId, leaveType, startDate, endDate, reason.value, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
+    const request = { id: inserted.lastInsertRowid, employee_id: employeeId };
+    if (certificate.file) {
+      await runCertificateCheck(await saveCertificate(request, certificate.file));
+    } else if (previous && leaveType === CERTIFICATE_LEAVE_TYPE) {
+      // Applying again keeps the certificate from the rejected attempt unless a new one
+      // was chosen. It's checked again only if the dates changed.
+      const old = (await latestCertificatesByRequest([previous.id])).get(previous.id);
+      if (old) {
+        const sameDates = previous.start_date === startDate && previous.end_date === endDate && previous.leave_type === leaveType;
+        const copied = await db.prepare(
+          `INSERT INTO leave_certificates (leave_request_id, employee_id, filename, content_type, size_bytes, data, uploaded_at, check_status, check_summary, check_findings, checked_at)
+           SELECT ?, employee_id, filename, content_type, size_bytes, data, uploaded_at, ${sameDates ? 'check_status, check_summary, check_findings, checked_at' : "'not_checked', '', '[]', NULL"}
+           FROM leave_certificates WHERE id = ?`
+        ).run(request.id, old.id);
+        if (!sameDates || old.check_status === 'not_checked' || old.check_status === 'error') await runCertificateCheck(copied.lastInsertRowid);
+      }
     }
-    await db.prepare(
-      'INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(employeeId, leaveType, startDate, endDate, reason, 'pending', formatTimestamp(new Date()));
-    await logActivity('leave_applied', employeeId, `${leaveType}, ${startDate} to ${endDate}${reason ? ` · ${reason}` : ''}`);
+    await logActivity('leave_applied', employeeId, `${leaveType}, ${startDate} to ${endDate} · ${reason.value}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}${certificate.file ? ' · certificate attached' : ''}`);
     res.writeHead(302, { Location: `/leave?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -6048,27 +6896,78 @@ async function handleRequest(req, res) {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject leave.'); }
     const form = await readFormBody(req);
     const id = form.id;
-    const action = form.action;
     const request = await db.prepare('SELECT * FROM leave_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown leave request'); }
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/leave', 'leave');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date} · ${decision.note}`;
 
-    if (action === 'approve') {
-      await db.prepare("UPDATE leave_requests SET status = 'approved', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
+    if (!(await claimDecision('leave_requests', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'leave_requests', id, decision.note, '/leave', 'leave');
+    }
+    if (decision.action === 'approve') {
       // Casual/Sick no longer draw from a balance — see MONTHLY_PAID_LEAVE_TYPES.
       if (BALANCE_POOL_LEAVE_TYPES.includes(request.leave_type)) {
-        const days = countLeaveDays(request.start_date, request.end_date);
+        const days = await countLeaveDays(request.start_date, request.end_date);
         await db.prepare('UPDATE leave_balances SET balance = balance - ? WHERE employee_id = ? AND leave_type = ?')
           .run(days, request.employee_id, request.leave_type);
       }
-      await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'leave_request', id, `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date}`, request.employee_id);
-    } else if (action === 'reject') {
-      await db.prepare("UPDATE leave_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been rejected.`);
-      await logAdminAction(user.username, 'reject', 'leave_request', id, `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date}`, request.employee_id);
+      await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been approved.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'leave_request', id, summary, request.employee_id);
+    } else {
+      await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been rejected.${suffix} You can apply again from the Leave page.`);
+      await logAdminAction(user.username, 'reject', 'leave_request', id, summary, request.employee_id);
     }
+    res.writeHead(302, { Location: '/leave' });
+    return res.end();
+  }
+
+  // An employee adds or replaces the medical certificate on their own pending Sick Leave.
+  if (parsed.pathname === '/leave/certificate' && req.method === 'POST') {
+    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only the employee can attach their certificate.'); }
+    const lang = langOf(user);
+    let form;
+    try { form = await readFormBody(req, MAX_CERTIFICATE_FORM_BYTES); } catch (err) {
+      if (err && err.statusCode === 413) { res.writeHead(413); return res.end(t(lang, 'leave.cert_err_size')); }
+      throw err;
+    }
+    const request = await getRequestById('leave_requests', form.leave_request_id);
+    const employee = await getEmployee(user.employeeId);
+    if (!request || !employee || request.employee_id !== user.employeeId) { res.writeHead(404); return res.end('Unknown leave request'); }
+    const showError = async message => sendHtml(res, await renderLeave(employee, await getLeaveBalanceDisplay(employee.id), await getLeaveRequests(employee.id), user, message));
+    if (request.status !== 'pending' || request.leave_type !== CERTIFICATE_LEAVE_TYPE) return showError(t(lang, 'leave.cert_err_not_pending'));
+    const certificate = readCertificateFields(form);
+    if (certificate.errorKey) return showError(t(lang, certificate.errorKey));
+    if (!certificate.file) return showError(t(lang, 'leave.cert_err_type'));
+    await runCertificateCheck(await saveCertificate(request, certificate.file));
+    await logActivity('leave_certificate', employee.id, `Certificate for ${request.leave_type} ${request.start_date} to ${request.end_date}`);
+    res.writeHead(302, { Location: '/leave' });
+    return res.end();
+  }
+
+  // Managers only — same rule as employee documents: once uploaded, the employee sees
+  // that it's on file, not the file.
+  if (parsed.pathname === '/leave/certificate' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const cert = await db.prepare('SELECT * FROM leave_certificates WHERE id = ?').get(parsed.searchParams.get('id'));
+    if (!cert) { res.writeHead(404); return res.end('Not found'); }
+    res.writeHead(200, {
+      'Content-Type': cert.content_type,
+      'Content-Length': cert.size_bytes,
+      'Content-Disposition': `inline; filename="${String(cert.filename).replace(/["\r\n]/g, '')}"`,
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(Buffer.isBuffer(cert.data) ? cert.data : Buffer.from(cert.data));
+  }
+
+  if (parsed.pathname === '/leave/certificate/check' && req.method === 'POST') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const form = await readFormBody(req);
+    const cert = await db.prepare('SELECT id, leave_request_id FROM leave_certificates WHERE id = ?').get(form.id);
+    if (!cert) { res.writeHead(404); return res.end('Not found'); }
+    await runCertificateCheck(cert.id);
+    await logAdminAction(user.username, 'check_certificate', 'leave_request', cert.leave_request_id, `Certificate #${cert.id}`);
     res.writeHead(302, { Location: '/leave' });
     return res.end();
   }
@@ -6086,7 +6985,9 @@ async function handleRequest(req, res) {
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     const monthlySummary = await computeMonthlyPermissionSummary(employeeId, now.getFullYear(), now.getMonth() + 1);
-    return sendHtml(res, await renderPermission(employee, await getPermissionRequests(employeeId), monthlySummary, user));
+    const reapply = await resolveReapply('permission_requests', parsed.searchParams.get('reapply'), employeeId);
+    return sendHtml(res, await renderPermission(employee, await getPermissionRequests(employeeId), monthlySummary, user,
+      reapply.errorKey ? t(langOf(user), reapply.errorKey) : null, { previous: reapply.previous || null }));
   }
 
   if (parsed.pathname === '/permission/apply' && req.method === 'POST') {
@@ -6096,20 +6997,29 @@ async function handleRequest(req, res) {
     const form = await readFormBody(req);
     const date = form.date;
     const leaveTime = form.leave_time;
-    const reason = form.reason || '';
     if (!date || !leaveTime) {
       res.writeHead(400); return res.end('Missing required fields');
     }
     const employee = await getEmployee(employeeId);
+    const lang = langOf(user);
+    const reapply = await resolveReapply('permission_requests', form.previous_request_id, employeeId);
+    const previous = reapply.previous || null;
     async function rejectWithError(message) {
       const now = new Date();
       const monthlySummary = await computeMonthlyPermissionSummary(employeeId, now.getFullYear(), now.getMonth() + 1);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(await renderPermission(employee, await getPermissionRequests(employeeId), monthlySummary, user, message));
+      return res.end(await renderPermission(employee, await getPermissionRequests(employeeId), monthlySummary, user, message,
+        { previous, date, leave_time: leaveTime, reason: form.reason || '' }));
     }
+    if (reapply.errorKey) return rejectWithError(t(lang, reapply.errorKey));
+    const cleaned = cleanNote(form.reason);
+    if (cleaned.error) return rejectWithError(t(lang, cleaned.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }));
+    const reason = cleaned.value;
     // Cuts off last-minute requests: today's permission must be filed with at least 30
-    // minutes' notice before the shift starts, not scrambled in right beforehand.
-    if (date === todayStr()) {
+    // minutes' notice before the shift starts, not scrambled in right beforehand. Applying
+    // again for the same date after a rejection is exempt — the first request was on time.
+    const refiling = previous && previous.date === date;
+    if (date === todayStr() && !refiling) {
       const shift = getShiftForDate(employee, date);
       const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
       if (nowMinutes >= parseTimeToMinutes(shift.start) - 30) {
@@ -6123,9 +7033,9 @@ async function handleRequest(req, res) {
       return rejectWithError('You already have a pending request for this date.');
     }
     await db.prepare(
-      'INSERT INTO permission_requests (employee_id, date, leave_time, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(employeeId, date, leaveTime, reason, 'pending', formatTimestamp(new Date()));
-    await logActivity('permission_applied', employeeId, `Leave at ${leaveTime} on ${date}${reason ? ` · ${reason}` : ''}`);
+      'INSERT INTO permission_requests (employee_id, date, leave_time, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(employeeId, date, leaveTime, reason, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
+    await logActivity('permission_applied', employeeId, `Leave at ${leaveTime} on ${date} · ${reason}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}`);
     res.writeHead(302, { Location: `/permission?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -6134,20 +7044,22 @@ async function handleRequest(req, res) {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject permission requests.'); }
     const form = await readFormBody(req);
     const id = form.id;
-    const action = form.action;
     const request = await db.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown permission request'); }
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/permission', 'permission');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${request.employee_id}: leave at ${request.leave_time} on ${request.date} · ${decision.note}`;
 
-    if (action === 'approve') {
-      await db.prepare("UPDATE permission_requests SET status = 'approved', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`, request.employee_id);
-    } else if (action === 'reject') {
-      await db.prepare("UPDATE permission_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been rejected.`);
-      await logAdminAction(user.username, 'reject', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`, request.employee_id);
+    if (!(await claimDecision('permission_requests', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'permission_requests', id, decision.note, '/permission', 'permission');
+    }
+    if (decision.action === 'approve') {
+      await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been approved.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'permission_request', id, summary, request.employee_id);
+    } else {
+      await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been rejected.${suffix} You can apply again from the Permission page.`);
+      await logAdminAction(user.username, 'reject', 'permission_request', id, summary, request.employee_id);
     }
     res.writeHead(302, { Location: '/permission' });
     return res.end();
@@ -6161,7 +7073,9 @@ async function handleRequest(req, res) {
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     const prefill = { date: parsed.searchParams.get('date') || '', kind: parsed.searchParams.get('kind') || '' };
-    return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employeeId), user, null, prefill));
+    const reapply = await resolveReapply('correction_requests', parsed.searchParams.get('reapply'), employeeId);
+    prefill.previous = reapply.previous || null;
+    return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employeeId), user, reapply.errorKey ? { key: reapply.errorKey } : null, prefill));
   }
 
   if (parsed.pathname === '/corrections/apply' && req.method === 'POST') {
@@ -6178,16 +7092,21 @@ async function handleRequest(req, res) {
       check_out_time: kind === 'check_in' ? null : (form.check_out_time || '').trim(),
       reason: (form.reason || '').trim(),
     };
-    const error = request.reason ? await validateCorrection(employee, request) : { key: 'corrections.err_reason' };
+    const reapply = await resolveReapply('correction_requests', form.previous_request_id, employee.id);
+    const previous = reapply.previous || null;
+    const reasonCheck = cleanNote(request.reason);
+    const error = reapply.errorKey ? { key: reapply.errorKey }
+      : reasonCheck.error ? { key: reasonCheck.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'corrections.err_reason', vars: { max: NOTE_MAX_LENGTH } }
+      : await validateCorrection(employee, request, { refiling: !!previous && previous.date === request.date });
     if (error) {
-      return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employee.id), user, error, request));
+      return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employee.id), user, error, { ...request, previous }));
     }
     await db.prepare(
-      'INSERT INTO correction_requests (employee_id, date, kind, check_in_time, check_out_time, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(employee.id, request.date, request.kind, request.check_in_time, request.check_out_time, request.reason, 'pending', formatTimestamp(new Date()));
+      'INSERT INTO correction_requests (employee_id, date, kind, check_in_time, check_out_time, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(employee.id, request.date, request.kind, request.check_in_time, request.check_out_time, request.reason, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
     await logActivity('correction_applied', employee.id, [request.date,
       request.check_in_time && `in ${request.check_in_time}`, request.check_out_time && `out ${request.check_out_time}`,
-      request.reason].filter(Boolean).join(' · '));
+      request.reason, previous && `applied again after #${previous.id} was rejected`].filter(Boolean).join(' · '));
     res.writeHead(302, { Location: `/corrections?employee_id=${encodeURIComponent(employee.id)}` });
     return res.end();
   }
@@ -6197,12 +7116,12 @@ async function handleRequest(req, res) {
     const form = await readFormBody(req);
     const request = await db.prepare('SELECT * FROM correction_requests WHERE id = ?').get(form.id);
     if (!request) { res.writeHead(404); return res.end('Unknown correction request'); }
-    if (request.status !== 'pending') {
-      res.writeHead(302, { Location: '/corrections' });
-      return res.end();
-    }
-    const summary = `${request.employee_id}: ${request.kind} on ${request.date} (${correctionTimesText(request, 'en')})`;
-    if (form.action === 'approve') {
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/corrections', 'corrections');
+    if (request.status !== 'pending') return sendAlreadyDecided(res, user, 'correction_requests', request.id, decision.note, '/corrections', 'corrections');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${request.employee_id}: ${request.kind} on ${request.date} (${correctionTimesText(request, 'en')}) · ${decision.note}`;
+    if (decision.action === 'approve') {
       const employee = await getEmployee(request.employee_id);
       const error = employee
         ? await validateCorrection(employee, request, { excludeId: request.id, forApproval: true })
@@ -6212,21 +7131,18 @@ async function handleRequest(req, res) {
         return sendHtml(res, await renderAdminCorrections(await getAllCorrectionRequests(), user, message));
       }
       // Claim the request first so a double-click can't insert the punches twice.
-      const claimed = await db.prepare("UPDATE correction_requests SET status = 'approved', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
-        .run(formatTimestamp(new Date()), user.username, request.id);
-      if (claimed.changes) {
-        if (request.check_in_time) await recordPunch(request.employee_id, `${request.date} ${request.check_in_time}:00`, 'in', 'correction', `Correction #${request.id}`, '', user.username);
-        if (request.check_out_time) await recordPunch(request.employee_id, `${request.date} ${request.check_out_time}:00`, 'out', 'correction', `Correction #${request.id}`, '', user.username);
-        await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been approved.`);
-        await logAdminAction(user.username, 'approve', 'correction_request', request.id, summary, request.employee_id);
+      if (!(await claimDecision('correction_requests', request.id, 'approved', decision.note, user))) {
+        return sendAlreadyDecided(res, user, 'correction_requests', request.id, decision.note, '/corrections', 'corrections');
       }
-    } else if (form.action === 'reject') {
-      const rejected = await db.prepare("UPDATE correction_requests SET status = 'rejected', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
-        .run(formatTimestamp(new Date()), user.username, request.id);
-      if (rejected.changes) {
-        await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been rejected.`);
-        await logAdminAction(user.username, 'reject', 'correction_request', request.id, summary, request.employee_id);
-      }
+      if (request.check_in_time) await recordPunch(request.employee_id, `${request.date} ${request.check_in_time}:00`, 'in', 'correction', `Correction #${request.id}`, '', user.username);
+      if (request.check_out_time) await recordPunch(request.employee_id, `${request.date} ${request.check_out_time}:00`, 'out', 'correction', `Correction #${request.id}`, '', user.username);
+      await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been approved.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'correction_request', request.id, summary, request.employee_id);
+    } else if (!(await claimDecision('correction_requests', request.id, 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'correction_requests', request.id, decision.note, '/corrections', 'corrections');
+    } else {
+      await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been rejected.${suffix} You can apply again from the Corrections page.`);
+      await logAdminAction(user.username, 'reject', 'correction_request', request.id, summary, request.employee_id);
     }
     res.writeHead(302, { Location: '/corrections' });
     return res.end();
@@ -6247,7 +7163,9 @@ async function handleRequest(req, res) {
     const today = todayStr();
     const todayOvertimeMinutes = await computeOvertimeMinutes(employee, today);
     const todayAuthorized = await isOvertimeAuthorized(employeeId, today);
-    return sendHtml(res, await renderOvertime(employee, await getOvertimeRequests(employeeId), todayOvertimeMinutes, todayAuthorized, user));
+    const reapply = await resolveReapply('overtime_requests', parsed.searchParams.get('reapply'), employeeId);
+    return sendHtml(res, await renderOvertime(employee, await getOvertimeRequests(employeeId), todayOvertimeMinutes, todayAuthorized, user,
+      reapply.errorKey ? t(langOf(user), reapply.errorKey) : null, { previous: reapply.previous || null }));
   }
 
   if (parsed.pathname === '/overtime/apply' && req.method === 'POST') {
@@ -6262,50 +7180,55 @@ async function handleRequest(req, res) {
     const employeeId = isAdmin ? form.employee_id : user.employeeId;
     const date = form.date;
     const plannedHours = form.planned_hours;
-    const reason = form.reason || '';
     if (!employeeId || !date || !plannedHours) {
       res.writeHead(400); return res.end('Missing required fields');
     }
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(400); return res.end('Unknown employee'); }
-    const duplicate = await db.prepare(
-      "SELECT id FROM overtime_requests WHERE employee_id = ? AND date = ? AND status = 'pending'"
-    ).get(employeeId, date);
-    if (duplicate) {
+    const lang = langOf(user);
+    const reapply = isAdmin ? { previous: null } : await resolveReapply('overtime_requests', form.previous_request_id, employeeId);
+    const previous = reapply.previous || null;
+    const showError = async (employeeMessage, adminMessage = employeeMessage) => {
       if (isAdmin) {
         const now = new Date();
         const hoursReportRows = await Promise.all((await allEmployees()).map(async e => ({
           employee: e,
           ...(await computeMonthlyOvertimeSummary(e, now.getFullYear(), now.getMonth() + 1)),
         })));
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(await renderAdminOvertime(
-          await getAllOvertimeRequests(), hoursReportRows, user,
-          `${employee.name} already has a pending overtime request for this date.`
-        ));
+        return sendHtml(res, await renderAdminOvertime(await getAllOvertimeRequests(), hoursReportRows, user, adminMessage));
       }
       const today = todayStr();
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(await renderOvertime(
+      return sendHtml(res, await renderOvertime(
         employee, await getOvertimeRequests(employeeId),
         await computeOvertimeMinutes(employee, today), await isOvertimeAuthorized(employeeId, today),
-        user, 'You already have a pending overtime request for this date.'
+        user, employeeMessage, { previous, date, planned_hours: plannedHours, reason: form.reason || '' }
       ));
+    };
+    if (reapply.errorKey) return showError(t(lang, reapply.errorKey));
+    const cleaned = cleanNote(form.reason);
+    if (cleaned.error) return showError(t(isAdmin ? 'en' : lang, cleaned.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required', { max: NOTE_MAX_LENGTH }));
+    const reason = cleaned.value;
+    const duplicate = await db.prepare(
+      "SELECT id FROM overtime_requests WHERE employee_id = ? AND date = ? AND status = 'pending'"
+    ).get(employeeId, date);
+    if (duplicate) {
+      return showError('You already have a pending overtime request for this date.', `${employee.name} already has a pending overtime request for this date.`);
     }
     if (isAdmin) {
+      // Recorded by a manager as already authorized, so their reason is also the decision note.
       const timestamp = formatTimestamp(new Date());
       await db.prepare(
-        'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(employeeId, date, Number(plannedHours), reason, 'approved', timestamp, timestamp);
+        'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at, decided_at, decided_by, decision_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(employeeId, date, Number(plannedHours), reason, 'approved', timestamp, timestamp, user.username, reason);
       await logAdminAction(user.username, 'record', 'overtime_request', employeeId, `${employeeId}: ${date}, ${plannedHours}h planned (filed by admin, auto-approved)`, employeeId);
       await createNotification(employeeId, `Your admin recorded ${plannedHours}h of overtime for you on ${date}.`);
       res.writeHead(302, { Location: '/overtime' });
       return res.end();
     }
     await db.prepare(
-      'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(employeeId, date, Number(plannedHours), reason, 'pending', formatTimestamp(new Date()));
-    await logActivity('overtime_applied', employeeId, `${date}, ${plannedHours}h planned${reason ? ` · ${reason}` : ''}`);
+      'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at, previous_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(employeeId, date, Number(plannedHours), reason, 'pending', formatTimestamp(new Date()), previous ? previous.id : null);
+    await logActivity('overtime_applied', employeeId, `${date}, ${plannedHours}h planned · ${reason}${previous ? ` (applied again after #${previous.id} was rejected)` : ''}`);
     res.writeHead(302, { Location: `/overtime?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -6314,20 +7237,22 @@ async function handleRequest(req, res) {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject overtime requests.'); }
     const form = await readFormBody(req);
     const id = form.id;
-    const action = form.action;
     const request = await db.prepare('SELECT * FROM overtime_requests WHERE id = ?').get(id);
     if (!request) { res.writeHead(404); return res.end('Unknown overtime request'); }
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/overtime', 'overtime');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned · ${decision.note}`;
 
-    if (action === 'approve') {
-      await db.prepare("UPDATE overtime_requests SET status = 'approved', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(request.employee_id, `Your overtime request for ${request.date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'overtime_request', id, `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned`, request.employee_id);
-    } else if (action === 'reject') {
-      await db.prepare("UPDATE overtime_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await logAdminAction(user.username, 'reject', 'overtime_request', id, `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned`, request.employee_id);
-      await createNotification(request.employee_id, `Your overtime request for ${request.date} has been rejected.`);
+    if (!(await claimDecision('overtime_requests', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'overtime_requests', id, decision.note, '/overtime', 'overtime');
+    }
+    if (decision.action === 'approve') {
+      await createNotification(request.employee_id, `Your overtime request for ${request.date} has been approved.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'overtime_request', id, summary, request.employee_id);
+    } else {
+      await logAdminAction(user.username, 'reject', 'overtime_request', id, summary, request.employee_id);
+      await createNotification(request.employee_id, `Your overtime request for ${request.date} has been rejected.${suffix} You can apply again from the Overtime page.`);
     }
     res.writeHead(302, { Location: '/overtime' });
     return res.end();
@@ -6341,11 +7266,11 @@ async function handleRequest(req, res) {
   if (parsed.pathname === '/admin/activity-log.csv' && req.method === 'GET') {
     if (!isAdminRole(user)) { res.writeHead(403); return res.end('Admin access only.'); }
     const filters = activityFiltersFrom(parsed.searchParams);
-    const names = Object.fromEntries((await allEmployees()).map(e => [e.id, e.name]));
+    const lookups = await activityLookups(await allEmployees());
     const rows = await queryActivity(filters);
     await logAdminAction(user.username, 'download_report', 'activity_log', `${filters.from}..${filters.to}`, filters.employeeId || '', filters.employeeId || null);
     return sendCsv(res, `activity-log-${filters.from}-to-${filters.to}.csv`,
-      toCsv(ACTIVITY_CSV_HEADERS, rows.map(r => activityCsvRow(r, names[r.employee_id]))));
+      toCsv(ACTIVITY_CSV_HEADERS, rows.map(r => activityCsvRow(r, lookups))));
   }
 
   if (parsed.pathname === '/admin/remote-punches' && req.method === 'GET') {
@@ -6416,25 +7341,74 @@ async function handleRequest(req, res) {
     return sendHtml(res, await renderFieldTrip(employeeId, trips, user));
   }
 
+  // A field trip photo. Managers see every trip's; an employee sees only their own.
+  if (parsed.pathname === '/field-trip/photo' && req.method === 'GET') {
+    const photo = await db.prepare('SELECT * FROM field_trip_photos WHERE id = ?').get(parsed.searchParams.get('id'));
+    if (!photo || (!isManagementRole(user) && photo.employee_id !== user.employeeId)) { res.writeHead(404); return res.end('Not found'); }
+    res.writeHead(200, {
+      'Content-Type': photo.content_type,
+      'Content-Length': photo.size_bytes,
+      'Content-Disposition': `inline; filename="${String(photo.filename).replace(/["\r\n]/g, '')}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=86400',
+    });
+    return res.end(Buffer.isBuffer(photo.data) ? photo.data : Buffer.from(photo.data));
+  }
+
   if (parsed.pathname === '/field-trip/decide' && req.method === 'POST') {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject field trips.'); }
     const form = await readFormBody(req);
     const id = form.id;
-    const action = form.action;
     const trip = await db.prepare('SELECT * FROM field_trips WHERE id = ?').get(id);
     if (!trip) { res.writeHead(404); return res.end('Unknown field trip'); }
+    const decision = readDecision(form);
+    if (decision.error) return sendDecisionError(res, user, decision.error, '/field-trip', 'field-trip');
+    const suffix = decisionNoteSuffix(decision.note, user.username);
+    const summary = `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km${trip.amount != null ? ` (${formatInr(trip.amount)})` : ''} · ${decision.note}`;
+    const described = tripSummaryText(trip);
 
-    if (action === 'approve') {
-      await db.prepare("UPDATE field_trips SET status = 'approved', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) has been approved for reimbursement.`);
-      await logAdminAction(user.username, 'approve', 'field_trip', id, `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km`, trip.employee_id);
-    } else if (action === 'reject') {
-      await db.prepare("UPDATE field_trips SET status = 'rejected', decided_at = ? WHERE id = ?")
-        .run(formatTimestamp(new Date()), id);
-      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) was not approved for reimbursement.`);
-      await logAdminAction(user.username, 'reject', 'field_trip', id, `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km`, trip.employee_id);
+    if (!(await claimDecision('field_trips', id, decision.action === 'approve' ? 'approved' : 'rejected', decision.note, user))) {
+      return sendAlreadyDecided(res, user, 'field_trips', id, decision.note, '/field-trip', 'field-trip');
     }
+    if (decision.action === 'approve') {
+      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${described}) has been approved for reimbursement.${suffix}`);
+      await logAdminAction(user.username, 'approve', 'field_trip', id, summary, trip.employee_id);
+    } else {
+      await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${described}) was not approved for reimbursement.${suffix} You can submit it again from the Field Trips page.`);
+      await logAdminAction(user.username, 'reject', 'field_trip', id, summary, trip.employee_id);
+    }
+    res.writeHead(302, { Location: '/field-trip' });
+    return res.end();
+  }
+
+  // Submitting a rejected trip again: the same trip (date, route, distance) with a new
+  // reason, as a fresh pending row pointing back at the rejected one.
+  if (parsed.pathname === '/field-trip/reapply' && req.method === 'POST') {
+    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only the employee can submit their trip again.'); }
+    const form = await readFormBody(req);
+    const lang = langOf(user);
+    const reapply = await resolveReapply('field_trips', form.previous_request_id, user.employeeId);
+    const reason = cleanNote(form.reason);
+    const errorKey = reapply.errorKey || (!reapply.previous && 'notes.err_reapply_unknown')
+      || (reason.error && (reason.error === 'notes.err_too_long' ? 'notes.err_too_long' : 'notes.err_reason_required'));
+    if (errorKey) {
+      const trips = await db.prepare('SELECT * FROM field_trips WHERE employee_id = ? ORDER BY id DESC LIMIT 20').all(user.employeeId);
+      return sendHtml(res, await renderFieldTrip(user.employeeId, trips, user, t(lang, errorKey, { max: NOTE_MAX_LENGTH })));
+    }
+    const previous = reapply.previous;
+    // Same trip, so the same stops, rate and amount it was first submitted with, and the
+    // same photos copied onto the new attempt.
+    const now = formatTimestamp(new Date());
+    const inserted = await db.prepare(
+      `INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km, reason, previous_request_id, stops, round_trip, rate_per_km, amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(previous.employee_id, previous.date, now, previous.from_address, previous.to_address, previous.distance_km, reason.value, previous.id,
+      previous.stops || null, previous.round_trip || 0, previous.rate_per_km == null ? null : previous.rate_per_km, previous.amount == null ? null : previous.amount);
+    await db.prepare(
+      `INSERT INTO field_trip_photos (trip_id, employee_id, filename, content_type, size_bytes, data, uploaded_at)
+       SELECT ?, employee_id, filename, content_type, size_bytes, data, uploaded_at FROM field_trip_photos WHERE trip_id = ? ORDER BY id`
+    ).run(inserted.lastInsertRowid, previous.id);
+    await logActivity('field_trip', previous.employee_id, `Submitted again: ${tripSummaryText(previous)} · ${reason.value}`);
     res.writeHead(302, { Location: '/field-trip' });
     return res.end();
   }
@@ -6742,6 +7716,21 @@ async function handleRequest(req, res) {
     // cached form or a stray request without this field must not silently demote
     // someone, since account_role governs what the employee's login can do.
     const accountRole = ACCOUNT_ROLES.includes(form.account_role) ? form.account_role : currentAccountRole;
+    // What this save changes, for the Activity Log. Emp ID # and account role have
+    // entries of their own below, so they aren't repeated here.
+    const nameOfId = async (id) => { if (!id) return ''; const e = await getEmployee(id); return e ? e.name : id; };
+    const showShift = (start, end, custom) => (start && end ? `${start}–${end} (${Number(custom) ? 'custom' : 'branch timings'})` : '');
+    const editChanges = fieldChanges([
+      { label: 'Name', from: employee.name, to: name },
+      { label: 'Shift', from: showShift(employee.shift_start, employee.shift_end, employee.shift_custom), to: showShift(shift.start, shift.end, shift.custom) },
+      { label: 'Branch', from: employeeBranchLabel(employee.branch), to: employeeBranchLabel(branch) },
+      { label: 'Designation', from: employee.designation, to: designation },
+      { label: 'Employment type', from: employee.role, to: role },
+      { label: 'Reports to', from: await nameOfId(employee.reports_to), to: await nameOfId(reportsTo) },
+      { label: 'Date joined', from: employee.date_joined, to: dateJoined },
+      { label: 'Mobile', from: employee.mobile, to: mobile },
+      { label: 'Email', from: employee.email, to: email },
+    ]);
     await db.prepare(
       'UPDATE employees SET name = ?, shift_start = ?, shift_end = ?, shift_custom = ?, date_joined = ?, role = ?, designation = ?, branch = ?, reports_to = ?, mobile = ?, email = ? WHERE id = ?'
     ).run(name, shift.start, shift.end, shift.custom ? 1 : 0, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null, employeeId);
@@ -6763,7 +7752,11 @@ async function handleRequest(req, res) {
       await db.prepare('DELETE FROM sessions WHERE employee_id = ?').run(newId);
       await logAdminAction(user.username, 'change_account_role', 'employee', newId, `${name}: ${currentAccountRole} -> ${accountRole}`);
     }
-    await logAdminAction(user.username, 'edit_employee', 'employee', newId, name);
+    // A save that only changed the Emp ID # or account role is already fully described
+    // by those entries; one that changed nothing at all still says so.
+    if (editChanges.length || (newId === employeeId && accountRole === currentAccountRole)) {
+      await logAdminAction(user.username, 'edit_employee', 'employee', newId, name, newId, editChanges);
+    }
     res.writeHead(302, {
       Location: newId !== employeeId
         ? `/admin/employee-registration?renamed=${encodeURIComponent(newId)}&from=${encodeURIComponent(employeeId)}`
@@ -6947,6 +7940,7 @@ async function handleRequest(req, res) {
     const form = await readFormBody(req);
     const changed = [];
     const invalid = [];
+    const settingChanges = [];
     for (const def of SETTING_DEFS) {
       const submitted = form[def.key];
       const clearing = form[`__clear__${def.key}`] === '1';
@@ -6962,10 +7956,11 @@ async function handleRequest(req, res) {
       if (def.secret && !clearing && submitted === '') continue;
       const value = clearing ? '' : String(submitted === undefined ? '' : submitted).trim();
       if (value === '') {
-        const existing = await db.prepare('SELECT key FROM app_settings WHERE key = ?').get(def.key);
+        const existing = await db.prepare('SELECT key, value FROM app_settings WHERE key = ?').get(def.key);
         if (!existing) continue;
         await db.prepare('DELETE FROM app_settings WHERE key = ?').run(def.key);
         changed.push(`${def.key} cleared`);
+        settingChanges.push(hidesValue(def) ? { field: def.label, hidden: true } : { field: def.label, from: existing.value, to: '(cleared)' });
         continue;
       }
       // An invalid value is not saved, so the setting keeps working with what it had.
@@ -6978,11 +7973,16 @@ async function handleRequest(req, res) {
         'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by'
       ).run(def.key, value, formatTimestamp(new Date()), user.username);
       changed.push(`${def.key} updated`);
+      // With nothing saved yet, what was in force came from the environment or the
+      // built-in default, which CONFIG already holds.
+      const before = existing ? existing.value : (CONFIG[def.key] == null ? '' : String(CONFIG[def.key]));
+      settingChanges.push(...fieldChanges([{ label: def.label, from: before, to: value, hidden: hidesValue(def) }]));
     }
     if (changed.length) {
-      // Deliberately records which settings changed, never the values — the audit log
-      // is readable in-app and two of these are credentials.
-      await logAdminAction(user.username, 'settings_updated', 'app_settings', 'settings', changed.join(', '));
+      // Records old and new values, except for the credentials (see hidesValue),
+      // which are only marked as changed — the log is readable in-app and exported
+      // to CSV.
+      await logAdminAction(user.username, 'settings_updated', 'app_settings', 'settings', changed.join(', '), null, settingChanges);
     }
     await loadSettings({ force: true });
     return sendHtml(res, await renderAdminSettings(user, {
@@ -7032,10 +8032,12 @@ async function handleRequest(req, res) {
     if (error) return sendHtml(res, await renderAdminSettings(user, { error }));
 
     const changed = [];
+    const branchChanges = [];
     for (const id of deleting) {
       if (!existing[id]) continue;
       await db.prepare('DELETE FROM branches WHERE id = ?').run(id);
       changed.push(`${existing[id].name} deleted`);
+      branchChanges.push({ field: existing[id].name, note: 'deleted' });
     }
     // Two passes so swapping two names doesn't trip the UNIQUE constraint midway.
     for (const r of kept.filter(r => r.id && existing[r.id] && existing[r.id].name !== r.name)) {
@@ -7049,22 +8051,34 @@ async function handleRequest(req, res) {
       if (before) {
         await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ?, shift_start = ?, shift_end = ?, half_saturdays = ?, sat_start = ?, sat_end = ? WHERE id = ?')
           .run(r.name, r.location, i, r.shift_start, r.shift_end, r.half_saturdays, r.sat_start, r.sat_end, r.id);
-        if (before.half_saturdays !== r.half_saturdays) changed.push(`${r.name} half Saturdays ${r.half_saturdays ? 'on' : 'off'}`);
-        if (before.shift_start !== r.shift_start || before.shift_end !== r.shift_end) {
-          changed.push(`${r.name} shift ${r.shift_start}-${r.shift_end}`);
-          shiftChanges.push(r);
-        }
-        if (r.half_saturdays && (before.sat_start !== r.sat_start || before.sat_end !== r.sat_end)) changed.push(`${r.name} half Saturday ${r.sat_start}-${r.sat_end}`);
         if (before.name !== r.name) {
           renames.set(before.name, r.name);
           changed.push(`${before.name} renamed to ${r.name}`);
+          branchChanges.push({ field: 'Branch name', from: before.name, to: r.name });
         }
-        if (before.locationText !== r.location) changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
+        if (before.half_saturdays !== r.half_saturdays) {
+          changed.push(`${r.name} half Saturdays ${r.half_saturdays ? 'on' : 'off'}`);
+          branchChanges.push({ field: `${r.name} half Saturdays`, from: before.half_saturdays ? 'on' : 'off', to: r.half_saturdays ? 'on' : 'off' });
+        }
+        if (before.shift_start !== r.shift_start || before.shift_end !== r.shift_end) {
+          changed.push(`${r.name} shift ${r.shift_start}-${r.shift_end}`);
+          branchChanges.push({ field: `${r.name} shift`, from: `${before.shift_start}–${before.shift_end}`, to: `${r.shift_start}–${r.shift_end}` });
+          shiftChanges.push(r);
+        }
+        if (r.half_saturdays && (before.sat_start !== r.sat_start || before.sat_end !== r.sat_end)) {
+          changed.push(`${r.name} half Saturday ${r.sat_start}-${r.sat_end}`);
+          branchChanges.push({ field: `${r.name} half Saturday`, from: before.sat_start && before.sat_end ? `${before.sat_start}–${before.sat_end}` : '', to: `${r.sat_start}–${r.sat_end}` });
+        }
+        if (before.locationText !== r.location) {
+          changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
+          branchChanges.push(...fieldChanges([{ label: `${r.name} location`, from: before.locationText, to: r.location }]));
+        }
       } else {
         const result = await db.prepare('INSERT INTO branches (name, location, sort_order, shift_start, shift_end, half_saturdays, sat_start, sat_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
           .run(r.name, r.location, i, r.shift_start, r.shift_end, r.half_saturdays, r.sat_start, r.sat_end);
         newId = Number(result.lastInsertRowid);
         changed.push(`${r.name} added`);
+        branchChanges.push({ field: r.name, note: `added · shift ${r.shift_start}–${r.shift_end}${r.location ? ` · location ${r.location}` : ''}` });
       }
     }
     // One scan and one transaction for every rename in this save, rather than a scan
@@ -7102,8 +8116,10 @@ async function handleRequest(req, res) {
     if ((deviceBefore ? deviceBefore.id : null) !== deviceChoice) {
       await db.prepare('UPDATE branches SET has_device = CASE WHEN id = ? THEN 1 ELSE 0 END').run(deviceChoice);
       changed.push('biometric device branch changed');
+      const deviceAfter = deviceChoice === newId ? kept.find(r => !r.id) : kept.find(r => r.id === deviceChoice);
+      branchChanges.push(...fieldChanges([{ label: 'Biometric device branch', from: deviceBefore ? deviceBefore.name : '', to: deviceAfter ? deviceAfter.name : '' }]));
     }
-    if (changed.length) await logAdminAction(user.username, 'branches_updated', 'branches', 'branches', changed.join(', '));
+    if (changed.length) await logAdminAction(user.username, 'branches_updated', 'branches', 'branches', changed.join(', '), null, branchChanges);
     await loadSettings({ force: true });
     return sendHtml(res, await renderAdminSettings(user, { notice: changed.length ? `Saved: ${changed.join(', ')}.` : 'No changes to save.' }));
   }
@@ -7160,7 +8176,11 @@ async function handleRequest(req, res) {
       }
     }
     await db.prepare('UPDATE employees SET device_pin = ? WHERE id = ?').run(pin || null, employeeId);
-    await logAdminAction(user.username, 'set_device_pin', 'employee', employeeId, pin || '(cleared)');
+    // The PIN is what the biometric device authenticates a punch with, so it is
+    // recorded as changed and never written down — this log is readable in-app and
+    // exported to CSV, the same reason the API keys in Settings are hidden.
+    await logAdminAction(user.username, 'set_device_pin', 'employee', employeeId, '', employeeId,
+      [pin ? { field: 'Device PIN', hidden: true } : { field: 'Device PIN', note: 'cleared' }]);
     res.writeHead(302, { Location: '/admin/device-pins' });
     return res.end();
   }
@@ -7237,6 +8257,15 @@ module.exports.safeLoginUsername = safeLoginUsername;
 module.exports.sendCsv = sendCsv;
 // Exported for the unit tests — the settings' own parse/validate are pure.
 module.exports.SETTING_DEFS_BY_KEY = SETTING_DEFS_BY_KEY;
+module.exports.apiReadScope = apiReadScope;
+module.exports.SETTING_DEFS = SETTING_DEFS;
+module.exports.hidesValue = hidesValue;
+module.exports.API_EMPLOYEE_FIELDS = API_EMPLOYEE_FIELDS;
+// resolveTripRoute talks to LocationIQ and nothing else, so a test can stand in for
+// fetch and check which coordinates a trip is actually measured from. CONFIG goes with
+// it because the rule depends on PLACES_VIEWBOX.
+module.exports.resolveTripRoute = resolveTripRoute;
+module.exports.CONFIG = CONFIG;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped

@@ -7,6 +7,8 @@ import { validateCommitmentTerms } from "@/lib/proposal-terms";
 
 const CONTENT_FIELDS = [
   "items",
+  "recurring_addons",
+  "escalation_percentage",
   "tax_percentage",
   "discount_percentage",
   "title",

@@ -40,6 +40,11 @@ const ACK_WORD = "(?:ok|okay|k|kk|thanks?|thank you|thankyou|thx|ty|yes|no|hi+|h
 const ACK_RE = new RegExp(`^(?:${ACK_WORD}[\\s,!.]*)+$`, "i");
 // A complaint from a booking-only customer needs a negative cue as well ("is wifi included?" is a
 // question, "wifi not working" is a complaint).
+/** "ok", "thanks", a thumbs-up: a message that asks for nothing and needs no reply. */
+export function isQuietAcknowledgement(text: string): boolean {
+  return ACK_RE.test(text.trim());
+}
+
 const NEGATIVE_CUE_RE =
   /\b(not|n't|broken|problem|issue|complain\w*|leak\w*|dirty|noise|noisy|refund|wrong|stopped|down|failed|damag\w*|bad|worst|poor|overcharg\w*)\b/i;
 const NON_TEXT_TYPES = new Set(["sticker", "reaction"]);

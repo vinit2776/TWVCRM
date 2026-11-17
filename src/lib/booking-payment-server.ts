@@ -20,6 +20,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { queryEntityDef, type EntityRow } from "@/lib/queries/registry";
 import { fanOutQueryEvent, entityLabel } from "@/lib/queries/server";
 import {
@@ -258,6 +259,7 @@ export async function settleBookingPayment(
       // status itself, and checkout calls it again.
       await maybeCreateBookingGstTask(admin, payment.booking_id as string);
     }
+    await syncBookingPiStatement(admin, payment.booking_id as string);
   }
 
   if (settleReport) {

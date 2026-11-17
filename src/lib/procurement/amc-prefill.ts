@@ -22,6 +22,8 @@ export interface PrefillLine {
   billingCycle: ServicePoBillingCycle;
   /** Pre-GST per bill; empty when the units on this line do not split into whole bills. */
   perCycleCost: string;
+  /** The proposal's contract total for this line before GST: the agreed value may go below it, never above. */
+  proposalTotal?: number;
 }
 
 export interface PrefillUpdates {
@@ -34,7 +36,7 @@ export interface PrefillUpdates {
   helpline?: string;
   contactEmail?: string;
   /** One-unit proposals: the starter line. */
-  firstLine?: { billingCycle: ServicePoBillingCycle; perCycleCost?: string };
+  firstLine?: { billingCycle: ServicePoBillingCycle; perCycleCost?: string; proposalTotal?: number };
   /** Multi-unit proposals: one line per matched asset. */
   lines?: PrefillLine[];
 }
@@ -219,7 +221,8 @@ export function planAmcPrefill(x: ExtractedAmcProposal, cur: PrefillCurrent, ans
         } else {
           notes.push("A unit had no cost in the proposal. Enter that asset's cost on the Cost step.");
         }
-        lines.push({ assetId, billingCycle: frequency, perCycleCost });
+        const everyRate = rates.every((r): r is number => r !== null);
+        lines.push({ assetId, billingCycle: frequency, perCycleCost, ...(everyRate ? { proposalTotal: round2(rates.reduce((sum, r) => sum + (r ?? 0), 0)) } : {}) });
       }
       if (lines.length > 0) updates.lines = lines;
       const left = decided.map((d, i) => (d === UNIT_SKIPPED ? i : -1)).filter((i) => i >= 0);
@@ -234,10 +237,10 @@ export function planAmcPrefill(x: ExtractedAmcProposal, cur: PrefillCurrent, ans
     if (cycles && cycles > 0) {
       const each = round2(value / cycles);
       if (Math.abs(each * cycles - value) <= 0.01) {
-        updates.firstLine = { billingCycle: frequency, perCycleCost: String(each) };
+        updates.firstLine = { billingCycle: frequency, perCycleCost: String(each), proposalTotal: value };
         notes.push(`${cycles} ${BILLING_CYCLE_LABELS[frequency]?.toLowerCase() ?? ""} bill${cycles === 1 ? "" : "s"} of ${inr(each)} before GST make up ${inr(value)}.`);
       } else {
-        updates.firstLine = { billingCycle: frequency };
+        updates.firstLine = { billingCycle: frequency, proposalTotal: value };
         notes.push(`${inr(value)} does not split evenly into ${cycles} bills. Enter the amount per bill yourself on the Cost step.`);
       }
     }

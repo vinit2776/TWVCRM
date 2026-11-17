@@ -23,6 +23,12 @@ export const RoomSelectionSection = memo(function RoomSelectionSection() {
     endTime, setEndTime, minBookingMin, slotStepMin, formatTime12, formatDuration,
   } = useBookingForm();
   const { locations } = useLocations();
+  // A day-pass seat is one person's desk: once attendees is filled in, seats can't exceed it.
+  const attendeeCount = parseInt(numAttendees, 10);
+  const maxSeats = Math.max(1, Math.min(
+    selectedSpace?.capacity || 99,
+    attendeeCount >= 1 ? attendeeCount : Infinity,
+  ));
 
   return (
     <Card>
@@ -66,7 +72,11 @@ export const RoomSelectionSection = memo(function RoomSelectionSection() {
               min="1"
               placeholder={selectedSpace ? `Up to ${selectedSpace.capacity}` : "e.g. 4"}
               value={numAttendees}
-              onChange={(e) => setNumAttendees(e.target.value)}
+              onChange={(e) => {
+                setNumAttendees(e.target.value);
+                const n = parseInt(e.target.value, 10);
+                if (isDayPass && n >= 1) setNumSeats((s) => Math.min(s, n));
+              }}
             />
             {numAttendees && selectedSpace && parseInt(numAttendees, 10) > selectedSpace.capacity && (
               <p className="text-xs text-amber-600 flex items-center gap-1">
@@ -119,7 +129,8 @@ export const RoomSelectionSection = memo(function RoomSelectionSection() {
                 <Button
                   type="button" variant="outline" size="sm"
                   className="h-8 w-8 p-0 text-base"
-                  onClick={() => setNumSeats(s => Math.min(s + 1, selectedSpace?.capacity || 99))}
+                  onClick={() => setNumSeats(s => Math.min(s + 1, maxSeats))}
+                  disabled={numSeats >= maxSeats}
                 >+</Button>
               </div>
               {numSeats > 1 && (
