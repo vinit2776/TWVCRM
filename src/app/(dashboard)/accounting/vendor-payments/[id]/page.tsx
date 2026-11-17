@@ -1,5 +1,6 @@
 "use client";
 
+import { RetiredAmcBanner } from "@/components/procurement/retired-amc-banner";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { use, useState, useEffect, useCallback } from "react";
@@ -907,6 +908,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         />
       )}
 
+      <RetiredAmcBanner po={chain?.po ?? null} billStatus={bill.approval_status} fullyPaid={isFullyPaid} />
+
       {/* Header */}
       <div className="flex items-start gap-3">
         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 mt-0.5" onClick={() => router.push("/accounting?tab=vendor-payments")}>
@@ -916,7 +919,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold">{bill.bill_number}</h1>
             <BillEditedBadge editCount={bill.edit_count} editedAt={bill.last_edited_at} summary={bill.last_edit_summary} />
-            <Badge className="bg-green-100 text-green-800 border-0">Approved</Badge>
+            {bill.approval_status === "approved" ? (
+              <Badge className="bg-green-100 text-green-800 border-0">Approved</Badge>
+            ) : (
+              <Badge className="bg-red-100 text-red-800 border-0 capitalize">{bill.approval_status}</Badge>
+            )}
             <Badge className={`${PAYMENT_STATUS_COLORS[bill.payment_status]} border-0`}>
               {bill.payment_status === "unpaid" ? "Unpaid" : bill.payment_status === "partially_paid" ? "Partially Paid" : "Paid"}
             </Badge>
@@ -942,7 +949,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           {!isFullyPaid && (
             <p className="text-sm text-amber-700 font-medium">₹{outstanding.toLocaleString("en-IN")} outstanding</p>
           )}
-          {!isFullyPaid && canRecordPayment && !isOnHold && (
+          {!isFullyPaid && canRecordPayment && !isOnHold && bill.approval_status === "approved" && (
             <Button size="sm" onClick={openPaymentDialog} className="gap-1.5">
               <CreditCard className="h-3.5 w-3.5" />
               Record Payment
@@ -1045,7 +1052,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       )}
 
       {/* GST Status Card — always visible to payment-capable roles */}
-      {canRecordPayment && !isFullyPaid && (
+      {canRecordPayment && !isFullyPaid && bill.approval_status === "approved" && (
         <div className={`rounded-lg border p-3 text-sm space-y-2 ${
           billGstAmount > 0 || bill.gst_zero_confirmed
             ? "bg-blue-50 border-blue-200"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { PROPOSAL_MAX_TENURE_MONTHS } from "@/lib/proposal-terms";
 import { programmedEscalation } from "@/lib/auto-renewal";
 import {
@@ -45,6 +45,7 @@ import { BILLING_CYCLE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { escalateUnitPrice } from "@/lib/line-item-escalation";
+import { defaultCarryIds, type CarryableAddon } from "@/lib/renewal-addons";
 import type { Contract } from "@/types";
 
 // ─── Field Help Tooltip ─────────────────────────────────────────────────────
@@ -87,6 +88,9 @@ export function ContractRenewalDialog({
   // for the previous term only.
   const [escalationPct, setEscalationPct] = useState(() => programmedEscalation(contract));
   const [agreedNote, setAgreedNote] = useState("");
+  // Recurring add-ons on the contract being renewed, and which of them ride into the next term.
+  const [addons, setAddons] = useState<CarryableAddon[]>([]);
+  const [carryIds, setCarryIds] = useState<string[]>([]);
   const [startDate, setStartDate] = useState(() => {
     const end = new Date(contract.end_date);
     end.setDate(end.getDate() + 1);
@@ -139,6 +143,25 @@ export function ContractRenewalDialog({
     return Math.max(0, Math.round((renewStart - parentEnd) / 86_400_000) - 1);
   }, [startDate, contract.end_date]);
 
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch(`/api/contracts/${contract.id}/addons`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json) return;
+        const list = (json.data || []) as CarryableAddon[];
+        setAddons(list);
+        setCarryIds(defaultCarryIds(list, contract.end_date));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [open, contract.id, contract.end_date]);
+
+  const carriedAddonsMonthly = addons
+    .filter((a) => carryIds.includes(a.id))
+    .reduce((sum, a) => sum + Number(a.amount), 0);
+
   const handleRenew = async () => {
     setRenewing(true);
     try {
@@ -152,6 +175,7 @@ export function ContractRenewalDialog({
           billing_cycle: billingCycle,
           escalation_percentage: escalationPct,
           agreed_note: agreedNote,
+          carry_addon_ids: carryIds,
         }),
       });
 
@@ -169,6 +193,9 @@ export function ContractRenewalDialog({
             },
           }
         );
+        if (json.data.addons_carried_error) {
+          toast.error(`The renewal was created, but its recurring add-ons were not carried over: ${json.data.addons_carried_error}. Add them from the renewal's page before its first invoice.`);
+        }
         onOpenChange(false);
         onSuccess();
       } else {
@@ -300,6 +327,47 @@ export function ContractRenewalDialog({
               Rates rounded to nearest ₹1 for cleaner invoicing
             </p>
           </div>
+
+          {/* Recurring add-ons: never escalated, so they are chosen separately from the fee. */}
+          {addons.length > 0 && (
+            <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Recurring add-ons carried into the next term
+              </p>
+              {addons.map((a) => {
+                const state = !a.is_active
+                  ? "Paused"
+                  : a.effective_until && a.effective_until < contract.end_date
+                    ? `Ends ${formatDate(a.effective_until)}`
+                    : "Running";
+                return (
+                  <label key={a.id} className="flex items-start gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={carryIds.includes(a.id)}
+                      onChange={(e) =>
+                        setCarryIds((ids) => (e.target.checked ? [...ids, a.id] : ids.filter((id) => id !== a.id)))
+                      }
+                    />
+                    <span className="flex-1">
+                      <span className="font-medium">{a.description}</span>{" "}
+                      <span className="text-xs text-muted-foreground">({state})</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {formatCurrency(Number(a.amount))} + GST per month, same amount (not escalated)
+                        {startDate && previewEndDate && ` · ${formatDate(startDate)} to ${formatDate(previewEndDate)}`}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+              <p className="text-xs text-muted-foreground">
+                Next term, before GST: monthly fee {formatCurrency(previewSubtotal)} + add-ons {formatCurrency(carriedAddonsMonthly)} ={" "}
+                <span className="font-medium text-foreground">{formatCurrency(previewSubtotal + carriedAddonsMonthly)}</span>.
+                An add-on left unticked stops when this term ends.
+              </p>
+            </div>
+          )}
 
           {/* Renewal Terms */}
           <div className="space-y-3">

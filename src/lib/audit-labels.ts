@@ -47,6 +47,19 @@ function summarizeContract(c: AuditChanges, action: string): AuditSummary | null
       detail: [newEndDate ? `now expires ${newEndDate}` : null, reason].filter(Boolean).join(" · ") || undefined,
     };
   }
+  if (action === "contract_addon_ended") {
+    // Keys are "<add-on name>: effective_until" and "<add-on name>: reason".
+    const untilKey = Object.keys(c).find((k) => k.endsWith(": effective_until"));
+    const reasonKey = Object.keys(c).find((k) => k.endsWith(": reason"));
+    const name = untilKey ? untilKey.slice(0, -": effective_until".length) : "Add-on";
+    const until = untilKey ? (c[untilKey].new as string | null) : null;
+    const reason = reasonKey ? (c[reasonKey].new as string | null) : null;
+    return {
+      label: until ? `${name} billing ends ${until}` : `${name} billing ended early`,
+      tone: "amber",
+      detail: reason ?? undefined,
+    };
+  }
   if (action === "rent_month_waived" && has(c, "waived_month")) {
     return {
       label: `Rent billing waived for ${String(c.waived_month.new).slice(0, 7)}`,
