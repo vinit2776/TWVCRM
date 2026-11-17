@@ -1,4 +1,5 @@
 import { splitByShare } from "@/lib/rent-maintenance-split";
+import { prorataAddonsTotal, type ProrataAddonLine } from "@/lib/prorata-addons";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -89,6 +90,8 @@ export function buildProrataLineItems(params: {
   prorataSubtotal: number;
   monthlySubtotal: number;
   fixedShare: number;
+  /** Recurring add-ons' share of the same days; added as their own lines. Leave out for none. */
+  addonLines?: ProrataAddonLine[];
 }) {
   const start = new Date(params.startDate + "T00:00:00Z");
   const monthLabel = MONTH_NAMES[start.getUTCMonth()];
@@ -120,5 +123,7 @@ export function buildProrataLineItems(params: {
       ...detail,
     });
   }
-  return [{ type: "rent", label: "Pro-Rata Workspace Fee", items, subtotal: params.prorataSubtotal }];
+  const addonLines = params.addonLines ?? [];
+  for (const line of addonLines) items.push({ ...line });
+  return [{ type: "rent", label: "Pro-Rata Workspace Fee", items, subtotal: round2(params.prorataSubtotal + prorataAddonsTotal(addonLines)) }];
 }
