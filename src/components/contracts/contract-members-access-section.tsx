@@ -297,7 +297,6 @@ function StepPanel({
   const device = group.primaryEntry.device_label;
 
   async function sendPin() {
-    if (!group.phone) { toast.error("No phone number on record"); return; }
     setPinLoading(true);
     try {
       const res = await fetch("/api/cosec/send-enrollment-pin", {
@@ -306,7 +305,7 @@ function StepPanel({
         body: JSON.stringify({ member_id: group.entity_id }),
       });
       const json = await res.json();
-      if (res.ok) toast.success(`Enrollment PIN sent to ${group.phone}`);
+      if (res.ok) toast.success(`Enrollment PIN emailed to ${json.email ?? displayName}`);
       else toast.error(json.error ?? "Failed to send PIN");
     } finally {
       setPinLoading(false);
@@ -370,12 +369,10 @@ function StepPanel({
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {group.phone && (
             <Button size="sm" variant="outline" disabled={pinLoading} onClick={sendPin} className="h-7 text-xs gap-1.5">
               {pinLoading ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-              Resend PIN via SMS
+              Email PIN again
             </Button>
-          )}
           <span className="text-xs text-muted-foreground">
             The system will auto-detect when enrollment is complete.
           </span>
@@ -593,7 +590,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
   useEffect(() => { load(); }, [load]);
 
   async function handleAdd() {
-    if (!form.name || !form.phone) { toast.error("Name and phone are required"); return; }
+    if (!form.name || !form.phone || !form.email.trim()) { toast.error("Name, phone and email are required"); return; }
     setSaving(true);
     try {
       const res = await fetch(`/api/contracts/${contractId}/members`, {
@@ -603,7 +600,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Failed to add member"); return; }
-      toast.success(`${form.name} added${contractStatus === "active" ? " — enrollment PIN sent via SMS" : ""}`);
+      toast.success(`${form.name} added${contractStatus === "active" ? " — door PIN is being emailed" : ""}`);
       setDialogOpen(false);
       setForm({ name: "", phone: "", email: "" });
       await load();
@@ -621,7 +618,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
         body: JSON.stringify({ member_id: member.id }),
       });
       const json = await res.json();
-      if (res.ok) toast.success(`Enrollment PIN resent to ${member.phone}`);
+      if (res.ok) toast.success(`Enrollment PIN emailed to ${json.email ?? member.name}`);
       else toast.error(json.error ?? "Failed to send PIN");
     } finally {
       setActionLoading(a => ({ ...a, [`pin_${member.id}`]: false }));
@@ -638,7 +635,8 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
       });
       const json = await res.json();
       if (res.ok) {
-        toast.success(`Access PIN sent to ${member.phone} via SMS`);
+        if (json.email_sent) toast.success(`Access PIN emailed to ${member.email ?? member.name}`);
+        else toast.warning(json.email_problem ?? "PIN issued but not emailed");
         await load();
       } else {
         toast.error(json.error ?? "Failed to issue PIN");
@@ -849,7 +847,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                         size="sm" variant="outline" className="text-xs h-7 gap-1"
                         onClick={() => handleIssuePin(member, wizardGroup)}
                         disabled={isPinLoading}
-                        title="Issue a fallback access PIN — sent directly to member via SMS"
+                        title="Issue a fallback access PIN — emailed to the member"
                       >
                         {isPinLoading
                           ? <Loader2 size={13} className="animate-spin" />
@@ -912,10 +910,10 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                 placeholder="9876543210"
                 type="tel"
               />
-              <p className="text-xs text-muted-foreground">Enrollment PIN will be sent to this number via SMS</p>
+              <p className="text-xs text-muted-foreground">Needed for the door PIN and the WiFi voucher</p>
             </div>
             <div className="space-y-1.5">
-              <Label>Email <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Label>Email <span className="text-red-600 text-xs">*</span></Label>
               <Input
                 value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}

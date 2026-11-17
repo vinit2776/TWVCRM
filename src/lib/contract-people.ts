@@ -163,6 +163,7 @@ export type AddPersonResult =
     }
   | { ok: false; code: "SEATS_FULL"; seats: number }
   | { ok: false; code: "PHONE_REQUIRED" }
+  | { ok: false; code: "EMAIL_REQUIRED" }
   | { ok: false; code: "ERROR"; message: string };
 
 interface ExistingContact {
@@ -234,6 +235,7 @@ export async function addPerson(admin: SupabaseClient, input: AddPersonInput): P
     if (!given.ok) {
       if (given.code === "SEATS_FULL") return { ok: false, code: "SEATS_FULL", seats: given.seats };
       if (given.code === "PHONE_REQUIRED") return { ok: false, code: "PHONE_REQUIRED" };
+      if (given.code === "EMAIL_REQUIRED") return { ok: false, code: "EMAIL_REQUIRED" };
       return { ok: false, code: "ERROR", message: given.message ?? "Failed to give access" };
     }
     return { ok: true, contactId: duplicate.id, memberId: given.memberId, reusedExisting: true };
@@ -242,6 +244,8 @@ export async function addPerson(admin: SupabaseClient, input: AddPersonInput): P
   let memberId: string | null = null;
   if (wantsAccess) {
     if (!phone || phoneDigits(phone).length < 10) return { ok: false, code: "PHONE_REQUIRED" };
+    // The door PIN (and the voucher) are delivered by email, so nobody gets a seat without one.
+    if (!email) return { ok: false, code: "EMAIL_REQUIRED" };
     const seats = await loadSeats(admin, input.contractId);
     if (seats === null) return { ok: false, code: "ERROR", message: "Contract not found" };
     if ((await activeSeatCount(admin, input.contractId)) >= seats) return { ok: false, code: "SEATS_FULL", seats };
@@ -288,7 +292,7 @@ export async function addPerson(admin: SupabaseClient, input: AddPersonInput): P
 
 export type GiveAccessResult =
   | { ok: true; memberId: string }
-  | { ok: false; code: "NOT_FOUND" | "ALREADY_HAS_ACCESS" | "PHONE_REQUIRED" | "ERROR"; message?: string }
+  | { ok: false; code: "NOT_FOUND" | "ALREADY_HAS_ACCESS" | "PHONE_REQUIRED" | "EMAIL_REQUIRED" | "ERROR"; message?: string }
   | { ok: false; code: "SEATS_FULL"; seats: number };
 
 /** Turn a contact-only person into a seat-holding member who gets access. */
@@ -305,6 +309,7 @@ export async function giveAccess(
   if (!contact || !contact.is_active) return { ok: false, code: "NOT_FOUND" };
   if (contact.source_member_id) return { ok: false, code: "ALREADY_HAS_ACCESS" };
   if (!contact.phone || phoneDigits(contact.phone).length < 10) return { ok: false, code: "PHONE_REQUIRED" };
+  if (!contact.email || !String(contact.email).trim()) return { ok: false, code: "EMAIL_REQUIRED" };
 
   const seats = await loadSeats(admin, input.contractId);
   if (seats === null) return { ok: false, code: "NOT_FOUND" };

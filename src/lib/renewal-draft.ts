@@ -6,6 +6,7 @@ import { normalizeRenewalNote } from "@/lib/renewal-note";
 import { carrySpecialClauseToRenewal } from "@/lib/special-clause/service";
 import { carryElectricityConfigToRenewal } from "@/lib/electricity-renewal";
 import { programmedEscalation } from "@/lib/auto-renewal";
+import { renewalAddonSeeds, type CarryableAddon } from "@/lib/renewal-addons";
 
 /**
  * Creates the next term of a contract as a draft renewal, with escalation applied to
@@ -20,7 +21,12 @@ import { programmedEscalation } from "@/lib/auto-renewal";
  *
  * Body (all optional overrides):
  *   { tenure_months?, seats?, start_date?, billing_cycle?, escalation_percentage?,
- *     notice_period_months?, lock_in_months?, agreed_note? }
+ *     notice_period_months?, lock_in_months?, agreed_note?, carry_addon_ids? }
+ *
+ * `carry_addon_ids` is which of the source contract's recurring add-ons ride into the
+ * new term (the renewal dialog's checklist). Left out, the add-ons that are still
+ * billing and run to the end of the term are carried. They are copied at the same
+ * amount, never escalated, and dated to the new term.
  *
  * `agreed_note` is an optional internal note (max 1000 chars) on what was agreed in
  * the negotiation, stored on the renewal as renewal_agreed_note. It is never rendered
@@ -351,6 +357,34 @@ export async function createRenewalDraft(
     await admin.from("contract_service_quotas").insert(renewalQuotas);
   }
 
+  // 11b. Recurring add-ons. They are not in items/subtotal, so the escalation above
+  // never touched them; they are copied as they are, for the new term. A failure
+  // must not lose the draft, but is reported so the add-ons are not silently dropped.
+  let addonsCarried = 0;
+  let addonsCarriedError: string | null = null;
+  const { data: sourceAddons } = await admin
+    .from("contract_addons")
+    .select("id, description, amount, effective_from, effective_until, is_active")
+    .eq("contract_id", id);
+  const seeds = renewalAddonSeeds(
+    (sourceAddons ?? []) as CarryableAddon[],
+    Array.isArray(body.carry_addon_ids) ? (body.carry_addon_ids as string[]) : undefined,
+    source.end_date as string,
+    newContract.id,
+    startDateStr,
+    endDateStr,
+    dbUser.id,
+  );
+  if (seeds.length > 0) {
+    const { error: addonErr } = await admin.from("contract_addons").insert(seeds);
+    if (addonErr) {
+      console.error("[renew] failed to carry recurring add-ons:", addonErr.message);
+      addonsCarriedError = addonErr.message;
+    } else {
+      addonsCarried = seeds.length;
+    }
+  }
+
   // 12a. Electricity re-billing settings (location, split, billing profile) ride
   // along too — otherwise the renewed contract is skipped when the landlord's
   // monthly bill is approved and the customer is never billed.
@@ -377,6 +411,7 @@ export async function createRenewalDraft(
       escalation_percentage: { old: 0, new: escalationPct },
       subtotal: { old: Number(source.subtotal), new: newSubtotal },
       deposit_shortfall: { old: 0, new: depositShortfall },
+      ...(addonsCarried > 0 ? { recurring_addons_carried: { old: null, new: addonsCarried } } : {}),
     },
   });
 
@@ -458,6 +493,8 @@ export async function createRenewalDraft(
       start_date: startDateStr,
       end_date: endDateStr,
       gap_days: gapDays,
+      addons_carried: addonsCarried,
+      addons_carried_error: addonsCarriedError,
       special_clause_carried: specialClauseCarried,
       electricity_config_carried: electricityCarried,
       escalation_approval_status: approvalStatus,

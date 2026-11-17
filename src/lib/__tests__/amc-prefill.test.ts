@@ -48,11 +48,11 @@ describe("planAmcPrefill", () => {
   it("applies the user's answer to the question", () => {
     const p = planAmcPrefill({ ...blueStar, amountCandidates: [22770, 33000] }, empty, { amount: "33000" });
     expect(p.questions).toEqual([]);
-    expect(p.updates.firstLine).toEqual({ billingCycle: "half_yearly", perCycleCost: "16500" });
+    expect(p.updates.firstLine).toEqual({ billingCycle: "half_yearly", perCycleCost: "16500", proposalTotal: 33000 });
   });
   it("leaves the cost blank when the total does not split evenly", () => {
     const p = planAmcPrefill({ ...blueStar, valueBeforeGst: 22770.01 }, empty);
-    expect(p.updates.firstLine).toEqual({ billingCycle: "half_yearly" });
+    expect(p.updates.firstLine).toEqual({ billingCycle: "half_yearly", proposalTotal: 22770.01 });
     expect(p.notes.join(" ")).toMatch(/does not split evenly/);
   });
   it("counts a multi-year contract's visits for every year", () => {
@@ -65,7 +65,7 @@ describe("planAmcPrefill", () => {
     expect(asked.questions.map((q) => q.id)).toEqual(["frequency"]);
     const answered = planAmcPrefill({ ...blueStar, billingFrequency: null }, empty, { frequency: "quarterly" });
     expect(answered.questions).toEqual([]);
-    expect(answered.updates.firstLine).toEqual({ billingCycle: "quarterly", perCycleCost: "5692.5" });
+    expect(answered.updates.firstLine).toEqual({ billingCycle: "quarterly", perCycleCost: "5692.5", proposalTotal: 22770 });
   });
   it("asks who pays for parts when coverage is unclear, and never assumes", () => {
     const asked = planAmcPrefill({ ...blueStar, coverage: null }, empty);
@@ -129,18 +129,18 @@ describe("planAmcPrefill with several units", () => {
     const p = planAmcPrefill(fiveUnits, empty, {}, ["a1", "a2", "a3", "a4", "a5"]);
     expect(p.unitsToDecide).toBe(0);
     expect(p.updates.lines).toEqual([
-      { assetId: "a1", billingCycle: "half_yearly", perCycleCost: "11385" },
-      { assetId: "a2", billingCycle: "half_yearly", perCycleCost: "3105" },
-      { assetId: "a3", billingCycle: "half_yearly", perCycleCost: "3105" },
-      { assetId: "a4", billingCycle: "half_yearly", perCycleCost: "3105" },
-      { assetId: "a5", billingCycle: "half_yearly", perCycleCost: "11385" },
+      { assetId: "a1", billingCycle: "half_yearly", perCycleCost: "11385", proposalTotal: 22770 },
+      { assetId: "a2", billingCycle: "half_yearly", perCycleCost: "3105", proposalTotal: 6210 },
+      { assetId: "a3", billingCycle: "half_yearly", perCycleCost: "3105", proposalTotal: 6210 },
+      { assetId: "a4", billingCycle: "half_yearly", perCycleCost: "3105", proposalTotal: 6210 },
+      { assetId: "a5", billingCycle: "half_yearly", perCycleCost: "11385", proposalTotal: 22770 },
     ]);
   });
   it("bills together the units the user matches to one asset", () => {
     const p = planAmcPrefill(fiveUnits, empty, {}, ["pkg", "duct", "duct", "duct", "pkg"]);
     expect(p.updates.lines).toEqual([
-      { assetId: "pkg", billingCycle: "half_yearly", perCycleCost: "22770" },
-      { assetId: "duct", billingCycle: "half_yearly", perCycleCost: "9315" },
+      { assetId: "pkg", billingCycle: "half_yearly", perCycleCost: "22770", proposalTotal: 45540 },
+      { assetId: "duct", billingCycle: "half_yearly", perCycleCost: "9315", proposalTotal: 18630 },
     ]);
   });
   it("leaves out a unit that is not ours and warns that the total no longer matches", () => {
@@ -198,5 +198,22 @@ describe("normaliseProposal", () => {
   it("keeps distinct positive amount candidates only", () => {
     const x = normaliseProposal({ vendor_name: "V", amount_candidates: [100, 100, 0, -1, 200] });
     expect(x?.amountCandidates).toEqual([100, 200]);
+  });
+});
+
+describe("proposal ceilings", () => {
+  it("caps a one-unit proposal at its contract value, even when the cost per bill is left blank", () => {
+    expect(planAmcPrefill(blueStar, empty).updates.firstLine?.proposalTotal).toBe(22770);
+    expect(planAmcPrefill({ ...blueStar, valueBeforeGst: 22770.01 }, empty).updates.firstLine?.proposalTotal).toBe(22770.01);
+  });
+  it("caps each asset line at the sum of its units' costs", () => {
+    const p = planAmcPrefill(fiveUnits, empty, {}, ["pkg", "duct", "duct", "duct", "pkg"]);
+    expect(p.updates.lines?.map((l) => l.proposalTotal)).toEqual([45540, 18630]);
+  });
+  it("sets no ceiling on a line whose unit has no cost in the proposal", () => {
+    const noRate = { ...fiveUnits, equipment: fiveUnits.equipment.map((e, i) => (i === 1 ? { ...e, rate: null } : e)) };
+    const p = planAmcPrefill(noRate, empty, {}, ["a1", "a2", "a3", "a4", "a5"]);
+    expect(p.updates.lines?.[1].proposalTotal).toBeUndefined();
+    expect(p.updates.lines?.[0].proposalTotal).toBe(22770);
   });
 });
