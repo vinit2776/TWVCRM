@@ -14,6 +14,7 @@ export const ENQUIRY_UPDATE_KINDS = [
   "details_sent",
   "waiting_customer",
   "note",
+  "replied_whatsapp",
 ] as const;
 export type EnquiryUpdateKind = (typeof ENQUIRY_UPDATE_KINDS)[number];
 
@@ -25,6 +26,7 @@ export const ENQUIRY_UPDATE_LABEL: Record<EnquiryUpdateKind, string> = {
   details_sent: "Sent details on WhatsApp",
   waiting_customer: "Waiting on customer",
   note: "Note",
+  replied_whatsapp: "Replied on WhatsApp",
 };
 
 /** Outcomes a person can record when resolving an enquiry. */
@@ -39,6 +41,7 @@ export const ENQUIRY_SOURCE_LABEL: Record<string, string> = {
   meta_ads: "Meta Ads",
   direct_walkin: "Walk-in",
   whatsapp: "WhatsApp",
+  website: "Website",
 };
 
 export interface EnquiryItem {
@@ -49,7 +52,7 @@ export interface EnquiryItem {
   mobile: string | null;
   /** Display label, e.g. "Google Ads". */
   source: string;
-  /** Raw source key: google_ads | meta_ads | direct_walkin | whatsapp. */
+  /** Raw source key: google_ads | meta_ads | direct_walkin | whatsapp | website. */
   sourceTag: string;
   /** When this enquiry was received. */
   attentionResetAt: string;

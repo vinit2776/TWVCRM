@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { normalizeStoredPhone } from "@/lib/phone";
 import { logAudit } from "@/lib/audit";
 
 /**
@@ -55,8 +56,8 @@ export async function POST(
       full_name: body.full_name.trim(),
       designation: body.designation?.trim() || null,
       email: body.email?.trim() || null,
-      phone: body.phone?.trim() || null,
-      mobile: body.mobile?.trim() || null,
+      phone: normalizeStoredPhone(body.phone) || null,
+      mobile: normalizeStoredPhone(body.mobile) || null,
       contact_role: body.contact_role || "general",
       notes: body.notes?.trim() || null,
       is_active: body.is_active !== false,
@@ -102,8 +103,8 @@ export async function PATCH(
   if (body.full_name !== undefined) updates.full_name = body.full_name?.trim() || null;
   if (body.designation !== undefined) updates.designation = body.designation?.trim() || null;
   if (body.email !== undefined) updates.email = body.email?.trim() || null;
-  if (body.phone !== undefined) updates.phone = body.phone?.trim() || null;
-  if (body.mobile !== undefined) updates.mobile = body.mobile?.trim() || null;
+  if (body.phone !== undefined) updates.phone = normalizeStoredPhone(body.phone) || null;
+  if (body.mobile !== undefined) updates.mobile = normalizeStoredPhone(body.mobile) || null;
   if (body.contact_role !== undefined) updates.contact_role = body.contact_role;
   if (body.notes !== undefined) updates.notes = body.notes?.trim() || null;
   if (body.is_active !== undefined) updates.is_active = body.is_active;

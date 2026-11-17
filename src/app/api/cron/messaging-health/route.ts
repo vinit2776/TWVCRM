@@ -7,10 +7,16 @@ import {
   shouldAlert,
   fetchMsg91Templates,
   findTemplateIssues,
+  evaluateTemplates,
+  templateAlerts,
+  mergeTemplateHealth,
   HEALTH_WINDOW_HOURS,
+  TEMPLATE_WINDOW_DAYS,
   type ChannelHealth,
   type ChannelStatus,
   type TemplateIssue,
+  type TemplateAlert,
+  type StoredTemplateState,
 } from "@/lib/messaging-health";
 
 /**
@@ -59,6 +65,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  // Per-template health needs a much longer window than the channel rate — a
+  // low-volume template like gst_invoice_doc sends a handful of times a week,
+  // so a 6h window would never reach MIN_SAMPLE_SIZE and would read "idle"
+  // forever. See TEMPLATE_WINDOW_DAYS.
+  const templateSince = new Date(now.getTime() - TEMPLATE_WINDOW_DAYS * 86_400_000).toISOString();
+  const { data: templateRows, error: templateErr } = await admin
+    .from("whatsapp_messages")
+    .select("channel, status, error_message, template_name")
+    .eq("direction", "outbound")
+    .eq("channel", "whatsapp")
+    .gte("created_at", templateSince);
+
+  if (templateErr) {
+    // Non-fatal: the channel check below is the load-bearing half.
+    console.error("[messaging-health] template window fetch failed:", templateErr.message);
+  }
+  const templateHealth = evaluateTemplates(templateRows ?? []);
+
   // Template audit — best-effort, and only meaningful for WhatsApp.
   let templateIssues: TemplateIssue[] = [];
   let templatesChecked = false;
@@ -79,13 +103,15 @@ export async function GET(request: NextRequest) {
 
   const results: Record<string, ChannelHealth & { alerted: boolean }> = {};
   const alerts: Array<{ channel: Channel; previous: ChannelStatus | null; health: ChannelHealth }> = [];
+  let tplAlerts: TemplateAlert[] = [];
+  let mergedTemplateHealth: Record<string, StoredTemplateState> = {};
 
   for (const channel of CHANNELS) {
     const health = evaluateChannel((rows ?? []).filter((r) => r.channel === channel));
 
     const { data: prior } = await admin
       .from("messaging_health_state")
-      .select("last_alerted_status")
+      .select("last_alerted_status, template_health")
       .eq("channel", channel)
       .maybeSingle();
 
@@ -93,6 +119,14 @@ export async function GET(request: NextRequest) {
     const alerting = shouldAlert(previous, health.status);
 
     if (alerting) alerts.push({ channel, previous, health });
+
+    // Per-template transitions live on the WhatsApp row only — SMS templates
+    // are DLT flows, already covered by the channel rate.
+    if (channel === "whatsapp") {
+      const priorMap = (prior?.template_health ?? {}) as Record<string, StoredTemplateState | undefined>;
+      tplAlerts = templateAlerts(templateHealth, priorMap);
+      mergedTemplateHealth = mergeTemplateHealth(priorMap, templateHealth, tplAlerts, now.toISOString());
+    }
 
     await admin.from("messaging_health_state").upsert(
       {
@@ -106,6 +140,7 @@ export async function GET(request: NextRequest) {
         ...(channel === "whatsapp" && templatesChecked
           ? { template_issues: templateIssues, templates_checked_at: now.toISOString() }
           : {}),
+        ...(channel === "whatsapp" ? { template_health: mergedTemplateHealth } : {}),
         // Only advance the alerted status when we actually sent an email, so a
         // channel that flaps below the alert rules doesn't lose its baseline.
         ...(alerting
@@ -119,9 +154,9 @@ export async function GET(request: NextRequest) {
     results[channel] = { ...health, alerted: alerting };
   }
 
-  if (alerts.length > 0) {
+  if (alerts.length > 0 || tplAlerts.length > 0) {
     try {
-      await sendHealthAlertEmail(alerts, templateIssues);
+      await sendHealthAlertEmail(alerts, templateIssues, tplAlerts);
     } catch (err) {
       console.error("[messaging-health] alert email failed:", err);
     }
@@ -131,6 +166,7 @@ export async function GET(request: NextRequest) {
     whatsapp: results.whatsapp?.status,
     sms: results.sms?.status,
     template_issues: templateIssues.length,
+    template_alerts: tplAlerts.length,
   });
 
   return NextResponse.json({
@@ -138,7 +174,10 @@ export async function GET(request: NextRequest) {
     channels: results,
     template_issues: templateIssues,
     templates_checked: templatesChecked,
-    alerts_sent: alerts.length,
+    template_window_days: TEMPLATE_WINDOW_DAYS,
+    templates: templateHealth,
+    template_alerts: tplAlerts.map((t) => ({ template: t.template, previous: t.previous, status: t.health.status })),
+    alerts_sent: alerts.length + tplAlerts.length,
   });
 }
 
@@ -161,21 +200,35 @@ function escapeHtml(s: string): string {
 
 async function sendHealthAlertEmail(
   alerts: Array<{ channel: Channel; previous: ChannelStatus | null; health: ChannelHealth }>,
-  templateIssues: TemplateIssue[]
+  templateIssues: TemplateIssue[],
+  tplAlerts: TemplateAlert[] = []
 ) {
-  const worst = alerts.some((a) => a.health.status === "down")
-    ? "down"
-    : alerts.some((a) => a.health.status === "degraded")
-      ? "degraded"
-      : "ok";
+  const anyDown =
+    alerts.some((a) => a.health.status === "down") || tplAlerts.some((t) => t.health.status === "down");
+  const anyDegraded =
+    alerts.some((a) => a.health.status === "degraded") || tplAlerts.some((t) => t.health.status === "degraded");
+  const worst = anyDown ? "down" : anyDegraded ? "degraded" : "ok";
 
   const recovered = alerts.filter((a) => a.health.status === "ok");
   const broken = alerts.filter((a) => a.health.status !== "ok");
+  const tplBroken = tplAlerts.filter((t) => t.health.status !== "ok");
+  const tplRecovered = tplAlerts.filter((t) => t.health.status === "ok");
 
+  // Name the specific template in the subject — "Messaging Alert — WHATSAPP
+  // degraded" is not actionable when the channel is fine and one document
+  // template is dead.
+  const brokenParts = [
+    ...broken.map((a) => `${a.channel.toUpperCase()} ${a.health.status}`),
+    ...tplBroken.map((t) => `${t.template} ${t.health.status}`),
+  ];
+  const recoveredParts = [
+    ...recovered.map((a) => a.channel.toUpperCase()),
+    ...tplRecovered.map((t) => t.template),
+  ];
   const subject =
-    broken.length > 0
-      ? `Messaging Alert — ${broken.map((a) => `${a.channel.toUpperCase()} ${a.health.status}`).join(", ")}`
-      : `Messaging Recovered — ${recovered.map((a) => a.channel.toUpperCase()).join(", ")}`;
+    brokenParts.length > 0
+      ? `Messaging Alert — ${brokenParts.join(", ")}`
+      : `Messaging Recovered — ${recoveredParts.join(", ")}`;
 
   const block = (a: { channel: Channel; previous: ChannelStatus | null; health: ChannelHealth }) => {
     const h = a.health;
@@ -217,6 +270,30 @@ async function sendHealthAlertEmail(
         </div>
         <div style="padding:28px 32px;">
           ${alerts.map(block).join("")}
+          ${
+            tplAlerts.length > 0
+              ? `<p style="color:#333;font-size:14px;margin:4px 0 8px;"><strong>Templates that changed state</strong> (last ${TEMPLATE_WINDOW_DAYS} days):</p>
+                 <table style="width:100%;border-collapse:collapse;font-size:13px;margin:0 0 18px;">
+                   <tr style="background:#f3f4f6;">
+                     <th style="padding:6px 12px;text-align:left;border-bottom:2px solid #d1d5db;font-size:11px;">Template</th>
+                     <th style="padding:6px 12px;text-align:left;border-bottom:2px solid #d1d5db;font-size:11px;">State</th>
+                     <th style="padding:6px 12px;text-align:left;border-bottom:2px solid #d1d5db;font-size:11px;">Failed</th>
+                   </tr>
+                   ${tplAlerts
+                     .map(
+                       (t) => `<tr>
+                         <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;font-family:monospace;font-size:12px;">${escapeHtml(t.template)}</td>
+                         <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;color:${STATUS_COLOR[t.health.status]};font-weight:600;">${t.health.status.toUpperCase()}${t.previous ? `<span style="color:#888;font-weight:400;"> (was ${t.previous})</span>` : ""}</td>
+                         <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${t.health.failedCount} of ${t.health.sampleSize}</td>
+                       </tr>`
+                     )
+                     .join("")}
+                 </table>
+                 <p style="color:#666;font-size:12px;margin:0 0 18px;">
+                   A template can fail completely while the channel looks healthy — check the document URL it sends (a private-bucket link returns 400 to Meta and surfaces as error 131053).
+                 </p>`
+              : ""
+          }
           ${
             templateIssues.length > 0
               ? `<p style="color:#333;font-size:14px;margin:20px 0 8px;"><strong>Templates not deliverable in MSG91:</strong></p>

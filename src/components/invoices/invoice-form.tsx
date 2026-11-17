@@ -19,6 +19,7 @@ import { Loader2, ShieldAlert, Info, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { ACCOUNTING_HEADS, ACCOUNTING_HEAD_LABELS, type AccountingHead } from "@/lib/constants";
 import { preventEnterSubmit } from "@/lib/utils";
+import { isContractOperational } from "@/lib/constants";
 import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
 
 // "Other Income" is too open-ended a catch-all for staff to reach for by
@@ -40,6 +41,10 @@ interface InvoiceFormProps {
   // Set when a guided flow (the contract page's Invoice wizard) has already
   // asked what the invoice is for — the purpose is then shown, not chosen.
   presetHead?: AccountingHead;
+  // Set when the caller already knows which contract this invoice belongs to
+  // (the contract page's Invoice wizard) — the customer's live contracts are
+  // then not looked up or asked about.
+  contractId?: string;
   // Receives the created invoice so a caller can follow up (e.g. attach it to a contract).
   onCreated?: (invoice: { id: string }) => void | Promise<void>;
 }
@@ -54,6 +59,7 @@ export function InvoiceForm({
   activeProposalId,
   onRequestProposal,
   presetHead,
+  contractId,
   onCreated,
 }: InvoiceFormProps) {
   const router = useRouter();
@@ -71,6 +77,25 @@ export function InvoiceForm({
   const [submitting, setSubmitting] = useState(false);
 
   const isDeposit = primaryHead === "security_deposit";
+
+  // The customer's live contracts: one attaches by itself, several must be
+  // chosen, none means the invoice lives on the ad-hoc page only.
+  const [liveContracts, setLiveContracts] = useState<Array<{ id: string; contract_number: string; location?: { name: string } | null }>>([]);
+  const [chosenContractId, setChosenContractId] = useState("");
+  useEffect(() => {
+    if (!open || contractId) return;
+    let cancelled = false;
+    setChosenContractId("");
+    fetch(`/api/contracts?lead_id=${leadId}&status=active,renewal_in_progress&limit=50`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled) return;
+        const rows = (json?.data ?? []) as Array<{ id: string; contract_number: string; status: string; end_date: string; location?: { name: string } | null }>;
+        setLiveContracts(rows.filter(isContractOperational));
+      })
+      .catch(() => { if (!cancelled) setLiveContracts([]); });
+    return () => { cancelled = true; };
+  }, [open, leadId, contractId]);
 
   const resetForm = () => {
     setPrimaryHead(presetHead ?? "");
@@ -98,6 +123,11 @@ export function InvoiceForm({
 
     if (!primaryHead) {
       toast.error("Select what this invoice is for");
+      return;
+    }
+
+    if (!contractId && liveContracts.length > 1 && !chosenContractId) {
+      toast.error("Choose which contract this invoice belongs to");
       return;
     }
 
@@ -151,6 +181,7 @@ export function InvoiceForm({
     const body = {
       lead_id: leadId,
       proposal_id: proposalId || undefined,
+      contract_id: contractId || chosenContractId || undefined,
       primary_head: primaryHead === "unsure" ? null : primaryHead,
       title: title.trim(),
       items: validItems.map((item) => ({
@@ -263,6 +294,35 @@ export function InvoiceForm({
             </Card>
           ) : (
             <>
+              {!contractId && liveContracts.length === 1 && (
+                <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  This customer has a live contract, so this invoice will also appear on{" "}
+                  <span className="font-mono font-medium">{liveContracts[0].contract_number}</span>.
+                </p>
+              )}
+              {!contractId && liveContracts.length > 1 && (
+                <div className="space-y-2">
+                  <Label htmlFor="invoice-contract">
+                    Which contract is this for? <span className="text-destructive">*</span>
+                  </Label>
+                  <Select value={chosenContractId} onValueChange={setChosenContractId}>
+                    <SelectTrigger id="invoice-contract">
+                      <SelectValue placeholder="Select a live contract" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {liveContracts.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.contract_number}{c.location?.name ? ` · ${c.location.name}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    The customer has more than one live contract. The invoice will appear on the one you pick.
+                  </p>
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label htmlFor="invoice-title">
                   Title <span className="text-destructive">*</span>

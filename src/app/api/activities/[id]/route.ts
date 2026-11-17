@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createReminderEvent, rescheduleReminderEvent } from "@/lib/google-calendar";
 import { istLocalToUtcIso } from "@/lib/utils";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
+import { logAudit } from "@/lib/audit";
+import { followUpClosedRows } from "@/lib/follow-up-closed-note";
 
 export async function PATCH(
   request: NextRequest,
@@ -123,6 +125,12 @@ export async function PATCH(
 
   const now = new Date().toISOString();
 
+  const { data: before } = await supabase
+    .from("activities")
+    .select("follow_up_date, is_follow_up_done")
+    .eq("id", id)
+    .maybeSingle();
+
   const updatePayload =
     action === "close"
       ? {
@@ -155,6 +163,28 @@ export async function PATCH(
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  if (action === "close") {
+    const { error: noteError } = await supabase.from("activities").insert(
+      followUpClosedRows({
+        leadId: data.lead_id,
+        closed: [{ follow_up_date: data.follow_up_date, follow_up_notes: data.follow_up_notes, subject: data.subject }],
+        createdBy: dbUser?.id,
+      })
+    );
+    if (noteError) console.error("follow-up closed note failed", noteError.code, noteError.message);
+  }
+
+  logAudit(supabase, {
+    entityType: "lead",
+    entityId: data.lead_id,
+    action: "update",
+    performedBy: dbUser?.id ?? null,
+    changes:
+      action === "close"
+        ? { follow_up_done: { old: before?.is_follow_up_done ?? false, new: true } }
+        : { follow_up_date: { old: before?.follow_up_date ?? null, new: data.follow_up_date } },
+  });
 
   if (action === "reschedule" && dbUser?.email && data.follow_up_date) {
     const { data: lead } = await supabase

@@ -1,5 +1,6 @@
 "use client";
 
+import { internetState, INTERNET_STATE_LABEL, INTERNET_STATE_DOT, INTERNET_STATE_TEXT } from "@/lib/unifi-health";
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Wifi, Users, MonitorSmartphone, Activity } from "lucide-react";
@@ -53,7 +54,7 @@ export function NetworkWidget({ locationId }: NetworkWidgetProps) {
   if (!visible || loading) return null;
   if (!data) return null;
 
-  const online = data.internet.status === "online";
+  const net = internetState(data.internet.status);
   const totalBandwidth = data.today.wan_tx + data.today.wan_rx;
 
   return (
@@ -76,10 +77,10 @@ export function NetworkWidget({ locationId }: NetworkWidgetProps) {
         {/* Internet status */}
         <div className="flex items-center gap-2">
           <span
-            className={`inline-flex h-2 w-2 rounded-full ${online ? "bg-green-500" : "bg-red-500"}`}
+            className={`inline-flex h-2 w-2 rounded-full ${INTERNET_STATE_DOT[net]}`}
           />
-          <span className={`text-sm font-medium ${online ? "text-green-700" : "text-red-600"}`}>
-            Internet {online ? "Online" : "Degraded"}
+          <span className={`text-sm font-medium ${INTERNET_STATE_TEXT[net]}`}>
+            Internet {INTERNET_STATE_LABEL[net]}
           </span>
           {data.internet.latency_ms != null && (
             <span className="text-xs text-muted-foreground ml-auto">

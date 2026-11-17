@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { hasRole, FACILITY_ROLES, logIssueEvent, computeSlaTarget } from "@/lib/facility";
+import { canWorkOnIssue, hasRole, FACILITY_ROLES, logIssueEvent, computeSlaTarget } from "@/lib/facility";
 import { notifyIssueAssignee } from "@/lib/facility-notifications";
 import type { FacilityIssuePriority } from "@/types";
 
@@ -65,7 +65,7 @@ export async function PUT(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, full_name, role").eq("auth_id", user.id).single();
-  if (!hasRole(dbUser?.role, FACILITY_ROLES.workOnIssues)) {
+  if (!(await canWorkOnIssue(supabase, id, dbUser))) {
     return NextResponse.json({ error: "Insufficient role" }, { status: 403 });
   }
 

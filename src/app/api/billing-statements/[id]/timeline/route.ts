@@ -339,11 +339,12 @@ export async function GET(
 
     if (rep.status !== "reported" && rep.reviewed_at) {
       const rejected = rep.status === "rejected";
+      const withdrawn = rep.status === "withdrawn";
       push({
         id: `report-${rep.id}-outcome`, at: rep.reviewed_at, kind: "payment_report",
-        label: rejected ? "Reported payment rejected" : "Reported payment verified",
+        label: withdrawn ? "Reported payment withdrawn" : rejected ? "Reported payment rejected" : "Reported payment verified",
         amount: rep.amount,
-        detail: rep.resolution_note || (rejected ? "No such payment found" : "Matched in the bank"),
+        detail: rep.resolution_note || (withdrawn ? "Withdrawn by the reporter" : rejected ? "No such payment found" : "Matched in the bank"),
         // A rejection explains why a claimed payment never became a receipt —
         // exactly the kind of thing someone reading this later is hunting for.
         highlight: rejected,

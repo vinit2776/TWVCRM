@@ -1,3 +1,4 @@
+import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createBookingSchema } from "@/lib/validations";
@@ -325,6 +326,14 @@ export async function POST(request: NextRequest) {
       unitRate = dr;
     }
     quantity = Math.max(1, Number(input.num_seats ?? 1));
+    // A day-pass seat is one person's desk, so more seats than attendees would over-bill.
+    const attendees = input.num_attendees ? Number(input.num_attendees) : 0;
+    if (attendees > 0 && quantity > attendees) {
+      return NextResponse.json(
+        { error: `Seats (${quantity}) can't be more than attendees (${attendees}). Raise attendees or lower seats.` },
+        { status: 400 },
+      );
+    }
   } else {
     unitRate = (input.hourly_rate !== undefined && input.hourly_rate >= 0)
       ? input.hourly_rate
@@ -415,7 +424,8 @@ export async function POST(request: NextRequest) {
   // portion. Keeps the receipt aligned with what's actually collected.
   const gstRate = 18;
   const gstAmount = parseFloat((totalAmount * gstRate / 100).toFixed(2));
-  const totalAmountWithGst = parseFloat((totalAmount + gstAmount).toFixed(2));
+  // Whole rupees: nobody pays paise, and the leftover would otherwise block "fully paid".
+  const totalAmountWithGst = roundToRupee(totalAmount + gstAmount);
 
   // 3b. Prepaid purchase validation (if caller passes prepaid_purchase_id in body)
   let prepaidPurchaseId: string | undefined;
@@ -919,7 +929,8 @@ export async function POST(request: NextRequest) {
   // 10a. COSEC access PIN — always fire for every booking so the guest gets
   // entry-door access even when the space has no room device linked.
   // Called directly (no HTTP self-fetch) to avoid serverless network fragility.
-  provisionBookingAccess(booking.id as string).catch((err) =>
+  // Provision only; the PIN is sent from the booking page when staff decide it is needed.
+  provisionBookingAccess(booking.id as string, { deliver: false }).catch((err) =>
     console.error("[booking] COSEC provision failed:", err)
   );
 

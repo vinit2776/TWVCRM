@@ -63,6 +63,13 @@ interface Props {
   contractId: string;
   seats: number;
   contractStatus: string;
+  /**
+   * Show the Add Member button. The People & Access panel is now the one place
+   * people are added, because adding here provisions door access and texts a
+   * PIN straight away, before IT has issued anything. Defaults to true so any
+   * other caller keeps today's behaviour.
+   */
+  allowAdd?: boolean;
 }
 
 // ── Wizard types ───────────────────────────────────────────────────────────────
@@ -290,7 +297,6 @@ function StepPanel({
   const device = group.primaryEntry.device_label;
 
   async function sendPin() {
-    if (!group.phone) { toast.error("No phone number on record"); return; }
     setPinLoading(true);
     try {
       const res = await fetch("/api/cosec/send-enrollment-pin", {
@@ -299,7 +305,7 @@ function StepPanel({
         body: JSON.stringify({ member_id: group.entity_id }),
       });
       const json = await res.json();
-      if (res.ok) toast.success(`Enrollment PIN sent to ${group.phone}`);
+      if (res.ok) toast.success(`Enrollment PIN emailed to ${json.email ?? displayName}`);
       else toast.error(json.error ?? "Failed to send PIN");
     } finally {
       setPinLoading(false);
@@ -363,12 +369,10 @@ function StepPanel({
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {group.phone && (
             <Button size="sm" variant="outline" disabled={pinLoading} onClick={sendPin} className="h-7 text-xs gap-1.5">
               {pinLoading ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-              Resend PIN via SMS
+              Email PIN again
             </Button>
-          )}
           <span className="text-xs text-muted-foreground">
             The system will auto-detect when enrollment is complete.
           </span>
@@ -521,6 +525,7 @@ function MemberLifecycle({
 // ── Member status badge ────────────────────────────────────────────────────────
 
 const STATUS_BADGE: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+  not_issued:         { label: "Door access not issued", variant: "outline" },
   pending:            { label: "Pending",           variant: "secondary" },
   provisioned:        { label: "Awaiting Enroll",   variant: "outline" },
   biometric_enrolled: { label: "Biometric Active",  variant: "default" },
@@ -531,7 +536,7 @@ const STATUS_BADGE: Record<string, { label: string; variant: "default" | "second
 };
 
 function overallStatus(access: DeviceAccess[]): string {
-  if (access.length === 0) return "pending";
+  if (access.length === 0) return "not_issued";
   const statuses = access.map(a => a.enrollment_status);
   if (statuses.some(s => s === "fully_enrolled")) return "fully_enrolled";
   if (statuses.some(s => s === "biometric_enrolled")) return "biometric_enrolled";
@@ -543,7 +548,7 @@ function overallStatus(access: DeviceAccess[]): string {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function ContractMembersAccessSection({ contractId, seats, contractStatus }: Props) {
+export function ContractMembersAccessSection({ contractId, seats, contractStatus, allowAdd = true }: Props) {
   const [members, setMembers] = useState<Member[]>([]);
   const [wizardGroupMap, setWizardGroupMap] = useState<Map<string, PersonGroup>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -585,7 +590,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
   useEffect(() => { load(); }, [load]);
 
   async function handleAdd() {
-    if (!form.name || !form.phone) { toast.error("Name and phone are required"); return; }
+    if (!form.name || !form.phone || !form.email.trim()) { toast.error("Name, phone and email are required"); return; }
     setSaving(true);
     try {
       const res = await fetch(`/api/contracts/${contractId}/members`, {
@@ -595,7 +600,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Failed to add member"); return; }
-      toast.success(`${form.name} added${contractStatus === "active" ? " — enrollment PIN sent via SMS" : ""}`);
+      toast.success(`${form.name} added${contractStatus === "active" ? " — door PIN is being emailed" : ""}`);
       setDialogOpen(false);
       setForm({ name: "", phone: "", email: "" });
       await load();
@@ -613,7 +618,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
         body: JSON.stringify({ member_id: member.id }),
       });
       const json = await res.json();
-      if (res.ok) toast.success(`Enrollment PIN resent to ${member.phone}`);
+      if (res.ok) toast.success(`Enrollment PIN emailed to ${json.email ?? member.name}`);
       else toast.error(json.error ?? "Failed to send PIN");
     } finally {
       setActionLoading(a => ({ ...a, [`pin_${member.id}`]: false }));
@@ -630,7 +635,8 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
       });
       const json = await res.json();
       if (res.ok) {
-        toast.success(`Access PIN sent to ${member.phone} via SMS`);
+        if (json.email_sent) toast.success(`Access PIN emailed to ${member.email ?? member.name}`);
+        else toast.warning(json.email_problem ?? "PIN issued but not emailed");
         await load();
       } else {
         toast.error(json.error ?? "Failed to issue PIN");
@@ -674,7 +680,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
   }
 
   const activeCount = members.length;
-  const canAdd = contractStatus === "active" || contractStatus === "draft";
+  const canAdd = allowAdd && (contractStatus === "active" || contractStatus === "draft");
 
   // Step legend — shown once at top when there are members with access
   const hasWizardData = wizardGroupMap.size > 0;
@@ -762,6 +768,9 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm">{member.name}</span>
                       <Badge variant={badge.variant} className="text-xs">{badge.label}</Badge>
+                      {status === "not_issued" && (
+                        <span className="text-xs text-amber-700">Issue it from People &amp; Access above</span>
+                      )}
                       {wizardGroup && currentStep(wizardGroup, false) === 5 && (
                         <Badge variant="outline" className="text-[10px] border-green-400 text-green-700 bg-green-50 gap-1">
                           <CheckCircle2 size={10} />
@@ -833,12 +842,12 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                       </Button>
                     )}
                     {/* Issue access PIN — available for any provisioned/enrolled status */}
-                    {wizardGroup && !isBlocked && !["pending", "deleted"].includes(status) && (
+                    {wizardGroup && !isBlocked && !["pending", "not_issued", "deleted"].includes(status) && (
                       <Button
                         size="sm" variant="outline" className="text-xs h-7 gap-1"
                         onClick={() => handleIssuePin(member, wizardGroup)}
                         disabled={isPinLoading}
-                        title="Issue a fallback access PIN — sent directly to member via SMS"
+                        title="Issue a fallback access PIN — emailed to the member"
                       >
                         {isPinLoading
                           ? <Loader2 size={13} className="animate-spin" />
@@ -847,7 +856,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                         Issue PIN
                       </Button>
                     )}
-                    {!isBlocked && status !== "provisioned" && status !== "pending" && (
+                    {!isBlocked && status !== "provisioned" && status !== "pending" && status !== "not_issued" && (
                       <Button
                         size="sm" variant="ghost" className="text-xs h-7 text-red-600 hover:text-red-700"
                         onClick={() => handleBlock(member)}
@@ -901,10 +910,10 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                 placeholder="9876543210"
                 type="tel"
               />
-              <p className="text-xs text-muted-foreground">Enrollment PIN will be sent to this number via SMS</p>
+              <p className="text-xs text-muted-foreground">Needed for the door PIN and the WiFi voucher</p>
             </div>
             <div className="space-y-1.5">
-              <Label>Email <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Label>Email <span className="text-red-600 text-xs">*</span></Label>
               <Input
                 value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}

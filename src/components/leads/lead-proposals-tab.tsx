@@ -1,5 +1,6 @@
 "use client";
 
+import { canCancelInvoice as canCancelInvoiceRole } from "@/lib/invoice-cancel";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban, Loader2, Pencil, RefreshCw } from "lucide-react";
@@ -38,6 +39,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
+import { adhocProformaPdfBase64, downloadAdhocProformaPdf } from "@/lib/adhoc-proforma-client";
 import type { Proposal, ProformaInvoice, Lead } from "@/types";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -135,14 +137,14 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   // Lead info for PDF generation
   const [lead, setLead] = useState<Lead | null>(null);
 
-  // Cancelling an invoice is restricted to admin/manager/accounts server-side
+  // Cancelling an invoice is restricted to admin/manager server-side
   // (api/invoices/[id]/cancel) — mirror that here so the action isn't offered
   // to roles that would only get a 403.
   const [userRole, setUserRole] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? null)).catch(() => {});
   }, []);
-  const canCancelInvoice = ["admin", "manager", "accounts"].includes(userRole ?? "");
+  const canCancelInvoice = canCancelInvoiceRole(userRole);
 
   // Newest non-terminal proposal — where the deposit link lives. Proposals
   // come back newest-first, so this is just the first one that isn't
@@ -193,9 +195,11 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
 
   // ── Download Invoice PDF ──
   const handleDownloadInvoicePDF = async (inv: ProformaInvoice) => {
-    const { generateInvoicePDF } = await import("@/lib/pdf-generator");
-    const doc = generateInvoicePDF(inv, lead || undefined);
-    doc.save(`${inv.invoice_number}.pdf`);
+    try {
+      await downloadAdhocProformaPdf(inv.id, inv.invoice_number);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to download the PDF");
+    }
   };
 
   // ── Email Proposal ──
@@ -227,11 +231,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       leadEmail: lead?.email || undefined,
       leadPhone: lead?.phone || lead?.mobile || undefined,
       defaultCc: lead?.billing_emails || undefined,
-      generatePDF: async () => {
-        const { generateInvoicePDF } = await import("@/lib/pdf-generator");
-        const doc = generateInvoicePDF(inv, lead || undefined);
-        return doc.output("datauristring").split(",")[1];
-      },
+      generatePDF: () => adhocProformaPdfBase64(inv.id),
     });
     setEmailDialogOpen(true);
   };

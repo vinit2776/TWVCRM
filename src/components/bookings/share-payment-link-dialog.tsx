@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Mail, MessageCircle, Smartphone, Copy, ExternalLink, Link2, CheckCircle } from "lucide-react";
 import { toast } from "sonner";
+import { RecipientFields, recipientsValid } from "@/components/bookings/recipient-fields";
 import { formatCurrency } from "@/lib/utils";
 
 interface Props {
@@ -56,6 +57,13 @@ export function SharePaymentLinkDialog({
   const [resolving, setResolving] = useState(false);
   const [emailSending, setEmailSending] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
+  const [emailTo, setEmailTo] = useState(customerEmail ?? "");
+  const [emailCc, setEmailCc] = useState("");
+  // Each time the dialog opens, start from the booking's email with no CC, so a CC added
+  // for one send is never copied silently on a later one.
+  useEffect(() => {
+    if (open) { setEmailTo(customerEmail ?? ""); setEmailCc(""); }
+  }, [open, customerEmail]);
 
   // Resolve the link the moment the dialog opens. The "Pay Now" link
   // sent by every channel must be the same instance so all webhooks /
@@ -82,7 +90,7 @@ export function SharePaymentLinkDialog({
   }, [open, ensurePaymentLink, internalLinkFallback]);
 
   const sendEmail = async () => {
-    if (!customerEmail) {
+    if (!emailTo.trim()) {
       toast.error("No customer email on file. Add one to the lead, or use WhatsApp/SMS instead.");
       return;
     }
@@ -93,6 +101,8 @@ export function SharePaymentLinkDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "payment_link",
+          to: emailTo.trim(),
+          cc: emailCc,
           razorpay_payment_link_url: isRazorpay ? paymentUrl : undefined,
         }),
       });
@@ -103,7 +113,7 @@ export function SharePaymentLinkDialog({
       }
       setEmailSent(true);
       onSent();
-      toast.success(`Payment link emailed to ${customerEmail}`, {
+      toast.success(`Payment link emailed to ${emailTo.trim()}`, {
         description: isRazorpay
           ? "Payment status will update automatically once the customer pays."
           : "Internal link — staff to confirm payment manually after collection.",
@@ -231,11 +241,13 @@ export function SharePaymentLinkDialog({
           <div className="space-y-2">
             <Label className="text-xs">Send via</Label>
 
+            <RecipientFields to={emailTo} cc={emailCc} onTo={setEmailTo} onCc={setEmailCc} savedEmail={customerEmail} idPrefix="link" />
+
             {/* Email — server-side */}
             <button
               type="button"
               onClick={sendEmail}
-              disabled={!paymentUrl || !customerEmail || emailSending}
+              disabled={!paymentUrl || !recipientsValid(emailTo, emailCc) || emailSending}
               className="w-full flex items-center justify-between gap-3 rounded-md border bg-card px-3 py-2.5 text-sm hover:bg-muted/40 active:scale-[0.99] transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <div className="flex items-center gap-2.5 min-w-0">
@@ -243,7 +255,7 @@ export function SharePaymentLinkDialog({
                 <div className="text-left min-w-0">
                   <div className="font-medium">Email</div>
                   <div className="text-[11px] text-muted-foreground truncate">
-                    {customerEmail || "— no email on file —"}
+                    {emailTo.trim() || "— enter an email below —"}
                   </div>
                 </div>
               </div>

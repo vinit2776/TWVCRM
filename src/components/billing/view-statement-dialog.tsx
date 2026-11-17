@@ -1635,7 +1635,7 @@ export function ViewStatementDialog({
                 A payment link was previously sent. How would you like to resend?
               </p>
               <p className="text-xs text-blue-600">
-                If the customer&apos;s link has expired, generate a fresh one — it cancels the old link and emails a new invoice with a new 15-day payment link.
+                If the customer&apos;s link has expired, generate a fresh one — it cancels the old link and emails a new invoice with a new 180-day payment link.
               </p>
               <div className="flex gap-2 pt-1">
                 <Button

@@ -141,13 +141,14 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
   const canIssueDirect = canApprove;
   const canViewCustomerGroups = ["admin", "manager", "it_manager", "it_technician"].includes(userRole);
 
-  // Fetch SSID once
+  // Fetch the SSID for this location
   useEffect(() => {
-    fetch("/api/unifi/wlan")
+    setSsid(null);
+    fetch(`/api/unifi/wlan?location_id=${locationId}`)
       .then(r => r.json())
       .then(d => { if (d.ssid) setSsid(d.ssid); })
       .catch(() => {});
-  }, []);
+  }, [locationId]);
 
   // Contract search for the optional "Link to contract" field on Issue Ad-hoc
   useEffect(() => {
@@ -306,7 +307,7 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
       const res = await fetch("/api/unifi/vouchers/reveal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voucher_id: voucherId }),
+        body: JSON.stringify({ voucher_id: voucherId, location_id: locationId }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to reveal code");

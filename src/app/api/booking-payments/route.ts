@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { isBookingPaymentMethodLocked } from "@/lib/booking-payment-method";
+import { bookingPaymentTolerance, findDuplicateReference } from "@/lib/booking-payment-rules";
+import { raiseBookingPaymentReport } from "@/lib/booking-payment-server";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
+import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 
 const PAYMENT_SELECT = "*, creator:users!booking_payments_created_by_fkey(id, full_name), collector:users!booking_payments_collected_by_fkey(id, full_name), handover_receiver:users!booking_payments_handed_over_to_fkey(id, full_name), handover_confirmer:users!booking_payments_handover_confirmed_by_fkey(id, full_name)";
 
@@ -38,7 +42,7 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, role")
+    .select("id, role, full_name")
     .eq("auth_id", user.id)
     .single();
 
@@ -52,7 +56,7 @@ export async function POST(request: NextRequest) {
   // We trust staff roles and skip the separate verification step so check-in
   // can proceed immediately. Restricted to roles that can run the floor.
   const verifyOnCreate = body.verify_on_create === true && [
-    "admin", "manager", "floor_manager", "fms", "office_admin",
+    "admin", "manager", "floor_manager", "fms", "office_admin", "coordinator",
   ].includes(dbUser.role);
 
   if (!booking_id || !amount || !payment_mode) {
@@ -76,6 +80,23 @@ export async function POST(request: NextRequest) {
     : (payment_mode === "upi" && verifyOnCreate)
       ? "verified"
       : "pending";
+
+  // The same UTR on a second payment is the usual shape of a double-entry: the
+  // customer's one transfer recorded twice, or reported by two people. Say so
+  // before it becomes two pending rows accounts have to untangle.
+  const trimmedReference = typeof payment_reference === "string" ? payment_reference.trim() : "";
+  if (trimmedReference) {
+    const { data: existing } = await supabase
+      .from("booking_payments")
+      .select("id, status, payment_reference")
+      .eq("booking_id", booking_id);
+    if (findDuplicateReference(existing || [], trimmedReference)) {
+      return NextResponse.json(
+        { error: "A payment with this reference is already recorded on this booking." },
+        { status: 409 },
+      );
+    }
+  }
 
   // Atomic RPC: locks the booking row, verifies balance, and inserts the
   // payment in one transaction — prevents the race where two concurrent
@@ -119,12 +140,34 @@ export async function POST(request: NextRequest) {
   if (status === "verified") {
     const newTotal = Number(rpcResult.new_total);
     const grandTotal = Number(rpcResult.grand_total);
-    if (newTotal >= grandTotal) {
+    if (newTotal >= grandTotal - bookingPaymentTolerance(grandTotal)) {
       await supabase
         .from("bookings")
         .update({ payment_status: "paid", payment_mode })
         .eq("id", booking_id);
     }
+    // Close or part-settle the PI's Receivables statement, if the booking has one.
+    await syncBookingPiStatement(createAdminClient(), booking_id);
+    // Paid after checkout (an extra, say): the Tally task is created or refreshed now.
+    await maybeCreateBookingGstTask(createAdminClient(), booking_id);
+  }
+
+  // A manual UPI payment nobody verified at the counter would otherwise sit
+  // as a pending row with accounts never told. Open the verification thread so
+  // it shows in the Tally Inbox "To verify" tab and on /queries. Razorpay
+  // pending rows are not reported — the webhook verifies those on its own.
+  if (status === "pending" && payment_mode === "upi") {
+    await raiseBookingPaymentReport(createAdminClient(), {
+      payment: {
+        id: payment.id,
+        booking_id,
+        amount: payment.amount,
+        payment_mode,
+        payment_reference: payment.payment_reference ?? null,
+        status: "pending",
+      },
+      author: dbUser as { id: string; role: string; full_name: string },
+    });
   }
 
   logAudit(supabase, {

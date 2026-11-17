@@ -10,6 +10,11 @@ import { computeSettlement } from "@/lib/settlement";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { sendPartEmail } from "@/lib/deposit-instalment-email-server";
+import { syncContractDepositFromParts } from "@/lib/deposit-instalment-server";
+import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
+import { bookingPaymentTolerance } from "@/lib/booking-payment-rules";
 
 export const dynamic = "force-dynamic";
 
@@ -139,13 +144,18 @@ export async function POST(request: NextRequest) {
             .update({ payment_status: "paid", payment_mode: "razorpay" })
             .eq("id", bookingPayment.booking_id);
 
+          // Paid after checkout: the task is otherwise only created at checkout.
+          await maybeCreateBookingGstTask(supabase, bookingPayment.booking_id);
+
           // Provision COSEC access PIN now that booking is confirmed paid.
           // Called directly (no HTTP self-fetch) to avoid serverless network fragility.
-          provisionBookingAccess(bookingPayment.booking_id).catch((err) =>
+          provisionBookingAccess(bookingPayment.booking_id, { deliver: false }).catch((err) =>
             console.error("[webhook] COSEC provision failed:", err)
           );
         }
       }
+      // Close or part-settle the PI's Receivables statement, if the booking has one.
+      await syncBookingPiStatement(supabase, bookingPayment.booking_id);
     }
 
     logWebhookReceipt(supabase, { event, razorpay_payment_id: paymentId, razorpay_order_id: orderId, entity: "booking", outcome: "processed" });
@@ -218,6 +228,52 @@ export async function POST(request: NextRequest) {
 
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "proposal" });
+    }
+
+    // Staged deposit: a payment on one of a proposal's part links, or a late
+    // payment on its original full-deposit link once parts exist. Only that part
+    // is marked paid; the proposal's deposit flips to paid when the parts add up.
+    // A proposal with no parts is not matched here and takes the path below.
+    const { data: partPayment, error: partError } = await supabase.rpc("record_deposit_payment_for_link", {
+      p_link_id: paymentLinkId,
+      p_payment_id: razorpayPaymentId,
+      p_amount: amountPaid,
+    });
+    // PGRST202 = function not deployed in this database yet; anything else is a
+    // real failure and must not fall through to "unmatched" — return 500 so
+    // Razorpay retries instead of the payment going unrecorded.
+    if (partError && partError.code !== "PGRST202") {
+      console.error("[webhook] deposit part recording failed:", partError.message);
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit_part", outcome: "error", outcome_detail: partError.message });
+      return NextResponse.json({ error: "Failed to record deposit part" }, { status: 500 });
+    }
+    if (partPayment?.matched) {
+      if (partPayment.success && !partPayment.already_paid) {
+        logAudit(supabase, {
+          entityType: "proposal",
+          entityId: partPayment.proposal_id,
+          action: "update",
+          performedBy: "system",
+          changes: {
+            deposit_part_paid: { old: null, new: { amount: amountPaid, reference: razorpayPaymentId, ...(partPayment.via_original_link ? { via_original_link: true } : {}) } },
+            deposit_total_paid: { old: null, new: partPayment.paid },
+            ...(partPayment.accepted_now ? { status: { old: partPayment.proposal_status_before, new: "accepted" } } : {}),
+            ...(partPayment.complete ? { deposit_complete: { old: false, new: true } } : {}),
+          },
+        }).catch(() => {});
+      }
+      // Last part in: a contract activated while the deposit was part-paid now holds the full deposit.
+      if (partPayment.success && !partPayment.already_paid && partPayment.complete) {
+        await syncContractDepositFromParts(supabase, partPayment.proposal_id).catch((e) =>
+          console.error("[webhook] contract deposit sync failed:", e instanceof Error ? e.message : e));
+      }
+      // Receipt with the running breakup — once per part (a repeat delivery is already_paid).
+      if (partPayment.success && !partPayment.already_paid && partPayment.instalment_id) {
+        await sendPartEmail(supabase, { instalmentId: partPayment.instalment_id, kind: "received" }).catch((e) =>
+          console.error("[webhook] deposit part receipt email failed:", e instanceof Error ? e.message : e));
+      }
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit_part", outcome: partPayment.success ? "processed" : "error", outcome_detail: partPayment.success ? null : partPayment.error });
+      return NextResponse.json({ status: "ok", entity: "proposal_deposit_part" });
     }
 
     // Check if this payment link belongs to a proposal security deposit
@@ -307,7 +363,7 @@ export async function POST(request: NextRequest) {
     // Check if this payment link belongs to a billing statement (invoice)
     const { data: billingStatement } = await supabase
       .from("billing_statements")
-      .select("id, total_amount, payment_status, voided_at")
+      .select("id, total_amount, payment_status, voided_at, booking_id, created_via")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .maybeSingle();
 
@@ -328,7 +384,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ok", entity: "billing_statement", ignored: "voided" });
     }
 
-    if (billingStatement && billingStatement.payment_status !== "paid") {
+    // A booking's PI shares the booking's payment link. Its payment is recorded
+    // on the booking below (which then settles the statement), so it must not be
+    // taken here: this branch would return before the booking ever saw the
+    // payment, and would queue a second Tally handoff for the same booking.
+    const isBookingPiStatement = !!billingStatement?.booking_id && billingStatement.created_via === "booking_pi";
+
+    if (billingStatement && !isBookingPiStatement && billingStatement.payment_status !== "paid") {
       // Record payment
       const { data: insertedPayment } = await supabase
         .from("billing_payments")
@@ -595,7 +657,7 @@ export async function POST(request: NextRequest) {
     // Find the booking by razorpay_payment_link_id
     const { data: booking } = await supabase
       .from("bookings")
-      .select("id, total_amount")
+      .select("id, total_amount, total_amount_with_gst")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .single();
 
@@ -638,12 +700,21 @@ export async function POST(request: NextRequest) {
 
     const totalPaid = (verifiedPayments || []).reduce((sum, p) => sum + Number(p.amount), 0);
 
-    if (totalPaid >= Number(booking.total_amount)) {
+    // Settles against the GST-inclusive total, the figure the link was created
+    // for, with the same tolerance as every other booking payment path.
+    const bookingTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
+    if (totalPaid >= bookingTotal - bookingPaymentTolerance(bookingTotal)) {
       await supabase
         .from("bookings")
         .update({ payment_status: "paid", payment_mode: "razorpay" })
         .eq("id", booking.id);
+      // A booking paid by link after checkout would otherwise never reach the
+      // Tally Inbox: the task is only created at checkout and on verification.
+      // The helper checks the booking is checked out and paid, and is idempotent.
+      await maybeCreateBookingGstTask(supabase, booking.id);
     }
+    // Close or part-settle the PI's Receivables statement, if the booking has one.
+    await syncBookingPiStatement(supabase, booking.id);
 
     logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "booking", outcome: "processed" });
     return NextResponse.json({ status: "ok" });

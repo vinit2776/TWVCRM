@@ -16,11 +16,18 @@ export interface ConvertInput {
   billingCycle: string;
   cycleCount: number;
   serviceStart: string | null;
-  /** Invoice to become cycle 1; omit to convert without one. */
-  bill?: { po_id: string | null; service_report_id: string | null; approval_status: string; total_amount: number | string } | null;
+  /** Existing invoices to tie to their cycles; empty converts without tying any. */
+  assignments?: ConvertAssignment[];
   poId: string;
-  cycle1From?: string | null;
-  cycle1To?: string | null;
+}
+
+export interface ConvertAssignment {
+  billId: string;
+  /** 1-based cycle of the whole contract. */
+  cycle: number;
+  from: string;
+  to: string;
+  bill: { po_id: string | null; service_report_id: string | null; approval_status: string; total_amount: number | string };
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -55,15 +62,32 @@ export function checkConvertToService(i: ConvertInput):
     };
   }
 
-  if (i.bill) {
-    if (i.bill.po_id !== i.poId) return { ok: false, error: "That invoice is not on this purchase order", status: 422 };
-    if (i.bill.approval_status === "rejected") return { ok: false, error: "A rejected invoice can't be used for cycle 1", status: 422 };
-    if (i.bill.service_report_id) return { ok: false, error: "That invoice is already tied to a cycle", status: 422 };
-    if (Number(i.bill.total_amount) > unitCost + 0.01) {
-      return { ok: false, error: `That invoice (₹${Number(i.bill.total_amount).toLocaleString("en-IN")}) is more than one cycle's cost (₹${unitCost.toLocaleString("en-IN")})`, status: 422 };
+  const list = i.assignments ?? [];
+  if (list.length > i.cycleCount) {
+    return { ok: false, error: `${list.length} invoices can't fit in ${i.cycleCount} cycle${i.cycleCount === 1 ? "" : "s"}`, status: 422 };
+  }
+  const seenBills = new Set<string>();
+  const seenCycles = new Set<number>();
+  for (const a of list) {
+    const where = `cycle ${a.cycle}`;
+    if (a.bill.po_id !== i.poId) return { ok: false, error: `The invoice for ${where} is not on this purchase order`, status: 422 };
+    if (a.bill.approval_status === "rejected") return { ok: false, error: `A rejected invoice can't be used for ${where}`, status: 422 };
+    if (a.bill.service_report_id) return { ok: false, error: `The invoice for ${where} is already tied to a cycle`, status: 422 };
+    if (Number(a.bill.total_amount) > unitCost + 0.01) {
+      return { ok: false, error: `The invoice for ${where} (₹${Number(a.bill.total_amount).toLocaleString("en-IN")}) is more than one cycle's cost (₹${unitCost.toLocaleString("en-IN")})`, status: 422 };
     }
-    if (!i.cycle1From || !i.cycle1To || i.cycle1From > i.cycle1To) {
-      return { ok: false, error: "Enter the cycle 1 period, with the end on or after the start", status: 422 };
+    if (!a.from || !a.to || a.from > a.to) return { ok: false, error: `Enter the ${where} period, with the end on or after the start`, status: 422 };
+    if (seenBills.has(a.billId)) return { ok: false, error: "The same invoice was chosen for two cycles", status: 422 };
+    if (seenCycles.has(a.cycle)) {
+      return { ok: false, error: `Two invoices are set to ${where}. If one is a copy of the other, leave it out; otherwise give each its own cycle.`, status: 422 };
+    }
+    seenBills.add(a.billId);
+    seenCycles.add(a.cycle);
+  }
+  // The cycle engine counts reports and invoices, so a gap would offer a cycle that is already billed.
+  for (let c = 1; c <= list.length; c++) {
+    if (!seenCycles.has(c)) {
+      return { ok: false, error: `Invoices must start at cycle 1 and leave no gap. Nothing is tied to cycle ${c}.`, status: 422 };
     }
   }
   return { ok: true, unitCost };
@@ -105,4 +129,18 @@ export function suggestConversion(input: {
   }
   const byDates = cyclesBetween(input.amcStart, input.amcEnd, "yearly");
   return { billingCycle: "yearly", cycleCount: byDates ?? 1 };
+}
+
+/**
+ * A starting guess: the live invoices in order of date take cycles 1, 2, 3 and so on.
+ * Only a default, the admin confirms every row.
+ */
+export function suggestAssignments<T extends { id: string; sortKey: string }>(
+  bills: T[],
+  schedule: Array<{ n: number; from: string; to: string }>
+): Array<{ billId: string; cycle: number; from: string; to: string }> {
+  return [...bills]
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    .slice(0, schedule.length)
+    .map((b, i) => ({ billId: b.id, cycle: schedule[i].n, from: schedule[i].from, to: schedule[i].to }));
 }

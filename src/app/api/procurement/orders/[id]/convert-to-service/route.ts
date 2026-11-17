@@ -9,15 +9,18 @@ const bodySchema = z.object({
   billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   cycle_count: z.number().int().min(1).max(60),
   service_start_date: dateStr,
-  /** The existing invoice to tie to cycle 1; omit to convert without one. */
-  bill_id: z.string().uuid().nullish(),
-  cycle1_from: dateStr.nullish(),
-  cycle1_to: dateStr.nullish(),
+  /** Existing invoices tied to their cycles (1..k, no gaps); omit to convert without tying any. */
+  assignments: z.array(z.object({
+    bill_id: z.string().uuid(),
+    cycle_number: z.number().int().min(1).max(60),
+    period_from: dateStr,
+    period_to: dateStr,
+  })).max(60).default([]),
 });
 
 /**
  * Converts an AMC that was raised as a goods PO into a service PO (admin only).
- * The change itself is one database function (convert_goods_po_to_service, 00596) so
+ * The change itself is one database function (convert_goods_po_to_service_v2, 00667) so
  * it applies fully or not at all; this route authenticates, re-checks the rules to give
  * a readable error, and calls it.
  */
@@ -54,12 +57,13 @@ export async function POST(
   const pr = Array.isArray(po.purchase_requests) ? po.purchase_requests[0] : po.purchase_requests;
   const isAmc = !!po.amc_start_date || pr?.expenditure_type === "amc" || pr?.department === "amc";
 
-  const [{ count: reportCount }, billRes] = await Promise.all([
+  const [{ count: reportCount }, billsRes] = await Promise.all([
     supabase.from("po_service_reports").select("id", { count: "exact", head: true }).eq("po_id", id),
-    b.bill_id
-      ? supabase.from("vendor_bills").select("po_id, service_report_id, approval_status, total_amount").eq("id", b.bill_id).maybeSingle()
-      : Promise.resolve({ data: null }),
+    b.assignments.length
+      ? supabase.from("vendor_bills").select("id, po_id, service_report_id, approval_status, total_amount").in("id", b.assignments.map((a) => a.bill_id))
+      : Promise.resolve({ data: [] as Array<{ id: string; po_id: string | null; service_report_id: string | null; approval_status: string; total_amount: number }> }),
   ]);
+  const billById = new Map((billsRes.data ?? []).map((x) => [x.id, x]));
 
   const verdict = checkConvertToService({
     role: dbUser.role,
@@ -68,24 +72,28 @@ export async function POST(
     billingCycle: b.billing_cycle,
     cycleCount: b.cycle_count,
     serviceStart: b.service_start_date,
-    bill: b.bill_id ? billRes.data ?? { po_id: null, service_report_id: null, approval_status: "rejected", total_amount: 0 } : null,
+    assignments: b.assignments.map((a) => ({
+      billId: a.bill_id,
+      cycle: a.cycle_number,
+      from: a.period_from,
+      to: a.period_to,
+      bill: billById.get(a.bill_id) ?? { po_id: null, service_report_id: null, approval_status: "rejected", total_amount: 0 },
+    })),
     poId: id,
-    cycle1From: b.cycle1_from,
-    cycle1To: b.cycle1_to,
   });
   if (!verdict.ok) return NextResponse.json({ error: verdict.error }, { status: verdict.status });
 
   const admin = createAdminClient();
-  const { data: reportId, error } = await admin.rpc("convert_goods_po_to_service", {
+  const { data: tied, error } = await admin.rpc("convert_goods_po_to_service_v2", {
     p_po_id: id,
     p_user_id: dbUser.id,
     p_billing_cycle: b.billing_cycle,
     p_cycle_count: b.cycle_count,
     p_unit_cost: verdict.unitCost,
     p_service_start: b.service_start_date,
-    p_bill_id: b.bill_id ?? null,
-    p_c1_from: b.cycle1_from ?? null,
-    p_c1_to: b.cycle1_to ?? null,
+    p_assignments: b.assignments.map((a) => ({
+      bill_id: a.bill_id, cycle_number: a.cycle_number, period_from: a.period_from, period_to: a.period_to,
+    })),
   });
   if (error) {
     // The function raises plain-English messages for every rule; anything else is a real fault.
@@ -93,5 +101,5 @@ export async function POST(
     return NextResponse.json({ error: isRule ? error.message : "Couldn't convert this purchase order" }, { status: isRule ? 422 : 500 });
   }
 
-  return NextResponse.json({ data: { id, report_id: reportId ?? null } });
+  return NextResponse.json({ data: { id, invoices_tied: tied ?? 0 } });
 }

@@ -27,6 +27,8 @@ import type { QueryListItem } from "@/lib/queries/types";
 interface Props {
   /** Fires after any outcome so the tab count and sidebar badge can refresh. */
   onChanged?: () => void;
+  /** The inbox search box. /api/queries has no text search, so this filters the loaded rows. */
+  search?: string;
 }
 
 function daysWaiting(createdAt: string): number {
@@ -43,7 +45,7 @@ const CHECKED_CHIP_CLASS: Record<LastCheckedTone, string> = {
   stale: "bg-muted text-muted-foreground",
 };
 
-export function ToVerifyPanel({ onChanged }: Props) {
+export function ToVerifyPanel({ onChanged, search = "" }: Props) {
   const [items, setItems] = useState<QueryListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,6 +108,20 @@ export function ToVerifyPanel({ onChanged }: Props) {
 
   const today = new Date().toISOString().slice(0, 10);
 
+  const needle = search.trim().toLowerCase();
+  const visibleItems = needle
+    ? items.filter((item) =>
+        [
+          item.entity?.title,
+          item.entity?.reference,
+          item.entity?.subtitle,
+          item.created_by.full_name,
+          item.reported_payment?.payment_reference,
+          item.reported_amount != null ? String(item.reported_amount) : null,
+        ].some((v) => v?.toLowerCase().includes(needle)),
+      )
+    : items;
+
   if (loading && items.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -128,6 +144,14 @@ export function ToVerifyPanel({ onChanged }: Props) {
     );
   }
 
+  if (visibleItems.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+        No reported payments match “{search.trim()}”.
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="rounded-lg border divide-y">
@@ -137,9 +161,12 @@ export function ToVerifyPanel({ onChanged }: Props) {
           <span>Reported by</span>
           <span />
         </div>
-        {items.map((item) => {
+        {visibleItems.map((item) => {
           const days = daysWaiting(item.created_at);
-          const overdue = !!item.needed_by && item.needed_by < today;
+          // Past a week, or past its own due date, the row turns red so the
+          // oldest claims are the first thing the eye lands on.
+          const overdue = (!!item.needed_by && item.needed_by < today) || days > 7;
+          const hasReference = !!item.reported_payment?.payment_reference;
           const checked = lastCheckedChip(item.last_checked_at, Date.now());
           const modeLabel = item.reported_payment
             ? (STATEMENT_PAYMENT_MODE_LABELS[item.reported_payment.payment_mode] ??
@@ -150,7 +177,7 @@ export function ToVerifyPanel({ onChanged }: Props) {
               key={item.id}
               type="button"
               onClick={() => setOpened(item)}
-              className="w-full text-left grid grid-cols-1 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_24px] gap-1 md:gap-3 items-center px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors"
+              className={`w-full text-left grid grid-cols-1 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_24px] gap-1 md:gap-3 items-center px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors border-l-4 ${overdue ? "border-l-red-400" : "border-l-amber-400"}`}
             >
               <span className="min-w-0">
                 <span className="block truncate font-medium">{item.entity?.title ?? "Transaction no longer available"}</span>
@@ -164,15 +191,21 @@ export function ToVerifyPanel({ onChanged }: Props) {
                   {modeLabel && <span className="text-muted-foreground"> · {modeLabel}</span>}
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
-                  {item.reported_payment?.payment_reference
-                    ? `Ref ${item.reported_payment.payment_reference}`
-                    : "No reference given"}
+                  {hasReference ? `Ref ${item.reported_payment?.payment_reference}` : "No reference given"}
                   {item.reported_payment && ` · paid ${formatDate(item.reported_payment.paid_on)}`}
                 </span>
               </span>
               <span className="min-w-0">
                 <span className="block truncate">{item.created_by.full_name}</span>
                 <span className="flex flex-wrap gap-1 mt-0.5">
+                  <span className="text-[11px] px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-800">
+                    Reported · unverified
+                  </span>
+                  {!hasReference && (
+                    <span className="text-[11px] px-2 py-0.5 rounded-full border bg-muted border-border text-muted-foreground">
+                      No reference
+                    </span>
+                  )}
                   <span
                     className={`text-[11px] px-2 py-0.5 rounded-full border ${
                       overdue
@@ -212,7 +245,7 @@ export function ToVerifyPanel({ onChanged }: Props) {
           <SheetHeader className="mb-3">
             <SheetTitle className="text-base">{opened?.entity?.title ?? "Reported payment"}</SheetTitle>
             <p className="text-xs text-muted-foreground">
-              Check the bank statement, then verify and record, or tell the reporter it isn&apos;t there yet.
+              Check the bank statement, then record the payment, or tell the reporter it isn&apos;t there yet.
             </p>
           </SheetHeader>
           {opened && (

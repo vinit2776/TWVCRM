@@ -6,6 +6,8 @@ import type { Proposal } from "@/types";
 
 interface Props {
   proposal: Proposal;
+  /** Deposit asked for in parts (the single-request timestamp doesn't cover that). */
+  depositPartsRequested?: boolean;
 }
 
 interface Stage {
@@ -37,7 +39,7 @@ function fmt(dateStr?: string | null) {
   });
 }
 
-export function ProposalLifecycle({ proposal }: Props) {
+export function ProposalLifecycle({ proposal, depositPartsRequested }: Props) {
   const hasDeposit = Number(proposal.security_deposit_months || 0) > 0;
   const isRejected = proposal.status === "rejected";
 
@@ -156,13 +158,13 @@ export function ProposalLifecycle({ proposal }: Props) {
   if (!isRejected) {
     stages.push({
       key: "invoice",
-      label: "GST Invoice Issued",
+      label: "Proforma Invoice Issued",
       date: proposal.occupation_start_date,
       sub: proposal.occupation_start_date
         ? `Occupation from ${fmt(proposal.occupation_start_date)}`
         : undefined,
       state: proposal.occupation_start_date ? "done"
-        : (!hasDeposit || proposal.deposit_payment_status === "paid") ? "active"
+        : (!hasDeposit || proposal.deposit_payment_status === "paid" || proposal.deposit_email_sent_at || depositPartsRequested) ? "active"
         : "pending",
     });
   }

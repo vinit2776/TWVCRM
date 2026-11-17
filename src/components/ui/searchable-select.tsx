@@ -19,6 +19,8 @@ export interface SearchableSelectOption {
   label: string;
   /** Optional coloured pill shown after the label. Its text is searchable too. */
   badge?: { text: string; className?: string };
+  /** Optional second line under the label (e.g. model and serial). Searchable too. */
+  detail?: string;
 }
 
 interface SearchableSelectProps {
@@ -81,7 +83,7 @@ export function SearchableSelect({
               {options.map((option) => (
                 <CommandItem
                   key={option.value}
-                  value={option.badge ? `${option.label} ${option.badge.text}` : option.label}
+                  value={[option.label, option.detail, option.badge?.text].filter(Boolean).join(" ")}
                   onSelect={() => {
                     onValueChange(option.value === value ? "" : option.value);
                     setOpen(false);
@@ -96,6 +98,7 @@ export function SearchableSelect({
                   <span>
                     {option.label}
                     {option.badge && <OptionBadge badge={option.badge} className="ml-2 align-middle" />}
+                    {option.detail && <span className="block text-xs text-muted-foreground">{option.detail}</span>}
                   </span>
                 </CommandItem>
               ))}

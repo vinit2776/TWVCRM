@@ -13,6 +13,7 @@ const SOURCE_LABEL: Record<string, string> = {
   meta_ads: "Meta Ads",
   direct_walkin: "Walk-in",
   whatsapp: "WhatsApp",
+  website: "Website",
 };
 
 interface LeadEnquiry {

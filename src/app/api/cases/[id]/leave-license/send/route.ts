@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { caseClauseGateError } from "@/lib/special-clause/case-gate";
+import { caseAgreementGateError } from "@/lib/agreement-gate";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { applyDraftWatermark, isDraftAgreement } from "@/lib/draft-watermark";
 import { resolveWatermark } from "@/lib/agreement-watermark-server";
@@ -128,7 +128,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "No leave & license agreement found" }, { status: 404 });
   }
   {
-    const clauseBlock = await caseClauseGateError(supabase, caseId, agreement.id);
+    const clauseBlock = await caseAgreementGateError(supabase, caseId, agreement.id);
     if (clauseBlock) return NextResponse.json({ error: clauseBlock }, { status: 409 });
   }
   if (agreement.status === "executed") {

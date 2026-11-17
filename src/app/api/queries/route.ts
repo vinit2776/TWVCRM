@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { entityTypesForModule, queryEntityDef, type QueryEntityDef, type EntityRow } from "@/lib/queries/registry";
+import { buildSearchBlob, matchesSearchTokens, searchTokens } from "@/lib/queries/search";
+import { USER_ROLE_LABELS } from "@/lib/constants";
 import { canSeeQuery, isAwaitingUser, validateTargeting, type Viewer } from "@/lib/queries/audience";
 import {
   requireQueryUser,
@@ -27,6 +29,10 @@ import { QUERY_MODULE_LABELS, type QueryAuthor, type QueryKind, type QueryMessag
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 10;
+/** Candidate rows pulled for a text search. Entity names live in per-type tables, so
+ *  the match runs in memory over a capped set rather than in SQL. */
+const SEARCH_CANDIDATE_CAP = 500;
+const SEARCH_MAX_LENGTH = 100;
 
 type Tab = "awaiting_me" | "mine" | "open" | "overdue" | "resolved";
 
@@ -207,6 +213,43 @@ function sortByUrgency(items: QueryListItem[], today: string): QueryListItem[] {
   });
 }
 
+/**
+ * Text search over everything about a thread: the customer/vendor, the
+ * transaction reference and context line, the amount (or claimed amount), who
+ * raised it, who it was sent to (people and roles), who answered or resolved
+ * it, the module and kind, the payment reference, and every message. Each typed
+ * word must be found somewhere; see src/lib/queries/search.ts.
+ */
+function threadSearchBlob(
+  row: QueryRow,
+  def: QueryEntityDef,
+  summary: QueryListItem["entity"],
+  userNames: Map<string, string>,
+): string {
+  const report = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
+  return buildSearchBlob([
+    summary?.title,
+    summary?.reference,
+    summary?.subtitle,
+    summary?.amount,
+    def.label,
+    QUERY_MODULE_LABELS[def.module],
+    row.kind.replace(/_/g, " "),
+    row.status,
+    row.created_by?.full_name,
+    USER_ROLE_LABELS[row.created_by?.role] ?? row.created_by?.role,
+    row.resolved_by?.full_name,
+    ...(row.audience === "users" ? row.audience_user_ids.map((id) => userNames.get(id)) : []),
+    ...(row.audience === "roles" ? row.audience_roles.map((r) => USER_ROLE_LABELS[r] ?? r) : []),
+    row.needed_by,
+    report?.payment_reference,
+    report?.amount,
+    report?.payment_mode,
+    ...row.messages.map((m) => m.body),
+    ...row.messages.map((m) => m.author?.full_name),
+  ]);
+}
+
 /** Drop threads whose entity type this viewer's role isn't authorized on. */
 function visibleRows(rows: QueryRow[], viewer: Viewer): Array<{ row: QueryRow; def: QueryEntityDef }> {
   return rows.flatMap((row) => {
@@ -301,6 +344,7 @@ export async function GET(req: NextRequest) {
   const kindFilter = url.searchParams.get("kind");
   const entityType = url.searchParams.get("entity_type");
   const entityId = url.searchParams.get("entity_id");
+  const search = entityId ? "" : (url.searchParams.get("q") ?? "").trim().toLowerCase().slice(0, SEARCH_MAX_LENGTH);
   const today = new Date().toISOString().slice(0, 10);
 
   let q = admin.from("queries").select(THREAD_SELECT).order("updated_at", { ascending: false });
@@ -326,7 +370,7 @@ export async function GET(req: NextRequest) {
   // "Awaiting you" and the role-visibility filter are both post-filters, so
   // over-fetch and slice after — otherwise a page of ten could come back
   // near-empty. Capped so a large backlog can't pull the whole table.
-  const isPostFiltered = !entityId && tab === "awaiting_me";
+  const isPostFiltered = !entityId && (tab === "awaiting_me" || search.length > 0);
   // This tab is re-sorted by urgency below, not updated_at (see
   // sortByUrgency) — an updated_at cursor would cut rows out of the SQL
   // fetch before that reordering ever happens, silently skipping items on
@@ -334,7 +378,7 @@ export async function GET(req: NextRequest) {
   // every call here, so cursor is reinterpreted as a plain offset into the
   // sorted list instead.
   if (cursor && !isPostFiltered) q = q.lt("updated_at", cursor);
-  const { data, error } = await q.limit(isPostFiltered ? 200 : PAGE_SIZE + 1);
+  const { data, error } = await q.limit(search ? SEARCH_CANDIDATE_CAP : isPostFiltered ? 200 : PAGE_SIZE + 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const rows = (data ?? []) as unknown as QueryRow[];
@@ -345,12 +389,27 @@ export async function GET(req: NextRequest) {
     visible.map(({ row }) => ({ entity_type: row.entity_type, entity_id: row.entity_id })),
   );
 
-  let items = visible.map(({ row, def }) =>
-    toListItem(row, def, viewer, summaries.get(entityKey(row.entity_type, row.entity_id)) ?? null),
-  );
+  const summaryFor = (row: QueryRow) => summaries.get(entityKey(row.entity_type, row.entity_id)) ?? null;
+  const tokens = searchTokens(search);
+  const userNames = new Map<string, string>();
+  if (tokens.length > 0) {
+    const ids = [...new Set(visible.flatMap(({ row }) => (row.audience === "users" ? row.audience_user_ids : [])))];
+    if (ids.length > 0) {
+      const { data: people } = await admin.from("users").select("id, full_name").in("id", ids);
+      for (const p of people ?? []) userNames.set(p.id as string, p.full_name as string);
+    }
+  }
+  let items = visible
+    .filter(
+      ({ row, def }) =>
+        tokens.length === 0 || matchesSearchTokens(threadSearchBlob(row, def, summaryFor(row), userNames), tokens),
+    )
+    .map(({ row, def }) => toListItem(row, def, viewer, summaryFor(row)));
 
   if (isPostFiltered) {
-    items = sortByUrgency(items.filter((i) => i.awaiting_viewer), today);
+    // Only the Awaiting tab is urgency-sorted and awaiting-filtered; a search on
+    // any other tab keeps its recency order and pages by offset like this one.
+    if (tab === "awaiting_me") items = sortByUrgency(items.filter((i) => i.awaiting_viewer), today);
     const offset = cursor ? Number(cursor) || 0 : 0;
     const slice = items.slice(offset, offset + PAGE_SIZE);
     return NextResponse.json({

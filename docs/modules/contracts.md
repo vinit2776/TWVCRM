@@ -72,7 +72,8 @@ All under `src/app/api/contracts/`:
 - `[id]/members/route.ts` — `GET`, `POST` (add member + COSEC provision), `DELETE` (deactivate + block)
 - `[id]/quotas/route.ts` — `GET`, `POST` (upsert), `DELETE`
 - `[id]/facilities/route.ts` — `GET`, `POST`, `DELETE`
-- `[id]/addons/route.ts` — `GET`, `POST`, `PATCH`, `DELETE`
+- `[id]/addons/route.ts` — `GET`, `POST`, `PATCH`. Recurring add-ons never escalate and sit beside `contracts.subtotal` (the escalating monthly fee), not inside it. Dates must lie inside the contract term. `PATCH` pauses/resumes (`is_active`) or ends billing early (a new `effective_until` before the old one, or before the contract end): ending early needs `admin`/`manager`/`sales_rep` and an `end_reason` of at least 10 characters, and is audit-logged as `contract_addon_ended`. Every add/edit/pause corrects unsent single-month draft rent statements in place (line and GST recomputed, `src/lib/contract-addon-server.ts`); issued statements are never edited and come back in the response `notice` instead.
+- Renewal and add-ons: `createRenewalDraft` (`src/lib/renewal-draft.ts`, used by the Renew button and the auto-renewal job) copies the source contract's recurring add-ons onto the renewal at the same amount (never escalated), dated to the new term. `carry_addon_ids` is the renewal dialog's checklist; left out, the add-ons that are still billing and run to the end of the term are carried (`src/lib/renewal-addons.ts`). While a renewal is not yet active its rent is billed under the parent, so `generateRentProformas` also prices the renewal's add-ons there and stops the parent's own at its end date (`addonsForBillingRun`, only when the renewal carried some). The membership agreement lists add-ons as item 8A and says they are outside the escalation (items 18 and 19); the renewal addendum adds a Recurring Add-ons clause and a two-section fee schedule. A contract or renewal with no add-ons prints exactly the wording it always did.
 - `[id]/documents/route.ts` — `GET`, `POST`
 - `[id]/documents/init/route.ts` — `POST` (initialise KYC checklist from entity type)
 - `[id]/documents/[docId]/review/route.ts` — `POST` (approve/reject KYC doc)
@@ -537,7 +538,7 @@ Per-contract overrides in `contract_electricity_config` table. The `ContractElec
 | `NEXT_PUBLIC_APP_URL` / `VERCEL_URL` | `[id]/route.ts` — renewal auto-issue vouchers internal fetch |
 | `CRON_SECRET` | Contract expiry cron (`Authorization: Bearer <secret>`) |
 | `RESEND_API_KEY` | Voucher revocation and renewal transition emails |
-| UniFi config: `UNIFI_API_URL`, `UNIFI_USERNAME`, `UNIFI_PASSWORD`, `UNIFI_CONSOLE_ID` | `src/lib/unifi.ts` — voucher API for UniFi locations |
+| UniFi config: `UNIFI_API_URL`, `UNIFI_USERNAME`, `UNIFI_PASSWORD` (the console id comes from the location, never an env var) | `src/lib/unifi.ts` — voucher API for UniFi locations |
 | COSEC device config stored in `cosec_devices` table | `src/lib/cosec.ts` |
 | `locations.unifi_site_id` (DB column) | Determines if a location uses UniFi voucher mode |
 | `locations.wifi_voucher_mode` ('repository' or 'unifi_api') | Also checked via `isUnifiLocation()` |

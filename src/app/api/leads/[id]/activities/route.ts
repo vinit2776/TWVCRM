@@ -5,6 +5,7 @@ import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
 import { createReminderEvent } from "@/lib/google-calendar";
 import { istLocalToUtcIso } from "@/lib/utils";
+import { followUpClosedRows } from "@/lib/follow-up-closed-note";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -88,10 +89,12 @@ export async function POST(
     .eq("auth_id", user.id)
     .single();
 
+  const { closes_open_follow_ups, ...activityFields } = result.data;
+
   const { data, error } = await supabase
     .from("activities")
     .insert({
-      ...result.data,
+      ...activityFields,
       created_by: dbUser?.id,
     })
     .select("*, creator:users!activities_created_by_fkey(*)")
@@ -99,6 +102,56 @@ export async function POST(
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // A contact logged from the list or the lead page deals with what was already pending: close the
+  // older open follow-ups so the lead doesn't keep showing "overdue" for something just handled.
+  if (closes_open_follow_ups) {
+    const now = new Date().toISOString();
+    // What is overdue or due today is always handled by this contact. When it also sets a new next
+    // step, that replaces the older ones too, so the lead has one next step and not two; a tour
+    // booked for a later day is the exception, because the call doesn't change it.
+    const istToday = new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+    const endOfToday = `${istToday}T23:59:59.999+05:30`;
+    const open = supabase
+      .from("activities")
+      .update({
+        is_follow_up_done: true,
+        follow_up_actioned_by: dbUser?.id ?? null,
+        follow_up_actioned_at: now,
+        updated_at: now,
+      })
+      .eq("lead_id", id)
+      .eq("is_follow_up_done", false)
+      .not("follow_up_date", "is", null)
+      .neq("id", data.id);
+    const { data: closed, error: closeError } = await (result.data.follow_up_date
+      ? open.or(`follow_up_date.lte.${endOfToday},type.neq.tour`)
+      : open.lte("follow_up_date", endOfToday)
+    ).select("id, follow_up_date, follow_up_notes, subject");
+
+    if (closeError) {
+      console.error("closing earlier follow-ups failed", closeError.code, closeError.message);
+    } else if (closed && closed.length > 0) {
+      const { error: noteError } = await supabase.from("activities").insert(
+        followUpClosedRows({
+          leadId: id,
+          closed,
+          createdBy: dbUser?.id,
+          replacedBy: result.data.subject || "this contact",
+        })
+      );
+      if (noteError) console.error("follow-up closed note failed", noteError.code, noteError.message);
+    }
+    if (!closeError && closed && closed.length > 0 && dbUser?.id) {
+      logAudit(supabase, {
+        entityType: "lead",
+        entityId: id,
+        action: "update",
+        performedBy: dbUser.id,
+        changes: { follow_ups_closed_by_contact: { old: closed.length, new: data.id } },
+      });
+    }
   }
 
   // Auto-claim: whoever logs an activity takes over every OPEN enquiry on this lead.
