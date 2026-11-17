@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
     .from("vendor_bills")
     .select(
       `*, procurement_vendors(id, name, contact_email, gstin),
-       purchase_orders(id, po_number, po_type, expected_delivery_date, purchase_requests(department, expenditure_type)),
+       purchase_orders(id, po_number, po_type, status, amc_terminated_at, amc_termination_reason, expected_delivery_date, purchase_requests(department, expenditure_type)),
        companies(id, name, brand_name),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
        vendor_bill_payments(id, payment_reference, reversed_at)`,
@@ -212,7 +212,6 @@ export async function POST(request: NextRequest) {
 
   // ── PO validation ──────────────────────────────────────────────────────────
   let poTotalAmount: number | null = null;
-  let poAdvanceCredit = 0;
   let toleranceFacts: ToleranceFacts | null = null;
   // Price tolerance (goods POs only): how far past the PO value / received value
   // the invoice may go before it needs a special approval. 0 = firm price.
@@ -398,26 +397,28 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Pre-credit advance if already processed
-    if (po.advance_status === "processed" && po.advance_amount) {
-      poAdvanceCredit = Math.min(Number(po.advance_amount), parsed.data.total_amount);
-    }
+    // A processed advance is no longer credited here. Accounts apply it to the bill once it is
+    // approved (POST /api/procurement/bills/[id]/apply-advance), so it is counted once and has a payment line.
   }
 
   // ── Hard-block exact duplicate invoices ───────────────────────────────────
   // Same vendor + same invoice number on any non-rejected bill = duplicate.
   // Rejected bills are excluded so a re-submission after rejection is allowed.
   if (parsed.data.invoice_number?.trim()) {
-    const { count: dupCount } = await supabase
+    const { data: dupRows } = await supabase
       .from("vendor_bills")
-      .select("*", { count: "exact", head: true })
+      .select("bill_number, approval_status, purchase_orders(po_number, amc_terminated_at)")
       .eq("vendor_id", parsed.data.vendor_id)
       .eq("invoice_number", parsed.data.invoice_number.trim())
-      .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
+      .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)
+      .limit(1);
 
-    if (dupCount && dupCount > 0) {
+    if (dupRows && dupRows.length > 0) {
+      const d = dupRows[0] as unknown as { bill_number: string; approval_status: string; purchase_orders: { po_number: string; amc_terminated_at: string | null } | { po_number: string; amc_terminated_at: string | null }[] | null };
+      const po = Array.isArray(d.purchase_orders) ? d.purchase_orders[0] : d.purchase_orders;
+      const where = po ? ` on ${po.po_number}${po.amc_terminated_at ? " (a terminated AMC)" : ""}` : "";
       return NextResponse.json(
-        { error: `Invoice number "${parsed.data.invoice_number.trim()}" already exists for this vendor. Check Vendor Payments to avoid duplicate processing.` },
+        { error: `Invoice number "${parsed.data.invoice_number.trim()}" already exists for this vendor: ${d.bill_number}${where}, ${d.approval_status}. Open that bill and withdraw it if it was raised in error.` },
         { status: 409 }
       );
     }
@@ -469,11 +470,6 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Create the bill (number generation, insert, PO status update, audit) ───
-  const initialPaymentStatus =
-    poAdvanceCredit >= parsed.data.total_amount ? "paid" :
-    poAdvanceCredit > 0 ? "partially_paid" :
-    "unpaid";
-
   let bill: { id: string; bill_number: string };
   try {
     bill = await createVendorBill(supabase, {
@@ -490,8 +486,8 @@ export async function POST(request: NextRequest) {
       invoice_check: parsed.data.invoice_check ?? null,
       service_report_id: parsed.data.service_report_id ?? null,
       replaces_bill_id: parsed.data.replaces_bill_id ?? null,
-      amount_paid: poAdvanceCredit,
-      payment_status: initialPaymentStatus,
+      amount_paid: 0,
+      payment_status: "unpaid",
       created_by: dbUser.id,
       ...(toleranceFacts ?? {}),
       ...(electricityExtra ?? {}),

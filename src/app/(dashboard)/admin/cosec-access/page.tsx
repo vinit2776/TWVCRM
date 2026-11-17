@@ -260,10 +260,8 @@ export default function CosecAccessPage() {
       });
       const result = await res.json();
       if (result.ok) {
-        toast.success(result.sms_sent
-          ? `Access PIN sent to ${result.name} via SMS`
-          : `PIN issued for ${result.name} — no phone on file`
-        );
+        if (result.email_sent) toast.success(`Access PIN emailed to ${result.name}`);
+        else toast.warning(result.email_problem ?? `PIN issued for ${result.name} but not emailed`);
         await load();
       } else {
         toast.error(result.error || "Failed to issue PIN");

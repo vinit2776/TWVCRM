@@ -105,6 +105,7 @@ import { useExit } from "@/components/contracts/exit/use-exit";
 import { EXIT_START_ROLES } from "@/lib/contract-exit";
 import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
 import { ContractPricingSplitDialog } from "@/components/contracts/contract-pricing-split-dialog";
+import { pricingCorrectionBlocker } from "@/lib/contract-pricing-split";
 import { InvoiceCustomerWizard } from "@/components/contracts/invoice-customer-wizard";
 import { canUseInvoiceWizard } from "@/lib/invoice-wizard-availability";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
@@ -294,6 +295,24 @@ export default function ContractDetailPage({
       .catch(() => { if (!cancelled) setPoolShortfall(null); });
     return () => { cancelled = true; };
   }, [poolDepositApplied, contract?.lead_id]);
+  // The customer's deposit shortfall is Required − Available across their live
+  // contracts (deposit-summary), not the contract's own rate-increase top-up
+  // (deposit_shortfall), which assumed the parent's deposit was fully collected.
+  const contractIsLive = contract?.status === "active" || contract?.status === "renewal_in_progress";
+  const [leadDepositShortfall, setLeadDepositShortfall] = useState<number | null>(null);
+  const [depositTick, setDepositTick] = useState(0);
+  useEffect(() => {
+    if (!contractIsLive || !contract?.lead_id) { setLeadDepositShortfall(null); return; }
+    let cancelled = false;
+    fetch(`/api/leads/${contract.lead_id}/deposit-summary`)
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setLeadDepositShortfall(j.data?.total_shortfall ?? null); })
+      .catch(() => { if (!cancelled) setLeadDepositShortfall(null); });
+    return () => { cancelled = true; };
+  }, [contractIsLive, contract?.lead_id, contract?.deposit_shortfall, depositTick]);
+  const effectiveDepositShortfall = contractIsLive && leadDepositShortfall !== null
+    ? leadDepositShortfall
+    : contract?.deposit_shortfall;
   const poolUncovered = contract
     ? Math.max(0, Number(contract.security_deposit_amount || 0) - poolDepositApplied)
     : 0;
@@ -1621,9 +1640,9 @@ export default function ContractDetailPage({
                 </Link>
               </div>
               {contract.deposit_carried_from && (
-                Number(contract.deposit_shortfall || 0) > 0 ? (
+                Number(effectiveDepositShortfall || 0) > 0 ? (
                   <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
-                    Deposit shortfall: {formatCurrency(Number(contract.deposit_shortfall || 0))}
+                    Deposit shortfall: {formatCurrency(Number(effectiveDepositShortfall || 0))}
                   </Badge>
                 ) : (
                   <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
@@ -1797,9 +1816,9 @@ export default function ContractDetailPage({
                       ✓ {formatCurrency(poolDepositApplied)} applied from customer&apos;s pooled deposit
                     </p>
                   )}
-                  {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
+                  {effectiveDepositShortfall != null && effectiveDepositShortfall > 0 && (
                     <p className="text-[10px] text-amber-600 mt-0.5">
-                      Shortfall: {formatCurrency(contract.deposit_shortfall)}
+                      Shortfall: {formatCurrency(effectiveDepositShortfall)}
                     </p>
                   )}
                 </div>
@@ -1810,17 +1829,6 @@ export default function ContractDetailPage({
               </div>
             </CardContent>
           </Card>
-
-          {/* Recurring Add-ons */}
-          <div id="section-addons" className="scroll-mt-4">
-          <ContractAddonsSection
-            contractId={id}
-            contractStartDate={contract.start_date}
-            contractEndDate={contract.end_date}
-            taxPercentage={contract.tax_percentage ?? 18}
-            openAddSignal={addonOpenSignal}
-          />
-          </div>
 
           {/* Tiered Rate Schedule — only editable pre-activation, mirrors the
               API's own lock gate (same statuses as quota locking). */}
@@ -1842,11 +1850,12 @@ export default function ContractDetailPage({
               even when no proposal is (or ever was) linked. */}
           {(linkedProposal || (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) && (
             <ContractDepositSection
+              key={depositTick}
               proposal={linkedProposal}
               contract={contract}
               depositCarriedFrom={contract.deposit_carried_from}
               leadId={contract.lead_id || undefined}
-              depositShortfall={contract.deposit_shortfall}
+              depositShortfall={effectiveDepositShortfall}
             />
           )}
 
@@ -1855,8 +1864,8 @@ export default function ContractDetailPage({
           <ContractDepositTopupsSection
             contractId={id}
             currentUserRole={userRole ?? ""}
-            depositShortfall={contract.deposit_shortfall}
-            onShortfallCollected={() => fetchContract(false)}
+            depositShortfall={effectiveDepositShortfall}
+            onShortfallCollected={() => { fetchContract(false); setDepositTick((t) => t + 1); }}
             openCollectSignal={depositOpenSignal}
           />
           </div>
@@ -2025,7 +2034,12 @@ export default function ContractDetailPage({
           {/* Line Items Table */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Line Items</CardTitle>
+              <CardTitle className="text-base flex flex-wrap items-center gap-2">
+                Monthly billable
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                  escalates {Number(contract.escalation_percentage ?? 10)}% on renewal
+                </span>
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="rounded-md border overflow-x-auto">
@@ -2060,6 +2074,20 @@ export default function ContractDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Recurring Add-ons: kept with the monthly fee they sit beside, but never
+              escalated; each has its own dates and can be paused or ended. */}
+          <div id="section-addons" className="scroll-mt-4">
+          <ContractAddonsSection
+            contractId={id}
+            contractStartDate={contract.start_date}
+            contractEndDate={contract.end_date}
+            taxPercentage={contract.tax_percentage ?? 18}
+            monthlyFee={Number(contract.subtotal ?? 0)}
+            canEndBilling={["admin", "manager", "sales_rep"].includes(userRole ?? "")}
+            openAddSignal={addonOpenSignal}
+          />
+          </div>
 
           {/* Agreement document history — old executed versions stay
               visible/downloadable after a reupload (e.g. customer name
@@ -2246,6 +2274,19 @@ export default function ContractDetailPage({
             />
           )}
 
+          {/* An accepted renewal awaiting activation has no Renewal card, but still needs the pricing correction */}
+          {!["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) &&
+            pricingCorrectionBlocker(contract) === null && userRole === "admin" && (
+            <Card>
+              <CardContent className="pt-6">
+                <Button size="sm" variant="outline" className="w-full" onClick={() => setPricingSplitOpen(true)}>
+                  <Scale className="mr-1.5 h-3.5 w-3.5" />
+                  Edit pricing split
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Renewal Card — pinned to top of sidebar for active/expired/renewal_in_progress/renewed contracts */}
           {["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) && (
             <Card>
@@ -2306,11 +2347,11 @@ export default function ContractDetailPage({
                     <span className="text-xs text-green-700">Pooled with customer</span>
                   </div>
                 )}
-                {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
+                {effectiveDepositShortfall != null && effectiveDepositShortfall > 0 && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground text-xs">Deposit Shortfall</span>
                     <span className="text-xs text-amber-700 font-medium">
-                      {formatCurrency(contract.deposit_shortfall)}
+                      {formatCurrency(effectiveDepositShortfall)}
                     </span>
                   </div>
                 )}
@@ -2331,7 +2372,7 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
-                {contract.status === "active" && userRole === "admin" && (
+                {pricingCorrectionBlocker(contract) === null && userRole === "admin" && (
                   <Button size="sm" variant="outline" className="w-full" onClick={() => setPricingSplitOpen(true)}>
                     <Scale className="mr-1.5 h-3.5 w-3.5" />
                     Edit pricing split
@@ -3406,7 +3447,7 @@ export default function ContractDetailPage({
         leadId={contract.lead_id}
         userRole={userRole}
         contractStatus={contractDisplayStatus(contract)}
-        depositShortfall={contract.deposit_shortfall}
+        depositShortfall={effectiveDepositShortfall}
         locationId={contract.location_id}
         onOpenAddon={() => setAddonOpenSignal((n) => n + 1)}
         onOpenDeposit={() => setDepositOpenSignal((n) => n + 1)}

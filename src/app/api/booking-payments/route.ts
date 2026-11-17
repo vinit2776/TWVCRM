@@ -4,6 +4,8 @@ import { logAudit } from "@/lib/audit";
 import { isBookingPaymentMethodLocked } from "@/lib/booking-payment-method";
 import { bookingPaymentTolerance, findDuplicateReference } from "@/lib/booking-payment-rules";
 import { raiseBookingPaymentReport } from "@/lib/booking-payment-server";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
+import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 
 const PAYMENT_SELECT = "*, creator:users!booking_payments_created_by_fkey(id, full_name), collector:users!booking_payments_collected_by_fkey(id, full_name), handover_receiver:users!booking_payments_handed_over_to_fkey(id, full_name), handover_confirmer:users!booking_payments_handover_confirmed_by_fkey(id, full_name)";
 
@@ -144,6 +146,10 @@ export async function POST(request: NextRequest) {
         .update({ payment_status: "paid", payment_mode })
         .eq("id", booking_id);
     }
+    // Close or part-settle the PI's Receivables statement, if the booking has one.
+    await syncBookingPiStatement(createAdminClient(), booking_id);
+    // Paid after checkout (an extra, say): the Tally task is created or refreshed now.
+    await maybeCreateBookingGstTask(createAdminClient(), booking_id);
   }
 
   // A manual UPI payment nobody verified at the counter would otherwise sit
