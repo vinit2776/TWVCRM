@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,11 +13,15 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
+import { ProposalAddonsEditor } from "@/components/proposals/proposal-addons-editor";
+import { cleanAddons } from "@/lib/recurring-addons";
 import { Loader2, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
+import { DEFAULT_ESCALATION_PERCENTAGE } from "@/lib/auto-renewal";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
+import { resolveProposalTerms, validUntilFromDays } from "@/lib/location-proposal-settings";
 import {
   PROPOSAL_MAX_TENURE_MONTHS,
   buildCommitmentTermLines,
@@ -27,7 +31,7 @@ import {
   stripLegacyCommitmentLines,
   validateCommitmentTerms,
 } from "@/lib/proposal-terms";
-import type { ServiceCatalogItem, Proposal } from "@/types";
+import type { ServiceCatalogItem, Proposal, Location, ProposalAddon } from "@/types";
 
 interface ServiceQuotaRow {
   service_id: string;
@@ -77,6 +81,8 @@ export function ProposalForm({
     { description: "", quantity: 1, unit_price: 0, total: 0 },
   ]);
   const [escalationSplit, setEscalationSplit] = useState(false);
+  const [addons, setAddons] = useState<ProposalAddon[]>([]);
+  const [escalationPercentage, setEscalationPercentage] = useState(DEFAULT_ESCALATION_PERCENTAGE);
   const [taxPercentage, setTaxPercentage] = useState(18);
   const [discountPercentage, setDiscountPercentage] = useState(0);
   const [validUntil, setValidUntil] = useState("");
@@ -93,6 +99,17 @@ export function ProposalForm({
   const [lockInMonths, setLockInMonths] = useState<number | null>(null);
   const [noticePeriodMonths, setNoticePeriodMonths] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // The terms text this form last filled in itself. If the box still holds it,
+  // the user hasn't edited it, so a location change can swap it silently.
+  const appliedTermsRef = useRef(DEFAULT_PROPOSAL_TERMS);
+  const termsRef = useRef(termsAndConditions);
+  termsRef.current = termsAndConditions;
+  const commitmentUntouched = tenureMonths == null && lockInMonths == null && noticePeriodMonths == null && depositMonths === 0;
+  const commitmentUntouchedRef = useRef(commitmentUntouched);
+  commitmentUntouchedRef.current = commitmentUntouched;
+  const validUntilRef = useRef(validUntil);
+  validUntilRef.current = validUntil;
 
   // Load service catalog once on mount
   useEffect(() => {
@@ -134,6 +151,8 @@ export function ProposalForm({
           : [{ description: "", quantity: 1, unit_price: 0, total: 0 }]
       );
       setEscalationSplit((initialProposal.items ?? []).some((i) => i.escalates !== undefined));
+      setAddons((initialProposal.recurring_addons ?? []).map((a) => ({ description: a.description, amount: Number(a.amount) })));
+      setEscalationPercentage(Number(initialProposal.escalation_percentage ?? DEFAULT_ESCALATION_PERCENTAGE));
       setTaxPercentage(initialProposal.tax_percentage ?? 18);
       setDiscountPercentage(initialProposal.discount_percentage ?? 0);
       setValidUntil(initialProposal.valid_until ? initialProposal.valid_until.slice(0, 10) : "");
@@ -166,6 +185,38 @@ export function ProposalForm({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialProposal, leadLocationId]);
+
+  // New proposals start from the chosen location's terms and commitment defaults
+  // (Location > Proposals). Editing or revising keeps the proposal's own snapshot.
+  useEffect(() => {
+    if (!open || initialProposal || !locationId) return;
+    let cancelled = false;
+    fetch(`/api/locations/${locationId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        const loc = json?.data as Location | undefined;
+        if (cancelled || !loc) return;
+        const nextTerms = resolveProposalTerms(loc.proposal_terms, DEFAULT_PROPOSAL_TERMS);
+        const current = termsRef.current;
+        if (nextTerms !== current) {
+          const untouched = current === appliedTermsRef.current;
+          if (untouched || window.confirm(`Replace the terms you edited with ${loc.name}'s default terms?`)) {
+            setTermsAndConditions(nextTerms);
+          }
+        }
+        appliedTermsRef.current = nextTerms;
+        const d = loc.proposal_defaults;
+        if (d && commitmentUntouchedRef.current) {
+          if (d.tenure_months != null) setTenureMonths(d.tenure_months);
+          if (d.lock_in_months != null) setLockInMonths(d.lock_in_months);
+          if (d.notice_period_months != null) setNoticePeriodMonths(d.notice_period_months);
+          if (d.security_deposit_months != null) setDepositMonths(d.security_deposit_months);
+        }
+        if (d?.valid_days != null && !validUntilRef.current) setValidUntil(validUntilFromDays(d.valid_days));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [open, locationId, initialProposal]);
 
   // Edit mode only — merge in the proposal's existing service quotas once
   // the catalog has loaded (need service_id from the catalog to match rows).
@@ -206,10 +257,13 @@ export function ProposalForm({
     setDescription("");
     setItems([{ description: "", quantity: 1, unit_price: 0, total: 0 }]);
     setEscalationSplit(false);
+    setAddons([]);
+    setEscalationPercentage(DEFAULT_ESCALATION_PERCENTAGE);
     setTaxPercentage(18);
     setDiscountPercentage(0);
     setValidUntil("");
     setTermsAndConditions(DEFAULT_PROPOSAL_TERMS);
+    appliedTermsRef.current = DEFAULT_PROPOSAL_TERMS;
     setNotes("");
     setLocationId(leadLocationId || null);
     setConfRoomHours(0);
@@ -284,6 +338,16 @@ export function ProposalForm({
       return;
     }
 
+    const halfFilledAddon = addons.find((a) => (a.description.trim() === "") !== !(a.amount > 0));
+    if (halfFilledAddon) {
+      toast.error("Each add-on needs both a description and a monthly amount. Fill it in or remove the row.");
+      return;
+    }
+    if (!Number.isFinite(escalationPercentage) || escalationPercentage < 0 || escalationPercentage > 100) {
+      toast.error("Escalation must be a percentage between 0 and 100");
+      return;
+    }
+
     const commitmentError = validateCommitmentTerms({
       tenure_months: tenureMonths,
       lock_in_months: lockInMonths,
@@ -318,6 +382,8 @@ export function ProposalForm({
         total: Math.max(1, item.quantity) * item.unit_price,
         ...(escalationSplit && item.escalates !== undefined ? { escalates: item.escalates } : {}),
       })),
+      recurring_addons: cleanAddons(addons),
+      escalation_percentage: escalationPercentage,
       tax_percentage: taxPercentage,
       discount_percentage: discountPercentage,
       valid_until: validUntil || undefined,
@@ -414,6 +480,16 @@ export function ProposalForm({
               onEscalationSplitChange={setEscalationSplit}
             />
           </div>
+
+          {/* Escalation + recurring add-ons: kept apart from the monthly fee */}
+          <ProposalAddonsEditor
+            addons={addons}
+            onChange={setAddons}
+            escalationPercentage={escalationPercentage}
+            onEscalationChange={setEscalationPercentage}
+            monthlyFee={computedSubtotal}
+            depositMonths={depositMonths}
+          />
 
           {/* Service Quotas — from global service catalog */}
           <div className="border rounded-lg p-4 space-y-3 bg-muted/30">

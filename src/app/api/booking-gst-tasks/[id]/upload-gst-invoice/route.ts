@@ -84,7 +84,7 @@ export async function POST(
   const { data: taskRow } = await adminClient
     .from("booking_gst_tasks")
     .select(`
-      id, handoff_state, booking_id,
+      id, handoff_state, booking_id, kind, amount_with_gst,
       booking:bookings!booking_gst_tasks_booking_id_fkey(
         id, booking_number, total_amount_with_gst, payment_status,
         guest_name, guest_email, guest_phone, guest_company,
@@ -100,6 +100,8 @@ export async function POST(
     id: string;
     handoff_state: string;
     booking_id: string;
+    kind: string;
+    amount_with_gst: number | null;
     booking: {
       id: string;
       booking_number: string | null;
@@ -130,12 +132,26 @@ export async function POST(
   }
 
   // ── Hard-block rules ──────────────────────────────────────────────────────
-  // Amount must match total_amount_with_gst (GST-inclusive for bookings).
-  // Compare at whole-rupee level — Razorpay collects in paise and the stored
-  // amount may differ by a few paise from the rounded GST invoice amount.
-  if (Math.round(Number(meta.invoice_amount)) !== Math.round(Number(task.booking.total_amount_with_gst))) {
+  // An extra added after checkout reopens the booking's balance. The invoice waits until
+  // it is paid, so accounts raise one invoice for everything instead of re-doing it.
+  const unissuedMain = task.kind === "main" && task.handoff_state === "gst_to_issue";
+  if (unissuedMain && task.booking.payment_status !== "paid") {
     return badRequest(
-      `Tally amount ₹${meta.invoice_amount} does not match booking total ₹${task.booking.total_amount_with_gst}. ` +
+      `${task.booking.booking_number ?? "This booking"} has an extra charge that is not paid yet. ` +
+      `Wait for it to be collected on the booking (Collect Payment); this task releases by itself and the invoice then covers the full amount.`,
+    );
+  }
+
+  // Amount must match what this task covers: the booking's whole total for a main task
+  // not yet issued, otherwise the amount recorded on the task (a supplement covers only
+  // the extra). Compare at whole-rupee level — Razorpay collects in paise and the stored
+  // amount may differ by a few paise from the rounded GST invoice amount.
+  const expectedAmount = unissuedMain || task.amount_with_gst == null
+    ? Number(task.booking.total_amount_with_gst)
+    : Number(task.amount_with_gst);
+  if (Math.round(Number(meta.invoice_amount)) !== Math.round(expectedAmount)) {
+    return badRequest(
+      `Tally amount ₹${meta.invoice_amount} does not match ${task.kind === "supplement" ? "the extra charge" : "booking total"} ₹${expectedAmount}. ` +
       `Fix the Tally voucher; no override is allowed.`,
     );
   }
@@ -240,6 +256,7 @@ export async function POST(
       gst_invoice_number: meta.tally_invoice_number,
       tally_invoice_number: meta.tally_invoice_number,
       tally_total_amount: meta.invoice_amount,
+      amount_with_gst: meta.invoice_amount,
       issuance_channel: "tally",
       handoff_state: "ready_to_send",
       updated_at: new Date().toISOString(),
@@ -251,6 +268,12 @@ export async function POST(
       { error: `Invoice saved (id: ${insertedUpload.id}) but task status update failed: ${taskUpdateErr.message}. Refresh and check task state.` },
       { status: 500 },
     );
+  }
+
+  // The main invoice covers every charge on the booking so far; anything added after it
+  // is claimed by a supplement.
+  if (task.kind === "main") {
+    await adminClient.from("booking_addons").update({ gst_task_id: task.id }).eq("booking_id", task.booking_id).is("gst_task_id", null);
   }
 
   // ── Send intimation email to accounts ────────────────────────────────────

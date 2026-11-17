@@ -14,7 +14,8 @@ import {
 
 // Deploy precedes the hand-applied migrations, so a missing table or column is a
 // normal state, not a failure (same approach as src/lib/kyc-waiver.ts).
-const NOT_MIGRATED = new Set(["42P01", "42703"]);
+// PGRST205 / PGRST204 are PostgREST schema-cache misses (table / column) for the same state.
+const NOT_MIGRATED = new Set(["42P01", "42703", "PGRST205", "PGRST204"]);
 
 /** The wiring switch. Any failure reads as off, so nothing changes by accident. */
 export async function getVoTermsMode(admin: SupabaseClient): Promise<VoTermsMode> {

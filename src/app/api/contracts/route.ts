@@ -8,6 +8,8 @@ import { logAudit } from "@/lib/audit";
 import { getProrataPaidDate } from "@/lib/proposals";
 import { firstBillingAnchor } from "@/lib/billing-months";
 import { commitmentEndDate, resolveContractCommitment } from "@/lib/contract-commitment";
+import { seedContractAddons } from "@/lib/recurring-addons";
+import type { ProposalAddon } from "@/types";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -368,6 +370,37 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // ── Recurring add-ons from the proposal → contract_addons ─────────────────
+  // Each runs the full term (start to end date); billing prorates and bills them
+  // from there. They are not in items/subtotal, so they never escalate and never
+  // count toward the security deposit. A failure must not lose the contract, but
+  // it is reported so the add-ons are not silently left unbilled.
+  let recurringAddonsError: string | null = null;
+  if (data) {
+    const seeds = seedContractAddons(
+      proposal.recurring_addons as ProposalAddon[] | null,
+      data.id,
+      resolvedStartDateStr,
+      endDateStr,
+      dbUser?.id ?? null
+    );
+    if (seeds.length > 0) {
+      const { error: seedError } = await createAdminClient().from("contract_addons").insert(seeds);
+      if (seedError) {
+        console.error("[contracts] Failed to seed contract_addons from proposal:", seedError.message);
+        recurringAddonsError = seedError.message;
+      } else if (dbUser?.id) {
+        logAudit(supabase, {
+          entityType: "contract",
+          entityId: data.id,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: { addons_added_from_proposal: { old: null, new: seeds.map((a) => `${a.description} (${a.amount})`).join(", ") } },
+        });
+      }
+    }
+  }
+
   // ── Optional special clause ───────────────────────────────────────────────
   // Submitted after the contract exists so the revision has a real contract_id.
   // A failure here must not lose the contract; the author can resubmit from its page.
@@ -388,7 +421,12 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json(
-    { data, special_clause_status: specialClauseStatus, special_clause_error: specialClauseError },
+    {
+      data,
+      special_clause_status: specialClauseStatus,
+      special_clause_error: specialClauseError,
+      recurring_addons_error: recurringAddonsError,
+    },
     { status: 201 },
   );
 }
