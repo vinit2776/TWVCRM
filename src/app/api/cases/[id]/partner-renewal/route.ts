@@ -17,7 +17,7 @@ import { RENEWAL_DURATIONS, RENEWAL_DURATIONS_TEXT, RENEWAL_ESCALATION_MODES } f
  *
  * GET     the recorded confirmation for this case, if any.
  * POST    action "confirm"  record that the partner is continuing, with the
- *                           term, the monthly fee from that term and how they
+ *                           term, the rate (annual above 12 months) from that term and how they
  *                           confirmed. Rolls the case straight over if the new
  *                           term has already begun.
  *         action "roll"     roll a confirmed case into its new term (allowed
@@ -42,7 +42,7 @@ const confirmSchema = z
     escalation_mode: z.enum(RENEWAL_ESCALATION_MODES),
     custom_percentage: z.number().min(0).max(100).nullish(),
     escalation_reason: z.string().trim().max(500).nullish(),
-    /** The end date and monthly fee they saw, so a stale dialog can't confirm other terms. */
+    /** The end date and rate they saw, so a stale dialog can't confirm other terms. */
     confirm_end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     expected_rate: z.number().nonnegative(),
     note: z.string().trim().min(10, "Say how the partner confirmed (at least 10 characters)").max(1000),
@@ -166,11 +166,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
   const body = parsed.data;
   if (!(Number(c.rate) > 0)) {
-    return NextResponse.json({ error: "This case has no monthly fee on record. Set its rate first." }, { status: 400 });
+    return NextResponse.json({ error: "This case has no rate on record. Set its rate first." }, { status: 400 });
   }
 
   const offer = partnerRenewalOffer({
-    currentMonthlyRate: Number(c.rate),
+    currentRate: Number(c.rate),
     agreedEscalationPercentage: c.renewal_escalation_percentage,
     currentEnd: c.end_date,
     durationMonths: body.duration_months,
@@ -194,6 +194,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     escalation_reason: body.escalation_reason || null,
     current_rate: Number(c.rate),
     new_rate: offer.newRate,
+    new_term_fee: offer.newTermFee,
     note: body.note,
     by: dbUser.id,
     by_name: dbUser.full_name,

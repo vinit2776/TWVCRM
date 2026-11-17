@@ -85,8 +85,8 @@ export async function completeVoRenewal(
   const term = nextRenewalTerm(oldEnd, months);
 
   // The rate the next renewal escalates from is this term's fee as cases.rate
-  // stores it: the fee itself up to 12 months, the annual rate beyond. Postpaid partner cases are billed monthly from `rate` and don't fit a
-  // one-off renewal statement yet, so their rate is left alone.
+  // stores it: the fee itself up to 12 months, the annual rate beyond. Postpaid partner cases have no renewal statement; their rate is set
+  // by rollPartnerRenewal.
   const aggregator = Array.isArray(caseRow.aggregator) ? caseRow.aggregator[0] : caseRow.aggregator;
   const isPostpaid = !!caseRow.aggregator_id && (aggregator as { billing_method?: string } | null)?.billing_method === "postpaid";
   const billedFee = Number(stmt.fixed_amount);

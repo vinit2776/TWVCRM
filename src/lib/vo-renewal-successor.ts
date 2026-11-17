@@ -60,6 +60,10 @@ export function successorCaseRow(
   params: {
     term: { start: string; end: string };
     months: number;
+    /**
+     * cases.rate for the new term, in the canonical meaning (see vo-term-fee.ts). Null keeps the
+     * previous value untouched, which is only right when the term length does not cross 12 months.
+     */
     rate: number | null;
     /** The paid renewal bill, or null for a partner case continued without one. */
     statementId: string | null;
