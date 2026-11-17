@@ -47,6 +47,11 @@ const TABLE_MAP: Record<Exclude<ReceivableKind, "statement">, {
     reminderCount: "reminder_count",
     lastSentAt: "last_reminder_sent_at",
   },
+  booking_pi: {
+    table: "billing_statements",
+    reminderCount: "reminder_count",
+    lastSentAt: "last_reminder_sent_at",
+  },
 };
 
 export interface ReceivableReminderInput {
@@ -151,7 +156,7 @@ function renderEmail(o: {
     ? `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#92400e;"><strong>Due today.</strong></div>`
     : `<div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#065f46;"><strong>Due in ${Math.abs(d)} day${Math.abs(d) !== 1 ? "s" : ""}</strong> (${o.dueDate}).</div>`;
 
-  const refLabel = o.kind === "adhoc_invoice" ? "Invoice Ref" : "Reference";
+  const refLabel = o.kind === "adhoc_invoice" ? "Invoice Ref" : o.kind === "booking_pi" ? "Booking" : "Reference";
   const whatLabel = o.kind === "deposit"
     ? "Security Deposit"
     : o.kind === "topup" ? "Additional Security Deposit" : "Amount Due";
@@ -191,6 +196,16 @@ function introFor(kind: Exclude<ReceivableKind, "statement">, stageIdx: number, 
   // Deposits never carry a GST invoice. An ad-hoc invoice does once one is
   // issued, and the wording follows the document the customer is chased for.
   if (kind === "adhoc_invoice") return resolveIntro(STAGES[stageIdx].intro, taxInvoiceIssued ? "tax invoice" : "proforma");
+  if (kind === "booking_pi") {
+    switch (stageIdx) {
+      case 0:
+        return "Just a friendly note that the payment for your booking, as per the proforma invoice we sent, is due. You can pay with the link below, or at the counter when you arrive.";
+      case 1:
+        return "A gentle reminder that the payment for your booking is still pending. You can pay with the link below, or at the counter when you arrive.";
+      default:
+        return "The payment for your booking is still outstanding. Kindly arrange it at the earliest, or write back if there is anything we can help resolve. Our accounts team has been copied on this email.";
+    }
+  }
 
   const what = kind === "deposit" ? "security deposit" : "additional security deposit";
   switch (stageIdx) {
@@ -210,6 +225,11 @@ function subjectFor(
   amountStr: string,
   stageIdx: number,
 ): string {
+  if (kind === "booking_pi") {
+    return daysOverdue <= 0
+      ? `Booking payment due — ${reference} · ₹${amountStr}`
+      : `Booking payment pending — ${reference} (${daysOverdue}d) · ₹${amountStr}`;
+  }
   if (kind === "adhoc_invoice") {
     const dueDesc = daysOverdue > 0 ? `${daysOverdue}d` : "due today";
     return STAGES[stageIdx].subject(reference, dueDesc, amountStr);

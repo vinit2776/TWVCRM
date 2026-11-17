@@ -14,6 +14,7 @@ export const ENQUIRY_UPDATE_KINDS = [
   "details_sent",
   "waiting_customer",
   "note",
+  "replied_whatsapp",
 ] as const;
 export type EnquiryUpdateKind = (typeof ENQUIRY_UPDATE_KINDS)[number];
 
@@ -25,6 +26,7 @@ export const ENQUIRY_UPDATE_LABEL: Record<EnquiryUpdateKind, string> = {
   details_sent: "Sent details on WhatsApp",
   waiting_customer: "Waiting on customer",
   note: "Note",
+  replied_whatsapp: "Replied on WhatsApp",
 };
 
 /** Outcomes a person can record when resolving an enquiry. */

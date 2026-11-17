@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
 import { zodErrorResponse } from "@/lib/validations";
+import { INVOICE_LABELS } from "@/lib/facility/asset-invoice";
 
 const insertSchema = z.object({
   tier: z.enum(["commercial", "operational"]),
@@ -12,6 +13,8 @@ const insertSchema = z.object({
   file_size: z.number().int().optional(),
   mime_type: z.string().optional(),
   notes: z.string().max(1000).optional(),
+  // One invoice can cover several assets: the same file gets a row on each of these too.
+  also_asset_ids: z.array(z.string().uuid()).max(50).optional(),
 });
 
 export async function GET(
@@ -65,23 +68,36 @@ export async function POST(
   }
 
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("asset_documents")
-    .insert({
-      asset_id: assetId,
-      tier: parsed.data.tier,
-      label: parsed.data.label,
-      file_url: parsed.data.file_url,
-      file_name: parsed.data.file_name || null,
-      file_size: parsed.data.file_size || null,
-      mime_type: parsed.data.mime_type || null,
-      notes: parsed.data.notes || null,
-      uploaded_by: dbUser.id,
-    })
-    .select()
-    .single();
+  const isInvoice = INVOICE_LABELS.includes(parsed.data.label);
+  const alsoIds = Array.from(new Set((parsed.data.also_asset_ids ?? []).filter((a) => a !== assetId)));
+  if (alsoIds.length > 0) {
+    if (!isInvoice) {
+      return NextResponse.json({ error: "Only an invoice can be attached to more than one asset" }, { status: 422 });
+    }
+    const { data: found } = await admin.from("facility_assets").select("id").in("id", alsoIds);
+    if ((found ?? []).length !== alsoIds.length) {
+      return NextResponse.json({ error: "One of the other assets was not found" }, { status: 422 });
+    }
+  }
+
+  const groupId = isInvoice ? crypto.randomUUID() : null;
+  const rows = [assetId, ...alsoIds].map((id) => ({
+    asset_id: id,
+    tier: parsed.data.tier,
+    label: parsed.data.label,
+    file_url: parsed.data.file_url,
+    file_name: parsed.data.file_name || null,
+    file_size: parsed.data.file_size || null,
+    mime_type: parsed.data.mime_type || null,
+    notes: parsed.data.notes || null,
+    uploaded_by: dbUser.id,
+    doc_kind: isInvoice ? "invoice" : null,
+    invoice_group_id: groupId,
+  }));
+  const { data: inserted, error } = await admin.from("asset_documents").insert(rows).select();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const data = inserted.find((r) => r.asset_id === assetId) ?? inserted[0];
 
   logAudit(admin, {
     action: "create",

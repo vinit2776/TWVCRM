@@ -6,7 +6,7 @@ import { modelAdditions } from "./supported-items";
 // Unlike the internal-note check this FAILS CLOSED: a clause that was not
 // vetted must never reach an agreement, so any outage throws SpecialClauseAiError.
 
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+const DEFAULT_MODEL = "claude-haiku-5-5";
 const MODEL = () => process.env.ANTHROPIC_SPECIAL_CLAUSE_MODEL || DEFAULT_MODEL;
 const TIMEOUT_MS = 30_000;
 export const MAX_ROUNDS = 3;
@@ -215,7 +215,9 @@ async function anthropicCall(system: string, user: string): Promise<string> {
   try {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const message = await anthropic.messages.create(
-      { model: MODEL(), max_tokens: 1200, system, messages: [{ role: "user", content: user }] },
+      // Haiku 5.5 thinks by default and those tokens come out of max_tokens: the cap has to
+      // cover the thinking as well as the clause itself, or a draft comes back truncated.
+      { model: MODEL(), max_tokens: 4000, system, messages: [{ role: "user", content: user }] },
       { timeout: TIMEOUT_MS, maxRetries: 1 },
     );
     return message.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();

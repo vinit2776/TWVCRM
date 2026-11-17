@@ -26,6 +26,8 @@ interface ChainContract {
   is_renewal: boolean;
   parent_contract_id: string | null;
   escalation_waived: boolean;
+  /** Monthly total of the contract's recurring add-ons that are still billing (excl. GST). */
+  addon_monthly?: number;
 }
 
 interface ContractChainStripProps {
@@ -41,6 +43,9 @@ interface ContractChainStripProps {
  * (escalation_percentage alone wouldn't reflect that).
  */
 function EscalationBadge({ prev, next }: { prev: ChainContract; next: ChainContract }) {
+  // Recurring add-ons sit outside the subtotal and never escalate, so a contract that
+  // has them is saying the percentage is on the monthly fee alone.
+  const feeOnly = (prev.addon_monthly ?? 0) > 0 || (next.addon_monthly ?? 0) > 0;
   const delta = next.subtotal - prev.subtotal;
   const pct = prev.subtotal > 0 ? (delta / prev.subtotal) * 100 : 0;
   const pctLabel = `${delta > 0 ? "+" : delta < 0 ? "−" : "±"}${Math.abs(pct).toFixed(Number.isInteger(pct) ? 0 : 1)}%`;
@@ -78,6 +83,7 @@ function EscalationBadge({ prev, next }: { prev: ChainContract; next: ChainContr
       <span className={`text-[8px] ${positive ? "text-emerald-600" : "text-rose-600"}`}>
         {deltaLabel}
       </span>
+      {feeOnly && <span className="text-[7px] uppercase tracking-wide text-muted-foreground">on fee</span>}
     </div>
   );
 }
@@ -128,7 +134,23 @@ export function ContractChainStrip({ contractId, leadId }: ContractChainStripPro
 
       // Only show the strip if there's more than 1 contract in the chain
       if (chainList.length > 1) {
-        setChain(chainList);
+        // Add-ons are not part of the subtotal, so each contract's are read separately.
+        const withAddons = await Promise.all(
+          chainList.map(async (c) => {
+            try {
+              const r = await fetch(`/api/contracts/${c.id}/addons`);
+              if (!r.ok) return c;
+              const j = await r.json();
+              const total = ((j.data || []) as { is_active: boolean; amount: number }[])
+                .filter((a) => a.is_active)
+                .reduce((sum, a) => sum + Number(a.amount), 0);
+              return { ...c, addon_monthly: total };
+            } catch {
+              return c;
+            }
+          })
+        );
+        setChain(withAddons);
       }
     } catch {
       // Silent fail
@@ -215,6 +237,11 @@ export function ContractChainStrip({ contractId, leadId }: ContractChainStripPro
                     <p className="text-xs font-semibold text-primary">
                       {formatCurrency(c.subtotal)}/mo
                     </p>
+                    {(c.addon_monthly ?? 0) > 0 && (
+                      <p className="text-[10px] font-medium text-amber-700">
+                        + {formatCurrency(c.addon_monthly ?? 0)}/mo add-ons
+                      </p>
+                    )}
                     <p className="text-[10px] text-muted-foreground">
                       {formatDate(c.start_date)} – {formatDate(c.end_date)}
                     </p>

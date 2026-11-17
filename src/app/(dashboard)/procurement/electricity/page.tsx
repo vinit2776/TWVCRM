@@ -412,6 +412,8 @@ export default function ElectricityBillsPage() {
     if (lines.length === 0) { toast.error("Add at least one line"); return; }
     if (!editingBillId && !invoice.file) { toast.error("Upload the landlord's invoice first — it is used to check what you entered"); return; }
     if (!editingBillId) { const blocked = invoice.blockedReason(enteredForCheck, duplicateWarning); if (blocked) { toast.error(blocked); return; } }
+    // Editing keeps the invoice on file unless a corrected one is chosen; that one is checked like a new capture.
+    if (editingBillId && invoice.file) { const blocked = invoice.blockedReason(enteredForCheck); if (blocked) { toast.error(blocked); return; } }
     setSubmitting(true);
     const linesPayload = lines.map((l) => ({
       line_type: l.line_type,
@@ -423,7 +425,7 @@ export default function ElectricityBillsPage() {
       sort_order: l.sort_order,
     }));
     let invoiceFileUrl: string | null = null;
-    if (!editingBillId) {
+    if (!editingBillId || invoice.file) {
       invoiceFileUrl = await invoice.upload();
       if (!invoiceFileUrl) { setSubmitting(false); return; }
     }
@@ -438,6 +440,7 @@ export default function ElectricityBillsPage() {
             landlord_gst_applicable: form.landlord_gst_applicable,
             landlord_gst_rate: form.landlord_gst_rate,
             lines: linesPayload,
+            ...(invoiceFileUrl ? { invoice_file_url: invoiceFileUrl, invoice_check: invoice.recordFor(enteredForCheck) } : {}),
           }),
         })
       : await fetch("/api/electricity-bills", {
@@ -868,9 +871,9 @@ export default function ElectricityBillsPage() {
   // Accounts may approve (the API refuses when no customer contract is billable); Revise stays admin/manager.
   const canApproveBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
   const canManageCustomerBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
-  // Edit/Delete are corrections tools for mis-entered data — admin only,
-  // stricter than who's allowed to capture a bill in the first place.
-  const canEditBills = user?.role === "admin";
+  // Delete is a corrections tool for mis-entered data — admin only. Edit is also open to accounts,
+  // but only until the landlord invoice has any payment (the API enforces the same lock).
+  const canEditBills = ["admin", "accounts"].includes(user?.role ?? "");
   const canDeleteBills = user?.role === "admin";
 
   return (
@@ -1068,7 +1071,7 @@ export default function ElectricityBillsPage() {
                       }
                       return null;
                     })()}
-                    {canEditBills && bill.status === "draft" && (
+                    {canEditBills && bill.status === "draft" && !(bill.vendor_bill && (bill.vendor_bill.payment_status === "paid" || Number(bill.vendor_bill.amount_paid ?? 0) > 0)) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1701,7 +1704,7 @@ export default function ElectricityBillsPage() {
               </div>
             </div>
 
-            {!editingBillId && <LandlordInvoiceField invoice={invoice} duplicate={duplicateWarning} entered={enteredForCheck} onApply={applyInvoiceSuggestion} />}
+            <LandlordInvoiceField invoice={invoice} duplicate={editingBillId ? null : duplicateWarning} entered={enteredForCheck} onApply={applyInvoiceSuggestion} replace={!!editingBillId} />
 
             <div className="space-y-1">
               <Label>Notes</Label>
