@@ -405,16 +405,20 @@ export async function POST(request: NextRequest) {
   // Same vendor + same invoice number on any non-rejected bill = duplicate.
   // Rejected bills are excluded so a re-submission after rejection is allowed.
   if (parsed.data.invoice_number?.trim()) {
-    const { count: dupCount } = await supabase
+    const { data: dupRows } = await supabase
       .from("vendor_bills")
-      .select("*", { count: "exact", head: true })
+      .select("bill_number, approval_status, purchase_orders(po_number, amc_terminated_at)")
       .eq("vendor_id", parsed.data.vendor_id)
       .eq("invoice_number", parsed.data.invoice_number.trim())
-      .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
+      .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)
+      .limit(1);
 
-    if (dupCount && dupCount > 0) {
+    if (dupRows && dupRows.length > 0) {
+      const d = dupRows[0] as unknown as { bill_number: string; approval_status: string; purchase_orders: { po_number: string; amc_terminated_at: string | null } | { po_number: string; amc_terminated_at: string | null }[] | null };
+      const po = Array.isArray(d.purchase_orders) ? d.purchase_orders[0] : d.purchase_orders;
+      const where = po ? ` on ${po.po_number}${po.amc_terminated_at ? " (a terminated AMC)" : ""}` : "";
       return NextResponse.json(
-        { error: `Invoice number "${parsed.data.invoice_number.trim()}" already exists for this vendor. Check Vendor Payments to avoid duplicate processing.` },
+        { error: `Invoice number "${parsed.data.invoice_number.trim()}" already exists for this vendor: ${d.bill_number}${where}, ${d.approval_status}. Open that bill and withdraw it if it was raised in error.` },
         { status: 409 }
       );
     }
