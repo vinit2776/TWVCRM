@@ -59,6 +59,10 @@
       "schedule": "0 4 * * 6"
     },
     {
+      "path": "/api/cron/wa-reply-alert",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/rent-gap-alert",
       "schedule": "30 4 * * *"
     },
