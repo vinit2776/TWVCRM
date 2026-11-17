@@ -2880,3 +2880,27 @@ export const NO_ANSWER_REASONS = ["Switched off", "No response", "Not reachable 
 
 /** Roles that can handle (own) a lead: follow-ups, reminders and tour alerts go to this person. */
 export const LEAD_HANDLER_ROLES = ["admin", "manager", "sales_rep"] as const;
+
+// ==========================================
+// Virtual Office KYC review (two-step)
+// ==========================================
+export const KYC_PORTAL_CHECK_TYPES = ["pan_income_tax", "gstin_portal", "mca_master_data", "aadhaar_visual"] as const;
+export const KYC_PORTAL_CHECK_LABELS: Record<(typeof KYC_PORTAL_CHECK_TYPES)[number], string> = {
+  pan_income_tax: "PAN on Income Tax portal",
+  gstin_portal: "GSTIN on GST portal",
+  mca_master_data: "Company on MCA master data",
+  aadhaar_visual: "Aadhaar checked visually",
+};
+export const KYC_PORTAL_CHECK_RESULTS = ["matched", "mismatch", "not_found", "unavailable"] as const;
+export const KYC_PORTAL_CHECK_RESULT_LABELS: Record<(typeof KYC_PORTAL_CHECK_RESULTS)[number], string> = {
+  matched: "Matched",
+  mismatch: "Mismatch",
+  not_found: "Not found",
+  unavailable: "Portal unavailable",
+};
+export const KYC_PORTAL_CHECK_RESULT_COLORS: Record<(typeof KYC_PORTAL_CHECK_RESULTS)[number], string> = {
+  matched: "bg-green-100 text-green-800",
+  mismatch: "bg-red-100 text-red-800",
+  not_found: "bg-red-100 text-red-800",
+  unavailable: "bg-gray-100 text-gray-800",
+};
