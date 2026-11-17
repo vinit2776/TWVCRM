@@ -105,6 +105,7 @@ import { useExit } from "@/components/contracts/exit/use-exit";
 import { EXIT_START_ROLES } from "@/lib/contract-exit";
 import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
 import { ContractPricingSplitDialog } from "@/components/contracts/contract-pricing-split-dialog";
+import { pricingCorrectionBlocker } from "@/lib/contract-pricing-split";
 import { InvoiceCustomerWizard } from "@/components/contracts/invoice-customer-wizard";
 import { canUseInvoiceWizard } from "@/lib/invoice-wizard-availability";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
@@ -2273,6 +2274,19 @@ export default function ContractDetailPage({
             />
           )}
 
+          {/* An accepted renewal awaiting activation has no Renewal card, but still needs the pricing correction */}
+          {!["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) &&
+            pricingCorrectionBlocker(contract) === null && userRole === "admin" && (
+            <Card>
+              <CardContent className="pt-6">
+                <Button size="sm" variant="outline" className="w-full" onClick={() => setPricingSplitOpen(true)}>
+                  <Scale className="mr-1.5 h-3.5 w-3.5" />
+                  Edit pricing split
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Renewal Card — pinned to top of sidebar for active/expired/renewal_in_progress/renewed contracts */}
           {["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) && (
             <Card>
@@ -2358,7 +2372,7 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
-                {contract.status === "active" && userRole === "admin" && (
+                {pricingCorrectionBlocker(contract) === null && userRole === "admin" && (
                   <Button size="sm" variant="outline" className="w-full" onClick={() => setPricingSplitOpen(true)}>
                     <Scale className="mr-1.5 h-3.5 w-3.5" />
                     Edit pricing split
