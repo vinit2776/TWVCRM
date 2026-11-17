@@ -1,5 +1,6 @@
 "use client";
 
+import { RetiredAmcBanner } from "@/components/procurement/retired-amc-banner";
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { use, useState, useEffect, useCallback } from "react";
@@ -906,6 +907,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           tip="After recording, a confirmation email is automatically sent to the vendor's registered email. Make sure the email is on file before saving."
         />
       )}
+
+      <RetiredAmcBanner po={chain?.po ?? null} billStatus={bill.approval_status} fullyPaid={isFullyPaid} />
 
       {/* Header */}
       <div className="flex items-start gap-3">
