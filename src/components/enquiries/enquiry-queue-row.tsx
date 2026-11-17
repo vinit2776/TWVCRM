@@ -103,6 +103,19 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
                 Re-enquiry
               </span>
             )}
+            {!item.isReEnquiry && !isResolved && (
+              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">
+                First enquiry
+              </span>
+            )}
+            {!isResolved && (item.messageCount ?? 0) > 1 && (
+              <span
+                className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-800"
+                title="The customer has written more than once on this enquiry"
+              >
+                {item.messageCount} messages
+              </span>
+            )}
           </div>
           <p className="text-xs text-muted-foreground truncate">
             {item.source}

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { syncAddonsToContractTerm } from "@/lib/contract-addon-sync";
 
 const MAX_LIFETIME_EXTENSION_DAYS = 60;
 
@@ -94,6 +95,14 @@ export async function POST(
   if (updateErr) {
     return NextResponse.json({ error: updateErr.message }, { status: 500 });
   }
+
+  // Add-ons on the default dates keep billing through the extension.
+  await syncAddonsToContractTerm(
+    createAdminClient(),
+    id,
+    { start: contract.start_date as string, end: contract.end_date as string },
+    { start: contract.start_date as string, end: newEndDateStr }
+  );
 
   await logAudit(supabase, {
     entityType: "contract",

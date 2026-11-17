@@ -35,6 +35,7 @@ const SharePaymentLinkDialog = dynamic(() => import("@/components/bookings/share
 const PostCheckoutChecklistDialog = dynamic(() => import("@/components/bookings/post-checkout-checklist-dialog").then(m => m.PostCheckoutChecklistDialog), { ssr: false });
 const CancelBookingDialog    = dynamic(() => import("@/components/bookings/cancel-booking-dialog").then(m => m.CancelBookingDialog),         { ssr: false });
 const MarkComplimentaryDialog = dynamic(() => import("@/components/bookings/mark-complimentary-dialog").then(m => m.MarkComplimentaryDialog), { ssr: false });
+const SendPiDialog = dynamic(() => import("@/components/bookings/send-pi-dialog").then(m => m.SendPiDialog), { ssr: false });
 const GetPaymentChooser      = dynamic(() => import("@/components/bookings/get-payment-chooser").then(m => m.GetPaymentChooser),             { ssr: false });
 import { NextActionBanner, NextActionTarget, computeNextActionTarget } from "@/components/bookings/next-action-banner";
 import { OvertimeChargeBanner } from "@/components/bookings/overtime-charge-banner";
@@ -43,6 +44,9 @@ const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-us
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
 import { BookingPaymentSummary } from "@/components/bookings/booking-payment-summary";
+import { BookingPiSentBanner } from "@/components/bookings/booking-pi-sent-banner";
+import { PaymentLinkStrip } from "@/components/bookings/payment-link-strip";
+import { BookingEmailDialog } from "@/components/bookings/booking-email-dialog";
 import { CorrectPaymentMethodDialog } from "@/components/bookings/correct-payment-method-dialog";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
@@ -113,6 +117,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [deferDialogOpen, setDeferDialogOpen] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [getPaymentChooserOpen, setGetPaymentChooserOpen] = useState(false);
+  const [sendPiOpen, setSendPiOpen] = useState(false);
+  const [resendConfirmOpen, setResendConfirmOpen] = useState(false);
+  const [resendPinOpen, setResendPinOpen] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [markCompDialogOpen, setMarkCompDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
@@ -508,20 +515,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }).catch(() => {});
   }, [fetchBooking, id]);
 
-  const handleResendEmail = async () => {
-    const res = await fetch(`/api/bookings/${id}/email`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "confirmation" }),
-    });
-    if (res.ok) {
-      toast.success("Confirmation email sent");
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to send email");
-    }
-  };
-
   const handleCopyFeedbackLink = () => {
     if (!booking?.feedback_token) { toast.error("No feedback token"); return; }
     const url = `${window.location.origin}/feedback/${booking.feedback_token}`;
@@ -851,6 +844,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const isTerminalStatus = ["cancelled", "checked_out", "no_show", "closed"].includes(booking.status);
   const isPaid = booking.payment_status === "paid";
   const canEditPricing = !isTerminalStatus && !isPaid && !hasVerifiedPayment;
+  // A walk-in or guest booking takes an extra found after checkout as a line on the
+  // booking itself (it reopens the balance); contract holders still use the monthly invoice.
+  const extrasAfterCheckout = booking.status === "checked_out"
+    && booking.customer_type !== "contract_holder" && !booking.contract_id;
+  const openExtras = () => {
+    setShowAddonsSection(true);
+    setAddonOpenSignal(Date.now());
+  };
   const lockReason = isTerminalStatus
     ? `Locked — booking is ${booking.status}`
     : isPaid
@@ -921,7 +922,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Button variant="outline" size="sm" onClick={() => setRescheduleDialogOpen(true)}>
                 <Calendar className="mr-1 h-4 w-4" />Reschedule
               </Button>
-              <Button variant="outline" size="sm" onClick={handleResendEmail}>
+              <Button variant="outline" size="sm" onClick={() => setResendConfirmOpen(true)}>
                 <Mail className="mr-1 h-4 w-4" />Resend Email
               </Button>
               <Button variant="outline" size="sm" onClick={() => handleStatusAction("no_show")} disabled={actionLoading}>
@@ -1071,7 +1072,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               consistent verb across the whole booking lifecycle —
               the underlying ledger differs but the intent is the same. */}
           {(booking.status === "checked_out" || booking.status === "no_show") && (
-            <Button variant="outline" size="sm" onClick={() => setLogChargeOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => (extrasAfterCheckout ? openExtras() : setLogChargeOpen(true))}>
               <Plus className="mr-1 h-4 w-4" />Add Charge
             </Button>
           )}
@@ -1121,6 +1122,38 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           phone={booking.booker_phone || booking.lead?.phone || booking.guest_phone || ""}
           leadId={booking.lead?.id}
         />
+      )}
+
+      {extrasAfterCheckout && booking.payment_status === "pending"
+        && existingPayments.some((p) => p.status === "verified") && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold text-amber-800">
+              Extra to collect · {formatCurrency(amountLeftToCollect(Number(booking.total_amount_with_gst) || Number(booking.total_amount), existingPayments))}
+            </div>
+            <div className="text-xs text-amber-700 mt-0.5">
+              Added after checkout. The booking was already paid; this is the balance. The GST invoice waits until it is collected, then covers everything.
+            </div>
+          </div>
+          <Button size="sm" variant="outline" className="shrink-0 bg-white/70" onClick={() => setGetPaymentChooserOpen(true)}>
+            Collect
+          </Button>
+        </div>
+      )}
+
+      {booking.pi_sent_at && (
+        <BookingPiSentBanner
+          sentAt={booking.pi_sent_at}
+          sentTo={booking.pi_sent_to ?? null}
+          sentByName={booking.pi_sender?.full_name ?? null}
+          paymentStatus={booking.payment_status}
+          onResend={() => setSendPiOpen(true)}
+        />
+      )}
+
+      {booking.razorpay_payment_link_url && booking.payment_status === "pending" && (
+        <PaymentLinkStrip url={booking.razorpay_payment_link_url} />
       )}
 
       {/* Payment status summary — replaces the bare "posted_to_bill" pill
@@ -1354,9 +1387,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
       {/* Quick Action Links */}
       <div className="flex flex-wrap gap-2">
-        <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleDownloadReceipt}>
-          <Download className="mr-1 h-3.5 w-3.5" />Download Receipt
-        </Button>
+        {/* A receipt acknowledges money received, so it only exists once a payment
+            has been verified. Before that it would show an unpaid booking as a receipt. */}
+        {existingPayments.some((p) => p.status === "verified") && (
+          <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleDownloadReceipt}>
+            <Download className="mr-1 h-3.5 w-3.5" />Download Receipt
+          </Button>
+        )}
         {booking.status === "checked_out" && (
           <>
             {booking.feedback_token && (
@@ -1612,14 +1649,19 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const existingPin = (booking as any).access_pin as string | null;
 
-          async function provisionPin() {
+          // Returns what actually happened, so a dialog never claims an email went when it did not.
+          async function provisionPinDetailed(to?: string, cc?: string): Promise<{ ok: boolean; message: string | null }> {
             const res = await fetch("/api/cosec/booking-access", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ booking_id: id }),
+              body: JSON.stringify({ booking_id: id, ...(to ? { to } : {}), ...(cc ? { cc } : {}) }),
             });
-            const json = res.ok ? await res.json() : null;
-            if (res.ok && json) {
+            const json = await res.json().catch(() => null);
+            if (!res.ok) return { ok: false, message: json?.error || "Failed to resend PIN" };
+            if (json?.skipped) {
+              return { ok: false, message: "No door devices are set up at this location, so no PIN was provisioned or sent." };
+            }
+            if (json) {
               // Surface per-channel delivery result
               if (json.delivery) setPinDelivery(json.delivery);
               // Refresh booking to pick up new access_pin value
@@ -1629,7 +1671,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               fetch(`/api/cosec/booking-devices?booking_id=${id}`)
                 .then(r => r.json()).then(j => setBookingDevices(j.data || [])).catch(() => {});
             }
-            return res.ok;
+            const emailStatus = json?.delivery?.email;
+            if (to && emailStatus && emailStatus !== "sent") {
+              return { ok: false, message: `The PIN was provisioned but the email to ${to} was not sent (${emailStatus}).` };
+            }
+            return { ok: true, message: null };
+          }
+
+          async function provisionPin() {
+            return (await provisionPinDetailed()).ok;
           }
 
           // Build the shareable PIN message the staff member can copy and send manually
@@ -1668,15 +1718,24 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       <div className="flex flex-col gap-1.5 items-end">
                         <Button
                           variant="outline" size="sm"
-                          onClick={async () => {
-                            setPinDelivery(null);
-                            const ok = await provisionPin();
-                            if (ok) toast.success("Access PIN resent");
-                            else toast.error("Failed to resend PIN");
-                          }}
+                          onClick={() => setResendPinOpen(true)}
                         >
                           <Send size={13} className="mr-1.5" />Resend PIN
                         </Button>
+                        <BookingEmailDialog
+                          open={resendPinOpen}
+                          onOpenChange={setResendPinOpen}
+                          title="Resend access PIN"
+                          // The PIN's own default: the address entered for this booking, then the customer record's.
+                          savedEmail={booking.guest_email || customerEmail || null}
+                          idPrefix="pin"
+                          successMessage={(to) => `Access PIN resent. The email went to ${to}.`}
+                          onSend={async (to, cc) => {
+                            setPinDelivery(null);
+                            const result = await provisionPinDetailed(to, cc);
+                            return result.ok ? null : result.message;
+                          }}
+                        />
                         {/* Copy to share */}
                         <Button
                           variant="ghost" size="sm"
@@ -1694,8 +1753,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       </div>
                     </div>
 
+                    {/* The PIN is not sent automatically; staff send it when it is needed. */}
+                    {(!pinDelivery || [pinDelivery.sms, pinDelivery.email, pinDelivery.whatsapp].every((s) => s === "skipped")) && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Not sent to the customer. Use Resend PIN to email and text it when it is needed.
+                      </p>
+                    )}
+
                     {/* Delivery status — shown after Resend or Generate */}
-                    {pinDelivery && (
+                    {pinDelivery && [pinDelivery.sms, pinDelivery.email, pinDelivery.whatsapp].some((s) => s !== "skipped") && (
                       <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
                         <span className="text-[11px] text-muted-foreground mr-0.5">Sent via:</span>
                         <DeliveryBadge label="WhatsApp" status={pinDelivery.whatsapp} />
@@ -2286,7 +2352,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <BookingAddonsSection
             bookingId={booking.id}
             spaceId={booking.space_id}
-            canEdit={canEditPricing}
+            canEdit={canEditPricing || extrasAfterCheckout}
             onChange={fetchBooking}
             prefill={addonPrefill}
             openSignal={addonOpenSignal}
@@ -2300,7 +2366,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             {/* Same lock as the in-section "Add charge" — once payment is
                 collected, charges can't be added (would create a hidden
                 balance due). */}
-            {canEditPricing ? (
+            {canEditPricing || extrasAfterCheckout ? (
               <Button
                 size="sm"
                 onClick={() => {
@@ -2343,7 +2409,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         />
         {["checked_out", "no_show"].includes(booking.status) && (
           <div className="flex justify-end">
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setLogChargeOpen(true)}>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => (extrasAfterCheckout ? openExtras() : setLogChargeOpen(true))}>
               <Plus className="mr-1 h-3 w-3" />Add Charge
             </Button>
           </div>
@@ -2501,6 +2567,37 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         })()}
         onPickCounter={() => setPaymentDialogOpen(true)}
         onPickLink={() => setPaymentSendDialogOpen(true)}
+        onPickPi={() => setSendPiOpen(true)}
+      />
+
+      <BookingEmailDialog
+        open={resendConfirmOpen}
+        onOpenChange={setResendConfirmOpen}
+        title="Resend booking confirmation"
+        savedEmail={customerEmail || null}
+        idPrefix="confirm"
+        successMessage={(to) => `Confirmation sent to ${to}`}
+        onSend={async (to, cc) => {
+          const res = await fetch(`/api/bookings/${booking.id}/email`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "confirmation", to, cc }),
+          });
+          if (res.ok) return null;
+          const err = await res.json().catch(() => null);
+          return err?.error || "Failed to send email";
+        }}
+      />
+
+      <SendPiDialog
+        open={sendPiOpen}
+        onOpenChange={setSendPiOpen}
+        bookingId={booking.id}
+        piNumber={booking.pi_number || `PI-${booking.booking_number || booking.id.slice(0, 8).toUpperCase()}`}
+        amountDue={amountLeftToCollect(Number(booking.total_amount_with_gst) || Number(booking.total_amount), existingPayments)}
+        customerEmail={customerEmail || null}
+        alreadySentAt={booking.pi_sent_at ?? null}
+        onSent={() => { fetchBooking(); startPaymentPoll(); }}
       />
 
       <CancelBookingDialog

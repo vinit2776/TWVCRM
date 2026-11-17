@@ -4,7 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 // used for the manual "Check wording" button and the client pre-submit check) and by the
 // server-side enforcement in the invoice create/update routes — both must grade notes
 // identically so the client-side gate can't diverge from what's actually enforced.
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+const DEFAULT_MODEL = "claude-haiku-5-5";
 const MODEL = process.env.ANTHROPIC_CHARGE_DESCRIPTION_MODEL || DEFAULT_MODEL;
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -54,7 +54,9 @@ export async function checkInternalNote({
     const message = await anthropic.messages.create(
       {
         model: MODEL,
-        max_tokens: 150,
+        // Haiku 5.5 thinks by default and those tokens come out of max_tokens, so this
+        // cap is headroom for thinking ahead of the short answer, not a target length.
+        max_tokens: 1200,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userMessage }],
       },

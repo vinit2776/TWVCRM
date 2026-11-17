@@ -19,6 +19,7 @@ import { ReclassifyVouchersDialog } from "@/components/vouchers/reclassify-vouch
 import { VoucherIssuanceDialog } from "@/components/vouchers/voucher-issuance-dialog";
 import { UnifiPanel } from "@/components/vouchers/unifi-panel";
 import { RuijiePanel } from "@/components/vouchers/ruijie-panel";
+import { WifiNetworkNameField } from "@/components/vouchers/wifi-network-name-field";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { useLocations } from "@/hooks/use-locations";
 import {
@@ -81,7 +82,7 @@ export default function VouchersPage() {
   const userRole = user?.role ?? "sales_rep";
 
   // Resolve selected location details (to check unifi_site_id)
-  const { locations } = useLocations();
+  const { locations, refetch: refetchLocations } = useLocations();
   const selectedLocation = locationFilter
     ? locations.find((l) => l.id === locationFilter) ?? null
     : null;
@@ -180,6 +181,17 @@ export default function VouchersPage() {
           )}
         </div>
       </div>
+
+      {/* Network name the voucher email tells members to join (any voucher mode) */}
+      {selectedLocation && (
+        <WifiNetworkNameField
+          locationId={selectedLocation.id}
+          locationName={selectedLocation.name}
+          value={selectedLocation.wifi_ssid}
+          canEdit={["admin", "manager", "it_manager"].includes(userRole)}
+          onSaved={refetchLocations}
+        />
+      )}
 
       {/* Live-API location badge */}
       {isUnifiLocation && selectedLocation && (

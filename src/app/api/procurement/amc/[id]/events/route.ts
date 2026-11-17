@@ -79,12 +79,16 @@ export async function POST(
   // Fetch PO to validate and get visit counts
   const { data: po } = await supabase
     .from("purchase_orders")
-    .select("id, po_type, status, amc_visits_covered, amc_visits_used, amc_start_date, amc_status")
+    .select("id, po_type, status, amc_visits_covered, amc_visits_used, amc_start_date, amc_status, amc_terminated_at")
     .eq("id", poId)
     .single();
 
   if (!po) return NextResponse.json({ error: "PO not found" }, { status: 404 });
   if (po.po_type !== "service") return NextResponse.json({ error: "Not a service PO" }, { status: 422 });
+  // Logging a visit rewrites amc_status below, which would silently undo a termination.
+  if (po.amc_terminated_at) {
+    return NextResponse.json({ error: "This AMC has been terminated, so visits can't be logged against it. Reinstate it first." }, { status: 422 });
+  }
   // A cancelled contract is no longer being serviced under this PO. The screens hide the
   // button already; this stops the API logging against it directly.
   if (po.status === "cancelled") {

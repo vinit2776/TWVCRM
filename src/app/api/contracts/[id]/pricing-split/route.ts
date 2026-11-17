@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { lineItemSchema } from "@/lib/validations";
-import { computePricingTotals, adjustDepositShortfall } from "@/lib/contract-pricing-split";
+import { computePricingTotals, adjustDepositShortfall, pricingCorrectionBlocker } from "@/lib/contract-pricing-split";
 
 const bodySchema = z.object({
   // total is recomputed server-side, so callers only send the price inputs
@@ -14,10 +14,11 @@ const bodySchema = z.object({
 /**
  * POST /api/contracts/[id]/pricing-split
  *
- * Admin-only correction of an ACTIVE contract's line items, used to split a
- * single rate into rent (escalates) and maintenance (fixed), or to fix a rate
- * that was escalated wrongly. Rewrites items, subtotal, tax, total and the
- * deposit shortfall, and logs the old and new values.
+ * Admin-only correction of an ACTIVE contract's line items (or of a renewal that
+ * is accepted but not yet activated), used to split a single rate into rent
+ * (escalates) and maintenance (fixed), to fix a rate that was escalated wrongly,
+ * or to take a recurring add-on out of the fee. Rewrites items, subtotal, tax,
+ * total and the deposit shortfall, and logs the old and new values.
  *
  * Deliberately does NOT touch billing statements: an already-issued statement
  * is a financial document (and may sit in accounts' Tally Inbox), so it is
@@ -49,13 +50,12 @@ export async function POST(
   const admin = createAdminClient();
   const { data: contract } = await admin
     .from("contracts")
-    .select("id, contract_number, status, items, subtotal, total_amount, tax_percentage, discount_percentage, security_deposit_months, deposit_shortfall")
+    .select("id, contract_number, status, is_renewal, items, subtotal, total_amount, tax_percentage, discount_percentage, security_deposit_months, deposit_shortfall")
     .eq("id", id)
     .single();
   if (!contract) return NextResponse.json({ error: "Contract not found" }, { status: 404 });
-  if (contract.status !== "active") {
-    return NextResponse.json({ error: "Only an active contract's pricing can be changed here" }, { status: 400 });
-  }
+  const blocked = pricingCorrectionBlocker(contract);
+  if (blocked) return NextResponse.json({ error: blocked }, { status: 400 });
 
   // Phased rates override the flat items for billing, so editing the items
   // would not change what is billed and would only mislead.

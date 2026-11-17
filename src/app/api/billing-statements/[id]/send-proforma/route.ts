@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectIfBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 import { resolveAttachmentUrl } from "@/lib/communications-log";
@@ -25,6 +26,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const piBlock = await rejectIfBookingPiStatement(id);
+  if (piBlock) return piBlock;
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const adminSupabase = await createAdminClient();
 

@@ -7,6 +7,8 @@ import { calcGst } from "@/lib/tax";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
+import { addonsMonthlyTotal, cleanAddons, prorateMonthly } from "@/lib/recurring-addons";
+import type { ProposalAddon } from "@/types";
 
 /**
  * POST /api/proposals/[id]/send-invoice
@@ -124,7 +126,11 @@ export async function POST(
   // lines wholesale — amount is always qty × unit_price, recomputed here
   // rather than trusted from the client; there's no single "monthly rate" to
   // show a breakdown against, so those fields are left off.
-  const lineItems = overrideItems
+  type InvoiceLine = {
+    description: string; qty: number; unit_price: number; amount: number; hsn_sac_code: string;
+    monthly_rate?: number; days_used?: number; days_in_month?: number;
+  };
+  const lineItems: InvoiceLine[] = overrideItems
     ? overrideItems.map((item) => ({
         description: item.description,
         qty: item.qty,
@@ -145,6 +151,24 @@ export async function POST(
           hsn_sac_code: resolveHsnCode("rent"),
         };
       });
+
+  // Recurring add-ons run from the start date too, so the first partial month
+  // bills them by day alongside the fee. Staff overrides replace the lines
+  // wholesale, as they do for the fee.
+  const proposalAddons = overrideItems ? [] : cleanAddons(proposal.recurring_addons as ProposalAddon[] | null);
+  for (const addon of proposalAddons) {
+    const proratedAmount = prorateMonthly(addon.amount, daysRemaining, daysInMonth);
+    lineItems.push({
+      description: addon.description,
+      qty: 1,
+      unit_price: proratedAmount,
+      amount: proratedAmount,
+      monthly_rate: addon.amount,
+      days_used: daysRemaining,
+      days_in_month: daysInMonth,
+      hsn_sac_code: resolveHsnCode("rent"),
+    });
+  }
 
   const proratedSubtotal = Math.round(lineItems.reduce((sum: number, i: { amount: number }) => sum + i.amount, 0) * 100) / 100;
 
@@ -176,7 +200,7 @@ export async function POST(
         ${!overrideItems && prorationFactor < 1 ? `
         <div style="background:#f0faf5;border-left:4px solid #015E65;padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0;">
           <p style="color:#015E65;font-size:13px;font-weight:600;margin:0 0 8px;">About this invoice</p>
-          <p style="color:#333;font-size:13px;margin:0;">Prorated amount: Rs. ${Number(proposal.subtotal || proposal.total_amount || 0).toLocaleString("en-IN")} × ${daysRemaining}/${daysInMonth} = <strong>Rs. ${proratedSubtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> + GST</p>
+          <p style="color:#333;font-size:13px;margin:0;">Prorated amount: Rs. ${(Number(proposal.subtotal || proposal.total_amount || 0) + addonsMonthlyTotal(proposalAddons)).toLocaleString("en-IN")} × ${daysRemaining}/${daysInMonth} = <strong>Rs. ${proratedSubtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> + GST</p>
         </div>` : ""}
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;background:#f7f8fa;border-radius:6px;">
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Proposal Ref.</td><td style="padding:10px 16px;">${proposal.proposal_number}</td></tr>

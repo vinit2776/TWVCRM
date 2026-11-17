@@ -1,5 +1,6 @@
 "use client";
 
+import { cleanAddons } from "@/lib/recurring-addons";
 import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
@@ -69,6 +70,7 @@ import { partialDepositState, partialDepositWarning, type PartialDepositState } 
 import type { DepositPosition } from "@/lib/deposit-instalments";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
+import { LeadDepositSummary } from "@/components/leads/lead-deposit-summary";
 import { DepositPartsPanel } from "@/components/proposals/deposit-parts-panel";
 import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
 import dynamic from "next/dynamic";
@@ -1278,6 +1280,25 @@ export default function ProposalDetailPage({
                   </tbody>
                 </table>
               </div>
+              {proposal.escalation_percentage != null && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Escalation on the monthly fee: <span className="font-medium text-foreground">{Number(proposal.escalation_percentage)}%</span> at each renewal.
+                </p>
+              )}
+              {cleanAddons(proposal.recurring_addons).length > 0 && (
+                <div className="mt-4 rounded-md border border-amber-200 bg-amber-50/50 p-3 space-y-2">
+                  <p className="text-sm font-semibold">Recurring add-ons <span className="text-xs font-normal text-muted-foreground">(not escalated, outside the security deposit)</span></p>
+                  {cleanAddons(proposal.recurring_addons).map((a, i) => (
+                    <div key={i} className="flex justify-between text-sm">
+                      <span>{a.description}</span>
+                      <span className="tabular-nums">{formatCurrency(a.amount)} / month + GST</span>
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted-foreground">
+                    They become recurring add-ons on the contract for its full term, and can be switched off or ended there.
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -1487,6 +1508,10 @@ export default function ProposalDetailPage({
                       </button>
                     )}
                   </div>
+                )}
+
+                {proposal.lead_id && (
+                  <LeadDepositSummary leadId={proposal.lead_id} currentUserRole={currentUser?.role ?? undefined} />
                 )}
 
                 <DepositPartsPanel

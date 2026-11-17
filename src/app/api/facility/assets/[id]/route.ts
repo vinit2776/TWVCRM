@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { assetIdsWithInvoice } from "@/lib/facility/asset-invoice";
 import { logAudit } from "@/lib/audit";
 import { hasRole, FACILITY_ROLES } from "@/lib/facility";
 
@@ -34,7 +35,15 @@ export async function GET(
     .order("created_at", { ascending: false })
     .limit(50);
 
-  return NextResponse.json({ data: { ...asset, issue_history: issues || [] } });
+  const withInvoice = await assetIdsWithInvoice(createAdminClient(), [id]);
+
+  return NextResponse.json({
+    data: {
+      ...asset,
+      issue_history: issues || [],
+      ...(withInvoice ? { invoice_missing: !withInvoice.has(id) } : {}),
+    },
+  });
 }
 
 export async function PUT(
