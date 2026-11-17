@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { loadDepositCollection } from "@/lib/deposit-instalment-server";
+import { partialDepositWarning } from "@/lib/deposit-activation";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { syncAddonsToContractTerm } from "@/lib/contract-addon-sync";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
@@ -9,7 +12,7 @@ import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
 import { renewalChainContractIds } from "@/lib/renewal-chain";
 import { getRenewalProrataGate, PRORATA_UNSENT_ERROR } from "@/lib/renewal-prorata";
 import { setUserActive } from "@/lib/cosec";
-import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, siteConfigForStoredVoucher, buildVoucherNote, isUnifiLocation } from "@/lib/unifi";
 import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 import { resolveContractCommitment } from "@/lib/contract-commitment";
 import { hasCommitmentTerms } from "@/lib/proposal-terms";
@@ -27,7 +30,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months, tenure_months, lock_in_months, notice_period_months), commitment_overridden_by_user:users!contracts_commitment_overridden_by_fkey(full_name), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name), rate_phases:contract_rate_phases(*)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months, tenure_months, lock_in_months, notice_period_months), commitment_overridden_by_user:users!contracts_commitment_overridden_by_fkey(full_name), location:locations!contracts_location_id_fkey(id, name, code, address, city, state, proposal_amenity_icons, agreement_terms), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name), rate_phases:contract_rate_phases(*), recurring_addons:contract_addons(*)")
     .eq("id", id)
     .single();
 
@@ -62,6 +65,24 @@ export async function GET(
     parentContract = parent;
   }
 
+  // Who decided the negotiated escalation, and when — shown on the renewal's
+  // approval banner. Read through the user client: approval_requests is readable
+  // by any signed-in user, and the name comes from the same join the rest of
+  // this route uses.
+  let escalationDecision: { acted_by_name: string | null; acted_at: string | null; rejection_reason: string | null } | null = null;
+  if (data.escalation_approval_id && data.escalation_approval_status && data.escalation_approval_status !== "pending") {
+    const { data: ar } = await supabase
+      .from("approval_requests")
+      .select("acted_at, rejection_reason, acted_by_user:users!approval_requests_acted_by_fkey(full_name)")
+      .eq("id", data.escalation_approval_id)
+      .maybeSingle();
+    if (ar) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const actor = (ar as any).acted_by_user as { full_name: string } | null;
+      escalationDecision = { acted_by_name: actor?.full_name ?? null, acted_at: ar.acted_at ?? null, rejection_reason: ar.rejection_reason ?? null };
+    }
+  }
+
   const renewalProrataGate = data.is_renewal && data.status !== "active"
     ? await getRenewalProrataGate(createAdminClient(), data)
     : null;
@@ -71,6 +92,7 @@ export async function GET(
       ...data,
       ...actorNames,
       parent_contract: parentContract,
+      escalation_decision: escalationDecision,
       renewal_prorata_blocking: renewalProrataGate?.blocking ?? false,
     },
   });
@@ -248,6 +270,8 @@ export async function PATCH(
   // pro-rata payment at activation. Merged into the audit entry below, which is
   // built after this block.
   let prorataSatisfiedByInvoice: string | null = null;
+  // Set when the contract activates with a part-paid deposit (see the snapshot below).
+  let partialDepositClaimed: { paid: number; required: number; pending: number } | null = null;
   // Set when a never-activated contract is closed via Withdraw (stored as
   // `terminated`), so the audit trail distinguishes it from a live termination.
   let withdrawnBeforeActivation = false;
@@ -298,8 +322,17 @@ export async function PATCH(
       allowedFields.rejected_at = body.rejected_at || now;
       allowedFields.rejected_by = actorId;
     } else if (body.status === "active") {
-      // Block activation if escalation approval is pending
-      if (oldContract.escalation_approval_status === "pending") {
+      // Block activation if escalation approval is pending. The request itself
+      // is authoritative: the contract's status flag can be missing while a
+      // request is still open.
+      const { count: openEscalationRequests } = await createAdminClient()
+        .from("approval_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("entity_type", "contract")
+        .eq("entity_id", id)
+        .eq("status", "pending")
+        .in("approval_type", ["escalation_reduction", "escalation_waiver"]);
+      if (oldContract.escalation_approval_status === "pending" || (openEscalationRequests ?? 0) > 0) {
         return NextResponse.json({
           error: "Cannot activate: escalation rate approval is pending. Ask your admin to approve the negotiated rate first.",
         }, { status: 400 });
@@ -313,6 +346,8 @@ export async function PATCH(
       // Renewal contracts carry the deposit forward — skip the proposal
       // payment gate when deposit_carried_from is set.
       const isRenewal = !!oldContract.deposit_carried_from;
+      // Set when the deposit is part-paid but over the activation threshold (see below).
+      let partialDepositAtActivation: Awaited<ReturnType<typeof loadDepositCollection>> | null = null;
 
       // Payment gate — skipped for renewals (deposit carried forward)
       if (!isRenewal && !body.payment_override_reason) {
@@ -326,7 +361,7 @@ export async function PATCH(
 
         const { data: proposal } = await supabase
           .from("proposals")
-          .select("payment_status, deposit_payment_status, security_deposit_months, deposit_waiver_verified_at, deposit_claimed_by_contract_id")
+          .select("payment_status, deposit_payment_status, security_deposit_months, security_deposit_amount, deposit_exception_amount, deposit_credit_amount, deposit_waiver_verified_at, deposit_claimed_by_contract_id")
           .eq("id", oldContract.proposal_id)
           .single();
 
@@ -371,16 +406,33 @@ export async function PATCH(
         // already-collected deposit (Apply button → apply-pooled-deposit route)
         // instead of collecting it again or asking an admin for an override.
         const depositCoveredByPool = Number(oldContract.deposit_pool_applied_amount || 0) > 0;
+        // Deposit collected in parts: more than half received lets the contract
+        // activate with a pending-balance warning (the pro-rata invoice is still
+        // required above). The caller must acknowledge the warning.
+        const partial = depositRequired && !depositCoveredByPool && proposal.deposit_payment_status !== "paid" && !depositClaimedByOther
+          ? await loadDepositCollection(createAdminClient(), { id: oldContract.proposal_id, ...proposal })
+          : null;
         if (depositRequired && !depositCoveredByPool && (proposal.deposit_payment_status !== "paid" || depositClaimedByOther)) {
-          missing.push(depositClaimedByOther
-            ? "security deposit (already claimed by another contract activated from this same proposal — apply the customer's available deposit to this contract, or collect a separate one)"
-            : "security deposit");
+          if (partial?.allowsActivation) {
+            partialDepositAtActivation = partial;
+          } else {
+            missing.push(depositClaimedByOther
+              ? "security deposit (already claimed by another contract activated from this same proposal — apply the customer's available deposit to this contract, or collect a separate one)"
+              : "security deposit");
+          }
         }
         if (!depositRequired && !proposal.deposit_waiver_verified_at) missing.push("admin deposit waiver OTP approval");
         if (missing.length > 0) {
           return NextResponse.json({
             error: `Cannot activate: ${missing.join(" and ")} not yet collected on the linked proposal`,
           }, { status: 400 });
+        }
+        if (partialDepositAtActivation && body.acknowledge_partial_deposit !== true) {
+          return NextResponse.json({
+            error: `${partialDepositWarning(partialDepositAtActivation)} Confirm to activate with the deposit pending (do this from the contract page).`,
+            code: "PARTIAL_DEPOSIT_ACK_REQUIRED",
+            deposit: partialDepositAtActivation,
+          }, { status: 409 });
         }
 
         // Record which invoice stood in for the proposal payment, so the
@@ -412,7 +464,7 @@ export async function PATCH(
       if (!isRenewal && oldContract.proposal_id) {
         const { data: depositSnapshot } = await supabase
           .from("proposals")
-          .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes, occupation_start_date, deposit_claimed_by_contract_id")
+          .select("security_deposit_amount, security_deposit_months, deposit_exception_amount, deposit_credit_amount, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes, occupation_start_date, deposit_claimed_by_contract_id")
           .eq("id", oldContract.proposal_id)
           .single();
 
@@ -424,9 +476,17 @@ export async function PATCH(
           // it must not also claim the proposal's own payment — that would
           // count the same deposit twice.
           const poolApplied = Number(oldContract.deposit_pool_applied_amount || 0);
+          // A deposit collected in parts and still short: this contract holds the
+          // money received so far, so it must claim the proposal's deposit now
+          // (like a paid one) — otherwise a second contract off the same proposal
+          // could claim it, and the balance paid later would have no owner.
+          const partsCollection = poolApplied <= 0 && depositSnapshot.deposit_payment_status !== "paid"
+            ? await loadDepositCollection(createAdminClient(), { id: oldContract.proposal_id, ...depositSnapshot })
+            : null;
+          const partsHeld = !!partsCollection && partsCollection.paid > 0;
           let claimGranted = poolApplied > 0
             ? false
-            : depositSnapshot.deposit_payment_status !== "paid" ||
+            : (depositSnapshot.deposit_payment_status !== "paid" && !partsHeld) ||
               depositSnapshot.deposit_claimed_by_contract_id === id;
 
           if (!claimGranted && poolApplied <= 0) {
@@ -447,6 +507,11 @@ export async function PATCH(
           }
 
           Object.assign(allowedFields, buildContractDepositSnapshot(depositSnapshot, claimGranted));
+          if (partsHeld && claimGranted && partsCollection) {
+            const note = `Activated with ₹${partsCollection.paid.toLocaleString("en-IN")} of the ₹${partsCollection.required.toLocaleString("en-IN")} deposit received in parts (${partsCollection.percent}%); ₹${partsCollection.pending.toLocaleString("en-IN")} still pending.`;
+            allowedFields.deposit_internal_notes = [note, depositSnapshot.deposit_internal_notes].filter(Boolean).join(" ");
+            partialDepositClaimed = partsCollection;
+          }
           if (poolApplied > 0) {
             allowedFields.deposit_internal_notes =
               `₹${poolApplied} of this contract's security deposit is covered by the customer's pooled deposit (applied before activation); it was collected under another of their contracts.`;
@@ -541,6 +606,16 @@ export async function PATCH(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Add-ons left on the default dates follow the term when it moves.
+  if (oldContract.start_date && oldContract.end_date && data?.start_date && data?.end_date) {
+    await syncAddonsToContractTerm(
+      createAdminClient(),
+      id,
+      { start: oldContract.start_date as string, end: oldContract.end_date as string },
+      { start: data.start_date as string, end: data.end_date as string }
+    );
+  }
+
   // Close the exit workflow when a live contract is terminated: marks the exit
   // completed and tells the team. A no-op when there was no exit.
   if (body.status === "terminated" && oldContract.status !== "terminated" && !withdrawnBeforeActivation) {
@@ -562,6 +637,9 @@ export async function PATCH(
     }
     if (body.status === "active" && Number(oldContract.deposit_pool_applied_amount || 0) > 0 && !oldContract.deposit_carried_from) {
       auditChanges["deposit_covered_by_pool"] = { old: null, new: Number(oldContract.deposit_pool_applied_amount) };
+    }
+    if (partialDepositClaimed) {
+      auditChanges["deposit_activated_while_part_paid"] = { old: null, new: { paid: partialDepositClaimed.paid, required: partialDepositClaimed.required, pending: partialDepositClaimed.pending } };
     }
     if (prorataSatisfiedByInvoice) {
       auditChanges["prorata_satisfied_by_invoice"] = { old: null, new: prorataSatisfiedByInvoice };
@@ -664,7 +742,7 @@ export async function PATCH(
           const admin = createAdminClient();
           const { data: location } = await admin
             .from("locations")
-            .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
+            .select("code, unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
             .eq("id", oldContract.location_id)
             .single();
 
@@ -674,13 +752,17 @@ export async function PATCH(
             const seatedCount = oldContract.seats || 1;
             const { id: unifiVoucherId, code: unifiCode } = await createUnifiVoucher({
               durationMinutes,
-              note: `contract_${data.contract_number}`,
+              note: buildVoucherNote(location.code, `contract_${data.contract_number}`),
               quota: seatedCount,
             }, siteConfig);
             // Store the UniFi voucher _id on the contract for revocation on cancellation
             await admin
               .from("contracts")
-              .update({ unifi_voucher_id: unifiVoucherId })
+              .update({
+                unifi_voucher_id: unifiVoucherId,
+                unifi_voucher_console_id: siteConfig.consoleId,
+                unifi_voucher_location_code: location.code ?? null,
+              })
               .eq("id", id);
             console.log(`[unifi] Issued voucher ${unifiCode} (${durationMinutes} min, ${seatedCount} seats) for ${data.contract_number}`);
           }
@@ -718,11 +800,12 @@ export async function PATCH(
           // 1a. Revoke parent contract's UniFi API voucher (Nungambakkam LGF)
           const { data: parentContract } = await admin
             .from("contracts")
-            .select("unifi_voucher_id")
+            .select("unifi_voucher_id, unifi_voucher_console_id, location_id")
             .eq("id", oldContract.parent_contract_id)
             .single();
           if (parentContract?.unifi_voucher_id) {
-            revokeUnifiVoucher(parentContract.unifi_voucher_id)
+            // The console that issued it, not whatever the location points at now.
+            revokeUnifiVoucher(parentContract.unifi_voucher_id, await siteConfigForStoredVoucher({ consoleId: parentContract.unifi_voucher_console_id, locationId: parentContract.location_id }))
               .catch((err: unknown) => console.error("[renewal-activate] UniFi voucher revocation failed:", err));
           }
 
@@ -892,7 +975,9 @@ export async function PATCH(
 
   // On termination: revoke UniFi voucher instantly (Nungambakkam LGF only)
   if (body.status === "terminated" && oldContract.status !== "terminated" && oldContract.unifi_voucher_id) {
-    revokeUnifiVoucher(oldContract.unifi_voucher_id)
+    // Revoke on the contract's own site console, not the default one.
+    siteConfigForStoredVoucher({ consoleId: oldContract.unifi_voucher_console_id, locationId: oldContract.location_id })
+      .then((cfg) => revokeUnifiVoucher(oldContract.unifi_voucher_id, cfg))
       .catch(err => console.error("[unifi] voucher revocation on termination failed:", err));
   }
 
@@ -903,7 +988,7 @@ export async function PATCH(
         // Fetch active voucher issuances with voucher codes
         const { data: issuances } = await supabase
           .from("voucher_issuances")
-          .select("id, voucher_id, unifi_voucher_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
+          .select("id, voucher_id, unifi_voucher_id, unifi_console_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
           .eq("contract_id", id)
           .eq("is_active", true);
 
@@ -929,11 +1014,14 @@ export async function PATCH(
           // Revoke Unifi live-API per-seat vouchers (fire-and-forget)
           for (const issuance of issuances) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const uid = (issuance as any).unifi_voucher_id as string | null;
+            const { unifi_voucher_id: uid, unifi_console_id: issuedOn } = issuance as any as { unifi_voucher_id: string | null; unifi_console_id: string | null };
             if (uid) {
-              revokeUnifiVoucher(uid).catch((err: unknown) =>
-                console.error(`[unifi] per-seat revoke ${uid} on termination failed:`, err)
-              );
+              // Each voucher goes back to the console that issued it.
+              siteConfigForStoredVoucher({ consoleId: issuedOn, locationId: oldContract.location_id })
+                .then((cfg) => revokeUnifiVoucher(uid, cfg))
+                .catch((err: unknown) =>
+                  console.error(`[unifi] per-seat revoke ${uid} on termination failed:`, err)
+                );
             }
           }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT, serviceBillingStep, serviceNextStep, partitionBillsByCycle } from "../procurement/amc-billing";
+import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT, serviceBillingStep, serviceNextStep, partitionBillsByCycle, fullContractValue } from "../procurement/amc-billing";
 
 describe("cyclesBetween", () => {
   it("a standard financial year is 12 monthly cycles", () => {
@@ -206,5 +206,43 @@ describe("partitionBillsByCycle", () => {
     );
     expect(serviceNextStep({ status: "ordered", terminated: false, cycleCount: 2, reportsFiled: 1, invoicesFiled: cycleBills.length }))
       .toEqual({ kind: "log_report", cycle: 2 });
+  });
+});
+
+describe("contracts that were already running (opening cycles)", () => {
+  it("old contracts are unchanged when there is no opening position", () => {
+    expect(billingProgress(1, 4, 1000)).toEqual({ billed: 1, total: 4, remainingAmount: 3000, isComplete: false });
+    expect(billingProgress(1, 4, 1000, 0)).toEqual(billingProgress(1, 4, 1000));
+    expect(serviceNextStep({ status: "ordered", terminated: false, reportsFiled: 0, invoicesFiled: 0, cycleCount: 2 }))
+      .toEqual({ kind: "log_report", cycle: 1 });
+  });
+
+  it("cycle numbers continue from the opening position", () => {
+    const base = { status: "ordered", terminated: false, cycleCount: 1, openingCycles: 1 };
+    expect(serviceNextStep({ ...base, reportsFiled: 0, invoicesFiled: 0 })).toEqual({ kind: "log_report", cycle: 2 });
+    expect(serviceNextStep({ ...base, reportsFiled: 1, invoicesFiled: 0 })).toEqual({ kind: "upload_invoice", cycle: 2 });
+    expect(serviceNextStep({ ...base, reportsFiled: 1, invoicesFiled: 1 })).toEqual({ kind: "all_billed" });
+  });
+
+  it("the cycles to bill here are only the remaining ones", () => {
+    // 1 of 2 half-years already settled: one cycle left, and one invoice finishes it.
+    expect(serviceBillingStep(0, 0, 1).cyclesRemaining).toBe(1);
+    expect(serviceBillingStep(1, 1, 1).allBilled).toBe(true);
+  });
+
+  it("progress counts the earlier cycles as billed, and only the rest as remaining", () => {
+    expect(billingProgress(0, 1, 20700, 1)).toEqual({ billed: 1, total: 2, remainingAmount: 20700, isComplete: false });
+    expect(billingProgress(1, 1, 20700, 1)).toEqual({ billed: 2, total: 2, remainingAmount: 0, isComplete: true });
+  });
+
+  it("a one-cycle contract with nothing opened still has no progress readout", () => {
+    expect(billingProgress(0, 1, 5000, 0)).toBeNull();
+  });
+
+  it("the full contract value includes the cycles settled before", () => {
+    expect(fullContractValue(20700, 1, 1)).toBe(41400);
+    expect(fullContractValue(20700, 2, 0)).toBe(41400);
+    expect(fullContractValue(20700, 1)).toBe(20700);
+    expect(fullContractValue(Number.NaN, 1, 1)).toBe(0);
   });
 });

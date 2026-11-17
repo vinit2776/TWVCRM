@@ -5,13 +5,17 @@ import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
+import { daysPastBooking } from "@/lib/process-registry";
+import { checkInPaymentState, roundToRupee } from "@/lib/booking-payment-rules";
+import { noteProvisionalCheckIn } from "@/lib/booking-payment-server";
 import { deleteUserFromDevice } from "@/lib/cosec";
 import { computeVoucherSeatCap } from "@/lib/booking-vouchers";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 
 export const maxDuration = 30;
 
-const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state, wifi_voucher_mode), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, id_proof_path), facilities:booking_facilities(*)";
+const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state, wifi_voucher_mode), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, id_proof_path), facilities:booking_facilities(*), pi_sender:users!bookings_pi_sent_by_fkey(full_name)";
 
 /** Actual duration in hours between two real timestamps, to the minute
  *  (two decimals — the quantity column is DECIMAL(10,2)). Billed exactly:
@@ -274,7 +278,7 @@ async function computeBookingTotalsWithAddons(
     0
   );
 
-  const totalWithGst = parseFloat((newSubtotal + baseGstAmount + addonTotal).toFixed(2));
+  const totalWithGst = roundToRupee(newSubtotal + baseGstAmount + addonTotal);
   return {
     total_amount: newSubtotal,
     gst_amount: baseGstAmount,
@@ -433,7 +437,7 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, role")
+    .select("id, role, full_name")
     .eq("auth_id", user.id)
     .single();
 
@@ -664,15 +668,30 @@ export async function PATCH(
     updates.notes = body.notes;
   }
 
+  // Set when a walk-in checks in on a UPI payment accounts haven't verified yet.
+  let provisionalCheckIn = false;
+
   // Status transitions
   if (body.status) {
     const { status: newStatus } = body;
-    const canManage = ["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin"].includes(dbUser.role);
+    const canManage = ["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin", "coordinator"].includes(dbUser.role);
 
     switch (newStatus) {
       case "checked_in": {
         if (booking.status !== "confirmed") {
           return NextResponse.json({ error: "Can only check in confirmed bookings" }, { status: 400 });
+        }
+
+        // A booking from an earlier day can't be checked in "now": the stamped
+        // time would be wrong and the staff member who allowed the customer in
+        // without it would never be seen. Close out completes it as booked and
+        // records the lapse. Contract bookings are billed monthly, so they are
+        // not offered Close out and keep their existing behaviour.
+        if (booking.customer_type !== "contract_holder" && daysPastBooking(booking.booking_date, new Date()) >= 1) {
+          return NextResponse.json({
+            error: `This booking was for ${booking.booking_date}. Use Close out so it is recorded as handled late.`,
+            close_out_required: true,
+          }, { status: 409 });
         }
 
         // Day-pass spaces: enforce that check-in happens during the centre's
@@ -701,27 +720,32 @@ export async function PATCH(
         // We compare against the GST-inclusive grand total, the same figure
         // the customer is told to pay — using ex-GST here would have let
         // walk-ins check in after paying only the pre-tax amount.
+        //
+        // Verified payments count in full. A manual UPI payment that is still
+        // waiting for accounts also counts, provided staff attached its proof
+        // (screenshot or UTR) — the customer is at the counter and accounts
+        // may not look at the bank for hours. That is a provisional check-in:
+        // it is logged, and the GST invoice still waits for verification
+        // because only a verified payment marks the booking paid.
         if (booking.customer_type === "walk_in") {
-          const { data: verifiedPayments } = await supabase
+          const { data: bookingPayments } = await supabase
             .from("booking_payments")
-            .select("amount")
-            .eq("booking_id", id)
-            .eq("status", "verified");
+            .select("amount, status, payment_mode, payment_reference, screenshot_path")
+            .eq("booking_id", id);
 
-          const totalPaid = (verifiedPayments || []).reduce(
-            (sum: number, p: { amount: number }) => sum + Number(p.amount), 0
-          );
           const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
+          const paymentState = checkInPaymentState(grandTotal, bookingPayments || []);
 
-          if (totalPaid < grandTotal) {
+          if (!paymentState.covered) {
             return NextResponse.json({
               error: "Payment required before check-in",
               payment_required: true,
               total_amount: grandTotal,
-              amount_paid: totalPaid,
-              balance_due: grandTotal - totalPaid,
+              amount_paid: paymentState.verified,
+              balance_due: Math.max(0, grandTotal - paymentState.verified - paymentState.provisional),
             }, { status: 402 });
           }
+          provisionalCheckIn = paymentState.isProvisional;
         }
 
         updates.status = "checked_in";
@@ -986,6 +1010,12 @@ export async function PATCH(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // A rate, extension or reschedule that changed the total must reach the PI's
+  // Receivables statement, or it keeps chasing the old amount.
+  if ("total_amount" in updates || "total_amount_with_gst" in updates) {
+    await syncBookingPiStatement(createAdminClient(), id);
+  }
+
   // Create a Tally Inbox task when the booking is checked out AND already
   // paid. Must run after the update above commits — maybeCreateBookingGstTask
   // re-reads booking.status from the DB, so firing it any earlier would see
@@ -1009,6 +1039,14 @@ export async function PATCH(
     performedBy: dbUser.id,
     changes: diffChanges(booking, { ...booking, ...updates }),
   });
+
+  if (body.status === "checked_in" && provisionalCheckIn) {
+    void noteProvisionalCheckIn(createAdminClient(), {
+      bookingId: id,
+      bookingNumber: booking.booking_number as string,
+      actor: { id: dbUser.id, role: dbUser.role, full_name: dbUser.full_name ?? "Staff" },
+    });
+  }
 
   // Log activity on lead timeline for status changes
   if (booking.lead_id && body.status) {

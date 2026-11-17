@@ -9,7 +9,8 @@
 // Required Vercel environment variables:
 //   TURSO_DATABASE_URL, TURSO_AUTH_TOKEN  — the libSQL/Turso connection
 //   PUNCH_API_KEY, ZK_DEVICE_SN           — punch + device auth (as before)
-//   CRON_SECRET                           — protects /internal/auto-checkout
+//   CRON_SECRET                           — protects /internal/auto-checkout and
+//                                           /internal/daily-report
 //   ADMIN_BOOTSTRAP_PASSWORD              — first-run admin password, on an empty
 //                                           database only; remove once rotated
 // SEED_DEMO_DATA must stay unset here — it creates publicly-known credentials.

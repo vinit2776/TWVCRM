@@ -1,3 +1,4 @@
+import { exceedsProposalCap, proposalCapMessage } from "@/lib/procurement/proposal-cap";
 import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -83,6 +84,9 @@ const editPrSchema = z.object({
   amc_start_date: z.string().optional().nullable(),
   amc_end_date: z.string().optional().nullable(),
   amc_visits_covered: z.number().int().positive().optional().nullable(),
+  // Optional on edit: a form that doesn't send them must not wipe a running AMC's start.
+  opening_cycles: z.number().int().min(0).max(120).optional(),
+  opening_visits: z.number().int().min(0).max(500).optional(),
   amc_contact_name: z.string().optional().nullable(),
   amc_helpline_number: z.string().optional().nullable(),
   amc_contact_email: z.string().email().optional().nullable().or(z.literal("")),
@@ -155,7 +159,7 @@ export async function GET(
     supabase
       .from("purchase_requests")
       .select(
-        `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, linked_asset:facility_assets(id, name, asset_code), procurement_items(id, name, department, unit, description, gst_rate, standard_price)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by), linked_asset:facility_assets!linked_asset_id(id, name, asset_code), billable_contract:contracts!billable_contract_id(id, contract_number, tax_percentage, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), reimbursement_statements:billing_statements!source_pr_id(id, statement_number, status, total_amount, voided_at, created_at, gst_invoice_number, supporting_documents:reimbursement_supporting_documents(id))`
+        `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, linked_asset:facility_assets(id, name, asset_code, serial_number), procurement_items(id, name, department, unit, description, gst_rate, standard_price)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by), linked_asset:facility_assets!linked_asset_id(id, name, asset_code), billable_contract:contracts!billable_contract_id(id, contract_number, tax_percentage, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), reimbursement_statements:billing_statements!source_pr_id(id, statement_number, status, total_amount, voided_at, created_at, gst_invoice_number, supporting_documents:reimbursement_supporting_documents(id))`
       )
       .eq("id", id)
       .single(),
@@ -165,7 +169,7 @@ export async function GET(
   if (error || !data) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
   // Only procurement roles can access
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -537,7 +541,7 @@ export async function PATCH(
         // Validate edits target items actually belonging to this PR.
         const { data: existingItems } = await supabase
           .from("purchase_request_items")
-          .select("id, quantity")
+          .select("id, quantity, proposal_line_total")
           .eq("pr_id", id);
         const itemsById = new Map((existingItems ?? []).map((it) => [it.id as string, it]));
         for (const edit of priceEdits) {
@@ -546,6 +550,11 @@ export async function PATCH(
               { error: `Line item ${edit.id} does not belong to this MR` },
               { status: 422 }
             );
+          }
+          // A proposal's value can be lowered but never raised, also when resubmitting.
+          const cap = itemsById.get(edit.id)!.proposal_line_total;
+          if (cap != null && exceedsProposalCap({ quantity: Number(itemsById.get(edit.id)!.quantity ?? 0), perCycleCost: edit.estimated_price, cap: Number(cap) }, Number(pr.opening_cycles ?? 0))) {
+            return NextResponse.json({ error: proposalCapMessage(Number(cap)) }, { status: 422 });
           }
         }
         // Apply: update each row's estimated_price + recompute its total_estimated.
@@ -703,7 +712,7 @@ export async function PUT(
   // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
   const lockedChain = await chainLockedResponse(supabase, { prId: id });
   if (lockedChain) return lockedChain;
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -713,6 +722,11 @@ export async function PUT(
     .eq("id", id)
     .single();
   if (fetchError || !pr) return NextResponse.json({ error: "Request not found" }, { status: 404 });
+
+  // A coordinator raises and edits their own requests only.
+  if (dbUser.role === "coordinator" && pr.requested_by !== dbUser.id) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
 
   if (!MR_EDITABLE_STATUSES.includes(pr.status)) {
     return NextResponse.json(
@@ -787,9 +801,26 @@ export async function PUT(
   // with an opaque database error rather than something the user can act on.
   const { data: existingItems } = await supabase
     .from("purchase_request_items")
-    .select("id")
+    .select("id, linked_asset_id, proposal_line_total")
     .eq("pr_id", id);
   const existingItemIds = (existingItems ?? []).map((it) => it.id as string);
+
+  // A request set up from a proposal keeps its ceilings: the same assets, the value only lower.
+  const capByAsset = new Map<string, number>();
+  for (const it of existingItems ?? []) {
+    if (it.proposal_line_total != null && it.linked_asset_id) capByAsset.set(it.linked_asset_id as string, Number(it.proposal_line_total));
+  }
+  if (capByAsset.size > 0 && prData.department === "amc") {
+    const opening = prData.opening_cycles ?? Number(pr.opening_cycles ?? 0);
+    for (const item of items) {
+      const cap = item.linked_asset_id ? capByAsset.get(item.linked_asset_id) : undefined;
+      // An asset swapped in after the proposal was read has no proposal ceiling of its own.
+      if (cap === undefined) continue;
+      if (exceedsProposalCap({ quantity: item.quantity, perCycleCost: item.estimated_price ?? 0, cap }, opening)) {
+        return NextResponse.json({ error: proposalCapMessage(cap) }, { status: 422 });
+      }
+    }
+  }
   if (existingItemIds.length > 0) {
     const { count: linkedPoItems } = await supabase
       .from("purchase_order_items")
@@ -823,6 +854,7 @@ export async function PUT(
         total_estimated: item.estimated_price ? round2(item.quantity * item.estimated_price) : null,
         notes: item.notes || null,
         linked_asset_id: prData.department === "amc" ? item.linked_asset_id || null : null,
+        proposal_line_total: prData.department === "amc" && item.linked_asset_id ? capByAsset.get(item.linked_asset_id) ?? null : null,
       }))
     )
     .select("id");
@@ -855,6 +887,14 @@ export async function PUT(
     tolerance_requested_percent: isAmc ? 0 : prData.tolerance_requested_percent,
     tolerance_reason: isAmc || prData.tolerance_requested_percent === 0 ? null : prData.tolerance_reason ?? null,
   };
+  // NOT NULL columns: cleared to 0 when switching away from AMC, left alone when not sent.
+  if (!isAmc) {
+    updatePayload.opening_cycles = 0;
+    updatePayload.opening_visits = 0;
+  } else {
+    if (prData.opening_cycles !== undefined) updatePayload.opening_cycles = prData.opening_cycles;
+    if (prData.opening_visits !== undefined) updatePayload.opening_visits = prData.opening_visits;
+  }
   // Rewrite every AMC column each time so switching away from AMC clears stale values.
   for (const field of AMC_FIELDS) {
     const value = prData[field];

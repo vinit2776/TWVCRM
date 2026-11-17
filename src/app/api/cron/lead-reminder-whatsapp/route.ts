@@ -1,3 +1,4 @@
+import { followUpRecipient } from "@/lib/followup-recipient";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendWhatsApp } from "@/lib/whatsapp";
@@ -62,7 +63,7 @@ async function handler(request: NextRequest) {
     .in("id", candidates.map((c) => c.id))
     .is("followup_wa_reminder_sent_at", null)
     .select(
-      "id, lead_id, follow_up_date, created_by, creator:users!activities_created_by_fkey(phone), lead:leads!activities_lead_id_fkey(first_name, last_name, company)"
+      "id, lead_id, follow_up_date, created_by, creator:users!activities_created_by_fkey(phone), lead:leads!activities_lead_id_fkey(first_name, last_name, company, assigned_user:users!leads_assigned_to_fkey(phone))"
     );
 
   if (claimError) {
@@ -87,7 +88,8 @@ async function handler(request: NextRequest) {
   let skippedNoPhone = 0;
 
   for (const row of claimed as ClaimedRow[]) {
-    const phone = row.creator?.phone;
+    // Goes to whoever handles the lead now; the person who set it only if nobody does.
+    const phone = followUpRecipient(row)?.phone;
     if (!phone) {
       skippedNoPhone++;
       continue;

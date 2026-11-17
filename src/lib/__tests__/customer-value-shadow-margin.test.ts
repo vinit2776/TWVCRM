@@ -81,9 +81,19 @@ describe("summariseShadow", () => {
     expect(s.confidence).toBeCloseTo((1 * 10_000 + 0.5 * 30_000) / 40_000);
   });
 
-  it("has no confidence when nothing was costed, and shows a negative margin as it is", () => {
-    const s = summariseShadow([row("2026-09-01", 5_000, 0, null)])!;
-    expect(s.confidence).toBeNull();
+  it("has no shadow margin at all when no month had anything costed", () => {
+    expect(summariseShadow([row("2026-09-01", 5_000, 0, null)])).toBeNull();
+    expect(summariseShadow([row("2026-08-01", 100_000, 0, null), row("2026-09-01", 80_000, 0, null)])).toBeNull();
+  });
+
+  it("leaves uncosted months out of the average instead of letting them pull it to 100%", () => {
+    const s = summariseShadow([row("2026-07-01", 100_000, 0, null), row("2026-08-01", 100_000, 20_000, 1), row("2026-09-01", 100_000, 40_000, 1)])!;
+    expect(s.months).toEqual(["2026-08", "2026-09"]);
+    expect(s.marginPct).toBeCloseTo(140_000 / 200_000);
+    expect(s.marginPerMonth).toBe(70_000);
+  });
+
+  it("shows a negative margin as it is", () => {
     expect(summariseShadow([row("2026-09-01", 5_000, 8_000, 1)])!.marginPct).toBeLessThan(0);
   });
 });

@@ -1,3 +1,4 @@
+import { followUpRecipient } from "@/lib/followup-recipient";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
@@ -37,7 +38,7 @@ async function handler(request: NextRequest) {
   const { data: dueActivities, error } = await admin
     .from("activities")
     .select(
-      "id, lead_id, type, subject, follow_up_date, follow_up_notes, created_by, creator:users!activities_created_by_fkey(email, full_name), lead:leads!activities_lead_id_fkey(first_name, last_name, company)"
+      "id, lead_id, type, subject, follow_up_date, follow_up_notes, created_by, creator:users!activities_created_by_fkey(email, full_name), lead:leads!activities_lead_id_fkey(first_name, last_name, company, assigned_user:users!leads_assigned_to_fkey(id, email, full_name, phone))"
     )
     .eq("is_follow_up_done", false)
     .not("follow_up_date", "is", null)
@@ -64,11 +65,12 @@ async function handler(request: NextRequest) {
   const byUser = new Map<string, { email: string; name: string; rows: ActivityRow[] }>();
 
   for (const row of dueActivities as ActivityRow[]) {
-    const creator = row.creator;
-    if (!creator?.email) continue;
-    const key = row.created_by ?? creator.email;
+    // The reminder goes to whoever handles the lead now, so reassigning moves it with the lead.
+    const owner = followUpRecipient(row);
+    if (!owner?.email) continue;
+    const key = owner.id ?? owner.email;
     if (!byUser.has(key)) {
-      byUser.set(key, { email: creator.email, name: creator.full_name ?? "there", rows: [] });
+      byUser.set(key, { email: owner.email, name: owner.full_name ?? "there", rows: [] });
     }
     byUser.get(key)!.rows.push(row);
   }

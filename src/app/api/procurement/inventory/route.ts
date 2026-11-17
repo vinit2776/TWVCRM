@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getLastReceivedMap } from "@/lib/procurement/stock-aging";
 import { z } from "zod";
 
-const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin", "coordinator"];
 
 const upsertStockSchema = z.object({
   location_id: z.string().uuid(),

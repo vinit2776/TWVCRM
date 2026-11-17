@@ -6,7 +6,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigForLocationId, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 
 interface UnifiHealthSubsystem {
   subsystem: string;
@@ -44,16 +45,13 @@ export async function GET(request: NextRequest) {
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  // Resolve site config from location row (falls back to env-var defaults)
+  // The location's own console — no default when it is missing.
   const locationId = request.nextUrl.searchParams.get("location_id");
-  let siteCfg = undefined;
-  if (locationId) {
-    const { data: loc } = await supabase
-      .from("locations")
-      .select("unifi_console_id, unifi_site_id")
-      .eq("id", locationId)
-      .single();
-    if (loc) siteCfg = siteConfigFromLocation(loc);
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = await siteConfigForLocationId(locationId);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
   }
 
   try {
@@ -83,7 +81,9 @@ export async function GET(request: NextRequest) {
       tx_bytes_r: wan?.["tx_bytes-r"] ?? 0,
       rx_bytes_r: wan?.["rx_bytes-r"] ?? 0,
       latency: wan?.latency ?? 0,
-      uptime: wan?.uptime ?? 0,
+      // null (not 0) when the console reports no uptime, so the screen can say "unknown"
+      // instead of "Up 0d 0h", which reads like an outage.
+      uptime: wan?.uptime ?? null,
       isp_name: wan?.isp_name ?? null,
       xput_up: wan?.xput_up ?? 0,
       xput_down: wan?.xput_down ?? 0,

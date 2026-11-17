@@ -84,8 +84,20 @@ export async function GET(
     };
   });
 
+  // Who the payable is raised against — shown on the capture form so it is clear whose invoice to upload.
+  let landlordVendor: { id: string; name: string } | null = null;
+  if (config?.landlord_vendor_id) {
+    const { data: vendor } = await supabase
+      .from("procurement_vendors")
+      .select("id, name")
+      .eq("id", config.landlord_vendor_id)
+      .maybeSingle();
+    landlordVendor = vendor ?? null;
+  }
+
   return NextResponse.json({
     data: config,
+    landlord_vendor: landlordVendor,
     allocation: {
       utility_allocated: utilityAllocated,
       generator_allocated: generatorAllocated,

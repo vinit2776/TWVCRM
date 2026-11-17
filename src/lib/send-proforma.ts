@@ -13,6 +13,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
+import { annexureFromSections } from "@/lib/electricity-annexure";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { logCommunication } from "@/lib/communications-log";
@@ -345,6 +346,7 @@ export async function dispatchProforma(
     : [];
 
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber: proformaRef,
     // Rent proformas: invoice date = 1st of the billed month (period_start).
     //   e.g. June rent sent May 30 → prints "1 June 2026"
@@ -445,7 +447,7 @@ export async function dispatchProforma(
         ${razorpayLinkUrl ? `
         <div style="text-align:center;margin:12px 0;">
           <a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
-          <p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 15 days. If expired, please contact us to regenerate a new link.</p>
+          <p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 180 days. If it has expired, please contact us and we will send a new one.</p>
         </div>` : ""}
         <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
         <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:10px 16px;margin-top:24px;font-size:11px;color:#5d4037;">
@@ -802,6 +804,7 @@ export async function dispatchGstDirect(
     : [];
 
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber,
     invoiceDate: issueDateYmd,
     isProforma: false,
@@ -875,7 +878,7 @@ export async function dispatchGstDirect(
           <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
         </table>
         ${paymentOptionsHtml}
-        ${razorpayLinkUrl ? `<div style="text-align:center;margin:24px 0;"><a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a><p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 15 days. If expired, please contact us to regenerate a new link.</p></div>` : ""}
+        ${razorpayLinkUrl ? `<div style="text-align:center;margin:24px 0;"><a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a><p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 180 days. If it has expired, please contact us and we will send a new one.</p></div>` : ""}
         <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
       </div>
       <div style="background:#015E65;padding:12px 32px;text-align:center;">

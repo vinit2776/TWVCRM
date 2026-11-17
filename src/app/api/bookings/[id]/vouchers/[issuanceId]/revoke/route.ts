@@ -35,7 +35,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { revokeUnifiVoucher, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { revokeUnifiVoucher, siteConfigForStoredVoucher, UnifiConfigError } from "@/lib/unifi";
 
 const revokeBodySchema = z.object({
   reason: z.string().trim().min(1).optional(),
@@ -71,7 +71,7 @@ export async function POST(
   // Fetch the issuance and validate it belongs to this booking.
   const { data: issuance, error: issuanceErr } = await supabase
     .from("voucher_issuances")
-    .select("id, booking_id, is_active, voucher_id, unifi_voucher_id, ruijie_voucher_uuid")
+    .select("id, booking_id, is_active, voucher_id, unifi_voucher_id, unifi_console_id, ruijie_voucher_uuid")
     .eq("id", issuanceId)
     .eq("booking_id", id)
     .single();
@@ -108,22 +108,20 @@ export async function POST(
       .eq("id", id)
       .single();
 
-    const { data: location } = booking?.location_id
-      ? await supabase
-          .from("locations")
-          .select("unifi_site_id, unifi_console_id, wifi_voucher_mode")
-          .eq("id", booking.location_id)
-          .single()
-      : { data: null };
-
-    if (!location || !isUnifiLocation(location)) {
+    // The console that issued this voucher (recorded at issue time), not
+    // whatever the booking's location points at today.
+    let siteConfig;
+    try {
+      siteConfig = await siteConfigForStoredVoucher({
+        consoleId: issuance.unifi_console_id,
+        locationId: booking?.location_id,
+      });
+    } catch (err) {
       return NextResponse.json(
-        { error: "Could not resolve the UniFi site configuration for this booking's location." },
+        { error: err instanceof UnifiConfigError ? err.message : "Could not resolve the UniFi console for this voucher." },
         { status: 502 }
       );
     }
-
-    const siteConfig = siteConfigFromLocation(location);
     try {
       // revokeUnifiVoucher is intentionally best-effort at the HTTP-client
       // level (it logs and swallows controller errors — e.g. a voucher

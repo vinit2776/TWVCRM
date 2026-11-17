@@ -27,6 +27,15 @@ two. The CRM's only reference to this app is an outbound link in the sidebar.
   (shift matching, half-day/late rules, breaks, holidays, leave). The only part
   with unit tests, in [test/](test/).
 - **[i18n.js](i18n.js)** — English and Tamil strings, chosen per employee.
+- **[request-notes.js](request-notes.js)** — rules shared by every
+  apply/approve flow: the employee's reason and the manager's note are required,
+  and a rejected request can be filed again (`previous_request_id` links the
+  attempts into one thread).
+- **[certificate-check.js](certificate-check.js)** — optional Claude check of a
+  Sick Leave medical certificate (name, dates, signature against the request).
+  Advice for the manager only; off unless the `CERTIFICATE_CHECK` setting is on,
+  and it needs `ANTHROPIC_API_KEY`. Turning it on sends the certificate image to
+  Anthropic's API.
 - **[api/index.js](api/index.js)** — Vercel entry point. `vercel.json` rewrites
   every path here, so the router in `server.js` runs unchanged.
 - **[relay/](relay/)** — office-LAN proxy for the biometric device. See below.
@@ -137,8 +146,65 @@ Its own Vercel project, with **Root Directory** set to `attendance-gateway-code`
 so this repo's CRM code is not part of its build. Both projects use an ignored
 build step so a commit touching only one of them does not redeploy the other.
 
-The single cron (`/internal/auto-checkout`, 19:00 IST) is declared in this
-directory's own [vercel.json](vercel.json) and is protected by `CRON_SECRET`.
+The crons are declared in this directory's own [vercel.json](vercel.json) and are
+protected by `CRON_SECRET`:
+
+- `/internal/auto-checkout`, 19:00, 21:00 and 23:45 IST: safety runs for the auto
+  punch-out (see below). Hobby cron can't run often enough to give it its timing.
+- `/internal/daily-report/morning`, 10:00 IST: emails who has punched in,
+  who is late, who isn't in yet and who is on leave.
+- `/internal/daily-report/evening`, 19:00 IST: emails who punched out, who
+  left before their shift ended, who is still in and who was absent.
+
+The reports go to the recipients set at `/admin/settings` (Daily report recipients),
+through Resend; nothing is sent while the Resend API key there is empty. Each is a
+snapshot as of 10:00 / 19:00 (later punches and the auto-checkout are ignored), so
+the hour-wide timing of Vercel's Hobby cron doesn't change what it says. No email on
+holidays or Sundays, and at most one of each per day (`daily_report_runs`).
+`/admin/daily-report?kind=morning&date=YYYY-MM-DD` shows any day's email without
+sending it.
+
+**`/internal/punchin-reminder`** (same `CRON_SECRET`) once emailed punch-in
+reminders, driven by an every-5-minute cron in the CRM. The reminders were removed,
+and so was that cron: the endpoint now only runs the auto punch-out, and nothing
+calls it on a schedule. It is kept as a manual trigger and should be folded into
+`/internal/auto-checkout`, which does the same job under an accurate name.
+
+**Shift timings** are set per branch at `/admin/settings` → Branches: a weekday
+shift, and whether the branch has half Saturdays (2nd and 4th Saturday, with their
+own timings; only LGF does, so other branches work every Saturday in full). Each day uses the shift of the
+branch the employee first punched in at (GPS or the biometric device; their own branch
+if that punch was remote), so someone at LGF and Perungudi works whichever branch's
+hours they turned up at. An employee can instead have **custom timings** (Edit
+Employee → Custom timings), which apply on weekdays and full Saturdays at any branch;
+half Saturdays always follow the branch. See `resolveShift` in `attendance-logic.js`.
+
+Those rules only apply **from the date in Settings → Branch shift rules apply from**
+(`SHIFT_RULES_EFFECTIVE_FROM`, 2026-11-12 by default: the first whole day worked under
+them). An earlier day is read the way it was worked at the time — one company-wide half
+shift on the 2nd and 4th Saturday, and everyone on their own saved timings, with the
+branch not coming into it. The cut-off exists because a day's status is worked out each
+time a report is opened and nothing records what that day's shift was: without it,
+turning half Saturdays off for a branch would turn a Present Saturday into a Half Day in
+months that have already been reported on. Moving the date backwards re-measures those
+days, so only do it for a period whose branch timings are what was actually worked.
+
+One gap remains, the same one the gateway has always had: editing a branch's weekday
+shift also rewrites the saved timings of the employees who follow it, and the old rule
+reads those saved timings — so a weekday before the cut-off is measured against the new
+hours. Only a per-employee shift history would close that, which nothing stores. Half
+Saturdays, custom timings and which branch a day counts as worked at are unaffected.
+
+**Auto punch-out.** Anyone still punched in is auto punched-out 15 minutes after that
+day's shift end, stamped at exactly that time however late the run is. It gets its
+timing from the daily Vercel crons above (19:00, 21:00 and 23:45 IST, which between
+them cover every shift end) and from an employee opening their dashboard; the due time
+is fixed in advance, so a late run still stamps the right one, and each run also sweeps
+the previous `AUTO_CHECKOUT_CATCHUP_DAYS` days. It never waits for the
+biometric device: a real punch-out the device uploads later replaces the auto one.
+Until midnight the dashboard offers **Punch Out** again; a real punch-out made then
+replaces the auto one, so the day isn't a Missed Checkout and any time past the shift
+counts as overtime.
 
 A day closed only by that auto-checkout is a **Missed Checkout** (MC): it counts as
 a Half Day, with hours counted up to the shift end, until the employee files a
@@ -148,12 +214,36 @@ that, an approved correction fixes the times but the day stays a Half Day. They
 also get 1 full-day correction a month for a day with no punches at all; any
 other such day stays Absent. The limits live in `attendance-logic.js`.
 
+## Field trips
+
+An employee adds every place they went, in order, and can tick "Return to first
+stop" for a round trip. Their own branch is filled in as the starting point. The
+server sends all the stops to LocationIQ's driving directions in one call and stores
+the road distance of each leg and the total. Whatever distance the browser showed
+is ignored: the route is worked out again when the trip is submitted. The coordinates
+behind each stop are only taken from the browser where they fall inside the
+`PLACES_VIEWBOX` area that address search itself is bounded to — otherwise the stop's
+address is geocoded on the server instead, so the places an approver reads are always
+the places that were measured. Up to 6 photos
+(receipts, parking slips) can be attached; the phone shrinks them to a 1000px JPEG
+first and they are stored in `field_trip_photos`.
+
+The amount is the distance times `FIELD_TRIP_RATE_PER_KM`. The rate and amount are
+saved on the trip when it is submitted, so changing the rate never changes a trip
+already submitted, and a rejected trip submitted again keeps its original rate.
+Managers see each leg's km and a "Check in Google Maps" link through the same
+points. Rules and limits live in `field-trip.js`.
+
 ## Configuration
 
 Operational settings live in the database, editable by an admin at
 **/admin/settings** — office public IPs, the biometric device serial, the device
-clock correction, the punch API key, the LocationIQ key, and address-search
-biasing. Each resolves in this order:
+clock correction, the punch API key, the LocationIQ key, address-search
+biasing, the field trip rate per km (`FIELD_TRIP_RATE_PER_KM`, 0 by default, which
+shows distance only), whether a trip needs a photo (`FIELD_TRIP_PHOTO_REQUIRED`) and
+the most stops a trip can have (`FIELD_TRIP_MAX_STOPS`), and the medical certificate
+check (`CERTIFICATE_CHECK`, off by default, with its `ANTHROPIC_API_KEY`). Each
+resolves in this order:
 
 1. the `app_settings` table (the admin UI)
 2. the environment variable of the same name (a deploy-time default)
@@ -173,13 +263,42 @@ Secrets are never rendered back into the page. Saving with a secret field left
 blank keeps the stored value, so editing an unrelated setting cannot wipe a key;
 clearing one is an explicit checkbox.
 
+Saving a setting records its old and new value in the Activity Log, which is
+readable in-app and exported to CSV, so each setting is classified. Two separate
+flags, because they answer different questions:
+
+- `secret: true` — not shown *and* not recorded. For a value nobody needs to read
+  back: the API keys.
+- `logValue: false` — shown, but only ever recorded as "changed". For
+  `ZK_DEVICE_SN`, where a wrong serial silently drops real punches, so an admin has
+  to be able to check the stored one against the device, yet the serial is also the
+  sole credential on `/iclock/*` and must not end up in a downloaded CSV.
+
+`hidesValue(def)` in `server.js` is the one place that decides, and
+`test/setting-value-logging.test.js` lists every setting on one side or the other —
+a new setting fails that test until it is classified.
+
 ## Security notes
 
 - `/iclock/*` is authenticated **only** by the device serial number in the query
   string, so it **fails closed**: while no serial is configured those routes reject
-  every push, rather than accepting any device on the internet.
+  every push, rather than accepting any device on the internet. That makes the
+  serial a credential — anyone holding it can write punches for any employee — so
+  it is treated as one: `logValue: false` keeps it out of the Activity Log and the
+  CSV export even though the settings page still shows it.
+- A device record whose PIN maps to no employee is logged as `adms_unmapped_pin`
+  with its timestamp and **not** the PIN. "Unmapped" means no employee has it
+  *yet*, so it is routinely a real enrollee's live credential waiting to be mapped;
+  `/admin/device-pins` is where the mapping is read.
 - `PUNCH_API_KEY` falls back to a random per-process key when unset, which changes
   on every cold start — unusable by a device, but not guessable by anyone else.
 - `POST` bodies are capped at 64KB (`MAX_BODY_BYTES`), returning 413.
 - Login is rate-limited on username **and** IP together, so nobody can lock a
   real user out from an arbitrary network.
+- `GET /api/employees` and `GET /api/attendance` need either the `X-API-Key` punch
+  key or a logged-in session. An employee session sees only its own record and its
+  own attendance; admins and managers see everyone. Neither route ever returns
+  `device_pin` — that is the credential the biometric device identifies a person by,
+  and it belongs only to `/admin/device-pins`. **Both were open to the public
+  internet until 2026-11-12**, `/api/employees` answering `SELECT *` (name, mobile,
+  email, device PIN, branch, shift, join date) for every employee.

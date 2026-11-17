@@ -161,8 +161,8 @@ export function autoResolutions(
       });
       continue;
     }
-    if (leadStatus === "lost") {
-      res.push({ enquiryId: e.id, outcome: "not_interested", reason: "lead marked lost" });
+    if (leadStatus === "lost" || leadStatus === "junk") {
+      res.push({ enquiryId: e.id, outcome: "not_interested", reason: `lead marked ${leadStatus}` });
       continue;
     }
     const touches = [e.received_at, e.claimed_at, e.last_touch_at, ...(p?.milestones.map((m) => m.at) ?? [])]

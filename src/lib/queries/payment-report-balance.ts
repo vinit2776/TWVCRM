@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { balanceDue, paymentCredit } from "@/lib/settlement";
+import { depositPosition, requiredDeposit } from "@/lib/deposit-instalments";
 import type { PaymentReportEntityType } from "./payment-reports";
 
 /**
@@ -34,7 +35,7 @@ export interface ReportableBalance {
   reportable: number;
 }
 
-async function statementOutstanding(admin: SupabaseClient, statementId: string): Promise<number> {
+export async function statementOutstanding(admin: SupabaseClient, statementId: string): Promise<number> {
   const { data: stmt } = await admin
     .from("billing_statements").select("id, total_amount").eq("id", statementId).maybeSingle();
   if (!stmt) return 0;
@@ -82,6 +83,15 @@ async function depositOutstanding(admin: SupabaseClient, proposalId: string): Pr
   if (!p) return 0;
   // Already settled — nothing left to claim.
   if (p.deposit_payment_status === "paid" || p.deposit_payment_status === "not_required") return 0;
+  // Collected in parts: what is left is the deposit minus the parts already
+  // received (the proposal's own paid amount stays empty until the last part).
+  const { data: parts } = await admin
+    .from("proposal_deposit_instalments")
+    .select("amount, status, paid_amount")
+    .eq("proposal_id", proposalId);
+  if ((parts ?? []).some((r) => r.status !== "cancelled" || Number(r.paid_amount ?? 0) > 0)) {
+    return depositPosition(requiredDeposit(p), parts ?? []).balance;
+  }
   // Same arithmetic the manual-record dialog uses to prefill the expected
   // figure, so the two can't disagree about what is owed.
   const required =

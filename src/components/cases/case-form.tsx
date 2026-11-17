@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createCaseSchema, type CreateCaseInput } from "@/lib/validations";
+import { toast } from "sonner";
 import {
   VO_PURPOSES,
   VO_PURPOSE_LABELS,
@@ -103,6 +104,18 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
     return d.toISOString().split("T")[0];
   })();
 
+  // Only some fields print their error inline, so a failure on any other
+  // field would make Save do nothing with no message anywhere.
+  const onInvalid = (formErrors: FieldErrors<CreateCaseInput>) => {
+    const [field, error] = Object.entries(formErrors)[0] ?? [];
+    const message = (error as { message?: string } | undefined)?.message;
+    toast.error(
+      field
+        ? `Could not save — ${field.replace(/_/g, " ")}: ${message ?? "invalid value"}`
+        : "Could not save — please check the form for errors.",
+    );
+  };
+
   const onFormSubmit = async (data: CreateCaseInput) => {
     setSubmitting(true);
     try {
@@ -115,7 +128,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} onKeyDown={preventEnterSubmit} className="space-y-6">
+    <form onSubmit={handleSubmit(onFormSubmit, onInvalid)} onKeyDown={preventEnterSubmit} className="space-y-6">
       {/* Aggregator + Purpose */}
       <Card>
         <CardHeader>

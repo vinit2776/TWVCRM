@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { buildElectricityAnnexure } from "@/lib/electricity-annexure";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
@@ -182,6 +183,8 @@ export async function POST(
       label: "Electricity Charges",
       subtotal: Number(bill.customer_subtotal ?? 0),
       items,
+      // Frozen here so every later render of this invoice prints the same Annexure A.
+      annexure: buildElectricityAnnexure(bill, monthLabel),
     },
   ];
 

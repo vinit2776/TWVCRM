@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { caseClauseGateError } from "@/lib/special-clause/case-gate";
+import { caseAgreementGateError } from "@/lib/agreement-gate";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { previousAgreementDocumentId } from "@/lib/agreement-reset";
 import {
   getTemplateKey,
   mergeVariables,
@@ -181,7 +182,9 @@ export async function POST(
     );
   }
 
-  // Create document record for the PDF
+  // Create document record for the PDF. A regenerate supersedes the previous
+  // proposal's file, which stays reachable as the earlier version.
+  const supersededDocId = await previousAgreementDocumentId(supabase, caseId, "proposal");
   const { data: docRecord } = await supabase
     .from("documents")
     .insert({
@@ -192,6 +195,7 @@ export async function POST(
       size_bytes: pdfBuffer.length,
       category: "case_document",
       uploaded_by: dbUser?.id,
+      ...(supersededDocId ? { parent_document_id: supersededDocId } : {}),
     })
     .select("id")
     .single();
@@ -460,7 +464,7 @@ export async function PATCH(
   }
 
   if (["send_to_client", "initiate_signing", "mark_executed"].includes(action)) {
-    const clauseBlock = await caseClauseGateError(supabase, caseId, agreementId);
+    const clauseBlock = await caseAgreementGateError(supabase, caseId, agreementId);
     if (clauseBlock) return NextResponse.json({ error: clauseBlock }, { status: 409 });
   }
 

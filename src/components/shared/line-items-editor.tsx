@@ -13,6 +13,8 @@ export interface LineItemData {
   unit?: string;
   unit_price: number;
   total: number;
+  /** Only set when the rent/maintenance split is on; false = fixed on renewal. */
+  escalates?: boolean;
 }
 
 interface LineItemsEditorProps {
@@ -22,6 +24,13 @@ interface LineItemsEditorProps {
   onTaxChange: (val: number) => void;
   discountPercentage: number;
   onDiscountChange: (val: number) => void;
+  /**
+   * Opt-in rent/maintenance split. When `onEscalationSplitChange` is given the
+   * editor shows the toggle and a per-line "On renewal" control. Callers that
+   * don't pass it (e.g. ad-hoc invoices) see no change.
+   */
+  escalationSplit?: boolean;
+  onEscalationSplitChange?: (on: boolean) => void;
 }
 
 export function LineItemsEditor({
@@ -31,6 +40,8 @@ export function LineItemsEditor({
   onTaxChange,
   discountPercentage,
   onDiscountChange,
+  escalationSplit = false,
+  onEscalationSplitChange,
 }: LineItemsEditorProps) {
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
 
@@ -38,8 +49,31 @@ export function LineItemsEditor({
     onChange([...items, preset]);
   };
 
+  const showSplit = Boolean(onEscalationSplitChange);
+  const splitOn = showSplit && escalationSplit;
+
+  // Turning the split on keeps every existing line escalating (today's
+  // behaviour); staff then mark maintenance as fixed. Turning it off drops the
+  // flags so the lines go back to the legacy shape.
+  const toggleSplit = (on: boolean) => {
+    onChange(items.map((i) => {
+      const next = { ...i };
+      if (on) next.escalates = true;
+      else delete next.escalates;
+      return next;
+    }));
+    onEscalationSplitChange?.(on);
+  };
+
+  const toggleEscalates = (index: number) => {
+    onChange(items.map((i, idx) => (idx === index ? { ...i, escalates: i.escalates === false } : i)));
+  };
+
   const addItem = () => {
-    onChange([...items, { description: "", quantity: 1, unit: "", unit_price: 0, total: 0 }]);
+    onChange([
+      ...items,
+      { description: "", quantity: 1, unit: "", unit_price: 0, total: 0, ...(splitOn ? { escalates: false } : {}) },
+    ]);
   };
 
   const removeItem = (index: number) => {
@@ -73,20 +107,28 @@ export function LineItemsEditor({
 
   return (
     <div className="space-y-4">
+      {showSplit && (
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={splitOn} onChange={(e) => toggleSplit(e.target.checked)} />
+          Rent and maintenance are billed separately (maintenance does not escalate)
+        </label>
+      )}
+
       {/* Header */}
       <div className="grid grid-cols-12 gap-2 text-xs font-medium text-muted-foreground px-1">
-        <div className="col-span-4">Description</div>
+        <div className={splitOn ? "col-span-3" : "col-span-4"}>Description</div>
         <div className="col-span-1">Qty</div>
-        <div className="col-span-2">Unit</div>
+        <div className={splitOn ? "col-span-1" : "col-span-2"}>Unit</div>
         <div className="col-span-2">Unit Price</div>
         <div className="col-span-2 text-right">Total</div>
+        {splitOn && <div className="col-span-2 text-center">On renewal</div>}
         <div className="col-span-1" />
       </div>
 
       {/* Items */}
       {items.map((item, index) => (
         <div key={index} className="grid grid-cols-12 gap-2 items-center">
-          <div className="col-span-4">
+          <div className={splitOn ? "col-span-3" : "col-span-4"}>
             <Input
               placeholder="Item description"
               value={item.description}
@@ -101,7 +143,7 @@ export function LineItemsEditor({
               onChange={(e) => updateItem(index, "quantity", e.target.value)}
             />
           </div>
-          <div className="col-span-2">
+          <div className={splitOn ? "col-span-1" : "col-span-2"}>
             <Input
               placeholder="hrs, days…"
               value={item.unit || ""}
@@ -119,6 +161,22 @@ export function LineItemsEditor({
           <div className="col-span-2 text-right text-sm font-medium">
             {formatCurrency(item.total)}
           </div>
+          {splitOn && (
+            <div className="col-span-2 flex justify-center">
+              <button
+                type="button"
+                onClick={() => toggleEscalates(index)}
+                className={`text-xs rounded px-2 py-1 border ${
+                  item.escalates === false
+                    ? "bg-amber-50 text-amber-800 border-amber-300"
+                    : "bg-blue-50 text-blue-800 border-blue-300"
+                }`}
+                aria-label={`Toggle escalation for line ${index + 1}`}
+              >
+                {item.escalates === false ? "Stays fixed" : "Escalates"}
+              </button>
+            </div>
+          )}
           <div className="col-span-1 flex justify-end">
             <Button
               type="button"

@@ -1,8 +1,37 @@
 import { createAdminClient } from "@/lib/supabase/server";
-import { revokeUnifiVoucher } from "@/lib/unifi";
+import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
 import { setUserActive } from "@/lib/cosec";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
+
+/**
+ * Deletes per-seat UniFi vouchers on the controller, each on the console that
+ * issued it (recorded on the issuance). Awaited, not fire-and-forget: the
+ * callers run in serverless functions that can be frozen once they return.
+ * Never throws — failures are logged so a controller outage can't block the
+ * caller's status change. Returns how many vouchers it tried to revoke.
+ */
+export async function revokeUnifiIssuances(
+  issuances: Array<{ unifi_voucher_id?: string | null; unifi_console_id?: string | null }>,
+  locationId: string | null | undefined,
+  label: string
+): Promise<number> {
+  const live = issuances.filter((i): i is { unifi_voucher_id: string; unifi_console_id?: string | null } => !!i.unifi_voucher_id);
+  const results = await Promise.allSettled(
+    live.map(async (i) =>
+      revokeUnifiVoucher(
+        i.unifi_voucher_id,
+        await siteConfigForStoredVoucher({ consoleId: i.unifi_console_id, locationId })
+      )
+    )
+  );
+  results.forEach((r, idx) => {
+    if (r.status === "rejected") {
+      console.error(`[contract-lifecycle] per-seat UniFi revoke ${live[idx].unifi_voucher_id} failed for ${label}:`, r.reason);
+    }
+  });
+  return live.length;
+}
 
 /**
  * Revokes WiFi vouchers (UniFi live-API + import-based) and blocks COSEC
@@ -18,19 +47,35 @@ export async function revokeContractAccess(
   contract: { id: string; contract_number: string; unifi_voucher_id?: string | null }
 ): Promise<void> {
   if (contract.unifi_voucher_id) {
-    revokeUnifiVoucher(contract.unifi_voucher_id).catch((err) =>
-      console.error(`[contract-lifecycle] UniFi revoke failed for ${contract.contract_number}:`, err)
-    );
+    const voucherId = contract.unifi_voucher_id;
+    // The voucher lives on the console that issued it (recorded on the
+    // contract); look that up from the contract so callers don't each pass it.
+    void (async () => {
+      try {
+        const { data } = await admin
+          .from("contracts").select("location_id, unifi_voucher_console_id").eq("id", contract.id).maybeSingle();
+        await revokeUnifiVoucher(
+          voucherId,
+          await siteConfigForStoredVoucher({ consoleId: data?.unifi_voucher_console_id, locationId: data?.location_id })
+        );
+      } catch (err) {
+        console.error(`[contract-lifecycle] UniFi revoke failed for ${contract.contract_number}:`, err);
+      }
+    })();
   }
 
   try {
     const { data: issuances } = await admin
       .from("voucher_issuances")
-      .select("id, voucher_id")
+      .select("id, voucher_id, unifi_voucher_id, unifi_console_id")
       .eq("contract_id", contract.id)
       .eq("is_active", true);
 
     if (issuances && issuances.length > 0) {
+      // Delete per-seat UniFi vouchers on the controller before marking them inactive.
+      const { data: loc } = await admin.from("contracts").select("location_id").eq("id", contract.id).maybeSingle();
+      await revokeUnifiIssuances(issuances, loc?.location_id, contract.contract_number);
+
       const revokeNow = new Date().toISOString();
       const issuanceIds = issuances.map((i) => i.id);
       await admin

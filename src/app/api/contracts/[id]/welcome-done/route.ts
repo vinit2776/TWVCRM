@@ -3,7 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { loadJourney } from "@/lib/journey/load";
 
-const MARK_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "office_admin"];
+const MARK_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "office_admin", "coordinator"];
 const UNDO_ROLES = ["admin", "manager"];
 
 async function authorise(roles: string[]) {

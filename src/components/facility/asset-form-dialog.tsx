@@ -7,7 +7,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Camera, ChevronLeft, ChevronRight, Loader2, X } from "lucide-react";
+import { Camera, ChevronLeft, ChevronRight, FileText, Loader2, X } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { compressImageClient } from "@/lib/uploads/compress-image-client";
 import type { FacilityAsset, FacilityAssetCategory, FacilityLifecycleStage, CategoryCustomField } from "@/types";
@@ -34,6 +35,22 @@ function Hint({ children }: { children: React.ReactNode }) {
   return <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{children}</p>;
 }
 
+/** "In maintenance" was being picked to mean "covered by an AMC"; say what each choice means. */
+function StatusNote({ status }: { status: string }) {
+  if (status === "maintenance") {
+    return (
+      <p className="mt-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+        &quot;In maintenance&quot; means the asset is out of use for repair right now. It does <b>not</b> mean it is
+        covered by an AMC — for that, set <b>Lifecycle stage</b> to &quot;Under AMC&quot; and keep Status as &quot;Active&quot;.
+      </p>
+    );
+  }
+  if (status === "retired") {
+    return <Hint>Retired assets are decommissioned and are left out of the AMC request asset list.</Hint>;
+  }
+  return <Hint>&quot;Active&quot; is right for anything in service, including assets under an AMC.</Hint>;
+}
+
 function StepIndicator({ step, total }: { step: number; total: number }) {
   return (
     <div className="flex items-center gap-1.5">
@@ -49,10 +66,12 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   asset?: FacilityAsset | null;
   defaultLocationId?: string;
+  /** Starting values for a NEW asset (ignored when editing), e.g. read from a vendor's proposal. */
+  initialValues?: Partial<Record<"name" | "make" | "model" | "serial_number" | "vendor" | "notes", string>>;
   onSuccess: (asset: FacilityAsset) => void;
 }
 
-export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLocationId, onSuccess }: Props) {
+export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLocationId, initialValues, onSuccess }: Props) {
   const isEdit = !!asset;
 
   const [locations, setLocations] = useState<Location[]>([]);
@@ -74,6 +93,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
   const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
   const [pendingPhotos, setPendingPhotos] = useState<{ file: File; preview: string }[]>([]);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const [pendingInvoice, setPendingInvoice] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
 
   const selectedCategory = useMemo(
@@ -108,29 +128,30 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       location_id: asset?.location_id || defaultLocationId || "",
       floor_id: asset?.floor_id || "",
       category_id: asset?.category_id || "",
-      name: asset?.name || "",
+      name: asset?.name || initialValues?.name || "",
       asset_code: asset?.asset_code || "",
-      make: asset?.make || "",
-      model: asset?.model || "",
-      serial_number: asset?.serial_number || "",
+      make: asset?.make || initialValues?.make || "",
+      model: asset?.model || initialValues?.model || "",
+      serial_number: asset?.serial_number || initialValues?.serial_number || "",
       mac_address: asset?.mac_address || "",
       ip_address: asset?.ip_address || "",
       purchase_date: asset?.purchase_date?.slice(0, 10) || "",
       warranty_expiry: asset?.warranty_expiry?.slice(0, 10) || "",
-      vendor: asset?.vendor || "",
+      vendor: asset?.vendor || initialValues?.vendor || "",
       status: (asset?.status || "active") as "active" | "maintenance" | "retired",
       lifecycle_stage: (asset?.lifecycle_stage || "operational") as FacilityLifecycleStage,
       installation_date: asset?.installation_date?.slice(0, 10) || "",
       assigned_department: asset?.assigned_department || "",
       next_service_due: asset?.next_service_due?.slice(0, 10) || "",
       location_notes: asset?.location_notes || "",
-      notes: asset?.notes || "",
+      notes: asset?.notes || initialValues?.notes || "",
       attention_notes: asset?.attention_notes || "",
     });
     setCustomValues((asset?.custom_field_values as Record<string, unknown>) || {});
     setPendingPhotos([]);
+    setPendingInvoice(null);
     setStep(1);
-  }, [open, asset, defaultLocationId]);
+  }, [open, asset, defaultLocationId, initialValues]);
 
   useEffect(() => {
     if (!form.location_id) { setFloors([]); return; }
@@ -199,6 +220,34 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     }
   };
 
+  // Not mandatory: the asset is saved either way, and stays flagged until an invoice is attached.
+  const uploadInvoice = async (assetId: string) => {
+    if (!pendingInvoice) return;
+    try {
+      const supabase = createClient();
+      const ext = pendingInvoice.name.split(".").pop() ?? "bin";
+      const path = `asset-docs/${assetId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("procurement-docs").upload(path, pendingInvoice);
+      if (upErr) throw new Error(upErr.message);
+      const { data: urlData } = supabase.storage.from("procurement-docs").getPublicUrl(path);
+      const res = await fetch(`/api/facility/assets/${assetId}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tier: "commercial",
+          label: "Purchase Invoice",
+          file_url: urlData.publicUrl,
+          file_name: pendingInvoice.name,
+          file_size: pendingInvoice.size,
+          mime_type: pendingInvoice.type,
+        }),
+      });
+      if (!res.ok) throw new Error("Upload failed");
+    } catch {
+      toast.warning("Asset saved, but the invoice did not upload. Open the asset and use Upload invoice.");
+    }
+  };
+
   const validateStep1 = () => {
     if (!form.location_id) { toast.error("Select a location first"); return false; }
     if (!form.category_id) { toast.error("Select a category"); return false; }
@@ -247,6 +296,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
       if (pendingPhotos.length > 0) await uploadPhotos(json.data.id);
+      await uploadInvoice(json.data.id);
       // Either of these rewrites the asset_code, which is what's printed on the
       // QR sticker — so both need a history entry explaining why the sticker on
       // the wall no longer matches. Only mention the code when it really moved.
@@ -466,10 +516,10 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
         >
           <option value="active">Active — in normal use</option>
-          <option value="maintenance">In maintenance — being serviced</option>
+          <option value="maintenance">In maintenance — out of use, being repaired</option>
           <option value="retired">Retired — decommissioned</option>
         </select>
-        <Hint>Almost always &quot;Active&quot; for new assets. Change when the asset goes for repair.</Hint>
+        <StatusNote status={form.status} />
       </div>
 
       {/* Category-specific custom fields */}
@@ -546,6 +596,35 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           className="mt-1 w-full rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-amber-400"
         />
         <Hint>Use this for recurring issues or safety warnings. Technicians see it highlighted in red every time they open this asset.</Hint>
+      </div>
+
+      {/* Purchase invoice */}
+      <div className="border-t pt-3">
+        <Label className="text-xs flex items-center gap-1">
+          <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+          Purchase invoice
+          <span className="text-muted-foreground font-normal">(optional, but flagged until uploaded)</span>
+        </Label>
+        <Hint>Attach the supplier invoice so the details entered here can be checked against it. If one invoice covers several assets, upload it here and tick the others from the asset&apos;s Documents tab.</Hint>
+        {pendingInvoice ? (
+          <div className="mt-2 flex items-center gap-2 text-sm">
+            <FileText className="h-4 w-4 text-primary" />
+            <span className="truncate">{pendingInvoice.name}</span>
+            <button type="button" onClick={() => setPendingInvoice(null)}><X className="h-3.5 w-3.5 text-muted-foreground" /></button>
+          </div>
+        ) : (
+          <input
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            className="mt-2 text-sm"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              if (f.size > 10 * 1024 * 1024) { toast.error("File too large (max 10 MB)"); return; }
+              setPendingInvoice(f);
+            }}
+          />
+        )}
       </div>
 
       {/* Photos */}
@@ -698,10 +777,11 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       <div>
         <Label className="text-xs">Status</Label>
         <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as "active" | "maintenance" | "retired" })} className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm">
-          <option value="active">Active</option>
-          <option value="maintenance">In maintenance</option>
-          <option value="retired">Retired</option>
+          <option value="active">Active — in normal use</option>
+          <option value="maintenance">In maintenance — out of use, being repaired</option>
+          <option value="retired">Retired — decommissioned</option>
         </select>
+        <StatusNote status={form.status} />
       </div>
       {customFields.length > 0 && (
         <div className="border-t pt-3 space-y-2.5">

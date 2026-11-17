@@ -10,7 +10,9 @@ import {
   validatePaymentReport,
   lastCheckedChip,
   matchingRecordedPayments,
+  paymentCoversReportedAmount,
   closedReportSummary,
+  canWithdrawPaymentReport,
   MAX_AGE_DAYS,
   type PaymentReportFields,
 } from "@/lib/queries/payment-reports";
@@ -277,6 +279,14 @@ describe("closedReportSummary", () => {
     expect(r.linkLine).toBe("Linked to the payment recorded on the invoice (NEFT, ref 22317)");
   });
 
+  it("says a deposit adjustment settled it rather than naming a bank mode", () => {
+    const r = closedReportSummary({
+      ...base, status: "verified",
+      linkedPayment: { payment_mode: "deposit_adjustment", payment_reference: "9fc3e278-d441" },
+    });
+    expect(r.linkLine).toBe("Settled by deposit adjustment");
+  });
+
   it("leaves the reference out when the payment has none", () => {
     const r = closedReportSummary({
       ...base, status: "verified",
@@ -298,6 +308,63 @@ describe("closedReportSummary", () => {
   it("says no such payment for a rejected report, with no link line", () => {
     const r = closedReportSummary({ ...base, status: "rejected", linkedPayment: null });
     expect(r.headline).toBe("Payment report closed — no such payment");
+    expect(r.linkLine).toBeNull();
+  });
+});
+
+describe("paymentCoversReportedAmount", () => {
+  it("accepts the bank credit (net of TDS)", () => {
+    expect(paymentCoversReportedAmount({ amount: 70200, tds_amount: 6500 }, 70200)).toBe(true);
+  });
+  it("accepts the whole invoice credit (net plus TDS)", () => {
+    expect(paymentCoversReportedAmount({ amount: 11880, tds_amount: 1100 }, 12980)).toBe(true);
+  });
+  it("tolerates a rupee but not two", () => {
+    expect(paymentCoversReportedAmount({ amount: 8851 }, 8850)).toBe(true);
+    expect(paymentCoversReportedAmount({ amount: 8853 }, 8850)).toBe(false);
+  });
+  it("rejects a different amount, such as a part payment", () => {
+    expect(paymentCoversReportedAmount({ amount: 10894 }, 26447)).toBe(false);
+  });
+});
+
+
+describe("canWithdrawPaymentReport", () => {
+  const base = { status: "reported" as const, targetKind: "invoice" as const, role: "sales_rep", userId: "u1", reportedBy: "u1" };
+
+  it("lets the reporter take back their own unverified report", () => {
+    expect(canWithdrawPaymentReport(base)).toBe(true);
+  });
+  it("refuses another non-accounts user", () => {
+    expect(canWithdrawPaymentReport({ ...base, userId: "u2" })).toBe(false);
+  });
+  it("lets accounts and admin withdraw someone else's report", () => {
+    expect(canWithdrawPaymentReport({ ...base, userId: "u2", role: "accounts" })).toBe(true);
+    expect(canWithdrawPaymentReport({ ...base, userId: "u2", role: "admin" })).toBe(true);
+  });
+  it("refuses a manager who did not raise it", () => {
+    expect(canWithdrawPaymentReport({ ...base, userId: "u2", role: "manager" })).toBe(false);
+  });
+  it("refuses once the report is settled", () => {
+    for (const status of ["verified", "rejected", "withdrawn"] as const) {
+      expect(canWithdrawPaymentReport({ ...base, status })).toBe(false);
+    }
+  });
+  it("never withdraws a booking report", () => {
+    expect(canWithdrawPaymentReport({ ...base, targetKind: "booking", role: "admin" })).toBe(false);
+  });
+  it("needs a known user", () => {
+    expect(canWithdrawPaymentReport({ ...base, userId: null, reportedBy: null })).toBe(false);
+  });
+});
+
+describe("closedReportSummary withdrawn", () => {
+  it("reads as withdrawn, not closed against a payment", () => {
+    const r = closedReportSummary({
+      status: "withdrawn", targetKind: "invoice", reportedAmount: 100, reportedMode: "neft",
+      reportedOn: "2026-11-05", linkedPayment: null, modeLabel: (m) => m,
+    });
+    expect(r.headline).toBe("Payment report withdrawn");
     expect(r.linkLine).toBeNull();
   });
 });

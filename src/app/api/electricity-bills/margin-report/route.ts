@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { canSeeElectricityRebilling } from "@/lib/electricity-visibility";
 
 /**
  * GET /api/electricity-bills/margin-report?year=2026&months=6
@@ -30,6 +31,11 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const supabase = createAdminClient();
+
+  const { data: viewer } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+  if (!canSeeElectricityRebilling(viewer?.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
 
   const { searchParams } = new URL(request.url);
   const months = Math.min(Math.max(parseInt(searchParams.get("months") ?? "6"), 1), 24);

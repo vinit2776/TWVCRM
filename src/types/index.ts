@@ -54,14 +54,21 @@ export interface Location {
   incharge_2?: Pick<User, "id" | "full_name" | "email" | "role"> | null;
   /** Set only for locations managed via the UniFi API (e.g. Nungambakkam LGF). */
   unifi_site_id?: string | null;
-  /** UniFi cloud console UUID — falls back to UNIFI_CONSOLE_ID env var when null. */
+  /** UniFi cloud console id — required for unifi_api mode (no env-var fallback). */
   unifi_console_id?: string | null;
   /** 'repository' (default) = issue from pre-uploaded pool; 'unifi_api' | 'ruijie_api' = generate on-demand. */
   wifi_voucher_mode?: string | null;
+  wifi_ssid?: string | null;
   /** Ruijie Cloud network group ID (site identifier). Set only for ruijie_api locations. */
   ruijie_group_id?: number | null;
   /** Icon keys shown in the proposal PDF amenities strip. Defaults to ["wifi","coffee","printer","meeting"]. */
   proposal_amenity_icons?: string[];
+  /** Per-location wording for the agreement Schedule; null = standard wording. See src/lib/agreement-terms.ts. */
+  agreement_terms?: import("@/lib/agreement-terms").AgreementTerms | null;
+  /** Terms & conditions a new proposal for this location starts from; null = DEFAULT_PROPOSAL_TERMS. */
+  proposal_terms?: string | null;
+  /** Commitment / validity numbers a new proposal for this location starts from. */
+  proposal_defaults?: import("@/lib/location-proposal-settings").ProposalDefaults | null;
   created_at: string;
   updated_at: string;
 }
@@ -69,7 +76,7 @@ export interface Location {
 // ==========================================
 // User Types
 // ==========================================
-export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager" | "accounts" | "fms" | "office_admin" | "it_manager" | "it_technician" | "viewer" | "enquiry_viewer";
+export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager" | "accounts" | "fms" | "office_admin" | "it_manager" | "it_technician" | "viewer" | "enquiry_viewer" | "coordinator";
 
 export interface User {
   id: string;
@@ -104,6 +111,8 @@ export type LeadSource =
   | "google_ads"
   | "direct_walkin"
   | "whatsapp"
+  | "website"
+  | "inbound_call"
   | "referral"
   | "cold_call"
   | "aggregator";
@@ -153,6 +162,17 @@ export interface Lead {
   entity_type?: string | null;
   id_proof_path?: string | null;
   id_proof_uploaded_at?: string | null;
+  // Latest public enquiry (attached by GET /api/leads, not a DB column)
+  _enquiry?: {
+    source: string;
+    received_at: string;
+    workspace_type: string | null;
+    seat_capacity: number | null;
+    budget_per_seat: number | null;
+    preferred_location: string | null;
+    /** The last thing the customer wrote: the WhatsApp message or the form's free text. */
+    message: string | null;
+  } | null;
   // Followup flag (attached by API, not DB column)
   _followup?: {
     overdue: boolean;
@@ -160,6 +180,8 @@ export interface Lead {
     upcoming: boolean;
     /** Soonest pending follow-up: when it's due and the note saying what to do. */
     next?: {
+      /** The activity that holds this follow-up, so it can be marked done or rescheduled. */
+      activity_id: string;
       due_at: string;
       days_overdue: number;
       notes: string | null;
@@ -189,6 +211,12 @@ export interface Lead {
   lost_reason?: string;
   // Soft-disable
   archived_at?: string | null;
+  /** Set while the lead is pinned: highlighted in the list and shown on every calendar day. */
+  pinned_at?: string | null;
+  /** Set by the Leads list when the lead has gone quiet (see src/lib/lead-stale.ts). */
+  _stale?: { state: "warning"; daysLeft: number } | { state: "stale"; daysQuiet: number };
+  /** Set by the Leads list: the last call, tour, meeting or email, for the "Last:" line. */
+  _last_contact?: { subject: string; at: string; note: string | null } | null;
   archived_by?: string | null;
   archive_reason?: string | null;
 }
@@ -300,6 +328,19 @@ export interface LineItem {
   unit?: string;
   unit_price: number;
   total: number;
+  /**
+   * Whether renewal escalation applies to this line. Absent means true, so
+   * every existing single-line contract escalates exactly as before. Set to
+   * false for a fixed component such as maintenance.
+   */
+  escalates?: boolean;
+}
+
+/** A monthly add-on offered with a proposal (valet parking, name board, locker). Never escalated. */
+export interface ProposalAddon {
+  description: string;
+  /** Monthly amount, excluding GST. */
+  amount: number;
 }
 
 export interface ComplimentaryItem {
@@ -332,7 +373,12 @@ export interface Proposal {
   status: ProposalStatus;
   description?: string;
   complimentary_items?: ComplimentaryItem[];
+  /** The monthly fee lines. These escalate. */
   items: LineItem[];
+  /** Monthly add-ons, never escalated, outside subtotal and the security deposit. Absent on older rows. */
+  recurring_addons?: ProposalAddon[];
+  /** Agreed annual escalation on the monthly fee. Absent on older rows (read as 10). */
+  escalation_percentage?: number;
   subtotal: number;
   tax_percentage: number;
   tax_amount: number;
@@ -389,6 +435,9 @@ export interface Proposal {
   deposit_razorpay_link_id?: string;
   deposit_razorpay_link_url?: string;
   deposit_email_sent_at?: string;
+  /** Live first-month proforma (statement id and amount); set by GET /api/proposals/[id] only. */
+  pi_statement_id?: string | null;
+  pi_statement_total?: number | null;
   deposit_payment_received_at?: string;
   deposit_payment_amount?: number;
   deposit_payment_reference?: string;
@@ -437,6 +486,38 @@ export interface Proposal {
   deposit_waiver_verified_by?: string;
   deposit_waiver_verified_by_user?: { id: string; full_name: string } | null;
   deposit_waiver_requested_at?: string;
+}
+
+/** One ask for a part of a proposal's security deposit (proposal_deposit_instalments, migration 00649). */
+export interface DepositInstalment {
+  id: string;
+  proposal_id: string;
+  seq: number;
+  amount: number;
+  status: "requested" | "paid" | "cancelled";
+  due_date: string | null;
+  razorpay_link_id: string | null;
+  razorpay_link_url: string | null;
+  internal_note: string | null;
+  customer_message: string | null;
+  requested_by: string | null;
+  requested_at: string;
+  floor_override_by: string | null;
+  floor_override_reason: string | null;
+  paid_amount: number | null;
+  paid_at: string | null;
+  payment_reference: string | null;
+  payment_medium: string | null;
+  payment_screenshot_url: string | null;
+  payment_notes: string | null;
+  recorded_by: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
+  cancel_reason: string | null;
+  settled_at: string | null;
+  settlement_id: string | null;
+  accounted: boolean;
+  accounted_at: string | null;
 }
 
 // ==========================================
@@ -631,7 +712,15 @@ export interface Contract {
   parking_space?: string;
   complimentary_services?: string;
   security_deposit_months?: number;
+  /** Escalation applied to THIS term. A negotiation may set it differently for this term only. */
   escalation_percentage?: number;
+  /** Escalation written into the signed base agreement, carried unchanged down a renewal chain. Null on older rows: read it with programmedEscalation(). */
+  agreement_escalation_percentage?: number | null;
+  /** Whether the daily auto-renew job may prepare and roll this contract into its next term. */
+  auto_renew?: boolean;
+  auto_renew_stopped_at?: string | null;
+  auto_renew_stopped_by?: string | null;
+  auto_renew_stop_reason?: string | null;
   notice_period_months?: number;
   lock_in_months?: number | null;
   // Set when an admin issued term / lock-in / notice different from the
@@ -695,6 +784,8 @@ export interface Contract {
   // Escalation approval
   escalation_approval_status?: string | null; // 'pending' | 'approved' | 'rejected'
   escalation_approval_id?: string | null;
+  /** Who approved/rejected the escalation and when (null while pending or for older rows with no record). */
+  escalation_decision?: { acted_by_name: string | null; acted_at: string | null; rejection_reason: string | null } | null;
   // Deposit carry-forward
   deposit_carried_from?: string | null;
   deposit_shortfall?: number;
@@ -743,6 +834,8 @@ export interface Contract {
   // Tiered rate phases
   phase_start_date?: string | null;
   rate_phases?: ContractRatePhase[];
+  /** Recurring add-ons (never escalated). Embedded by GET /api/contracts/[id]; absent elsewhere. */
+  recurring_addons?: ContractAddon[];
   // start_date is a placeholder until the linked proposal's pro-rata invoice
   // is paid — see supabase/migrations/00503_contract_start_date_confirmation.sql
   start_date_confirmed?: boolean;
@@ -883,7 +976,18 @@ export interface DepositTopup {
  * proposal-stage security deposits and later top-ups into one worklist. */
 export interface DepositInboxRow {
   id: string;
-  kind: "deposit" | "topup";
+  /** "part" = one instalment of a deposit collected in parts (proposal_deposit_instalments). */
+  kind: "deposit" | "topup" | "part";
+  /** Staged deposit only (kind "part"): which proposal, and where this part sits in the total. */
+  proposal_id?: string | null;
+  part_seq?: number | null;
+  /** Parts asked for so far, cancelled ones excluded — "Part 2 of 3" can grow until the deposit is complete. */
+  parts_known?: number | null;
+  /** Deposit paid up to and including this part. */
+  received_to_date?: number | null;
+  balance_after?: number | null;
+  /** This part completed the deposit. */
+  is_final?: boolean;
   /** Open query thread count — drives the "Query" button badge. Set by
    *  /api/accounting/inbox/deposits; see src/lib/queries/registry.ts. */
   open_query_count?: number;
@@ -988,6 +1092,10 @@ export interface VoucherIssuance {
   replaces_issuance_id?: string;
   /** UniFi internal _id — set when issued via Unifi live API. Used for revocation. */
   unifi_voucher_id?: string | null;
+  /** UniFi console the voucher was created on; revoke/email use this, not the location's current console. */
+  unifi_console_id?: string | null;
+  /** locations.code at issue time (also the prefix of the voucher note on the controller). */
+  unifi_location_code?: string | null;
 }
 
 export interface AdminOtp {
@@ -1121,9 +1229,13 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded" | "statement_held" | "statement_hold_released" | "booking_facility_override" | "commitment_terms_overridden" | "commitment_terms_recorded" | "rent_month_waived" | "rent_month_waiver_revoked" | "exit_started" | "exit_updated" | "exit_cancelled" | "exit_completed" | "exit_charge_added" | "exit_charge_updated" | "exit_charge_removed" | "exit_cleared" | "exit_approved" | "exit_returned" | "exit_paid" | "exit_owed_handled" | "rollback" | "special_clause_submitted" | "special_clause_approved" | "special_clause_changes_requested" | "special_clause_withdrawn";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "contract_addon_ended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "payment_report_withdrawn" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded" | "statement_held" | "statement_hold_released" | "booking_facility_override" | "commitment_terms_overridden" | "commitment_terms_recorded" | "rent_month_waived" | "rent_month_waiver_revoked" | "exit_started" | "exit_updated" | "exit_cancelled" | "exit_completed" | "exit_charge_added" | "exit_charge_updated" | "exit_charge_removed" | "exit_cleared" | "exit_approved" | "exit_returned" | "exit_paid" | "exit_owed_handled" | "rollback" | "special_clause_submitted" | "special_clause_approved" | "special_clause_changes_requested" | "special_clause_withdrawn" | "auto_renewal_stopped" | "auto_renewal_enabled" | "auto_renewal_paused" | "auto_renewal_revised" | "auto_renewal_notice_prepared" | "auto_renewal_notice_edited" | "auto_renewal_notice_approved" | "auto_renewal_notice_sent" | "auto_renewal_notice_send_failed" | "auto_renewal_notice_cancelled" | "auto_renewal_next_term_prepared";
 export type AuditEntityType =
+  | "energy_alert_rule"
+  | "energy_alert_episode"
   | "value_cost_parameter"
+  | "lead_rate_card"
+  | "lead_promotion"
   | "lead"
   | "activity"
   | "task"
@@ -1367,6 +1479,8 @@ export interface Booking {
   gst_rate?: number;
   gst_amount?: number;
   total_amount_with_gst?: number;
+  /** Completed via Close out after its date: billed as booked, no real check-in/out times. */
+  closed_out_late?: boolean;
   payment_status: BookingPaymentStatus;
   payment_mode?: string;
   payment_reference?: string;
@@ -1407,6 +1521,11 @@ export interface Booking {
   // Razorpay Payment Links
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;
+  // Optional proforma invoice sent with the payment link
+  pi_number?: string | null;
+  pi_sent_at?: string | null;
+  pi_sent_to?: string | null;
+  pi_sender?: { full_name: string } | null;
   // Prepaid package redemption
   prepaid_purchase_id?: string;
   prepaid_credits_used?: number;
@@ -2431,6 +2550,8 @@ export interface PoServiceReport {
   cycle_number: number;
   period_from: string;
   period_to: string;
+  /** The day the visit happened; older reports only have the cycle's period. */
+  service_date?: string | null;
   report_file_url?: string | null;
   notes?: string | null;
   recorded_by?: string | null;
@@ -2487,6 +2608,9 @@ export interface PurchaseRequest {
   amc_start_date?: string | null;
   amc_end_date?: string | null;
   amc_visits_covered?: number | null;
+  /** Cycles settled and visits done before the contract was entered here (the line quantity is only what is left). */
+  opening_cycles?: number;
+  opening_visits?: number;
   amc_contact_name?: string | null;
   amc_helpline_number?: string | null;
   amc_contact_email?: string | null;
@@ -2624,6 +2748,10 @@ export interface AssetDocument {
   mime_type?: string | null;
   notes?: string | null;
   uploaded_by?: string | null;
+  /** 'invoice' marks the asset's purchase invoice. */
+  doc_kind?: "invoice" | null;
+  /** Rows created from one upload share this id (one invoice covering several assets). */
+  invoice_group_id?: string | null;
   created_at: string;
   updated_at: string;
   uploader?: { id: string; full_name: string } | null;
@@ -2667,6 +2795,10 @@ export interface PurchaseOrder {
   service_start_date?: string | null;
   billing_cycle?: ServicePoBillingCycle | null;
   cycle_count?: number | null;
+  /** Cycles billed and settled before the contract was entered here (cycle_count is only what is left). */
+  opening_cycles?: number;
+  /** Visits already done before the contract was entered here. */
+  opening_visits?: number;
   unit_cost_per_cycle?: number | null;
   notes?: string;
   payment_terms?: string;
@@ -2718,6 +2850,14 @@ export interface PurchaseOrder {
 export interface VendorBill {
   id: string;
   cheque_signed_at?: string | null;
+  payment_hold_status?: "none" | "on_hold" | null;
+  payment_hold_reason?: string | null;
+  payment_hold_notes?: string | null;
+  payment_held_at?: string | null;
+  edit_count?: number | null;
+  last_edited_at?: string | null;
+  last_edited_by?: string | null;
+  last_edit_summary?: string | null;
   withdrawn_at?: string | null;
   withdrawn_reason?: string | null;
   bill_number: string;
@@ -2739,6 +2879,8 @@ export interface VendorBill {
   payment_date?: string;
   notes?: string;
   invoice_file_url?: string;
+  /** What the advisory invoice check found when the bill was entered (migration 00676); null when no check ran. */
+  invoice_check?: { checked_at: string; confidence: "high" | "medium" | "low"; findings: { code: string; message: string }[]; override_reason?: string } | null;
   service_report_id?: string | null;
   approval_status: BillApprovalStatus;
   approved_by?: string;
@@ -3474,6 +3616,8 @@ export interface FacilityAsset {
   open_issue_count?: number;
   total_issue_count?: number;
   last_issue_at?: string | null;
+  /** True when no purchase invoice is attached; undefined when it could not be checked. */
+  invoice_missing?: boolean;
 }
 
 // Non-secret fields only — the decrypted password is never part of this

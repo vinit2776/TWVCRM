@@ -109,12 +109,21 @@ export interface ShadowSummary {
   confidence: number | null;
 }
 
-/** The shadow margin over a few recent months, or null with none. Revenue-weighted, so a quiet month does not swing it. */
-export function summariseShadow(rows: ShadowRow[]): ShadowSummary | null {
+/**
+ * The shadow margin over a few recent months, or null with none. Revenue-weighted, so a quiet month
+ * does not swing it.
+ *
+ * Only months where some variable cost was actually counted take part. A month where nothing was
+ * costed (no electricity bill, no concessions, no rates entered) has a "margin" of exactly its
+ * revenue, which says nothing about the customer: it is left out, and a customer with no costed
+ * month at all has no shadow margin to show.
+ */
+export function summariseShadow(allRows: ShadowRow[]): ShadowSummary | null {
+  const rows = allRows.filter((r) => r.variable_cost > 0);
   if (rows.length === 0) return null;
   const revenue = rows.reduce((n, r) => n + r.revenue, 0);
   const margin = rows.reduce((n, r) => n + r.margin_after_variable, 0);
-  const weights = rows.filter((r) => r.confidence !== null && r.variable_cost > 0);
+  const weights = rows.filter((r) => r.confidence !== null);
   const weight = weights.reduce((n, r) => n + r.variable_cost, 0);
   return {
     months: rows.map((r) => r.month.slice(0, 7)).sort(),

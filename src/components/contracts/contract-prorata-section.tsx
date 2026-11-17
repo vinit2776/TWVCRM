@@ -17,7 +17,10 @@ import {
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
+import { ProrataCorrectionBanner } from "@/components/contracts/prorata-correction-banner";
 import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
+import { prorataAddonLines, prorataAddonsTotal } from "@/lib/prorata-addons";
+import type { AddonTerms } from "@/lib/addon-billing";
 import type { Contract } from "@/types";
 
 interface StatementState {
@@ -48,6 +51,8 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
   const [stmtState, setStmtState] = useState<StatementState | null>(null);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Recurring add-ons are not in the subtotal; the first-month invoice bills their share too.
+  const [addons, setAddons] = useState<AddonTerms[]>([]);
 
   // Takes an explicit id because right after a first send the contract prop
   // doesn't carry prorata_billing_statement_id yet — without it the card
@@ -66,6 +71,29 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
 
   useEffect(() => { fetchStmtState(); }, [fetchStmtState]);
 
+  useEffect(() => {
+    if (!contract.is_renewal) return;
+    let cancelled = false;
+    fetch(`/api/contracts/${contract.id}/addons`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json) return;
+        setAddons(
+          ((json.data || []) as Array<{ description: string; amount: number; effective_from: string; effective_until: string | null; is_active: boolean }>)
+            .filter((a) => a.is_active)
+            .map((a) => ({
+              description: a.description,
+              amount: Number(a.amount),
+              effective_from: a.effective_from,
+              effective_until: a.effective_until ?? null,
+              is_active: true,
+            }))
+        );
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [contract.id, contract.is_renewal, contract.subtotal]);
+
   if (!contract.is_renewal || contract.prorata_payment_status === "not_applicable") {
     return null;
   }
@@ -82,7 +110,9 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
 
   const monthlySubtotal = Number(contract.subtotal || 0);
   const taxPercentage = Number(contract.tax_percentage || 18);
-  const prorataSubtotal = Math.round((monthlySubtotal / daysInMonth) * prorataDays * 100) / 100;
+  const feeProrata = Math.round((monthlySubtotal / daysInMonth) * prorataDays * 100) / 100;
+  const addonsProrata = prorataAddonsTotal(prorataAddonLines(addons, contract.start_date));
+  const prorataSubtotal = Math.round((feeProrata + addonsProrata) * 100) / 100;
   const prorataTotal = Math.round(prorataSubtotal * (1 + taxPercentage / 100) * 100) / 100;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -244,6 +274,11 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
             <span>{prorataDays} of {daysInMonth} days</span>
           </div>
           <Separator />
+          {addonsProrata > 0 && (
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>Workspace fee {formatCurrency(feeProrata)} + recurring add-ons {formatCurrency(addonsProrata)}</span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span className="text-muted-foreground">Subtotal</span>
             <span>{formatCurrency(prorataSubtotal)}</span>
@@ -263,6 +298,14 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
               <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <p><span className="font-semibold">Not sent.</span> {dispatchError}</p>
             </div>
+          )}
+
+          {userRole === "admin" && (displayState === "gst_in_tally" || displayState === "pi_sent") && (
+            <ProrataCorrectionBanner
+              contractId={contract.id}
+              refreshKey={`${contract.subtotal}-${stmtState?.updated_at ?? ""}`}
+              onSuccess={() => { fetchStmtState(); onSuccess(); }}
+            />
           )}
 
           {displayState === "unsent" && (
@@ -412,6 +455,11 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
               <span className="text-muted-foreground">Pro-Rata Workspace Fee</span>
               <span>{monthNames[startMonth]} {startDay}–{daysInMonth}</span>
             </div>
+            {addonsProrata > 0 && (
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Workspace fee {formatCurrency(feeProrata)} + recurring add-ons {formatCurrency(addonsProrata)}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-muted-foreground">Subtotal</span>
               <span>{formatCurrency(prorataSubtotal)}</span>

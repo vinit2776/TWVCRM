@@ -54,6 +54,7 @@ import { ContractQuotasSection } from "@/components/contracts/contract-quotas-se
 import { ContractElectricityTab } from "@/components/contracts/contract-electricity-tab";
 import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
 import { ContractMembersAccessSection } from "@/components/contracts/contract-members-access-section";
+import { ContractPeopleAccessSection } from "@/components/contracts/contract-people-access-section";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import { ContractAddonsSection } from "@/components/contracts/contract-addons-section";
 import { ContractDepositTopupsSection } from "@/components/contracts/contract-deposit-topups-section";
@@ -212,6 +213,8 @@ function ContractOnboardingWizard() {
   const { enabled: leegalityEnabled } = useLeegalityEnabled();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12>(1);
+  // Bumped when the People & Access panel changes so the detail sections reload.
+  const [accessVersion, setAccessVersion] = useState(0);
 
   // Set once the draft contract is created at the end of step 2. Steps 3–4
   // operate against this real contract, not client-side wizard state.
@@ -2436,12 +2439,21 @@ function ContractOnboardingWizard() {
 
           {step === 12 && contractId && fullContract && (
             <>
+              <ContractPeopleAccessSection
+                contractId={contractId}
+                contractStatus={fullContract.status}
+                signedDocumentId={fullContract.signed_document_id}
+                onChanged={() => setAccessVersion((v) => v + 1)}
+              />
               <ContractMembersAccessSection
+                key={`members-${accessVersion}`}
                 contractId={contractId}
                 seats={fullContract.seats}
                 contractStatus={fullContract.status}
+                allowAdd={false}
               />
               <ContractVouchersSection
+                key={`vouchers-${accessVersion}`}
                 contractId={contractId}
                 seats={fullContract.seats}
                 contractStatus={fullContract.status}

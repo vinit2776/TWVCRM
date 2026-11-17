@@ -6,7 +6,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { unifiRequest, siteConfigFromLocation } from "@/lib/unifi";
+import { unifiRequest, siteConfigForLocationId, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 
 interface UnifiEvent {
   _id: string;
@@ -89,11 +90,11 @@ export async function GET(request: NextRequest) {
   const limit = Math.min(parseInt(searchParams.get("limit") ?? "100", 10), 500);
   const includeAlarms = searchParams.get("include_alarms") === "true";
 
-  let siteCfg = undefined;
-  if (locationId) {
-    const { data: loc } = await supabase
-      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", locationId).single();
-    if (loc) siteCfg = siteConfigFromLocation(loc);
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = await siteConfigForLocationId(locationId);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
   }
 
   // Some consoles/proxies don't expose /stat/event or /stat/alarm (404

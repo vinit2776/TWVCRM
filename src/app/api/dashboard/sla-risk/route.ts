@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     .eq("auth_id", user.id)
     .single();
 
-  const allowed = ["admin", "manager", "fms", "it_manager", "it_technician", "office_admin"];
+  const allowed = ["admin", "manager", "fms", "it_manager", "it_technician", "office_admin", "coordinator"];
   if (!dbUser || !allowed.includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }

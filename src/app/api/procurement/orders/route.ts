@@ -322,6 +322,8 @@ export async function POST(request: NextRequest) {
     // refine() above. po_number is trigger-assigned, company-scoped.
     let servicePoCompanyId = parsed.data.company_id ?? null;
     let servicePrItemId: string | null = null;
+    let openingCycles = 0;
+    let openingVisits = 0;
     // What the PO will actually be created with. A combined PO overrides the body's
     // schedule and cost with the sum of its lines.
     const svc = {
@@ -330,16 +332,18 @@ export async function POST(request: NextRequest) {
       unitCost: parsed.data.unit_cost_per_cycle,
       linkedAssetId: parsed.data.linked_asset_id ?? null,
     };
+    let fromAmcRequest = false;
     let combinedLines: Array<{ id: string; item_name: string; quantity: number; unit: string; estimated_price: number; linked_asset_id: string }> = [];
     if (parsed.data.pr_id) {
       const { data: parentPr, error: parentPrError } = await supabase
         .from("purchase_requests")
-        .select("company_id, status, department, expenditure_type")
+        .select("company_id, status, department, expenditure_type, opening_cycles, opening_visits")
         .eq("id", parsed.data.pr_id)
         .single();
       if (parentPrError || !parentPr) {
         return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
       }
+      fromAmcRequest = parentPr.department === "amc" || parentPr.expenditure_type === "amc";
       // Mirror of the goods-PO guard: a service PO that points at a request must
       // come from an AMC request, and one that is actually ready to order.
       if (parentPr.department !== "amc" && parentPr.expenditure_type !== "amc") {
@@ -353,6 +357,9 @@ export async function POST(request: NextRequest) {
         }, { status: 422 });
       }
       servicePoCompanyId = parentPr.company_id;
+      // A contract that was already running keeps its starting point on the PO.
+      openingCycles = Number(parentPr.opening_cycles ?? 0);
+      openingVisits = Number(parentPr.opening_visits ?? 0);
 
       // Tie this PO to the request line(s) it fulfils. Without the link the request
       // never registers as ordered, stays "approved", and can be ordered again.
@@ -401,6 +408,9 @@ export async function POST(request: NextRequest) {
           }, { status: 422 });
         }
         servicePrItemId = line.id;
+        // A running contract's line holds only the cycles still to bill; the form must not
+        // order more than was approved, whatever count it derived from the dates.
+        if (openingCycles > 0) svc.cycleCount = Number(line.quantity);
       }
     }
 
@@ -462,7 +472,9 @@ export async function POST(request: NextRequest) {
         total_ordered_amount: totalAmount,
         total_gst_amount: svcGstAmount,
         total_amount_with_gst: totalAmount + svcGstAmount,
-        status: "pending",
+        // An AMC is a standing contract, not goods to order: nothing is placed with the vendor, and the
+        // PO has to be "ordered" before service reports and invoices can be logged against it.
+        status: fromAmcRequest || amcStart ? "ordered" : "pending",
         advance_amount: parsed.data.advance_amount ?? null,
         advance_payment_mode: parsed.data.advance_payment_mode ?? null,
         advance_payment_reference: parsed.data.advance_payment_reference ?? null,
@@ -471,7 +483,10 @@ export async function POST(request: NextRequest) {
         amc_start_date: amcStart,
         amc_end_date: amcEnd,
         amc_visits_covered: amcVisitsCovered,
-        amc_visits_used: 0,
+        // Visits already done before the contract was entered here, if any.
+        amc_visits_used: openingVisits,
+        opening_cycles: openingCycles,
+        opening_visits: openingVisits,
         amc_contact_name: parsed.data.amc_contact_name ?? null,
         amc_helpline_number: parsed.data.amc_helpline_number ?? null,
         amc_contact_email: parsed.data.amc_contact_email ?? null,

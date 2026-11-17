@@ -56,6 +56,8 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
   const [composerText, setComposerText] = useState("");
   const [kind, setKind] = useState<QueryKind>("question");
   const [targeting, setTargeting] = useState<QueryTargeting>(DEFAULT_TARGETING);
+  // The asker must pick who answers; the default is deliberately not a choice.
+  const [audienceChosen, setAudienceChosen] = useState(false);
   const [neededBy, setNeededBy] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [templateKey, setTemplateKey] = useState<string | null>(null);
@@ -161,6 +163,7 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
       if (!res.ok) throw new Error(json.error || "Failed to send");
       setComposerText("");
       setTargeting(DEFAULT_TARGETING);
+      setAudienceChosen(false);
       setNeededBy(null);
       setFiles([]);
       setTemplateKey(null);
@@ -231,6 +234,12 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
     );
   }
 
+  const audienceReady =
+    audienceChosen &&
+    (targeting.audience === "all" ||
+      (targeting.audience === "roles" && targeting.audience_roles.length > 0) ||
+      (targeting.audience === "users" && targeting.audience_user_ids.length > 0));
+
   // ── Composer: no thread on this transaction yet ─────────────────────────
   if (!thread) {
     if (!checkedForExisting && !initialQueryId) return null;
@@ -290,7 +299,11 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
           entityRoles={def.roles}
           entityType={entityType}
           value={targeting}
-          onChange={setTargeting}
+          onChange={(next) => {
+            setTargeting(next);
+            setAudienceChosen(true);
+          }}
+          unset={!audienceChosen}
           disabled={submitting}
         />
 
@@ -298,10 +311,13 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
         <AttachmentPicker files={files} onChange={setFiles} disabled={submitting} />
 
         <div className="flex justify-end">
+          {composerText.trim() && !audienceReady && (
+            <span className="text-xs text-muted-foreground self-center mr-2">Choose who should answer</span>
+          )}
           <button
             type="button"
             onClick={ask}
-            disabled={submitting || !composerText.trim()}
+            disabled={submitting || !composerText.trim() || !audienceReady}
             className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-md bg-foreground text-background hover:opacity-90 disabled:opacity-50"
           >
             {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : <MessageCircleQuestion className="h-3 w-3" />}
@@ -415,6 +431,11 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
             );
           }
           const isAsker = m.created_by.id === thread.created_by.id;
+          // The first message of a payment report is what the reporter sent
+          // as evidence (their note and any screenshot), so accounts can tell
+          // it apart from later replies.
+          const isProof =
+            !!thread.payment_report && m.id === thread.messages.find((x) => x.event_type === "message")?.id;
           return (
             <div
               key={m.id}
@@ -428,6 +449,11 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
                 </span>
                 <span className="font-normal opacity-75 flex-none">{timeAgo(m.created_at)}</span>
               </div>
+              {isProof && (
+                <div className="text-[10px] font-semibold uppercase tracking-wide mb-1 opacity-70">
+                  Proof of payment details
+                </div>
+              )}
               {m.body}
               {m.attachments && m.attachments.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
