@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { TrendingUp, TrendingDown, Minus, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface RevenueStream {
   current: number;
@@ -60,7 +61,7 @@ export function RevenuePulseWidget({ locationFilter }: RevenuePulseWidgetProps) 
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/revenue-pulse?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/revenue-pulse?${params}`);
       const json = await res.json();
       setData(json.data ?? null);
     } catch {

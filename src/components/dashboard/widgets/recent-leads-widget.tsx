@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge, RatingBadge } from "@/components/shared/status-badge";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface RecentLead {
   id: string;
@@ -61,7 +62,7 @@ export function RecentLeadsWidget({ locationFilter }: RecentLeadsWidgetProps) {
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/recent-leads?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/recent-leads?${params}`);
       const json = await res.json();
       setData(json.data ?? []);
     } catch {

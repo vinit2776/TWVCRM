@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Users, Activity, CheckSquare, Loader2, Inbox } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { USER_ROLE_LABELS } from "@/lib/constants";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface TeamMember {
   user_id: string;
@@ -27,7 +28,7 @@ export function TeamPerformanceWidget({ locationFilter }: TeamPerformanceWidgetP
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/team?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/team?${params}`);
       const json = await res.json();
       setData(json.data ?? []);
     } catch {

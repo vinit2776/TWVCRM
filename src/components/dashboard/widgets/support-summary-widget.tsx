@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { LifeBuoy, AlertCircle, CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface SupportSummary {
   open: number;
@@ -16,7 +17,7 @@ export function SupportSummaryWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/support")
+    dashboardFetch("/api/dashboard/support")
       .then((r) => r.json())
       .then((json) => setData(json.data ?? null))
       .catch(() => setData(null))

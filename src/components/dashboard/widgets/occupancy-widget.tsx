@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Building2, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface LocationRow {
   location_id: string;
@@ -41,7 +42,7 @@ export function OccupancyWidget({ locationFilter }: OccupancyWidgetProps) {
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/occupancy?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/occupancy?${params}`);
       const json = await res.json();
       setData(json.data ?? null);
     } catch {
