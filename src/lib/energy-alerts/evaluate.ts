@@ -154,7 +154,7 @@ function datesBetween(fromMs: number, toMs: number): string[] {
   return out;
 }
 
-async function loadExcludedDates(admin: SupabaseClient, ruleLocationId: string, sinceDate: string, now: Date): Promise<Set<string>> {
+export async function loadExcludedDates(admin: SupabaseClient, ruleLocationId: string, sinceDate: string, now: Date): Promise<Set<string>> {
   const { data } = await admin
     .from("energy_alert_episodes")
     .select("started_at, closed_at, status, ack_reason")
