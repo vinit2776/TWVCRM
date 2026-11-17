@@ -41,7 +41,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { bookingWindowHours } from "@/lib/utils";
 import { sendBookingVoucherEmail, computeVoucherSeatCap } from "@/lib/booking-vouchers";
-import { createUnifiVoucher, revokeUnifiVoucher, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { createUnifiVoucher, revokeUnifiVoucher, siteConfigFromLocation, siteConfigForStoredVoucher, buildVoucherNote, UnifiConfigError } from "@/lib/unifi";
 
 const replaceBodySchema = z.object({
   reason: z.string().trim().min(1).optional(),
@@ -79,7 +79,7 @@ export async function POST(
   // Fetch the issuance and validate it belongs to this booking.
   const { data: issuance, error: issuanceErr } = await supabase
     .from("voucher_issuances")
-    .select("id, booking_id, seat_number, is_active, voucher_id, unifi_voucher_id, ruijie_voucher_uuid, lead_id, seat_occupant_email")
+    .select("id, booking_id, seat_number, is_active, voucher_id, unifi_voucher_id, unifi_console_id, ruijie_voucher_uuid, lead_id, seat_occupant_email")
     .eq("id", issuanceId)
     .eq("booking_id", id)
     .single();
@@ -124,23 +124,33 @@ export async function POST(
     const { data: location } = booking.location_id
       ? await supabase
           .from("locations")
-          .select("unifi_site_id, unifi_console_id, wifi_voucher_mode")
+          .select("code, unifi_site_id, unifi_console_id, wifi_voucher_mode")
           .eq("id", booking.location_id)
           .single()
       : { data: null };
 
-    if (!location || !isUnifiLocation(location)) {
+    // Old code: killed on the console that issued it (recorded at issue time).
+    // Replacement: issued on the location's current console.
+    let revokeConfig;
+    let siteConfig;
+    try {
+      if (!location) throw new UnifiConfigError("Could not resolve the booking's location.");
+      revokeConfig = await siteConfigForStoredVoucher({
+        consoleId: issuance.unifi_console_id,
+        locationId: booking.location_id,
+      });
+      siteConfig = siteConfigFromLocation(location);
+    } catch (err) {
       return NextResponse.json(
-        { error: "Could not resolve the UniFi site configuration for this booking's location." },
+        { error: err instanceof UnifiConfigError ? err.message : "Could not resolve the UniFi site configuration for this booking's location." },
         { status: 502 }
       );
     }
-    const siteConfig = siteConfigFromLocation(location);
 
     // Step 2: kill the old code on the controller first. Nothing is
     // changed in the DB unless this succeeds.
     try {
-      await revokeUnifiVoucher(issuance.unifi_voucher_id, siteConfig);
+      await revokeUnifiVoucher(issuance.unifi_voucher_id, revokeConfig);
     } catch (err) {
       console.error(`[booking-voucher-replace] Unifi revoke ${issuance.unifi_voucher_id} failed:`, err);
       return NextResponse.json(
@@ -167,7 +177,7 @@ export async function POST(
     let unifiCode: string;
     try {
       const result = await createUnifiVoucher(
-        { durationMinutes, note: `booking_${id}_seat${issuance.seat_number}_replacement`, quota: 2 },
+        { durationMinutes, note: buildVoucherNote(location.code, `booking_${id}_seat${issuance.seat_number}_replacement`), quota: 2 },
         siteConfig
       );
       unifiId = result.id;
@@ -199,6 +209,8 @@ export async function POST(
         seat_occupant_email: issuance.seat_occupant_email || null,
         unifi_voucher_id: unifiId,
         unifi_code: unifiCode,
+        unifi_console_id: siteConfig.consoleId,
+        unifi_location_code: location.code ?? null,
         duration_minutes: durationMinutes,
         replaces_issuance_id: issuanceId,
       })

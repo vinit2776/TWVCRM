@@ -14,7 +14,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MapPin, Receipt } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MapPin, Receipt, Ban } from "lucide-react";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { formatCurrency, formatDate, bookingWindowHours } from "@/lib/utils";
@@ -44,6 +44,7 @@ import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import { StatementHistoryDialog } from "./statement-history-dialog";
+import { BookingPaymentsToVerify } from "@/components/accounting/booking-payments-to-verify";
 import { ToVerifyPanel } from "./to-verify-panel";
 import { ReportedPaymentSheet } from "@/components/queries/reported-payment-sheet";
 import { paymentModeLabel as reportedModeLabel } from "@/components/billing/payment-collected-panel";
@@ -53,8 +54,9 @@ import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
 import { StatementPaymentPanel, paymentModeLabel } from "@/components/billing/payment-collected-panel";
 import { DepositGuardWarning, DepositOverrideField, looksLikeDepositAdjustment } from "@/components/billing/deposit-guard-notice";
 import { DEPOSIT_OVERRIDE_MIN_REASON_LENGTH } from "@/lib/deposit-payment-guard";
+import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 
-type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "to_verify" | "discrepancy" | "closed";
+type FilterTab = "all" | "cancellations" | "gst_to_issue" | "payment_to_record" | "to_verify" | "discrepancy" | "closed";
 
 // Success confirmation shown in place of a row once an action closes it out —
 // the row itself drops out of the "open" list on the next reload, so without
@@ -72,6 +74,7 @@ type CompletionInfo = {
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All open" },
+  { key: "cancellations", label: "Cancellations" },
   { key: "gst_to_issue", label: "GST to issue" },
   { key: "payment_to_record", label: "Payments" },
   { key: "to_verify", label: "To verify" },
@@ -139,9 +142,15 @@ function paymentStatusBadge(status: string): { label: string; cls: string } {
  * Mirrors INBOX_ACTIONABLE_STATES — every open row belongs to exactly one
  * group (discrepancy overrides state).
  */
-type ActionGroupKey = "discrepancy" | "upload_gst" | "send_to_customer" | "record_payment" | "mark_accounted";
+type ActionGroupKey = "cancel_credit_note" | "discrepancy" | "upload_gst" | "send_to_customer" | "record_payment" | "mark_accounted";
 
 const ACTION_GROUPS: { key: ActionGroupKey; title: string; caption: string; wrapCls: string }[] = [
+  {
+    key: "cancel_credit_note",
+    title: "Cancellations — upload credit note",
+    caption: "An admin or manager asked to cancel these GST invoices. Issue the credit note in Tally and upload it here.",
+    wrapCls: "bg-red-50 border-red-300",
+  },
   {
     key: "discrepancy",
     title: "Discrepancies to resolve",
@@ -175,6 +184,7 @@ const ACTION_GROUPS: { key: ActionGroupKey; title: string; caption: string; wrap
 ];
 
 function getRowActionGroup(row: InboxRow): ActionGroupKey {
+  if (row.cancellation_requested_at) return "cancel_credit_note";
   if (row.has_discrepancy) return "discrepancy";
   switch (row.handoff_state) {
     case "pi_paid_awaiting_gst":
@@ -215,13 +225,19 @@ export function TallyInboxClient() {
   // Open payment reports waiting on a bank check. Only meaningful (and only
   // shown) for the roles that can settle them — see canReviewPaymentReport.
   const canVerifyPayments = canReviewPaymentReport(currentUserRole);
-  const [toVerifyCount, setToVerifyCount] = useState<number | null>(null);
+  const [reportsToVerify, setReportsToVerify] = useState<number | null>(null);
+  const [bookingPaymentsToVerify, setBookingPaymentsToVerify] = useState(0);
   const loadToVerifyCount = useCallback(async () => {
     try {
-      const res = await fetch("/api/queries?stats=true", { cache: "no-store" });
+      const [res, bookingRes] = await Promise.all([
+        fetch("/api/queries?stats=true", { cache: "no-store" }),
+        fetch("/api/accounting/booking-payments-pending", { cache: "no-store" }),
+      ]);
       if (!res.ok) return;
       const json = (await res.json()) as { stats?: { to_verify?: number } };
-      setToVerifyCount(json.stats?.to_verify ?? 0);
+      const bookingJson = bookingRes.ok ? ((await bookingRes.json()) as { items?: unknown[] }) : null;
+      setReportsToVerify(json.stats?.to_verify ?? 0);
+      setBookingPaymentsToVerify(bookingJson?.items?.length ?? 0);
     } catch {
       // The tab simply shows no count.
     }
@@ -233,6 +249,11 @@ export function TallyInboxClient() {
   // These are backed by entirely different tables (billing_statements vs
   // booking_gst_tasks) and were previously stacked in one unlabeled list.
   const [activeType, setActiveType] = useState<"contracts" | "bookings">("contracts");
+  // Booking payments only make sense under Bookings; the rest are contract-side.
+  const toVerifyCount =
+    reportsToVerify === null
+      ? null
+      : reportsToVerify + (activeType === "bookings" ? bookingPaymentsToVerify : 0);
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   // Statement row state
@@ -407,6 +428,39 @@ export function TallyInboxClient() {
     }, 400);
     return () => clearTimeout(handle);
   }, [data]);
+
+  // Honor ?open=<statement_id | booking task_id> — used by the role dashboards
+  // so "Handle" lands on the exact item, expanded and scrolled into view.
+  // Runs once per page load: after that the user is driving, and a later
+  // refresh of `data` must not re-open a row they closed.
+  const handledOpenParam = useRef(false);
+  const [openNotice, setOpenNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (handledOpenParam.current || !data || loading) return;
+    const openId = new URLSearchParams(window.location.search).get("open");
+    if (!openId) return;
+    handledOpenParam.current = true;
+    // Stops the first-awaiting-GST auto-expand above from replacing the row we were asked for.
+    hasAutoExpanded.current = true;
+    if (data.rows.some((r) => r.statement_id === openId)) {
+      setActiveType("contracts");
+      setExpandedId(openId);
+    } else if (data.booking_rows?.some((r) => r.task_id === openId)) {
+      setActiveType("bookings");
+      setExpandedBookingId(openId);
+    } else {
+      // Only the open list is loaded here, so a missing id usually means it was
+      // handled since the dashboard was drawn — say so rather than show nothing.
+      setOpenNotice("That item is no longer in the open list. It may already have been handled.");
+      return;
+    }
+    // No cleanup on purpose: this runs once, and a data refresh re-running the
+    // effect would cancel the scroll without ever scheduling it again.
+    setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-statement-id="${CSS.escape(openId)}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 400);
+  }, [data, loading]);
 
   const handleSend = useCallback((statementId: string, row: InboxRow) => {
     const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
@@ -758,13 +812,16 @@ export function TallyInboxClient() {
     return list.reduce(
       (acc, r) => {
         acc.total_open += 1;
-        if (r.has_discrepancy) acc.discrepancies += 1;
+        // A pending cancellation is its own task; don't also count it as a
+        // payment/GST/discrepancy item.
+        if (r.cancellation_requested_at) acc.cancellations += 1;
+        else if (r.has_discrepancy) acc.discrepancies += 1;
         else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
         else if (r.bucket === "payment_to_record") acc.payments_to_record += 1;
         if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
         return acc;
       },
-      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0, cancellations: 0 },
     );
   }, [data]);
 
@@ -780,7 +837,7 @@ export function TallyInboxClient() {
         if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
         return acc;
       },
-      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0, cancellations: 0 },
     );
   }, [data, tab]);
 
@@ -789,8 +846,9 @@ export function TallyInboxClient() {
   const visibleRows = useMemo(() => {
     if (!data) return [];
     if (tab === "all" || tab === "closed") return data.rows;
-    if (tab === "discrepancy") return data.rows.filter((r) => r.has_discrepancy);
-    return data.rows.filter((r) => r.bucket === tab && !r.has_discrepancy);
+    if (tab === "cancellations") return data.rows.filter((r) => !!r.cancellation_requested_at);
+    if (tab === "discrepancy") return data.rows.filter((r) => r.has_discrepancy && !r.cancellation_requested_at);
+    return data.rows.filter((r) => r.bucket === tab && !r.has_discrepancy && !r.cancellation_requested_at);
   }, [data, tab]);
 
   // Only meaningful on the "All open" tab, where rows needing five different
@@ -811,6 +869,7 @@ export function TallyInboxClient() {
     const br = data.booking_rows;
     if (tab === "closed") return br.filter((r) => r.handoff_state === "complete");
     if (tab === "all") return br.filter((r) => r.handoff_state !== "complete");
+    if (tab === "cancellations") return [];
     if (tab === "discrepancy") return br.filter((r) => r.has_discrepancy && r.handoff_state !== "complete");
     if (tab === "gst_to_issue") return br.filter((r) => r.bucket === "gst_to_issue" && !r.has_discrepancy && r.handoff_state !== "complete");
     return [];
@@ -835,6 +894,7 @@ export function TallyInboxClient() {
       onCancelUpload={() => setExpandedId(null)}
       onGstinUpdated={() => void refreshRow(row.statement_id)}
       onRecordPayment={() => openPayDialog(row)}
+      onCreditNoteUploaded={() => void load()}
       onViewHistory={() => setHistoryRow({ id: row.statement_id, statement_number: row.statement_number })}
       onQueryChanged={() => void refreshRow(row.statement_id)}
       currentUserRole={currentUserRole}
@@ -903,12 +963,13 @@ export function TallyInboxClient() {
 
       {/* Filter tabs + search */}
       <div className="border-b flex items-center gap-1 flex-wrap">
-        {FILTER_TABS.filter((t) => t.key !== "to_verify" || canVerifyPayments).map((t) => {
+        {FILTER_TABS.filter((t) => (t.key !== "to_verify" || canVerifyPayments) && (t.key !== "cancellations" || tab === "cancellations" || activeStats.cancellations > 0)).map((t) => {
           // Counts are tab-aware: open tabs reflect the OPEN summary; the
           // Closed tab can't sensibly show a global count, so it shows the
           // page-size result only when we're on it.
           const count =
             t.key === "all" ? activeStats.total_open
+            : t.key === "cancellations" ? activeStats.cancellations
             : t.key === "gst_to_issue" ? activeStats.gst_to_issue
             : t.key === "payment_to_record" ? activeStats.payments_to_record
             : t.key === "to_verify" ? (toVerifyCount ?? undefined)
@@ -961,9 +1022,21 @@ export function TallyInboxClient() {
         </div>
       </div>
 
+      {openNotice && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-start justify-between gap-3">
+          <span>{openNotice}</span>
+          <button type="button" className="text-xs underline" onClick={() => setOpenNotice(null)}>Dismiss</button>
+        </div>
+      )}
+
       {/* Worklist */}
       {tab === "to_verify" ? (
-        <ToVerifyPanel onChanged={() => void loadToVerifyCount()} />
+        <div className="space-y-4">
+          {activeType === "bookings" && (
+            <BookingPaymentsToVerify onChanged={() => void loadToVerifyCount()} />
+          )}
+          <ToVerifyPanel onChanged={() => void loadToVerifyCount()} search={searchInput} />
+        </div>
       ) : error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <p className="font-medium">Failed to load inbox</p>
@@ -1500,6 +1573,7 @@ const InboxRowItem = memo(function InboxRowItem({
   onQueryChanged,
   currentUserRole,
   onWaived,
+  onCreditNoteUploaded,
 }: {
   row: InboxRow;
   expanded: boolean;
@@ -1519,7 +1593,9 @@ const InboxRowItem = memo(function InboxRowItem({
   onQueryChanged: () => void;
   currentUserRole: string;
   onWaived: () => void;
+  onCreditNoteUploaded: () => void;
 }) {
+  const [creditNoteOpen, setCreditNoteOpen] = useState(false);
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
   const [gstinSaving, setGstinSaving] = useState(false);
@@ -1607,13 +1683,18 @@ const InboxRowItem = memo(function InboxRowItem({
   const agingClass =
     aging >= AGING_ESCALATE_HOURS ? "text-red-700" : aging >= 24 ? "text-amber-700" : "text-muted-foreground";
 
-  const canUpload =
-    row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested";
-  const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
-  const canRecordPayment =
+  // A requested cancellation turns the row into a credit-note task: the
+  // payment / send / accounted actions would all be wrong for an invoice that
+  // is being withdrawn, so they are switched off while it is pending.
+  const cancelling = !!row.cancellation_requested_at && !row.is_voided;
+  const canUploadCreditNote = cancelling && (currentUserRole === "accounts" || currentUserRole === "admin");
+  const canUpload = !cancelling &&
+    (row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested");
+  const canSend = !cancelling && row.handoff_state === "ready_to_send" && !row.has_discrepancy;
+  const canRecordPayment = !cancelling && (
     row.handoff_state === "gst_sent_awaiting_payment"
-    || row.handoff_state === "paid_awaiting_receipt_record";
-  const canMarkAccounted = row.handoff_state === "gst_sent";
+    || row.handoff_state === "paid_awaiting_receipt_record");
+  const canMarkAccounted = !cancelling && row.handoff_state === "gst_sent";
   const hasUpload = row.latest_upload !== null;
   const isClosed = row.handoff_state === "complete";
 
@@ -1656,13 +1737,20 @@ const InboxRowItem = memo(function InboxRowItem({
 
   return (
     <li
-      className="hover:bg-muted/30 transition-colors rounded"
+      className={cancelling
+        ? "bg-red-50 hover:bg-red-100/70 border-l-4 border-red-500 transition-colors rounded"
+        : "hover:bg-muted/30 transition-colors rounded"}
       data-statement-id={row.statement_id}
     >
       <div className="p-3 md:p-4 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 items-start">
         {/* ── Line 1 ── primary identity */}
         <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
-          {row.gst_waived_at ? (
+          {cancelling ? (
+            <span className="text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 bg-red-100 text-red-800 border-red-300 font-medium">
+              <Ban className="h-2.5 w-2.5 inline -mt-0.5 mr-0.5" aria-hidden />
+              Cancellation requested
+            </span>
+          ) : row.gst_waived_at ? (
             <span
               className="text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 bg-green-50 text-green-800 border-green-200"
               title={row.gst_waived_reason ? `No GST required: ${row.gst_waived_reason}` : "No GST required"}
@@ -1809,6 +1897,24 @@ const InboxRowItem = memo(function InboxRowItem({
           )}
         </div>
 
+        {cancelling && (
+          <div className="col-span-2 text-xs text-red-900 bg-red-100/70 border border-red-200 rounded px-2.5 py-1.5">
+            <b>Credit note needed.</b> Requested {formatDate(row.cancellation_requested_at as string)}
+            {row.cancellation_requested_by_name ? ` by ${row.cancellation_requested_by_name}` : ""}
+            {row.cancellation_reason ? <> — “{row.cancellation_reason}”</> : null}
+            . Issue the credit note in Tally, then upload it here. Nothing is sent to the customer.
+          </div>
+        )}
+        {row.is_voided && row.lifecycle_stage === "cancelled" && (
+          <div className="col-span-2 text-xs text-red-900 bg-red-50 border border-red-200 rounded px-2.5 py-1.5">
+            <b>Cancelled</b>
+            {row.tally_credit_note_number ? ` via credit note ${row.tally_credit_note_number}` : ""}
+            {row.cancellation_requested_by_name
+              ? ` · requested by ${row.cancellation_requested_by_name}${row.cancellation_requested_at ? ` on ${formatDate(row.cancellation_requested_at)}` : ""}`
+              : ""}
+            {(row.cancellation_reason ?? row.void_reason) ? <> — “{row.cancellation_reason ?? row.void_reason}”</> : null}
+          </div>
+        )}
         {/* ── Billing address — accounts needs this to raise the Tally invoice ── */}
         {displayAddress && (
           <div className="col-span-2 flex items-start gap-1 text-[11px] text-muted-foreground" title={displayAddress}>
@@ -1995,6 +2101,20 @@ const InboxRowItem = memo(function InboxRowItem({
               {sending ? "Sending…" : "Retry send"}
             </button>
           )}
+          {canUploadCreditNote && (
+            <button
+              type="button"
+              onClick={() => setCreditNoteOpen(true)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+              title="Upload the credit note issued in Tally to cancel this GST invoice"
+            >
+              <Upload className="h-3 w-3" />
+              Upload credit note
+            </button>
+          )}
+          {cancelling && !canUploadCreditNote && (
+            <span className="text-xs text-red-800">Awaiting credit note from Accounts</span>
+          )}
           {canRecordPayment && (
             <button
               type="button"
@@ -2053,6 +2173,20 @@ const InboxRowItem = memo(function InboxRowItem({
         onClose={() => setReportSheet(null)}
         onChanged={onQueryChanged}
       />
+      {creditNoteOpen && (
+        <CreditNoteUploadDialog
+          statement={{
+            id: row.statement_id,
+            statement_number: row.statement_number,
+            tally_invoice_number: row.latest_upload?.tally_invoice_number ?? null,
+            total_amount: row.statement_total_amount,
+            payment_status: row.payment_status,
+          }}
+          defaultReason={row.cancellation_reason ?? ""}
+          onCancelled={() => { setCreditNoteOpen(false); onCreditNoteUploaded(); }}
+          onClose={() => setCreditNoteOpen(false)}
+        />
+      )}
       {expanded && canUpload && (
         <TallyInboxUploadForm
           row={row}
@@ -2125,6 +2259,8 @@ function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentCo
   }
   const latest = confirmations[0];
   const ref = latest.razorpay_payment_id ?? latest.payment_reference;
+  // A booking paid in two goes (e.g. UPI, then cash for an extra) must not read as just the last mode.
+  const modeLabels = [...new Set(confirmations.map((c) => paymentModeLabel(c.payment_mode)))];
 
   const handleViewScreenshot = async () => {
     setLoading(true);
@@ -2143,7 +2279,7 @@ function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentCo
     <>
       <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 text-green-800 border border-green-200 flex-shrink-0">
         <CheckCircle2 className="h-2.5 w-2.5" />
-        Paid · {paymentModeLabel(latest.payment_mode)}{ref ? ` · ${ref.slice(-8)}` : ""}
+        Paid · {modeLabels.join(" + ")}{modeLabels.length === 1 && ref ? ` · ${ref.slice(-8)}` : ""}
         {latest.screenshot_path && (
           <button
             type="button"
@@ -2523,7 +2659,8 @@ function BookingInboxRowItem({
   const agingClass =
     aging >= AGING_ESCALATE_HOURS ? "text-red-700" : aging >= 24 ? "text-amber-700" : "text-muted-foreground";
 
-  const canUpload = row.handoff_state === "gst_to_issue";
+  // A held row waits for an unpaid extra on the booking; it releases by itself once paid.
+  const canUpload = row.handoff_state === "gst_to_issue" && !row.held_reason;
   const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
   const canMarkDone = row.handoff_state === "ready_to_send";
   const hasUpload = row.latest_upload !== null;
@@ -2543,6 +2680,11 @@ function BookingInboxRowItem({
             <CalendarDays className="h-2.5 w-2.5" />
             Booking
           </span>
+          {row.task_kind === "supplement" && (
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 flex-shrink-0">
+              Supplement
+            </span>
+          )}
           <BookingPaymentPill confirmations={row.payment_confirmations} />
           <span className="font-medium text-sm truncate">{partyName}</span>
         </div>
@@ -2555,11 +2697,18 @@ function BookingInboxRowItem({
           <span className="font-mono">{row.booking_number ?? "(no number)"}</span>
           {row.space_name && <span> · {row.space_name}</span>}
           {row.booking_date && <span> · {row.booking_date}</span>}
-          <span> · {row.handoff_state === "gst_to_issue" ? "GST to issue" : row.handoff_state === "ready_to_send" ? "Ready to send" : "Complete"}</span>
+          <span> · {row.held_reason ? "On hold" : row.handoff_state === "gst_to_issue" ? "GST to issue" : row.handoff_state === "ready_to_send" ? "Ready to send" : "Complete"}</span>
         </div>
         <div className={`text-xs ${agingClass} text-right`}>
           {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
         </div>
+
+        {row.held_reason && (
+          <div className="col-span-2 text-xs rounded border border-amber-200 bg-amber-50 text-amber-800 px-2.5 py-1.5">
+            {row.held_reason}. Collect it on{" "}
+            <a className="underline font-medium" href={`/bookings/${row.booking_id}`}>the booking</a>; this row releases by itself once it is paid.
+          </div>
+        )}
 
         {/* Line 3: GSTIN + IRN pill */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap text-[11px]">
@@ -2679,6 +2828,9 @@ function BookingInboxRowItem({
                       : a.quantity > 1
                         ? ` × ${a.quantity}`
                         : ""}
+                    <span className="block text-[10px]">
+                      GST {formatCurrency(a.gst_amount)} @ {a.gst_rate}% · incl. {formatCurrency(a.total_with_gst)}
+                    </span>
                   </td>
                   <td className="text-right tabular-nums">{formatCurrency(a.amount)}</td>
                 </tr>

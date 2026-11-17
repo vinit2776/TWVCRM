@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     .select("id, status, created_at, updated_at, location_id, assigned_to");
 
   // Sales rep / floor manager: own leads only
-  if (dbUser.role === "sales_rep" || dbUser.role === "floor_manager") {
+  if (dbUser.role === "sales_rep" || dbUser.role === "floor_manager" || dbUser.role === "coordinator") {
     q = q.eq("assigned_to", dbUser.id);
   }
   if (locationId) q = q.eq("location_id", locationId);

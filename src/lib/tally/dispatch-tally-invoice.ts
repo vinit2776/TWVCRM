@@ -29,6 +29,7 @@ import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
+import { annexureFromSections } from "@/lib/electricity-annexure";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logAudit } from "@/lib/audit";
@@ -186,6 +187,7 @@ export async function dispatchTallyInvoice(
       try { razorpayQrBase64 = await QRCode.toDataURL(razorpayLinkUrl, { width: 200, margin: 1, errorCorrectionLevel: "M" }); } catch { /* skip */ }
     }
     const invoiceData: GstInvoiceData = {
+      annexure: annexureFromSections(statement.line_items),
       invoiceNumber: ack.invoiceNumber,
       invoiceDate: issueDateYmd,
       isProforma: false,
@@ -217,8 +219,24 @@ export async function dispatchTallyInvoice(
 
     const storagePath = `gst-invoices/${ack.invoiceNumber.replace(/\//g, "-")}.pdf`;
     await supabase.storage.from("crm-documents").upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
-    const { data: publicUrlData } = supabase.storage.from("crm-documents").getPublicUrl(storagePath);
-    const pdfPublicUrl = publicUrlData?.publicUrl || null;
+    // Signed URL, not getPublicUrl(): "crm-documents" is a PRIVATE bucket, so a
+    // public URL for it is well-formed but returns HTTP 400 to anyone without a
+    // session. The only consumer of this URL is the WhatsApp document header
+    // below, which Meta fetches anonymously — so every GST invoice sent on this
+    // path failed with error 131053 ("Unable to upload the media used in the
+    // message") and the customer received nothing. 37 of 37 between Aug and Nov
+    // 2026; the e-mail copy was unaffected because it attaches the PDF directly.
+    //
+    // Note getPublicUrl() cannot signal this: it builds the URL string locally
+    // and never returns null for a private bucket, so a `|| fallback` after it
+    // is dead code. Sign it instead.
+    const { data: signedPdf } = await supabase.storage
+      .from("crm-documents")
+      .createSignedUrl(storagePath, 365 * 24 * 3600); // 1 year — invoices get re-opened long after sending
+    const pdfPublicUrl = signedPdf?.signedUrl || null;
+    if (!pdfPublicUrl) {
+      console.error(`[dispatch-tally] Could not sign invoice PDF ${storagePath} — WhatsApp copy skipped.`);
+    }
 
     // ── Email ────────────────────────────────────────────────────────────────
     const periodLabel = new Date((statement.period_start as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" });

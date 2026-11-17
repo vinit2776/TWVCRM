@@ -5,7 +5,7 @@ import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import { loadEnquiryProgress } from "@/lib/enquiry-progress-load";
 
 // GET /api/leads/enquiry-log — one row per public-form enquiry (lead_enquiries).
-//   ?source=google_ads|meta_ads|direct_walkin|whatsapp
+//   ?source=google_ads|meta_ads|direct_walkin|whatsapp|website
 //   &outcome=unresolved|converted|not_interested|no_response|superseded|spam
 //   (spam enquiries are hidden unless outcome=spam is asked for)
 //   &from=ISO-date   — an enquiry matches if it was received, or resolved, on/after this

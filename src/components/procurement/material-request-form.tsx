@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -28,11 +28,21 @@ import {
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
-import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
+import { uploadQuotation } from "@/lib/procurement/upload-quotation";
+import { cyclesBetween, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { PROPOSAL_CAP_TOLERANCE, proposalCapMessage } from "@/lib/procurement/proposal-cap";
 import { PriceToleranceField } from "@/components/procurement/price-tolerance-field";
 import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { AmcStepHeader, AmcReviewCard, AmcRunningNotice, AmcRunningStep } from "@/components/procurement/amc-wizard-parts";
+import { AmcProposalCard } from "@/components/procurement/amc-proposal-card";
+import type { PrefillAnswers, PrefillPlan } from "@/lib/procurement/amc-prefill";
+import { useAmcOverlap } from "@/lib/procurement/use-amc-overlap";
+import { AssetOverlapNote } from "@/components/procurement/asset-warnings";
+import type { ExtractedAmcProposal } from "@/lib/procurement/proposal-extraction";
+import { amcStepsFor, validateAmcStep, contractLengthText } from "@/lib/procurement/amc-wizard-steps";
+import { cycleSchedule, maxSettledCycles, runningFigures, runningScheduleProblem, startedBefore } from "@/lib/procurement/amc-running";
 
 interface LineItem {
   id: string; // local draft id (in edit mode, seeded from the existing row id)
@@ -63,6 +73,10 @@ interface AmcLine {
   billingCycle: ServicePoBillingCycle;
   cycleCountOverride: string;
   perCycleCost: string; // pre-GST, INR
+  /** The whole contract value as typed; while set, the cost per cycle follows it divided by the number of cycles. */
+  totalEntry?: string;
+  /** Set when the line came from a proposal: its contract total before GST, a ceiling for the value. */
+  proposalTotal?: number;
 }
 
 const newAmcLine = (over: Partial<AmcLine> = {}): AmcLine => ({
@@ -109,8 +123,8 @@ function hydrateItems(pr: PurchaseRequest): LineItem[] {
 }
 
 export type MaterialRequestFormProps =
-  | { mode: "create"; initialDepartment?: ProcurementDepartment | null; lockDepartment?: boolean; pr?: undefined }
-  | { mode: "edit"; pr: PurchaseRequest; initialDepartment?: undefined; lockDepartment?: undefined };
+  | { mode: "create"; initialDepartment?: ProcurementDepartment | null; lockDepartment?: boolean; initialAssetId?: string | null; pr?: undefined }
+  | { mode: "edit"; pr: PurchaseRequest; initialDepartment?: undefined; lockDepartment?: undefined; initialAssetId?: undefined };
 
 export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const isEdit = props.mode === "edit";
@@ -133,6 +147,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const isCenterScoped = (CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(department);
 
   // ── AMC fields (used when department === "amc") ─────────────────────────────
+  // New AMC requests are asked one question at a time; editing keeps the single page.
+  const [amcStep, setAmcStep] = useState(0);
   const [assets, setAssets] = useState<FacilityAsset[]>([]);
   const [serviceItemName, setServiceItemName] = useState(pr?.service_item_name ?? "");
   const [amcCoverageType, setAmcCoverageType] = useState<"comprehensive" | "labour_only">(
@@ -150,6 +166,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   // AMC has no line-item editor — one AMC line per asset carries the commitment.
   // Each line is the single source of truth for how that asset's contract is paid:
   // unit = frequency, quantity = cycle count, estimated_price = per-cycle cost.
+  // A contract that began before it was entered here: cycles already settled, visits already done.
+  const [amcOpeningCycles, setAmcOpeningCycles] = useState<number>(pr?.opening_cycles ?? 0);
+  const [amcOpeningVisits, setAmcOpeningVisits] = useState<number>(pr?.opening_visits ?? 0);
   const [amcLines, setAmcLines] = useState<AmcLine[]>(() => {
     if (pr?.department !== "amc") return [newAmcLine()];
     const prItems = pr.purchase_request_items ?? [];
@@ -158,7 +177,10 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
         // A request saved before per-asset lines has its asset on the request itself.
         assetId: it.linked_asset_id ?? (prItems.length === 1 ? pr.linked_asset_id ?? "" : ""),
         billingCycle: cycleFromUnit(it.unit),
-        cycleCountOverride: it.quantity && Number(it.quantity) > 1 ? String(it.quantity) : "",
+        // A running contract stores only the cycles still to bill; the whole count is needed here.
+        cycleCountOverride: it.quantity && (Number(it.quantity) > 1 || (pr.opening_cycles ?? 0) > 0)
+          ? String(Number(it.quantity) + (pr.opening_cycles ?? 0))
+          : "",
         perCycleCost: it.estimated_price ? String(it.estimated_price) : "",
       })
     );
@@ -223,8 +245,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       .then((j) => {
         const all: Company[] = j.data || [];
         setCompanies(all);
-        if (!isEdit && !companyId && all.length > 0) {
-          setCompanyId(all[0].id);
+        if (!isEdit && all.length > 0) {
+          // Functional update: an asset shortcut may already have chosen the asset's company.
+          setCompanyId((cur) => cur || all[0].id);
         }
       })
       .catch(() => setCompanies([]));
@@ -234,9 +257,13 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   // Fetch facility assets for the AMC asset-picker (only when AMC is selected)
   useEffect(() => {
     if (department !== "amc" || assets.length > 0) return;
-    fetch("/api/facility/assets?status=active")
-      .then((r) => r.json())
-      .then((j) => setAssets(j.data ?? []))
+    // Assets in maintenance are the ones most likely to need an AMC, so they are listed too (labelled).
+    Promise.all(
+      ["active", "maintenance"].map((st) =>
+        fetch(`/api/facility/assets?status=${st}`).then((r) => r.json()).then((j) => (j.data ?? []) as FacilityAsset[])
+      )
+    )
+      .then(([active, maintenance]) => setAssets([...active, ...maintenance]))
       .catch(() => setAssets([]));
   }, [department, assets.length]);
 
@@ -250,8 +277,39 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   }, [department, reimbursementContracts.length]);
 
   // Auto-fill service name + end date when asset/start date change.
+  // Other live AMCs already covering the chosen assets in these dates (advisory; never blocks saving).
+  const amcOverlaps = useAmcOverlap(amcLines.map((l) => l.assetId), amcStartDate, amcEndDate, isEdit ? pr?.id : undefined);
   const updateAmcLine = (id: string, patch: Partial<AmcLine>) =>
     setAmcLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  // Arrived from an asset's page: pre-pick that asset (and its centre) once, even if it is not
+  // in the Active-only list the picker loads.
+  const assetPrefilled = useRef(false);
+  const initialAssetId = props.initialAssetId;
+  useEffect(() => {
+    if (!initialAssetId || assetPrefilled.current || department !== "amc" || isEdit) return;
+    assetPrefilled.current = true;
+    fetch(`/api/facility/assets/${initialAssetId}`)
+      .then((r) => r.json())
+      .then((j) => {
+        const a = j.data as FacilityAsset | undefined;
+        if (!a?.id) return;
+        setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]));
+        setAmcLines((prev) => (prev[0] && !prev[0].assetId ? prev.map((l, i) => (i === 0 ? { ...l, assetId: a.id } : l)) : prev));
+        setServiceItemName((cur) => cur || `Annual Maintenance Contract — ${a.name}`);
+        if (a.location_id) {
+          setLocationId((cur) => cur || (a.location_id as string));
+          // The centre only exists under its own company, so switch to that company too.
+          fetch("/api/locations")
+            .then((r) => r.json())
+            .then((lj) => {
+              const loc = (lj.data ?? []).find((l: { id: string; company_id?: string | null }) => l.id === a.location_id);
+              if (loc?.company_id) setCompanyId(loc.company_id);
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [initialAssetId, department, isEdit]);
   const handleAssetSelect = (lineId: string, assetId: string) => {
     updateAmcLine(lineId, { assetId });
     if (assetId && !serviceItemName && amcLines[0]?.id === lineId) {
@@ -400,14 +458,67 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   // total_estimated_amount must always be the FULL contract commitment, because
   // the AMC budget banner sums it. Storing a per-month figure there would make a
   // monthly contract consume a twelfth of the budget it actually commits.
-  const amcLineCalc = (l: AmcLine) => {
+  const amcWizard = department === "amc" && !isEdit;
+  const todayIso = (() => { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; })();
+  const amcRunning = department === "amc" && startedBefore(amcStartDate, todayIso);
+  // Before an opening position is applied: the whole contract's cycle count for a line.
+  const amcLineFull = (l: AmcLine) => {
     const derived = cyclesBetween(amcStartDate, amcEndDate, l.billingCycle);
     const override = l.cycleCountOverride.trim() !== "" && parseInt(l.cycleCountOverride) > 0 ? parseInt(l.cycleCountOverride) : null;
-    const count = override ?? derived ?? 1;
+    return { derived, count: override ?? derived ?? 1 };
+  };
+  const runningSchedule = amcRunning && amcLines[0]
+    ? cycleSchedule(amcStartDate, amcEndDate, amcLines[0].billingCycle, amcLineFull(amcLines[0]).count)
+    : [];
+  const runningProblem = amcRunning ? runningScheduleProblem(amcLines.map((l) => ({ billingCycle: l.billingCycle, count: amcLineFull(l).count }))) : null;
+  const maxSettled = maxSettledCycles(runningSchedule, todayIso);
+  // Settled cycles only count while the contract is running and its schedule is shared; an edit of a
+  // saved running contract (no step to change it) keeps what was stored.
+  const openingCycles = department !== "amc" || runningProblem ? 0
+    : amcWizard ? (amcRunning ? Math.min(amcOpeningCycles, maxSettled) : 0)
+    : amcOpeningCycles;
+  const openingVisits = amcWizard && !amcRunning ? 0 : amcOpeningVisits;
+  const amcLineCalc = (l: AmcLine) => {
+    const { derived, count: fullCount } = amcLineFull(l);
     const cost = parseFloat(l.perCycleCost) || 0;
-    return { derived, count, cost, total: contractTotal(cost, count) };
+    const fig = runningFigures(cost, fullCount, openingCycles);
+    // `count` is what is still to bill here; it is what the request line stores.
+    const count = fullCount - Math.min(openingCycles, Math.max(0, fullCount - 1));
+    return { derived, count, fullCount, cost, total: fig.remaining, fullTotal: fig.full, paidTotal: fig.paid };
+  };
+  // A typed contract total is split over the agreed number of payments; it follows later changes to the dates or frequency.
+  const totalKey = amcLines.map((l) => `${l.totalEntry ?? ""}|${amcLineFull(l).count}`).join(",");
+  useEffect(() => {
+    setAmcLines((prev) => {
+      let changed = false;
+      const next = prev.map((l) => {
+        const total = parseFloat(l.totalEntry ?? "");
+        if (!(total > 0)) return l;
+        const want = String(Math.round((total / amcLineFull(l).count) * 100) / 100);
+        if (want === l.perCycleCost) return l;
+        changed = true;
+        return { ...l, perCycleCost: want };
+      });
+      return changed ? next : prev;
+    });
+    // amcLineFull reads the dates, which totalKey already reflects through each line's cycle count.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalKey]);
+  // Filled from a proposal: everything stays editable, but the value can only go down from the proposal's.
+  const hasProposal = department === "amc" && amcLines.some((l) => l.proposalTotal != null);
+  const proposalCapError = (): string | null => {
+    for (let i = 0; i < amcLines.length; i++) {
+      const l = amcLines[i];
+      if (l.proposalTotal == null) continue;
+      if (amcLineCalc(l).fullTotal > l.proposalTotal + PROPOSAL_CAP_TOLERANCE) {
+        return `${amcLines.length > 1 ? `Line ${i + 1}: ` : ""}${proposalCapMessage(l.proposalTotal)}`;
+      }
+    }
+    return null;
   };
   const amcContractTotal = amcLines.reduce((sum, l) => sum + amcLineCalc(l).total, 0);
+  const amcFullTotal = amcLines.reduce((sum, l) => sum + amcLineCalc(l).fullTotal, 0);
+  const amcPaidTotal = amcLines.reduce((sum, l) => sum + amcLineCalc(l).paidTotal, 0);
 
   const buildPayload = (submit?: boolean) => {
     // For AMC, synthesize a single line item from the AMC service block so the
@@ -427,6 +538,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             estimated_price: c.cost || null,
             notes: undefined,
             linked_asset_id: l.assetId || null,
+            proposal_line_total: l.proposalTotal ?? null,
           };
         })
       : items.map((li) => ({
@@ -459,6 +571,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
         amc_start_date: amcStartDate || null,
         amc_end_date: amcEndDate || null,
         amc_visits_covered: amcUnlimited ? null : (parseInt(amcVisitsCovered) || null),
+        opening_cycles: openingCycles,
+        opening_visits: openingVisits,
         amc_contact_name: amcContactName.trim() || null,
         amc_helpline_number: amcHelpline.trim() || null,
         amc_contact_email: amcContactEmail.trim() || null,
@@ -526,25 +640,10 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     let ok = 0;
     for (const q of validQuotations) {
       if (!q.file) continue;
-      const fd = new FormData();
-      fd.append("file", q.file);
-      fd.append("vendor_name", q.vendor_name.trim());
-      fd.append("amount", q.amount);
-      if (q.notes.trim()) fd.append("notes", q.notes.trim());
-      try {
-        const res = await fetch(`/api/procurement/requests/${prId}/quotations`, {
-          method: "POST",
-          body: fd,
-        });
-        if (res.ok) ok++;
-        else {
-          const j = await res.json().catch(() => ({}));
-          toast.error(`Failed to upload quotation from ${q.vendor_name}: ${j.error ?? res.statusText}`);
-        }
-      } catch (err) {
-        toast.error(`Failed to upload quotation from ${q.vendor_name}`);
-        console.error(err);
-      }
+      // Storage first, then the details: the route no longer accepts the file itself.
+      const result = await uploadQuotation(prId, { file: q.file, vendor_name: q.vendor_name, amount: q.amount, notes: q.notes });
+      if (result.ok) ok++;
+      else toast.error(`Failed to upload quotation from ${q.vendor_name}: ${result.error}`);
     }
     return ok;
   };
@@ -569,6 +668,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
         if (!l.assetId) return `Please select the asset this AMC covers${at}`;
         const amt = parseFloat(l.perCycleCost);
         if (!amt || amt <= 0) return `Enter the ${CYCLE_COST_LABEL[l.billingCycle].toLowerCase()} (pre-GST)${at}`;
+        const capErr = proposalCapError();
+        if (capErr) return capErr;
         if (l.cycleCountOverride.trim() !== "" && parseInt(l.cycleCountOverride) <= 0)
           return `Number of cycles must be at least 1${at}`;
       }
@@ -789,6 +890,78 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     setTimeout(() => { void (isEdit ? doSave() : doSubmit()); }, 0);
   };
 
+  const amcSteps = amcStepsFor(amcRunning);
+  const lastAmcStep = amcSteps.length - 1;
+  const stepKey = amcSteps[Math.min(amcStep, lastAmcStep)].key;
+  /** Hides a block on every step but its own; unchanged when not in the step-by-step flow. */
+  const showStep = (key: string) => (!amcWizard || stepKey === key ? "" : "hidden");
+  const goToAmcStep = (n: number) => { setAmcStep(n); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  // A proposal that is being read, or read but not yet used or dismissed, holds the wizard on its first step.
+  const [proposalPending, setProposalPending] = useState(false);
+  const waitingOnProposal = proposalPending && stepKey === "proposal";
+  const nextAmcStep = () => {
+    if (waitingOnProposal) return;
+    const capErr = proposalCapError();
+    if (capErr) { toast.error(capErr); return; }
+    const err = validateAmcStep(amcStep, {
+      companyId, serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,
+      unlimitedVisits: amcUnlimited, visitsCovered: amcVisitsCovered,
+      lines: amcLines.map((l) => ({ assetId: l.assetId, perCycleCost: l.perCycleCost, cycleCountOverride: l.cycleCountOverride })),
+      contactName: amcContactName, helpline: amcHelpline,
+      running: { scheduleProblem: runningProblem },
+    }, amcSteps);
+    if (err) { toast.error(err); return; }
+    goToAmcStep(amcStep + 1);
+  };
+
+  // Dropping an applied proposal lifts its lock (asset, dates, schedule, value ceiling) and its attached file, so a wrong
+  // match or the wrong proposal is never a dead end. The values it filled stay, now editable.
+  const proposalQuoteId = useRef<string | null>(null);
+  const discardProposal = () => {
+    setAmcLines((prev) => prev.map((l) => ({ ...l, proposalTotal: undefined })));
+    const qid = proposalQuoteId.current;
+    if (qid) setQuotations((prev) => prev.filter((q) => q.id !== qid));
+    proposalQuoteId.current = null;
+  };
+
+  /** Fills the wizard from a proposal the user confirmed; returns how many details were set. */
+  const applyProposalPrefill = (plan: PrefillPlan, file: File, x: ExtractedAmcProposal, answers: PrefillAnswers): number => {
+    const u = plan.updates;
+    let count = 0;
+    if (u.serviceName !== undefined) { setServiceItemName(u.serviceName); count++; }
+    if (u.startDate !== undefined && u.endDate !== undefined) { setAmcStartDate(u.startDate); setAmcEndDate(u.endDate); count += 2; }
+    if (u.visitsCovered !== undefined) { setAmcVisitsCovered(u.visitsCovered); setAmcUnlimited(false); count++; }
+    if (u.coverage !== undefined) { setAmcCoverageType(u.coverage); count++; }
+    if (u.contactName !== undefined) { setAmcContactName(u.contactName); count++; }
+    if (u.helpline !== undefined) { setAmcHelpline(u.helpline); count++; }
+    if (u.contactEmail !== undefined) { setAmcContactEmail(u.contactEmail); count++; }
+    if (u.firstLine) {
+      const fl = u.firstLine;
+      setAmcLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, billingCycle: fl.billingCycle, perCycleCost: fl.perCycleCost ?? l.perCycleCost, cycleCountOverride: "", proposalTotal: fl.proposalTotal } : l)));
+      count += fl.perCycleCost === undefined ? 1 : 2;
+    }
+    if (u.lines) {
+      setAmcLines(u.lines.map((l) => newAmcLine({ assetId: l.assetId, billingCycle: l.billingCycle, perCycleCost: l.perCycleCost, proposalTotal: l.proposalTotal })));
+      count += u.lines.length;
+    }
+    // Keep the proposal itself as the attached quotation, so the approver can read it.
+    // When some units were left out, the attached figure is what this request covers, so the approver
+    // never sees a quotation that disagrees with the lines; the full proposal total stays in the note.
+    const scope = plan.unitScope && plan.unitScope.leftOut > 0 ? plan.unitScope : null;
+    const amount = scope ? scope.coveredTotal : answers.amount !== undefined ? Number(answers.amount) : x.valueBeforeGst;
+    const quoteNotes = scope
+      ? `AMC proposal. Covers ${scope.covered} of the ${scope.covered + scope.leftOut} units listed (${formatCurrency(scope.coveredTotal)} before GST${scope.proposalTotal ? ` of ${formatCurrency(scope.proposalTotal)}` : ""}); ${scope.leftOut} left out.`
+      : "AMC proposal";
+    const quoteId = generateLocalId();
+    proposalQuoteId.current = quoteId;
+    setQuotations((prev) => [
+      ...prev,
+      { id: quoteId, vendor_name: x.vendorName ?? "Vendor", amount: amount ? String(amount) : "", notes: quoteNotes, file },
+    ]);
+    toast.success("Filled in from the proposal. Check each step as you go.");
+    return count;
+  };
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <PageBreadcrumb
@@ -807,13 +980,17 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           <p className="text-sm text-muted-foreground">
             {isEdit
               ? "Correct any detail on this request. It stays in its current status — no re-approval is triggered."
-              : "Fill in details and add items to request"}
+              : amcWizard
+                ? "Set up a new AMC contract, one question at a time"
+                : "Fill in details and add items to request"}
           </p>
         </div>
       </div>
 
+      {amcWizard && <AmcStepHeader step={amcStep} steps={amcSteps} />}
+
       {/* Request Details */}
-      <Card>
+      <Card className={showStep("who")}>
         <CardHeader>
           <CardTitle className="text-base">Request Details</CardTitle>
         </CardHeader>
@@ -988,17 +1165,38 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
         </CardContent>
       </Card>
 
+      {amcWizard && stepKey === "who" && (
+        <AmcProposalCard
+          assets={assets}
+          defaultLocationId={locationId || undefined}
+          onAssetCreated={(a) => setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]))}
+          onApply={applyProposalPrefill}
+          onPendingChange={setProposalPending}
+          onDiscard={discardProposal}
+          current={{
+            serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,
+            visitsCovered: amcVisitsCovered, unlimitedVisits: amcUnlimited,
+            contactName: amcContactName, helpline: amcHelpline, contactEmail: amcContactEmail,
+            firstLine: { assetId: amcLines[0]?.assetId ?? "", perCycleCost: amcLines[0]?.perCycleCost ?? "", lineCount: amcLines.length },
+          }}
+        />
+      )}
+
+      {amcWizard && amcRunning && (stepKey === "who" || stepKey === "contract" || stepKey === "billing") && (
+        <AmcRunningNotice startDate={amcStartDate} />
+      )}
+
       {/* AMC Service Details — replaces the Line Items card when department=amc */}
       {department === "amc" && (
-        <Card>
-          <CardHeader className="pb-3">
+        <Card className={amcWizard && !["contract", "billing", "contacts"].includes(stepKey) ? "hidden" : ""}>
+          <CardHeader className={`pb-3 ${amcWizard ? "hidden" : ""}`}>
             <CardTitle className="text-base flex items-center gap-2">
               <Wrench className="h-4 w-4" />
               AMC Service Details <span className="text-red-500">*</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${showStep("contract")}`}>
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="service-item-name">Service / Contract Name <span className="text-red-500">*</span></Label>
                 <Input
@@ -1075,13 +1273,19 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             </div>
 
             {/* Assets covered — one line per asset, each on its own payment schedule */}
-            <div className="border-t pt-4 space-y-3">
+            <div className={`${amcWizard ? "" : "border-t pt-4"} space-y-3 ${showStep("billing")}`}>
               <div>
                 <p className="text-sm font-medium">Assets covered <span className="text-red-500">*</span></p>
                 <p className="text-xs text-muted-foreground">
                   One line per asset. Each line becomes its own PO with its own cycles, visits and invoices.
                 </p>
               </div>
+              {hasProposal && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+                  Filled in from the proposal. Change anything that differs from what was agreed, including the asset.
+                  The value can be lowered, but not raised above the proposal.
+                </div>
+              )}
               {amcLines.map((l, idx) => {
                 const c = amcLineCalc(l);
                 const takenByOthers = new Set(amcLines.filter((x) => x.id !== l.id).map((x) => x.assetId));
@@ -1107,12 +1311,22 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                       <SearchableSelect
                         options={assets
                           .filter((a) => !takenByOthers.has(a.id))
-                          .map((a) => ({ value: a.id, label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}` }))}
+                          .map((a) => ({
+                            value: a.id,
+                            label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}`,
+                            badge: a.status === "maintenance" ? { text: "Maintenance", className: "bg-amber-100 text-amber-800" } : undefined,
+                            // Similar units share names; the model and serial tell them apart.
+                            detail: [
+                              [a.make, a.model].filter(Boolean).join(" ") || null,
+                              a.serial_number ? `Serial ${a.serial_number}` : null,
+                            ].filter(Boolean).join(" · ") || undefined,
+                          }))}
                         value={l.assetId}
                         onValueChange={(v) => handleAssetSelect(l.id, v)}
-                        placeholder="Select the asset this line covers..."
-                        emptyMessage="No active assets found"
+                                                placeholder="Select the asset this line covers..."
+                        emptyMessage="No assets found"
                       />
+                      <AssetOverlapNote conflicts={l.assetId ? amcOverlaps[l.assetId] : undefined} />
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="space-y-1.5">
@@ -1129,6 +1343,31 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           </SelectContent>
                         </Select>
                       </div>
+                      {l.billingCycle !== "yearly" && (
+                        <div className="space-y-1.5 sm:col-span-3">
+                          <Label className="text-xs">Total contract value (pre-GST)</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="Enter the whole contract value to split it across the payments"
+                            value={l.totalEntry || (c.fullTotal > 0 ? String(Math.round(c.fullTotal * 100) / 100) : "")}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              const n = parseFloat(v);
+                              updateAmcLine(l.id, {
+                                totalEntry: v,
+                                perCycleCost: n > 0 ? String(Math.round((n / c.fullCount) * 100) / 100) : "",
+                              });
+                            }}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {parseFloat(l.totalEntry ?? "") > 0
+                              ? `Split into ${c.fullCount} ${CYCLE_UNIT_LABEL[l.billingCycle]}${c.fullCount === 1 ? "" : "s"}, each ${formatCurrency(c.cost)} before GST.${Math.abs(c.fullTotal - parseFloat(l.totalEntry!)) > 0.01 ? ` It does not divide evenly, so the contract comes to ${formatCurrency(c.fullTotal)}.` : ""}`
+                              : c.derived ? `Divided by the ${c.fullCount} payments in the contract period to fill in the cost below.` : "Set the contract dates first so the payments can be counted."}
+                          </p>
+                        </div>
+                      )}
                       <div className="space-y-1.5">
                         <Label className="text-xs">
                           {CYCLE_COST_LABEL[l.billingCycle]} (pre-GST) <span className="text-red-500">*</span>
@@ -1139,8 +1378,13 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                           step="0.01"
                           placeholder="0.00"
                           value={l.perCycleCost}
-                          onChange={(e) => updateAmcLine(l.id, { perCycleCost: e.target.value })}
+                          onChange={(e) => updateAmcLine(l.id, { perCycleCost: e.target.value, totalEntry: "" })}
                         />
+                        {l.proposalTotal != null && (
+                          <p className={`text-xs ${c.fullTotal > l.proposalTotal + PROPOSAL_CAP_TOLERANCE ? "text-red-600" : "text-muted-foreground"}`}>
+                            Proposal value {formatCurrency(l.proposalTotal)} before GST. If it was agreed lower, enter the lower amount — it can&apos;t be higher.
+                          </p>
+                        )}
                       </div>
                       {l.billingCycle !== "yearly" && (
                         <div className="space-y-1.5">
@@ -1189,8 +1433,26 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
               )}
             </div>
 
+            {/* What the vendor will bill, in plain numbers, so the figures can be sanity-checked before moving on */}
+            {amcWizard && stepKey === "billing" && amcContractTotal > 0 && (
+              <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm space-y-1">
+                <p className="font-medium">What the vendor will bill</p>
+                {amcLines.filter((l) => parseFloat(l.perCycleCost) > 0).map((l) => {
+                  const c = amcLineCalc(l);
+                  const asset = assets.find((a) => a.id === l.assetId)?.name ?? "This asset";
+                  return (
+                    <p key={l.id} className="text-xs text-muted-foreground">
+                      {asset}: {c.count} bill{c.count === 1 ? "" : "s"} of {formatCurrency(c.cost)} before GST
+                      {" "}(about {formatCurrency(c.cost * 1.18)} with 18% GST on each invoice).
+                    </p>
+                  );
+                })}
+                <p className="text-xs text-muted-foreground">Enter the amount before GST. The vendor adds GST on every invoice.</p>
+              </div>
+            )}
+
             {/* Vendor Contact Hierarchy */}
-            <div className="border-t pt-4 space-y-3">
+            <div className={`${amcWizard ? "" : "border-t pt-4"} space-y-3 ${showStep("contacts")}`}>
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium">Vendor Service Contacts</p>
                 <p className="text-xs text-muted-foreground">L1 primary · L2 / L3 escalation</p>
@@ -1241,7 +1503,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             </div>
 
             {/* Advance Request (optional) */}
-            <div className="border-t pt-4 space-y-2">
+            <div className={`border-t pt-4 space-y-2 ${showStep("billing")}`}>
               <label className="flex items-center gap-2 cursor-pointer">
                 <Checkbox checked={advanceRequired} onCheckedChange={(c) => { setAdvanceRequired(Boolean(c)); setAdvanceExpanded(Boolean(c)); }} />
                 <span className="text-sm font-medium">Vendor is requesting an advance payment</span>
@@ -1565,7 +1827,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           Edit mode omits this: the MR already exists, so its quotations are added
           and removed directly on the detail page rather than staged here. */}
       {!isEdit && (
-      <Card>
+      <Card className={showStep("proposal")}>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <div>
             <CardTitle className="text-base">
@@ -1687,8 +1949,60 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       </Card>
       )}
 
+      {amcWizard && stepKey === "running" && (
+        <>
+          {runningProblem && (
+            <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-900">{runningProblem}</div>
+          )}
+          {!runningProblem && (
+            <AmcRunningStep
+              schedule={runningSchedule}
+              unit={CYCLE_UNIT_LABEL[amcLines[0].billingCycle]}
+              perCycleTotal={amcLines.reduce((sum, l) => sum + (parseFloat(l.perCycleCost) || 0), 0)}
+              opening={openingCycles}
+              maxSettled={maxSettled}
+              onOpening={setAmcOpeningCycles}
+              visits={openingVisits}
+              visitsCovered={amcUnlimited ? null : (parseInt(amcVisitsCovered) || null)}
+              onVisits={setAmcOpeningVisits}
+              today={todayIso}
+            />
+          )}
+        </>
+      )}
+
+      {amcWizard && stepKey === "review" && (
+        <AmcReviewCard
+          company={companies.find((c) => c.id === companyId)?.name ?? "—"}
+          contractName={serviceItemName.trim() || "—"}
+          coverage={amcCoverageType === "labour_only" ? "Labour only (parts extra)" : "Comprehensive (parts and labour)"}
+          start={amcStartDate}
+          end={amcEndDate}
+          length={contractLengthText(amcStartDate, amcEndDate)}
+          visits={amcUnlimited ? "Unlimited" : `${amcVisitsCovered} a year`}
+          lines={amcLines.map((l) => {
+            const c = amcLineCalc(l);
+            return {
+              asset: assets.find((a) => a.id === l.assetId)?.name ?? "Asset",
+              frequency: CYCLE_UNIT_LABEL[l.billingCycle] + (c.count > 1 ? "s" : ""),
+              count: c.count,
+              perCycle: c.cost,
+              total: c.total,
+            };
+          })}
+          total={amcContractTotal}
+          running={openingCycles > 0 ? {
+            fullTotal: amcFullTotal, paidTotal: amcPaidTotal, cyclesDone: openingCycles,
+            cyclesTotal: amcLineCalc(amcLines[0]).fullCount, visitsDone: openingVisits,
+          } : undefined}
+          contact={[amcContactName.trim(), amcHelpline.trim()].filter(Boolean).join(" · ") || "—"}
+          advance={advanceRequired && parseFloat(advanceAmount) > 0 ? formatCurrency(parseFloat(advanceAmount)) : null}
+          proposals={validQuotations.length}
+        />
+      )}
+
       {/* Summary & Actions */}
-      <Card>
+      <Card className={showStep("review")}>
         <CardContent className="pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           {department === "amc" ? (
             <div>
@@ -1696,6 +2010,11 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
               <p className="text-xl font-bold">
                 {amcContractTotal > 0 ? formatCurrency(amcContractTotal) : "—"}
               </p>
+              {openingCycles > 0 && amcFullTotal > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Full contract {formatCurrency(amcFullTotal)}; {formatCurrency(amcPaidTotal)} already paid before this system.
+                </p>
+              )}
               {amcContractTotal > 0 && (amcLines.length > 1 || amcLineCalc(amcLines[0]).count > 1) && (
                 <p className="text-xs text-muted-foreground">
                   {amcLines.length > 1
@@ -1750,6 +2069,26 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           </div>
         </CardContent>
       </Card>
+
+      {amcWizard && (
+        // pr-20 / pb-24 on small screens keep the buttons clear of the floating help buttons.
+        <div className="flex items-center justify-between pr-20 pb-24 lg:pr-0 lg:pb-0">
+          <Button variant="outline" onClick={() => (amcStep === 0 ? router.back() : goToAmcStep(amcStep - 1))}>
+            {amcStep === 0 ? "Cancel" : "← Back"}
+          </Button>
+          {amcStep < lastAmcStep && (
+            <div className="flex items-center gap-3">
+              {stepKey === "proposal" && validQuotations.length === 0 && (
+                <span className="text-xs text-muted-foreground">No proposal yet? You can skip.</span>
+              )}
+              {waitingOnProposal && (
+                <span className="text-xs text-amber-800">Choose &quot;Fill in the steps for me&quot; or &quot;Don&apos;t use it&quot; to continue.</span>
+              )}
+              <Button onClick={nextAmcStep} disabled={waitingOnProposal}>{stepKey === "proposal" ? (validQuotations.length === 0 ? "Skip" : "Next →") : "Next →"}</Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Catalog Picker Dialog */}
       <Dialog

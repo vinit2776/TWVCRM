@@ -7,7 +7,11 @@ import {
   siteConfigFromLocation,
   isUnifiLocation,
   calcVoucherMinutes,
+  buildVoucherNote,
+  unifiFailureReason,
+  UnifiConfigError,
 } from "@/lib/unifi";
+import { voucherValidUntil } from "@/lib/voucher-validity";
 import {
   siteConfigFromLocation as ruijieSiteConfigFromLocation,
   isRuijieLocation,
@@ -109,7 +113,7 @@ export async function POST(
   if (locationId) {
     const { data: loc } = await supabase
       .from("locations")
-      .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, ruijie_group_id, name")
+      .select("code, unifi_site_id, unifi_console_id, wifi_voucher_mode, ruijie_group_id, name")
       .eq("id", locationId)
       .single();
     location = loc;
@@ -121,7 +125,13 @@ export async function POST(
   // UNIFI PATH
   // ──────────────────────────────────────────────────────────────────
   if (useUnifi) {
-    const siteConfig = siteConfigFromLocation(location);
+    let siteConfig: ReturnType<typeof siteConfigFromLocation>;
+    try {
+      siteConfig = siteConfigFromLocation(location);
+    } catch (err) {
+      if (err instanceof UnifiConfigError) return NextResponse.json({ error: err.message }, { status: 400 });
+      throw err;
+    }
     const durationMinutes = calcVoucherMinutes(contract.end_date);
 
     const { data: dbUser } = await supabase
@@ -162,7 +172,7 @@ export async function POST(
         const result = await createUnifiVoucher(
           {
             durationMinutes,
-            note: `${contract.contract_number}_seat${seatNumber}`,
+            note: buildVoucherNote(location.code, `${contract.contract_number}_seat${seatNumber}`),
             quota: 2,
           },
           siteConfig
@@ -172,7 +182,7 @@ export async function POST(
       } catch (err) {
         console.error("[unifi] per-seat voucher creation failed:", err);
         return NextResponse.json(
-          { error: "Failed to create Unifi voucher. Check API credentials and try again." },
+          { error: `Failed to create Unifi voucher (${unifiFailureReason(err)}). If this keeps happening, check the location's UniFi console settings.` },
           { status: 502 }
         );
       }
@@ -186,12 +196,14 @@ export async function POST(
           seat_number: seatNumber,
           issued_by: dbUser?.id,
           valid_from: contract.start_date,
-          valid_until: contract.end_date,
+          valid_until: voucherValidUntil(contract.end_date),
           seat_occupant_email: body.seat_occupant_email || null,
           member_id: body.member_id || null,
           is_active: true,
           unifi_voucher_id: unifiId,
           unifi_code: unifiCode,
+          unifi_console_id: siteConfig.consoleId,
+          unifi_location_code: location.code ?? null,
         })
         .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
         .single();
@@ -257,7 +269,7 @@ export async function POST(
         const result = await createUnifiVoucher(
           {
             durationMinutes,
-            note: `${contract.contract_number}_seat${seatNumber}`,
+            note: buildVoucherNote(location.code, `${contract.contract_number}_seat${seatNumber}`),
             quota: 2,
           },
           siteConfig
@@ -267,7 +279,7 @@ export async function POST(
       } catch (err) {
         console.error(`[unifi] seat ${seatNumber} voucher creation failed:`, err);
         return NextResponse.json(
-          { error: `Failed to create Unifi voucher for seat ${seatNumber}. ${issuedVouchers.length} vouchers issued before failure.` },
+          { error: `Failed to create Unifi voucher for seat ${seatNumber} (${unifiFailureReason(err)}). ${issuedVouchers.length} vouchers issued before failure.` },
           { status: 502 }
         );
       }
@@ -281,10 +293,12 @@ export async function POST(
           seat_number: seatNumber,
           issued_by: dbUser?.id,
           valid_from: contract.start_date,
-          valid_until: contract.end_date,
+          valid_until: voucherValidUntil(contract.end_date),
           is_active: true,
           unifi_voucher_id: unifiId,
           unifi_code: unifiCode,
+          unifi_console_id: siteConfig.consoleId,
+          unifi_location_code: location.code ?? null,
         })
         .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
         .single();

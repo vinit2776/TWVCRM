@@ -90,7 +90,7 @@ interface AssetDetail {
   recent_issues: { id: string; issue_number: string; title: string; created_at: string }[];
 }
 
-const OVERRIDE_ROLES = ["admin", "manager", "office_admin"];
+const OVERRIDE_ROLES = ["admin", "manager", "office_admin", "coordinator"];
 
 const STATUS_ACTION_LABEL: Record<string, string> = {
   in_progress: "Start Work",

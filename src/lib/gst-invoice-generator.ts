@@ -13,6 +13,7 @@ import { COMPANY_SEAL_BASE64 } from "@/lib/seal-data";
 import { COMPANY_SIGNATURE_BASE64 } from "@/lib/signature-data";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { sanitizeForPdf } from "@/lib/pdf-text";
+import type { ElectricityAnnexure } from "@/lib/electricity-annexure";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101];
@@ -170,6 +171,12 @@ export interface GstInvoiceData {
   periodStart: string;
   periodEnd: string;
   contractNumber: string;
+  /**
+   * Ad-hoc invoices belong to no contract and to no billing period (the
+   * statement's period is just the day it was raised). Set to label the
+   * reference "Ref:" instead of "Contract:" and to drop the Billing Period line.
+   */
+  adhoc?: boolean;
   /** Customer's own PO number for this contract — printed on both the proforma and tax invoice when set. */
   poNumber?: string | null;
   /** Customer payment due date (proforma only). YYYY-MM-DD. Printed in the totals block. */
@@ -210,6 +217,8 @@ export interface GstInvoiceData {
    * When set, a short note is printed so the merged PDF is self-explanatory.
    */
   supportingDocsCount?: number;
+  /** Electricity re-billing only: printed as "Annexure A — Calculation" on its own last page. */
+  annexure?: ElectricityAnnexure;
 }
 
 export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
@@ -244,7 +253,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   if (isProforma) {
     doc.text(`Proforma Ref: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
     doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
-    doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+    doc.text(`${data.adhoc ? "Ref" : "Contract"}: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
     if (data.poNumber) {
       detailY += 5;
       doc.text(`Customer PO Number: ${data.poNumber}`, pageWidth - 14, detailY, { align: "right" });
@@ -362,7 +371,9 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   // ── Supply details ──
   doc.setFontSize(8);
   doc.setTextColor(100, 100, 100);
-  doc.text(`Billing Period: ${formatDateInv(data.periodStart)} to ${formatDateInv(data.periodEnd)}`, 14, y);
+  if (!data.adhoc) {
+    doc.text(`Billing Period: ${formatDateInv(data.periodStart)} to ${formatDateInv(data.periodEnd)}`, 14, y);
+  }
   doc.text("Reverse Charge: No", pageWidth - 14, y, { align: "right" });
   y += 6;
 
@@ -630,5 +641,90 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.text(`${SELLER.address.replace(/\n/g, " ")}  |  ${SELLER.phone}  |  ${SELLER.website}`, pageWidth / 2, footerY + 10, { align: "center" });
   doc.text(`GSTIN: ${SELLER.gstin}`, pageWidth / 2, footerY + 14, { align: "center" });
 
+  if (data.annexure) drawElectricityAnnexure(doc, data, pageWidth);
+
   return doc;
+}
+
+/**
+ * Renders Annexure A on its own as a one-page PDF, using the same drawing code
+ * as the full invoice. Used to append the annexure to a Tally-issued PDF.
+ */
+export function generateElectricityAnnexurePDF(
+  data: Pick<GstInvoiceData, "invoiceNumber" | "contractNumber" | "annexure">,
+): Uint8Array {
+  const doc = new jsPDF("p", "mm", "a4");
+  const pageWidth = doc.internal.pageSize.getWidth();
+  drawElectricityAnnexure(doc, data as GstInvoiceData, pageWidth);
+  doc.deletePage(1); // drawElectricityAnnexure adds its own page; drop the blank first one
+  return new Uint8Array(doc.output("arraybuffer"));
+}
+
+function drawElectricityAnnexure(doc: jsPDF, data: GstInvoiceData, pageWidth: number): void {
+  const a = data.annexure!;
+  doc.addPage();
+
+  doc.setFillColor(...BRAND_TEAL);
+  doc.rect(0, 0, pageWidth, 22, "F");
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(255, 255, 255);
+  doc.text("Annexure A - Calculation of electricity charges", 14, 14);
+
+  let y = 32;
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(60, 60, 60);
+  doc.text(sanitizeForPdf(`Invoice ${data.invoiceNumber}  |  Contract ${data.contractNumber}  |  ${a.monthLabel}`), 14, y);
+  y += 10;
+
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("1. Units billed for the premises", 14, y);
+  y += 3;
+  autoTable(doc, {
+    startY: y,
+    body: [["Total units billed for the month", a.totalUnits.toFixed(2)]],
+    theme: "grid",
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right", cellWidth: 40 } },
+    margin: { left: 14, right: 14 },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  autoTable(doc, {
+    startY: y,
+    head: [["Line", "Units", "Rate", "Amount"]],
+    body: a.lines.map((l) => [l.label, l.units.toFixed(2), `Rs. ${l.rate.toFixed(2)}`, `Rs. ${l.amount.toFixed(2)}`]),
+    theme: "grid",
+    headStyles: { fillColor: [1, 94, 101], textColor: [255, 255, 255], fontSize: 8, fontStyle: "bold" },
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" } },
+    didParseCell: (h) => { if (h.section === "head" && h.column.index > 0) h.cell.styles.halign = "right"; },
+    margin: { left: 14, right: 14 },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  const half = a.gstRate / 2;
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("2. Totals", 14, y);
+  y += 3;
+  autoTable(doc, {
+    startY: y,
+    body: [
+      ["Subtotal", `Rs. ${a.subtotal.toFixed(2)}`],
+      [`CGST @${half}%`, `Rs. ${a.cgst.toFixed(2)}`],
+      [`SGST @${half}%`, `Rs. ${a.sgst.toFixed(2)}`],
+      ["Round off", `${a.roundOff < 0 ? "-" : "+"} Rs. ${Math.abs(a.roundOff).toFixed(2)}`],
+      ["Total payable", `Rs. ${a.total.toFixed(2)}`],
+    ],
+    theme: "grid",
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right", cellWidth: 40 } },
+    didParseCell: (h) => { if (h.row.index === 4) h.cell.styles.fontStyle = "bold"; },
+    margin: { left: 14, right: 14 },
+  });
 }

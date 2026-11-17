@@ -90,7 +90,7 @@ export async function GET(request: NextRequest) {
   type Booking = { id: string; start_time: string; end_time: string; guest_name: string | null; guest_company: string | null; status: string; lead: Lead | null };
 
   // Filter by ownership for non-managers
-  const ownsOnly = dbUser.role === "sales_rep" || dbUser.role === "floor_manager";
+  const ownsOnly = dbUser.role === "sales_rep" || dbUser.role === "floor_manager" || dbUser.role === "coordinator";
   const myId = dbUser.id;
 
   const filtAct = (rows: Act[] | null) =>

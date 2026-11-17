@@ -3,17 +3,20 @@
  *
  * Both the PATCH cancel branch (`/api/bookings/[id]`) and the rich
  * POST cancel endpoint (`/api/bookings/[id]/cancel`) need the same
- * three side-effects when a booking is cancelled or marked no-show:
+ * side-effects when a booking is cancelled or marked no-show:
  *
  *   1. Revoke any active WiFi vouchers for the booking (all customer types)
  *   2. Waive the linked usage_charge
  *   3. Auto-offer the freed slot to the first waitlisted customer
+ *   4. Cancel the booking's PI (void its Receivables statement and payment link)
  *
  * This module extracts them into one function so the logic stays DRY
  * and every cancel path (including no-show) gets all three.
  */
 
-import { revokeUnifiVoucher } from "@/lib/unifi";
+import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
+import { createAdminClient } from "@/lib/supabase/server";
+import { cancelBookingPiStatement } from "@/lib/booking-pi-statement-server";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseAny = any;
@@ -78,7 +81,7 @@ export async function executeBookingCancellationSideEffects(
   try {
     const { data: issuances } = await supabase
       .from("voucher_issuances")
-      .select("id, voucher_id, unifi_voucher_id, ruijie_voucher_uuid")
+      .select("id, voucher_id, unifi_voucher_id, unifi_console_id, ruijie_voucher_uuid")
       .eq("booking_id", booking.bookingId)
       .eq("is_active", true);
 
@@ -129,13 +132,23 @@ export async function executeBookingCancellationSideEffects(
           .in("id", voucherIds);
       }
 
-      // Revoke Unifi live-API vouchers (fire-and-forget, non-fatal)
+      // Revoke Unifi live-API vouchers (fire-and-forget, non-fatal), each on
+      // the console that issued it (recorded at issue time).
+      let bookingLocationId: string | null | undefined;
+      if (issuances.some((i: { unifi_voucher_id?: string | null }) => i.unifi_voucher_id)) {
+        const { data: bk } = await supabase
+          .from("bookings").select("location_id").eq("id", booking.bookingId).maybeSingle();
+        bookingLocationId = bk?.location_id;
+      }
       for (const issuance of issuances) {
-        const uid = (issuance as { unifi_voucher_id?: string | null }).unifi_voucher_id;
+        const { unifi_voucher_id: uid, unifi_console_id: issuedOn } =
+          issuance as { unifi_voucher_id?: string | null; unifi_console_id?: string | null };
         if (uid) {
-          revokeUnifiVoucher(uid).catch((err: unknown) =>
-            console.error(`[booking-cancel] Unifi revoke ${uid} failed:`, err)
-          );
+          siteConfigForStoredVoucher({ consoleId: issuedOn, locationId: bookingLocationId })
+            .then((cfg) => revokeUnifiVoucher(uid, cfg))
+            .catch((err: unknown) =>
+              console.error(`[booking-cancel] Unifi revoke ${uid} failed:`, err)
+            );
         }
       }
 
@@ -196,6 +209,11 @@ export async function executeBookingCancellationSideEffects(
       console.error("[booking-cancel] waitlist auto-offer failed:", err);
     }
   }
+
+  // ── 4. Cancel the booking's PI, if one was issued ──────────────
+  // Keeps a cancelled booking out of Receivables and the follow-up ladder.
+  // Never throws; a statement that already holds money is left for a manual refund.
+  await cancelBookingPiStatement(createAdminClient(), booking.bookingId, options.revokeReason ?? "Booking cancelled");
 
   return result;
 }

@@ -150,3 +150,23 @@ export async function reconcileLeadEnquiries(admin: SupabaseClient, leadIds: str
   }
   return resolved;
 }
+
+/** When a lead is archived for going quiet, its open enquiries close with it as "No response".
+ *  Same cut-off as the daily auto-resolve: enquiries older than it are left for a person. */
+export async function resolveEnquiriesForArchivedLeads(admin: SupabaseClient, leadIds: string[], now: Date = new Date()): Promise<number> {
+  if (leadIds.length === 0) return 0;
+  const cutoff = await loadCutoff(admin);
+  if (!cutoff) return 0; // fail-safe: no cut-off, no automatic resolving
+  const { data, error } = await admin
+    .from("lead_enquiries")
+    .update({ resolved_at: now.toISOString(), resolved_by: null, resolution_outcome: "no_response" })
+    .in("lead_id", leadIds)
+    .is("resolved_at", null)
+    .gte("received_at", cutoff)
+    .select("id");
+  if (error) {
+    console.error("[enquiry-progress] resolve for archived leads failed", error.code, error.message);
+    return 0;
+  }
+  return data?.length ?? 0;
+}

@@ -35,8 +35,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { INVOICE_STATUS_LABELS } from "@/lib/constants";
+import { adhocProformaPdfBase64, downloadAdhocProformaPdf } from "@/lib/adhoc-proforma-client";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import type { LineItem, ProformaInvoice } from "@/types";
+import type { LineItem } from "@/types";
 
 interface AdhocInvoice {
   id: string;
@@ -159,20 +160,12 @@ export function CaseAdhocInvoices({ caseId }: { caseId: string }) {
     }
   };
 
-  // Synthesizes a lead-shaped object from the resolved billing party so the
-  // PDF/email flow (built for lead invoices) can address a case's buyer —
-  // mirrors leadFromVoSource() in src/lib/send-proforma.ts.
-  const buyerAsLead = billsTo
-    ? { first_name: "", last_name: "", company: billsTo.name, email: billsTo.email ?? undefined, phone: billsTo.phone ?? undefined }
-    : undefined;
-
   const handleDownloadInvoicePDF = async (inv: AdhocInvoice) => {
-    const { generateInvoicePDF } = await import("@/lib/pdf-generator");
-    // AdhocInvoice only carries the fields this page needs, but they're the
-    // same fields generateInvoicePDF reads off a ProformaInvoice — safe to
-    // widen rather than duplicating the full type here.
-    const doc = generateInvoicePDF(inv as unknown as ProformaInvoice, buyerAsLead);
-    doc.save(`${inv.invoice_number}.pdf`);
+    try {
+      await downloadAdhocProformaPdf(inv.id, inv.invoice_number);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to download the PDF");
+    }
   };
 
   const handleSendInvoice = (inv: AdhocInvoice) => {
@@ -452,11 +445,7 @@ export function CaseAdhocInvoices({ caseId }: { caseId: string }) {
           documentNumber={emailInvoice.invoice_number ?? ""}
           leadEmail={billsTo?.email ?? undefined}
           leadPhone={billsTo?.phone ?? undefined}
-          onGeneratePDF={async () => {
-            const { generateInvoicePDF } = await import("@/lib/pdf-generator");
-            const doc = generateInvoicePDF(emailInvoice as unknown as ProformaInvoice, buyerAsLead);
-            return doc.output("datauristring").split(",")[1];
-          }}
+          onGeneratePDF={() => adhocProformaPdfBase64(emailInvoice.id)}
           onSuccess={load}
         />
       )}

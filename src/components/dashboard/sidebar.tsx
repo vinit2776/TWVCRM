@@ -57,6 +57,7 @@ import {
   FileSpreadsheet,
   BadgeIndianRupee,
   Flame,
+  Flag,
   Inbox,
   Zap,
   MessageCircleQuestion,
@@ -106,7 +107,7 @@ type NavSection = {
 const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "viewer"];
 
 // Operations menu (Bookings, Spaces, Packages, Vouchers): all active roles.
-const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "viewer"];
+const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "coordinator", "viewer"];
 
 // Top-level items — always visible, never grouped
 const topNavItems: NavItem[] = [
@@ -132,10 +133,10 @@ const navSections: NavSection[] = [
     label: "Sales",
     icon: TrendingUp,
     items: [
-      { href: "/leads",      label: "Leads",      icon: Users,       roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/pipeline",   label: "Pipeline",    icon: GitBranch,   roles: LEGACY_ROLES },
-      { href: "/activities", label: "Activities",  icon: Activity,    roles: LEGACY_ROLES },
-      { href: "/proposals",  label: "Proposals",   icon: FileText,    roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/leads",      label: "Leads",      icon: Users,       roles: [...LEGACY_ROLES, "accounts", "coordinator"] },
+      { href: "/pipeline",   label: "Pipeline",    icon: GitBranch,   roles: [...LEGACY_ROLES, "coordinator"] },
+      { href: "/activities", label: "Activities",  icon: Activity,    roles: [...LEGACY_ROLES, "coordinator"] },
+      { href: "/proposals",  label: "Proposals",   icon: FileText,    roles: [...LEGACY_ROLES, "accounts", "coordinator"] },
     ],
   },
   {
@@ -173,13 +174,14 @@ const navSections: NavSection[] = [
     label: "Operations",
     icon: CalendarClock,
     items: [
-      { href: "/contracts", label: "Contracts", icon: ScrollText,    roles: [...OPERATIONS_ROLES, "accounts"] },
+      // IT roles manage each contract's vouchers and door access from the detail page.
+      { href: "/contracts", label: "Contracts", icon: ScrollText,    roles: [...OPERATIONS_ROLES, "accounts", "it_manager", "it_technician"] },
       { href: "/bookings",  label: "Bookings",  icon: CalendarClock, roles: OPERATIONS_ROLES },
       { href: "/spaces",    label: "Spaces",    icon: DoorOpen,      roles: OPERATIONS_ROLES },
       { href: "/headcount", label: "Headcount", icon: UsersRound,    roles: OPERATIONS_ROLES },
       { href: "/packages",  label: "Packages",  icon: TicketCheck,   roles: OPERATIONS_ROLES },
       { href: "/vouchers",    label: "Vouchers",    icon: Wifi,          roles: [...OPERATIONS_ROLES, "facility_staff", "it_manager", "it_technician"] },
-      { href: "/network",     label: "Network",     icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "office_admin"] },
+      { href: "/network",     label: "Network",     icon: Server,        roles: ["coordinator", "admin", "manager", "it_manager", "it_technician", "office_admin"] },
       { href: "/attendance",  label: "Attendance",  icon: Fingerprint,   roles: ["admin", "manager", "viewer"] },
       // Launch page for the Attendance Gateway satellite app. Deliberately a
       // separate entry from "Attendance" above, which is this CRM's own unrelated
@@ -192,8 +194,8 @@ const navSections: NavSection[] = [
     label: "Virtual Offices",
     icon: Building2,
     items: [
-      { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: LEGACY_ROLES },
-      { href: "/cases",       label: "Cases",       icon: Briefcase, roles: LEGACY_ROLES },
+      { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: [...LEGACY_ROLES, "coordinator"] },
+      { href: "/cases",       label: "Cases",       icon: Briefcase, roles: [...LEGACY_ROLES, "coordinator"] },
     ],
   },
   {
@@ -201,17 +203,17 @@ const navSections: NavSection[] = [
     label: "Procurement",
     icon: ShoppingCart,
     items: [
-      { href: "/procurement",              label: "Dashboard",         icon: BarChart3Icon,     roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/requests",    label: "Material Requests", icon: ClipboardListIcon, roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/orders",      label: "Purchase Orders",   icon: Package,           roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/bills",       label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/payables",    label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/vendors",     label: "Vendors",           icon: Truck,             roles: ["admin", "manager", "office_admin", "accounts", "viewer"] },
-      { href: "/procurement/catalog",     label: "Item Catalog",      icon: Archive,           roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: ["admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
-      { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
-      { href: "/procurement/replenishment", label: "Replenishment",   icon: RefreshCw,         roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: ["admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
+      { href: "/procurement",              label: "Dashboard",         icon: BarChart3Icon,     roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/requests",    label: "Material Requests", icon: ClipboardListIcon, roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/orders",      label: "Purchase Orders",   icon: Package,           roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/bills",       label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/payables",    label: "Payables",          icon: IndianRupee,       roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/vendors",     label: "Vendors",           icon: Truck,             roles: ["coordinator", "admin", "manager", "office_admin", "accounts", "viewer"] },
+      { href: "/procurement/catalog",     label: "Item Catalog",      icon: Archive,           roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: ["coordinator", "admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
+      { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["coordinator", "admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
+      { href: "/procurement/replenishment", label: "Replenishment",   icon: RefreshCw,         roles: ["coordinator", "admin", "manager", "office_admin"] },
+      { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: ["coordinator", "admin", "manager", "office_admin", "floor_manager", "fms", "viewer"] },
       { href: "/procurement/electricity",  label: "Electricity Bills", icon: Zap,               roles: ["admin", "manager", "accounts", "office_admin"] },
       { href: "/procurement/verify",       label: "Verify Approval",   icon: ShieldCheck,       roles: ["admin", "manager", "office_admin"] },
     ],
@@ -221,12 +223,12 @@ const navSections: NavSection[] = [
     label: "Facility",
     icon: Wrench,
     items: [
-      { href: "/facility",               label: "Dashboard",           icon: BarChart3Icon, roles: ["admin", "manager", "it_manager", "it_technician", "fms", "floor_manager", "office_admin", "viewer"] },
-      { href: "/procurement/amc",        label: "AMC Contracts",       icon: Wrench,        roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/facility",               label: "Dashboard",           icon: BarChart3Icon, roles: ["coordinator", "admin", "manager", "it_manager", "it_technician", "fms", "floor_manager", "office_admin", "viewer"] },
+      { href: "/procurement/amc",        label: "AMC Contracts",       icon: Wrench,        roles: ["coordinator", "admin", "manager", "office_admin", "viewer"] },
       { href: "/facility/issues",        label: "Tasks / Work Orders", icon: ClipboardList, roles: null },
       { href: "/facility/my-issues",     label: "My Tasks",            icon: Ticket,        roles: null },
-      { href: "/facility/assets",        label: "Assets",              icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "fms", "viewer", "floor_manager", "office_admin"] },
-      { href: "/facility/team-kpi",      label: "Team KPI",            icon: TrendingUp,    roles: ["admin", "manager", "it_manager", "fms", "viewer"] },
+      { href: "/facility/assets",        label: "Assets",              icon: Server,        roles: ["coordinator", "admin", "manager", "it_manager", "it_technician", "fms", "viewer", "floor_manager", "office_admin"] },
+      { href: "/facility/team-kpi",      label: "Team KPI",            icon: TrendingUp,    roles: ["coordinator", "admin", "manager", "it_manager", "fms", "viewer"] },
       { href: "/facility/settings",      label: "Facility Settings",   icon: Settings,      roles: ["admin", "it_manager", "it_team"] },
       { href: "/admin/employees",        label: "Employees",           icon: UsersRound,    roles: ["admin", "manager", "office_admin", "floor_manager", "fms"] },
       { href: "/admin/cosec-devices",    label: "COSEC Devices",       icon: Fingerprint,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
@@ -253,13 +255,15 @@ const navSections: NavSection[] = [
     label: "Admin",
     icon: Settings,
     items: [
-      { href: "/locations",                        label: "Locations",              icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager", "it_manager"] },
+      { href: "/locations",                        label: "Locations",              icon: MapPin,        roles: ["admin", "manager", "sales_rep", "fms", "floor_manager", "it_manager"] },
       { href: "/admin/user-locations",             label: "User Locations",          icon: UsersRound,    roles: ["admin", "manager"] },
       { href: "/admin/transfer-billing-policies",  label: "Transfer Billing",        icon: ArrowLeftRight, roles: ["admin"] },
       { href: "/admin/electricity-billing-profiles", label: "Electricity Profiles",  icon: Zap,            roles: ["admin", "manager"] },
+      { href: "/admin/energy-alerts",              label: "Energy Alerts",           icon: Zap,            roles: ["admin", "manager", "it_manager", "fms"] },
       { href: "/admin/customer-value",             label: "Customer Value",          icon: TrendingUp,     roles: ["admin"] },
       { href: "/admin/cost-parameters",             label: "Value Cost Settings",    icon: Calculator,     roles: ["admin"] },
       { href: "/audit-logs",                       label: "Audit Logs",              icon: ClipboardList, roles: ["admin", "manager"] },
+      { href: "/admin/process-exceptions",         label: "Staff Exceptions",        icon: Flag,          roles: ["admin", "manager"] },
       // "Tally Sync" nav entry intentionally hidden — the automated bridge-sync
       // feature is shelved (superseded by Tally Inbox / tally_handoff_v2_enabled).
       // Page itself is NOT deleted — see docs/tally-integration-status.md before

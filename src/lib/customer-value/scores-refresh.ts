@@ -56,14 +56,16 @@ export interface ScoresRefreshResult {
  * Only ever called when the margin metric is on or being previewed.
  */
 export async function loadMarginPoints(supabase: SupabaseClient, leadIds: string[]): Promise<Map<string, MarginPoint[]>> {
-  const rows = await fetchInChunks<{ lead_id: string; month: string; revenue: number | string; margin_after_variable: number | string; confidence: number | string | null }>(
+  const rows = await fetchInChunks<{ lead_id: string; month: string; revenue: number | string; variable_cost: number | string; margin_after_variable: number | string; confidence: number | string | null }>(
     "margin",
     leadIds,
     (batch, from, to) =>
-      supabase.from("customer_value_margin").select("lead_id, month, revenue, margin_after_variable, confidence").in("lead_id", batch).order("lead_id").order("month").range(from, to)
+      supabase.from("customer_value_margin").select("lead_id, month, revenue, variable_cost, margin_after_variable, confidence").in("lead_id", batch).order("lead_id").order("month").range(from, to)
   );
   const byLead = new Map<string, MarginPoint[]>();
   for (const r of rows) {
+    // A month where nothing was costed has a "margin" of its whole revenue: not evidence of anything.
+    if (!(Number(r.variable_cost) > 0)) continue;
     const list = byLead.get(r.lead_id) ?? [];
     list.push({ month: r.month, revenue: Number(r.revenue), margin_after_variable: Number(r.margin_after_variable), confidence: r.confidence === null ? null : Number(r.confidence) });
     byLead.set(r.lead_id, list);

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { PROPOSAL_MAX_TENURE_MONTHS } from "@/lib/proposal-terms";
+import { programmedEscalation } from "@/lib/auto-renewal";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +44,8 @@ import {
 import { BILLING_CYCLE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
+import { escalateUnitPrice } from "@/lib/line-item-escalation";
+import { defaultCarryIds, type CarryableAddon } from "@/lib/renewal-addons";
 import type { Contract } from "@/types";
 
 // ─── Field Help Tooltip ─────────────────────────────────────────────────────
@@ -81,8 +84,13 @@ export function ContractRenewalDialog({
   const [tenureMonths, setTenureMonths] = useState(contract.tenure_months);
   const [seats, setSeats] = useState(contract.seats || 1);
   const [billingCycle, setBillingCycle] = useState<string>(contract.billing_cycle || "monthly");
-  const [escalationPct, setEscalationPct] = useState(contract.escalation_percentage || 0);
+  // Starts from the agreement's escalation, not from a rate that was negotiated
+  // for the previous term only.
+  const [escalationPct, setEscalationPct] = useState(() => programmedEscalation(contract));
   const [agreedNote, setAgreedNote] = useState("");
+  // Recurring add-ons on the contract being renewed, and which of them ride into the next term.
+  const [addons, setAddons] = useState<CarryableAddon[]>([]);
+  const [carryIds, setCarryIds] = useState<string[]>([]);
   const [startDate, setStartDate] = useState(() => {
     const end = new Date(contract.end_date);
     end.setDate(end.getDate() + 1);
@@ -96,13 +104,13 @@ export function ContractRenewalDialog({
   const multiplier = 1 + escalationPct / 100;
 
   // Preview: compute escalated subtotal per-item then sum (matches API logic)
-  type Item = { unit_price: number; quantity: number };
+  type Item = { unit_price: number; quantity: number; escalates?: boolean };
   const previewSubtotal = useMemo(() => {
     const items = (contract.items || []) as Item[];
     const oldSeats = contract.seats || 1;
     return items.reduce((sum, item) => {
       const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
-      const newPrice = roundToRupee(item.unit_price * multiplier);
+      const newPrice = escalateUnitPrice(item, multiplier, roundToRupee);
       return sum + newPrice * newQuantity;
     }, 0);
   }, [contract.items, multiplier, seats, contract.seats]);
@@ -124,7 +132,7 @@ export function ContractRenewalDialog({
   }, [startDate, tenureMonths]);
 
   // Check if escalation needs admin approval (reduction or waiver by non-admin)
-  const parentEscPct = contract.escalation_percentage || 0;
+  const parentEscPct = programmedEscalation(contract);
   const needsEscalationApproval = userRole !== "admin" && (escalationPct < parentEscPct || escalationPct === 0);
 
   // Gap calculation
@@ -134,6 +142,25 @@ export function ContractRenewalDialog({
     const renewStart = new Date(startDate).getTime();
     return Math.max(0, Math.round((renewStart - parentEnd) / 86_400_000) - 1);
   }, [startDate, contract.end_date]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch(`/api/contracts/${contract.id}/addons`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json) return;
+        const list = (json.data || []) as CarryableAddon[];
+        setAddons(list);
+        setCarryIds(defaultCarryIds(list, contract.end_date));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [open, contract.id, contract.end_date]);
+
+  const carriedAddonsMonthly = addons
+    .filter((a) => carryIds.includes(a.id))
+    .reduce((sum, a) => sum + Number(a.amount), 0);
 
   const handleRenew = async () => {
     setRenewing(true);
@@ -148,6 +175,7 @@ export function ContractRenewalDialog({
           billing_cycle: billingCycle,
           escalation_percentage: escalationPct,
           agreed_note: agreedNote,
+          carry_addon_ids: carryIds,
         }),
       });
 
@@ -165,6 +193,9 @@ export function ContractRenewalDialog({
             },
           }
         );
+        if (json.data.addons_carried_error) {
+          toast.error(`The renewal was created, but its recurring add-ons were not carried over: ${json.data.addons_carried_error}. Add them from the renewal's page before its first invoice.`);
+        }
         onOpenChange(false);
         onSuccess();
       } else {
@@ -225,7 +256,7 @@ export function ContractRenewalDialog({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate Negotiation</p>
             <div className="grid grid-cols-3 gap-3 items-end">
               <div className="space-y-1">
-                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line item. Set to 0 for no change. The escalated rate is rounded to the nearest ₹1." /></Label>
+                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line marked Escalates. Lines marked fixed (such as maintenance) stay as they are. Set to 0 for no change. The escalated rate is rounded to the nearest ₹1." /></Label>
                 <Input
                   type="number"
                   min={0}
@@ -235,6 +266,9 @@ export function ContractRenewalDialog({
                   onChange={(e) => setEscalationPct(parseFloat(e.target.value) || 0)}
                   className="h-9"
                 />
+                <p className="text-[10px] text-muted-foreground">
+                  Agreement: {parentEscPct}%. A different rate applies to this term only.
+                </p>
               </div>
               <div className="text-center pb-2">
                 <ArrowRight className="h-4 w-4 text-muted-foreground mx-auto" />
@@ -261,10 +295,79 @@ export function ContractRenewalDialog({
                 <p className="font-mono font-semibold">{formatCurrency(previewTotal)}</p>
               </div>
             </div>
+            {(contract.items || []).some((i) => i.escalates === false) && (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground border-b">
+                    <th className="py-1 text-left font-normal">Item</th>
+                    <th className="py-1 text-right font-normal">Current</th>
+                    <th className="py-1 text-right font-normal">Renewal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(contract.items || []).map((item, idx) => {
+                    const q = item.quantity === (contract.seats || 1) ? seats : item.quantity;
+                    return (
+                      <tr key={idx} className="border-b last:border-b-0">
+                        <td className="py-1">
+                          {item.description}
+                          {item.escalates === false && <span className="ml-1 text-amber-700">(fixed)</span>}
+                        </td>
+                        <td className="py-1 text-right font-mono">{formatCurrency(item.unit_price * item.quantity)}</td>
+                        <td className="py-1 text-right font-mono">
+                          {formatCurrency(escalateUnitPrice(item, multiplier, roundToRupee) * q)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
             <p className="text-[10px] text-muted-foreground text-center">
               Rates rounded to nearest ₹1 for cleaner invoicing
             </p>
           </div>
+
+          {/* Recurring add-ons: never escalated, so they are chosen separately from the fee. */}
+          {addons.length > 0 && (
+            <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Recurring add-ons carried into the next term
+              </p>
+              {addons.map((a) => {
+                const state = !a.is_active
+                  ? "Paused"
+                  : a.effective_until && a.effective_until < contract.end_date
+                    ? `Ends ${formatDate(a.effective_until)}`
+                    : "Running";
+                return (
+                  <label key={a.id} className="flex items-start gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={carryIds.includes(a.id)}
+                      onChange={(e) =>
+                        setCarryIds((ids) => (e.target.checked ? [...ids, a.id] : ids.filter((id) => id !== a.id)))
+                      }
+                    />
+                    <span className="flex-1">
+                      <span className="font-medium">{a.description}</span>{" "}
+                      <span className="text-xs text-muted-foreground">({state})</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {formatCurrency(Number(a.amount))} + GST per month, same amount (not escalated)
+                        {startDate && previewEndDate && ` · ${formatDate(startDate)} to ${formatDate(previewEndDate)}`}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+              <p className="text-xs text-muted-foreground">
+                Next term, before GST: monthly fee {formatCurrency(previewSubtotal)} + add-ons {formatCurrency(carriedAddonsMonthly)} ={" "}
+                <span className="font-medium text-foreground">{formatCurrency(previewSubtotal + carriedAddonsMonthly)}</span>.
+                An add-on left unticked stops when this term ends.
+              </p>
+            </div>
+          )}
 
           {/* Renewal Terms */}
           <div className="space-y-3">

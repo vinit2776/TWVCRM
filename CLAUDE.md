@@ -184,6 +184,7 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 |----------|----------|---------|
 | 28–31st 21:00 IST | `/api/billing/auto-generate` | Monthly invoice generation |
 | Daily 18:30 IST | `/api/cron/contract-expiry` | Contract expiry alerts |
+| Daily 06:00 IST | `/api/cron/auto-renew` | Auto-renewal (see `docs/auto-renewal.md`). For contracts with `contracts.auto_renew` on, emails admin and accounts a digest of who needs a person, what is due now and what is coming up; sends nothing when no contract is opted in. Two further stages each have their own switch and act only when `live`: `app_settings.auto_renew_notice_mode` (prepares customer notice drafts and emails the ones a person approved, on their day) and `auto_renew_roll_mode` (creates the next term once the rate notice has gone out). Both default `dry_run`, so by default it contacts no customer and creates nothing. Activating the next term is a person's click (part 4b-2 will automate it). `auto_renew_cron_mode` is `off` / `dry_run` (`live` reads as `dry_run`) |
 | Daily 20:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
 | Daily 09:00 IST | `/api/cron/query-digest` | The only place queries send email — one digest per person (new/replies/overdue/silent); in-app alerts stay real-time |
@@ -191,7 +192,10 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 | Daily 10:30 IST | `/api/cron/enquiry-reconcile` | Auto-resolve enquiries: contract active → Converted, lead lost → Not interested, 21 quiet days → No response (only enquiries received after `app_settings.enquiry_auto_resolve_effective_from`) |
 | Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 | Daily 10:00 IST | `/api/cron/rent-gap-alert` | In-app + push alert to admin/manager/accounts/sales_rep for each new rent gap that can be raised from Billing → Unbilled → Rent gap (staff only, once per contract-month) |
+| Every 15 min | `/api/cron/wa-reply-alert` | A customer has waited past the amber (1h) / red (3h) threshold (`src/lib/whatsapp-replies.ts`) on a WhatsApp enquiry someone took on: in-app + push to whoever took it, and red also to admin/manager; once per wait per level (dedupe = the notifications row). Staff only, never messages a customer; `?dry=1` writes nothing |
+| Daily 10:15 IST | `/api/cron/voucher-expiry-alert` | A UniFi voucher is capped at one year (`src/lib/voucher-validity.ts`), so on a longer contract it stops before the contract does. In-app + push alert to admin/manager/sales_rep 30 days ahead and again in the last week, per contract; staff then click **Replace** on the contract's Vouchers card (re-issues on the controller). Staff only — revokes, issues and emails nothing |
 | Hourly at :07 | `/api/cron/energy-ledger-capture` | Extend each OneGrid-enabled location's energy ledger (`location_energy_readings`) from its last stored row; feeds the Usage baseline |
+| Hourly at :14 | `/api/cron/energy-alerts` | Judges each enabled energy alert rule's new 15-minute slots against the usual for that slot (median of the last 30 same-kind days, from `location_energy_readings`) and records/emails staff when a deviation lasts. Episodes, not slots, are notified: one email on open, then only on a worsening step or a 2h/6h/24h reminder, with a daily cap per rule. Runs just after the :07 ledger capture. Emails only when `app_settings.energy_alerts_cron_mode` is `live` AND the rule is Live; default `dry_run` records decisions as `test` and contacts nobody. Staff only; `?dry=1` writes nothing. See `docs/energy-alerts.md` |
 | Hourly at :17 | `/api/cron/wifi-ledger-capture` | Copy each UniFi center's Wi-Fi usage (per device and site total) into `wifi_client_hourly` / `wifi_site_hourly` (console keeps ~7 days) and `wifi_client_daily` / `wifi_site_daily` (~90 days) before it ages out; read-only against UniFi, sends nothing |
 | Daily 03:00 IST | `/api/cron/customer-value` | Recompute every customer's monthly Value figures and today's score into `customer_value_monthly` / `customer_value_scores` (writes only those two tables; sends nothing) |
 | Daily 03:15 IST | `/api/cron/customer-value-margin` | Shadow margin after variable costs per customer-month into `customer_value_margin`, from the stored monthly figures and the cost rates in force; shown beside the score, never changes it (writes only that table; sends nothing) |
@@ -202,7 +206,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 
 ### Roles and Permissions
 
-`UserRole`: `admin`, `manager`, `sales_rep`, `floor_manager`, `accounts`, `fms`, `office_admin`, `it_manager`, `it_technician`
+`UserRole`: `admin`, `manager`, `sales_rep`, `floor_manager`, `accounts`, `fms`, `office_admin`, `it_manager`, `it_technician`, `coordinator`
 
 | Action | Allowed Roles |
 |--------|--------------|
@@ -215,7 +219,9 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Terminate an **active** contract | `admin`, `manager` |
 | **Withdraw** a never-activated contract (draft/sent/viewed/accepted → stored as `terminated`) | `admin`, `manager`, `sales_rep` — not renewal drafts (use Cancel Renewal) |
 | Facility tickets | `fms`, `admin` |
+| `coordinator` scope | Sales + Operations + Procurement (create/edit **own** MRs, view everything, **no approvals**) + day-to-day Facility. **No** Finance, Payroll, Attendance or Admin — sidebar hides them, `isCoordinatorBlockedPath` (`src/lib/restricted-roles.ts`) redirects typed URLs, API role lists refuse writes |
 | Void billing statements | `admin` only |
+| Withdraw an unverified payment report (Report paid) | the reporter, `admin`, `accounts` — only while it is still unverified; `POST /api/queries/payment-reports/[id]/withdraw`; never for booking reports |
 | Reverse a customer payment recorded in error | `admin` only — `POST /api/billing-statements/[id]/payment/[paymentId]/reverse` (reason ≥10 chars; refused for gateway/Tally-receipted/TDS-filed/deposit-adjustment payments, accounted or period-locked statements, and proposal/invoice/VO-case statements) |
 
 ### Procurement → Payment Flow (strict separation)
@@ -240,6 +246,10 @@ Lets the final vendor invoice drift from the PO value without a hard block (migr
 - GST tax rates are locked to each contract's `tax_percentage` — never recalculate dynamically.
 - `BillingLifecycleStatus` component (`src/components/billing/billing-lifecycle-status.tsx`) renders the 6-step progress indicator on list views.
 
+### Post-checkout extras (walk-in / guest bookings)
+
+An extra found after checkout (overtime, damage, missed F&B) is added as a booking add-on (`added_after_checkout`; contract holders keep the monthly-invoice route). It reopens a **paid** booking with money collected to `pending` for the difference (compare-and-set; waived/complimentary/prepaid bookings keep their status), the old spent payment link is cleared, and the PI statement follows. A booking can have several `booking_gst_tasks` (`kind` main/supplement, `sequence`, own `amount_with_gst`): an unissued task is refreshed to include the extra and **held** (shown as in-flight) until the booking is paid; once accounts issued the invoice, a supplement task is created for the difference. Add-ons are claimed (`gst_task_id`) when an invoice is uploaded; a claimed extra can't be removed. Rules: `src/lib/booking-extras.ts`, `booking-gst-task.ts`. Removing a paid extra leaves the money in place and returns an `overpaid` warning (refund is manual).
+
 ### Usage Invoices (contract/month grouped)
 
 Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.ts`; API under `/api/usage-billing/` (`unbilled`, `prepare`, `send`, `cancel`; admin/manager/accounts).
@@ -249,6 +259,10 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 - Held and within-quota charges never bill; charges older than `USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS` need "Bill anyway" (`reviewed_at`) first. Ended contracts still bill.
 - `prepare` → `create_usage_invoice` RPC (`00564`) locks and links charges to a draft in one transaction and refuses if anything changed (`USAGE_INVOICE_STALE`). Preview with the existing `preview-send` / `proforma-pdf?preview=1` routes. `send` finalizes and dispatches by `contracts.billing_mode`; if it fails before anything irreversible (payment link, GST number, sent), the draft is discarded and charges return to the list. `cancel` discards and releases.
 - Discard and void must release all three charge tables, including `facility_usage_records.billing_statement_id`.
+
+### Ad-hoc invoices on a live contract
+
+A live contract (`active`, or `renewal_in_progress` before its end date — `isContractOperational`) captures all of the customer's financial activity, so `POST /api/invoices` ties a lead's ad-hoc invoice to it at creation (`src/lib/adhoc-contract-attach.ts`): one live contract attaches by itself, several make the form require a pick (`contract_id`, server returns 400 otherwise), none leaves it on the ad-hoc page only. Case-raised invoices have no lead and are untouched. The automatic purpose is always `other` (visibility only) — only a hand-set `prorata_first_invoice` can open the activation gate. The contract card's dropdown can re-tag an invoice as **Security deposit** (for deposits that slipped through before the creation gate): it asks first, only a paid invoice with no GST can be credited to the customer's deposit pool (taxed/unpaid ones show a warning and are refused), and switching away takes the credit back out. Invoices raised before this rule: `node scripts/backfill-adhoc-contract-attach.mjs` (lists by default, `--apply` writes; skips customers with several live contracts).
 
 ### Proposal → Contract Flow (strictly enforced)
 
@@ -261,6 +275,7 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 - `POST /api/proposals/[id]/send-invoice` always creates a **fresh** link — never reuses `proposal.razorpay_payment_link_url`
 - Deposit paid → webhook auto-accepts proposal (`status → accepted`)
 - Pro-rata paid → `payment_status → paid`
+- The pro-rata invoice goes out **in parallel** with the deposit: it needs the deposit to have been *requested* (single request sent, or at least one live part), not received. Receipt is still required for contract activation.
 
 **Contract activation gate (hard — do not bypass):**
 1. `proposal_id` is set
@@ -268,6 +283,29 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 3. If `security_deposit_months > 0`: `deposit_payment_status = 'paid'`
 - **Renewal exception**: contracts with `deposit_carried_from` bypass the gate
 - Admin bypass: include `payment_override_reason` in PATCH body (logged to audit)
+- **Part-paid deposit (>50%)**: when the deposit is being collected in parts and **more than 50% of the adjusted required amount has actually been received** (`src/lib/deposit-activation.ts`), the deposit leg of the gate is satisfied with a warning: the PATCH must carry `acknowledge_partial_deposit: true` (else 409 `PARTIAL_DEPOSIT_ACK_REQUIRED`), the contract claims the proposal's deposit and snapshots it as `pending` with a note, and when the last part is paid `syncContractDepositFromParts` flips the contract's deposit to paid. The pro-rata / first invoice is still required, and the monthly GST invoice (`send-invoice`) follows the same >50% rule. Any role that can activate may do this. Exactly 50% is not enough. Both the proposal and the contract show a "deposit pending" warning until the balance is in.
+
+### Booking PI (optional proforma invoice for a walk-in/guest booking)
+
+Staff can send a PI with the booking's Razorpay link (Collect Payment → **Send PI + link**; `GET /api/bookings/[id]/pi` previews the PDF and sends nothing, `POST` emails it). It is optional: paying at the counter is unchanged.
+
+- Sending creates a billing statement owned by the booking (`created_via = booking_pi`, due **PI date + 7 days**) so it lists in Receivables as **Booking PI**. It shares the booking's link and is kept in step by `syncBookingPiStatement` (`src/lib/booking-pi-statement-server.ts`): payments (link, counter, accounts' verification), add-ons and rate edits, waive/complimentary all re-sync it; cancel or no-show voids it and cancels the link (a part-paid one is left, with a note, for an offline refund).
+- **One Tally handoff: the booking's own task** (after checkout, once paid). The statement never reaches the Tally Inbox (`handleStatementPaid` skips it). Recording a payment on it, sending it, or raising its GST invoice from Receivables is refused with a pointer to the booking.
+- Only **admin and accounts** can mark a reported manual payment paid (`PATCH /api/booking-payments/[id]`). Payments by link are marked paid by the Razorpay webhook with no action.
+- **Follow-ups:** the daily payment-reminder cron chases these in its second pass (`booking_pi` in `src/lib/receivable-fetch.ts`), on the **soft ladder** (friendly → gentle → firm, accounts CC'd, never management), from the due date. It sends only if the customer received the PI, a balance remains and the booking still owes it. The reminder reuses the booking's link and never makes a replacement (that would take a payment the booking never sees); a dead link goes without a Pay button. **Remind** on the Receivables row uses `/api/accounting/receivables/booking_pi/[id]/reminder`.
+
+### Staged security deposit (parts)
+
+Sales can take a proposal's deposit in parts (e.g. ₹20k of ₹60k now). **Activation is unchanged — the deposit must still be paid in full.** Ships dark: `app_settings.deposit_instalments_enabled` (`false` by default); `deposit_min_first_part_percent` (default 25) is the smallest first part without a manager.
+
+- Each ask is a row in `proposal_deposit_instalments` (`00649`) with its **own fresh Razorpay link** for exactly that amount, **several asks can be open at once** (`00665` dropped the one-open index; what may still be asked is the part neither paid nor already requested). Each open part is its own Receivables line for that part's amount (the whole deposit shows in the line's label), has its own **Report paid** (on the proposal and in Receivables), and accounts record a reported part against the matching open part when verifying. Admin / manager / sales rep may ask (`POST /api/proposals/[id]/deposit-instalments`); a first part below the minimum needs an admin/manager override with a reason; recording a bank payment against a part stays admin/accounts only.
+- The proposal's completed-deposit fields (`deposit_payment_status = paid`, amount, reference, medium, received-at) are written **only when parts paid ≥ required** (`_rollup_proposal_deposit`). Anything that needs *cash received* must read the instalments; anything that means "complete" keeps reading the proposal. The first paid part accepts the proposal and locks its terms.
+- All money changes go through RPCs (service role only): `request_deposit_instalment`, `record_deposit_instalment_paid`, `record_deposit_payment_for_link` (webhook; also records a late payment on the original full-deposit link once parts exist), `cancel_deposit_instalment`.
+- Once any part is asked for or paid, the single-deposit paths stand down (`hasLiveInstalments`): `deposit-link`, `deposit-payment`, `deposit-payment-link`, `accept` and `revise` refuse or skip.
+- Rules and figures: `src/lib/deposit-instalments.ts` (Required / Requested / Paid / Awaiting / Not yet asked / Balance).
+- **Customer messages** (`src/lib/deposit-instalment-email*.ts`): creating a part messages nobody; staff send it with **Email customer** (`POST …/[instalmentId]/send`, `{preview:true}` sends nothing; `{mode:"download"}` returns the details for a **Download PDF** to share by hand and logs it as a manual send). Every email shows total required, paid so far, this part, balance after. A "payment received" email goes out automatically when a part is paid (manual record and webhook), once per part. **Email only** — WhatsApp/SMS keep the single-amount wording until an MSG91 template with breakup fields is approved.
+- **Accounts**: the Tally Inbox lists one row and takes one Tally receipt **per part received** (`kind: "part"` on `/api/accounting/inbox/deposits`, "Part N of M · received now · received to date · balance · Final"); a proposal with paid parts is excluded from the single-deposit rows so nothing is booked twice. Settlement recon stamps each part by its own payment id. The daily collections digest reports each part on the day it arrives. Receivables show received vs. total with the open part's link; the automatic reminder ladder skips these proposals (it would chase the whole amount). Not yet done: payment-report tie to a specific part.
+- **Walk-away refund** (`00650`, `src/lib/deposit-refund.ts`): a customer who paid some parts and walks away is refunded **in full** (no retain). Manager / sales rep / admin request it from the proposal; **admin approves every refund** whatever the amount; accounts/admin pay it from Acc Payables (`/api/deposit-refunds/[id]/{approve,reject,pay}`); paying closes the proposal as `rejected` with "Customer withdrew — deposit refunded (UTR …)". Only while the deposit is still partly paid with no open ask and no contract — a complete deposit or a contract uses the contract exit flow. A live refund blocks new part requests.
 
 ### Contract Lifecycle
 
@@ -504,6 +542,21 @@ Staging is exactly what makes clicking through freely safe. Use it.
 - [ ] Migration rollback noted (if applicable)
 - [ ] Tested on staging (for anything touching auth, payments, or data) — see "Staging" above for how
 - [ ] Reviewed by at least one other person (once team is in place)
+
+---
+
+## Warnings Are Never Dead Ends
+
+Added 2026-11-12. Any warning, flag, chip or blocked-action message shown to a user must also give the **path to fix it**, so the user never has to work out what to do next and the warning clears once they have done it.
+
+- **Link or button right at the warning** to the exact place the fix is made (the page, dialog or action), named in plain words: "Record the delivery challan", not just "Delivery challan missing".
+- **Say what is wrong and what clears it** (which field, which document, which step first). If a prerequisite comes first ("mark the PO as ordered, then record the delivery"), say so in the same line.
+- **The warning disappears by itself once fixed** — it is derived from the data, never a dismissable note someone has to remember to clear. A flag stays visible until the underlying thing is done (e.g. an asset invoice missing stays flagged until it is uploaded).
+- **Do not show a warning that cannot be acted on.** If the user has no way to fix it on that screen or anywhere else, either build the path or do not show it; if a gap remains, say so in the PR so it is picked up, rather than shipping a dead end.
+- **Warn, don't block, unless told otherwise.** Prefer a visible warning with a way forward over a hard stop; blocks are only for the strictly enforced rules written elsewhere in this file.
+- A list row or chip that only summarises (e.g. a register chip) may leave the fix to the detail page, but that page must carry the full link/button.
+
+Applied first to the AMC warnings (item not received, delivery challan, asset details, line not an asset) in `src/lib/procurement/amc-received.ts` and the AMC contract page.
 
 ---
 

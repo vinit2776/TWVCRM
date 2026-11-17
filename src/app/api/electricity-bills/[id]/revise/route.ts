@@ -187,6 +187,33 @@ export async function POST(
     );
   }
 
+  // ── Carry the landlord payable over to the new draft ──────────────────────
+  // The payable belongs to the live bill. Without this, a revised draft shows no vendor bill and
+  // the payable stays attached to the revised (dead) row. Found through either side of the link,
+  // since some bills only have the vendor-bill side set.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: linkedVb } = await (supabase as any)
+    .from("vendor_bills")
+    .select("id")
+    .eq("electricity_bill_id", id)
+    .maybeSingle();
+  const vendorBillId: string | null = bill.vendor_bill_id ?? linkedVb?.id ?? null;
+  if (vendorBillId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: vbErr } = await (supabase as any)
+      .from("vendor_bills")
+      .update({ electricity_bill_id: newBill.id })
+      .eq("id", vendorBillId);
+    if (vbErr) {
+      console.error("[eb] revise: vendor bill relink failed:", vbErr.message);
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from("electricity_bills").update({ vendor_bill_id: vendorBillId }).eq("id", newBill.id);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from("electricity_bills").update({ vendor_bill_id: null }).eq("id", id);
+    }
+  }
+
   // ── Copy lines to new bill ────────────────────────────────────────────────
   if (bill.electricity_bill_lines.length > 0) {
     const linesToInsert = bill.electricity_bill_lines.map((l) => ({

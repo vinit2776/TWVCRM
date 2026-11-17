@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { checkConvertToService, cycle1Period, suggestConversion, type ConvertInput } from "../procurement/convert-to-service";
+import { checkConvertToService, cycle1Period, suggestAssignments, suggestConversion, type ConvertAssignment, type ConvertInput } from "../procurement/convert-to-service";
+
+const asg = (cycle: number, billId: string, from: string, to: string, over: Partial<ConvertAssignment["bill"]> = {}): ConvertAssignment => ({
+  billId, cycle, from, to,
+  bill: { po_id: "po1", service_report_id: null, approval_status: "approved", total_amount: 8032.5, ...over },
+});
 
 const base: ConvertInput = {
   role: "admin",
@@ -8,10 +13,8 @@ const base: ConvertInput = {
   billingCycle: "half_yearly",
   cycleCount: 2,
   serviceStart: "2026-03-30",
-  bill: { po_id: "po1", service_report_id: null, approval_status: "approved", total_amount: 8032.5 },
+  assignments: [asg(1, "b1", "2026-03-30", "2026-09-29")],
   poId: "po1",
-  cycle1From: "2026-03-30",
-  cycle1To: "2026-09-29",
 };
 const w = (p: Partial<ConvertInput>): ConvertInput => ({ ...base, ...p });
 
@@ -40,15 +43,49 @@ describe("checkConvertToService", () => {
     expect(checkConvertToService(w({ cycleCount: 0 }))).toMatchObject({ ok: false });
     expect(checkConvertToService(w({ billingCycle: "fortnightly" }))).toMatchObject({ ok: false });
   });
-  it("converts fine without an invoice and then needs no period", () => {
-    expect(checkConvertToService(w({ bill: null, cycle1From: null, cycle1To: null }))).toEqual({ ok: true, unitCost: 8032.5 });
+  it("converts fine without any invoice tied", () => {
+    expect(checkConvertToService(w({ assignments: [] }))).toEqual({ ok: true, unitCost: 8032.5 });
   });
-  it("checks the chosen invoice", () => {
-    expect(checkConvertToService(w({ bill: { ...base.bill!, approval_status: "rejected" } }))).toMatchObject({ ok: false });
-    expect(checkConvertToService(w({ bill: { ...base.bill!, service_report_id: "r" } }))).toMatchObject({ ok: false });
-    expect(checkConvertToService(w({ bill: { ...base.bill!, po_id: "other" } }))).toMatchObject({ ok: false });
-    expect(checkConvertToService(w({ bill: { ...base.bill!, total_amount: 9478.36 } }))).toMatchObject({ ok: false });
-    expect(checkConvertToService(w({ cycle1To: "2026-03-01" }))).toMatchObject({ ok: false });
+  it("checks every chosen invoice", () => {
+    const bad = (over: Partial<ConvertAssignment["bill"]>) => w({ assignments: [asg(1, "b1", "2026-03-30", "2026-09-29", over)] });
+    expect(checkConvertToService(bad({ approval_status: "rejected" }))).toMatchObject({ ok: false });
+    expect(checkConvertToService(bad({ service_report_id: "r" }))).toMatchObject({ ok: false });
+    expect(checkConvertToService(bad({ po_id: "other" }))).toMatchObject({ ok: false });
+    expect(checkConvertToService(bad({ total_amount: 9478.36 }))).toMatchObject({ ok: false });
+    expect(checkConvertToService(w({ assignments: [asg(1, "b1", "2026-09-29", "2026-03-30")] }))).toMatchObject({ ok: false });
+  });
+  it("ties both invoices of a half-yearly contract to cycles 1 and 2", () => {
+    expect(checkConvertToService(w({
+      assignments: [asg(1, "b1", "2026-03-30", "2026-09-29"), asg(2, "b2", "2026-09-30", "2027-03-29")],
+    }))).toEqual({ ok: true, unitCost: 8032.5 });
+  });
+  it("refuses a gap, so the engine never offers a cycle that is already billed", () => {
+    expect(checkConvertToService(w({ assignments: [asg(2, "b2", "2026-09-30", "2027-03-29")] })))
+      .toMatchObject({ ok: false, error: expect.stringMatching(/no gap/) });
+  });
+  it("refuses two invoices on one cycle and the same invoice twice", () => {
+    expect(checkConvertToService(w({ assignments: [asg(1, "b1", "2026-03-30", "2026-09-29"), asg(1, "b2", "2026-03-30", "2026-09-29")] })))
+      .toMatchObject({ ok: false, error: expect.stringMatching(/copy/) });
+    expect(checkConvertToService(w({ assignments: [asg(1, "b1", "2026-03-30", "2026-09-29"), asg(2, "b1", "2026-09-30", "2027-03-29")] })))
+      .toMatchObject({ ok: false, error: expect.stringMatching(/same invoice/) });
+  });
+  it("refuses more invoices than cycles", () => {
+    expect(checkConvertToService(w({ cycleCount: 1, billingCycle: "yearly", po: { ...base.po, total_ordered_amount: 8032.5 },
+      assignments: [asg(1, "b1", "2026-03-30", "2027-03-29"), asg(2, "b2", "2026-03-30", "2027-03-29")] }))).toMatchObject({ ok: false });
+  });
+});
+
+describe("suggestAssignments", () => {
+  const sched = [{ n: 1, from: "2026-03-30", to: "2026-09-29" }, { n: 2, from: "2026-09-30", to: "2027-03-29" }];
+  it("gives the older invoice cycle 1", () => {
+    expect(suggestAssignments([{ id: "late", sortKey: "2026-10-01|B" }, { id: "early", sortKey: "2026-04-02|A" }], sched))
+      .toEqual([
+        { billId: "early", cycle: 1, from: "2026-03-30", to: "2026-09-29" },
+        { billId: "late", cycle: 2, from: "2026-09-30", to: "2027-03-29" },
+      ]);
+  });
+  it("leaves extra invoices unassigned rather than inventing a cycle", () => {
+    expect(suggestAssignments([{ id: "a", sortKey: "1" }, { id: "b", sortKey: "2" }, { id: "c", sortKey: "3" }], sched)).toHaveLength(2);
   });
 });
 

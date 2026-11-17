@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { withCronHealth } from "@/lib/cron-ping";
+import { notifyRoles } from "@/lib/notify-roles";
 import { AUTO_RESOLVE_EFFECTIVE_FROM_KEY, reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 
 /**
@@ -20,6 +21,25 @@ async function handler(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const admin = createAdminClient();
+
+  // Possible leads (unknown numbers held for one tap) that have waited 4+ hours: nudge once each,
+  // so a real lead never sits unseen in the tray. In-app and push only; nobody outside the team is contacted.
+  const stale = new Date(Date.now() - 4 * 3_600_000).toISOString();
+  const { data: waiting } = await admin
+    .from("whatsapp_possible_leads")
+    .select("id")
+    .eq("status", "held")
+    .is("alerted_at", null)
+    .lte("first_at", stale);
+  if (waiting && waiting.length > 0) {
+    await notifyRoles(admin, ["admin", "manager", "sales_rep"], {
+      title: `${waiting.length} possible lead${waiting.length === 1 ? "" : "s"} waiting on WhatsApp`,
+      body: "Unknown numbers we couldn't judge. Open the Enquiry Log and tap It's a lead or Not a lead.",
+      url: `${process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app"}/leads/enquiry-log`,
+      tag: "wa-possible-leads",
+    });
+    await admin.from("whatsapp_possible_leads").update({ alerted_at: new Date().toISOString() }).in("id", waiting.map((w) => w.id as string));
+  }
 
   const { data: setting } = await admin.from("app_settings").select("value").eq("key", AUTO_RESOLVE_EFFECTIVE_FROM_KEY).maybeSingle();
   if (!setting?.value) return NextResponse.json({ message: "No auto-resolve cut-off set; nothing to do", resolved: 0 });

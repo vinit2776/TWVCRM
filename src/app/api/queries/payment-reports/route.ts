@@ -12,8 +12,8 @@ import { parseQueryRequest, storeAttachments } from "@/lib/queries/attachments";
 import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 import { logAudit } from "@/lib/audit";
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
-import { formatDate } from "@/lib/utils";
-import { reportableBalance, REPORT_TOLERANCE } from "@/lib/queries/payment-report-balance";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import { reportableBalance, statementOutstanding, REPORT_TOLERANCE } from "@/lib/queries/payment-report-balance";
 import {
   PAYMENT_REPORT_AUDIENCE_ROLES,
   PAYMENT_REPORT_ENTITY_TYPES,
@@ -21,6 +21,7 @@ import {
   describeReport,
   targetKindForEntity,
   validatePaymentReport,
+  canWithdrawPaymentReport,
   type PaymentReportEntityType,
 } from "@/lib/queries/payment-reports";
 
@@ -110,7 +111,26 @@ export async function GET(req: NextRequest) {
       entityType as Parameters<typeof reportableBalance>[1],
       entityId,
     );
-    return NextResponse.json({ items: mine, balance });
+    // Computed here, with the same rule the withdraw route enforces, so the
+    // dialog only offers the button to someone it will work for.
+    const items = mine.map((r) => {
+      const row = r as unknown as {
+        status: Parameters<typeof canWithdrawPaymentReport>[0]["status"];
+        target_kind: Parameters<typeof canWithdrawPaymentReport>[0]["targetKind"];
+        created_by: { id: string } | null;
+      };
+      return {
+        ...r,
+        can_withdraw: canWithdrawPaymentReport({
+          status: row.status,
+          targetKind: row.target_kind,
+          role: auth.dbUser.role,
+          userId: auth.dbUser.id,
+          reportedBy: row.created_by?.id,
+        }),
+      };
+    });
+    return NextResponse.json({ items, balance });
   }
 
   /**
@@ -237,6 +257,30 @@ export async function POST(req: NextRequest) {
       );
     }
     claimedStatementNumber = (stmt.statement_number as string | null) ?? null;
+
+    // Nothing to report on an invoice accounts has already been paid in full:
+    // recording a payment is the verification, so a report here could only ever
+    // sit open next to the payment that settled it. The contract-level balance
+    // check below can't see this, as it looks at the contract as a whole.
+    const owed = await statementOutstanding(admin, claimedStatementId).catch(() => null);
+    if (owed !== null && owed < REPORT_TOLERANCE) {
+      const { data: last } = await admin
+        .from("billing_payments")
+        .select("amount, tds_amount, payment_date, payment_mode, payment_reference")
+        .eq("billing_statement_id", claimedStatementId)
+        .order("payment_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const ref = last?.payment_reference ? `, ref ${last.payment_reference}` : "";
+      return NextResponse.json(
+        {
+          error: last
+            ? `That invoice is already paid in full: accounts recorded ${formatCurrency(Number(last.amount))} on ${formatDate(last.payment_date as string)}${ref}. There is nothing left to report.`
+            : "That invoice is already paid in full, so there is nothing left to report.",
+        },
+        { status: 409 },
+      );
+    }
   }
 
   // Refuse to let the same money be reported twice. The dialog hides the

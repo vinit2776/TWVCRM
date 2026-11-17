@@ -3,6 +3,9 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { queryEntityDef, type EntityRow } from "@/lib/queries/registry";
 import { fanOutQueryEvent, threadParticipantIds, entityLabel, loadEntity } from "@/lib/queries/server";
 import { logAudit } from "@/lib/audit";
+import { depositPosition, requiredDeposit } from "@/lib/deposit-instalments";
+import { REPORT_TOLERANCE } from "@/lib/queries/payment-report-balance";
+import { settleBookingPayment } from "@/lib/booking-payment-server";
 import {
   canReviewPaymentReport,
   isPaymentReportOutcome,
@@ -32,10 +35,12 @@ interface ReportRow {
   id: string;
   query_id: string;
   status: "reported" | "verified" | "rejected";
+  billing_payment_id: string | null;
   amount: number;
   paid_on: string;
   payment_mode: string;
-  target_kind: "invoice" | "deposit";
+  target_kind: "invoice" | "deposit" | "booking";
+  booking_payment_id: string | null;
   created_by: string;
   query: {
     id: string;
@@ -102,7 +107,7 @@ export async function PATCH(
   const { data: reportData, error: fetchErr } = await admin
     .from("query_payment_reports")
     .select(`
-      id, query_id, status, amount, paid_on, payment_mode, target_kind, created_by,
+      id, query_id, status, billing_payment_id, amount, paid_on, payment_mode, target_kind, booking_payment_id, created_by,
       query:queries!query_payment_reports_query_id_fkey(
         id, entity_type, entity_id, status, audience, audience_roles, audience_user_ids
       )
@@ -114,6 +119,19 @@ export async function PATCH(
   if (!reportData) return NextResponse.json({ error: "Report not found" }, { status: 404 });
 
   const report = reportData as unknown as ReportRow;
+
+  // Recording the payment already closes the report it satisfies, so the card's
+  // follow-up "verify" lands on a report that is already verified against this
+  // very payment. That is the outcome asked for, not a conflict.
+  if (
+    outcome === "verified" &&
+    report.status === "verified" &&
+    typeof body.billing_payment_id === "string" &&
+    report.billing_payment_id === body.billing_payment_id.trim()
+  ) {
+    return NextResponse.json({ status: "verified", settled: true, already: true });
+  }
+
   if (report.status !== "reported") {
     return NextResponse.json(
       { error: `This report has already been settled as "${report.status}"` },
@@ -124,6 +142,26 @@ export async function PATCH(
 
   const def = queryEntityDef(report.query.entity_type);
   if (!def) return NextResponse.json({ error: "Report not found" }, { status: 404 });
+
+  // A booking report points at a pending booking_payments row from the day it
+  // is raised. Verifying or rejecting it settles that row (over-credit guard,
+  // booking → paid, GST task) through the same step the booking page uses, so
+  // the two entry points can't disagree. 'not_found' touches nothing.
+  if (report.target_kind === "booking" && outcome !== "not_found") {
+    if (!report.booking_payment_id) {
+      return NextResponse.json({ error: "This report has no payment attached" }, { status: 400 });
+    }
+    const settled = await settleBookingPayment(admin, {
+      paymentId: report.booking_payment_id,
+      outcome,
+      notes: note || null,
+      reviewer: dbUser as { id: string; role: string; full_name: string },
+      settleReport: false,
+    });
+    if (!settled.ok) {
+      return NextResponse.json({ error: settled.error }, { status: settled.status });
+    }
+  }
 
   // ── Verified: the money must actually have been recorded ─────────────────
   //
@@ -137,14 +175,43 @@ export async function PATCH(
   if (outcome === "verified" && report.target_kind === "deposit" && report.query.entity_type === "proposal_deposit") {
     const { data: proposal } = await admin
       .from("proposals")
-      .select("id, deposit_payment_status, deposit_payment_amount")
+      .select("id, deposit_payment_status, deposit_payment_amount, security_deposit_amount, deposit_exception_amount, deposit_credit_amount")
       .eq("id", report.query.entity_id)
       .maybeSingle();
 
     if (!proposal) {
       return NextResponse.json({ error: "That proposal no longer exists" }, { status: 400 });
     }
-    if (proposal.deposit_payment_status !== "paid") {
+    // Collected in parts, the proposal only reads 'paid' after the last part, so
+    // the proof is the parts received: they must cover what this report claims
+    // on top of what earlier verified reports already account for.
+    const { data: partRows } = await admin
+      .from("proposal_deposit_instalments")
+      .select("amount, status, paid_amount")
+      .eq("proposal_id", proposal.id);
+    const hasParts = (partRows ?? []).some((r) => r.status !== "cancelled" || Number(r.paid_amount ?? 0) > 0);
+    if (hasParts && proposal.deposit_payment_status !== "paid") {
+      const received = depositPosition(requiredDeposit(proposal), partRows ?? []).paid;
+      const { data: verified } = await admin
+        .from("query_payment_reports")
+        .select("amount, query:queries!query_payment_reports_query_id_fkey(entity_type, entity_id)")
+        .eq("status", "verified")
+        .eq("target_kind", "deposit")
+        .neq("id", id);
+      const alreadyAccounted = (verified ?? [])
+        .filter((r) => {
+          const raw = (r as unknown as { query: { entity_type: string; entity_id: string } | { entity_type: string; entity_id: string }[] | null }).query;
+          const q = Array.isArray(raw) ? raw[0] ?? null : raw;
+          return q?.entity_type === "proposal_deposit" && q?.entity_id === proposal.id;
+        })
+        .reduce((sum, r) => sum + Number((r as unknown as { amount: number }).amount || 0), 0);
+      if (received + REPORT_TOLERANCE < alreadyAccounted + Number(report.amount)) {
+        return NextResponse.json(
+          { error: "Record this part first — the deposit parts received so far don't cover what was reported, so there is nothing to verify against." },
+          { status: 400 },
+        );
+      }
+    } else if (proposal.deposit_payment_status !== "paid") {
       return NextResponse.json(
         {
           error:
@@ -273,7 +340,9 @@ export async function PATCH(
     outcome === "verified"
       ? report.target_kind === "deposit"
         ? "Found in the bank and recorded against the deposit."
-        : "Found in the bank and recorded against the invoice."
+        : report.target_kind === "booking"
+          ? "Found in the bank and verified against the booking."
+          : "Found in the bank and recorded against the invoice."
       : "Not in the bank yet — will keep looking.";
 
   const { error: msgErr } = await admin.from("query_messages").insert({

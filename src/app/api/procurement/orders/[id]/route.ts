@@ -5,12 +5,17 @@ import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
 import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
-import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
+import { attachPurchasePos } from "@/lib/procurement/amc-asset-receipts";
+import type { AssetForAmc } from "@/lib/procurement/amc-received";
+import { TERMINATE_ROLES, terminateBlocker, terminationPatch } from "@/lib/procurement/amc-terminate";
+import { planAdvanceCancel } from "@/lib/procurement/advance-cancel";
+import { withdrawOpenBillsOfTerminatedAmc } from "@/lib/procurement/terminate-open-bills-server";
+import { loadAdvanceUsage } from "@/lib/procurement/po-advance";
 import { amcStatusFor, poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
 
 // Admin-only corrections, one step back each. See src/lib/procurement/admin-rollback.ts.
 const ROLLBACK_ACTIONS = [
-  "unorder", "unmark_received", "restore_cancelled", "restore_partial_cancel", "reopen_advance", "reverse_advance", "reinstate_amc",
+  "unorder", "unmark_received", "restore_cancelled", "restore_partial_cancel", "reopen_advance", "reverse_advance", "cancel_advance", "reinstate_amc", "withdraw_open_bills",
 ] as const;
 
 // cancel_po_reversing_receipts / restore_cancelled_po (00611) raise these as the exception message.
@@ -55,7 +60,9 @@ const patchPoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("restore_partial_cancel"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("reopen_advance"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("reverse_advance"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("cancel_advance"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("reinstate_amc"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("withdraw_open_bills"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("approve_advance") }),
   z.object({ action: z.literal("reject_advance") }),
   z.object({
@@ -88,7 +95,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*, linked_asset:facility_assets(id, name, asset_code), procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), companies(id, name, brand_name, gstin, address, city, state, pincode, phone, email), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
+      `*, purchase_order_items(*, linked_asset:facility_assets(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id), procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), companies(id, name, brand_name, gstin, address, city, state, pincode, phone, email), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code, serial_number, location_id, lifecycle_stage, procurement_po_id), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -103,7 +110,14 @@ export async function GET(
     .eq("entity_id", id)
     .order("created_at", { ascending: true });
 
-  return NextResponse.json({ data, audit_events: auditEvents ?? [] });
+  // Warning data only: where each linked asset was bought and whether its goods arrived.
+  const d = data as { linked_asset?: AssetForAmc | null; purchase_order_items?: Array<{ linked_asset?: AssetForAmc | null }> };
+  const linkedAssets = [d.linked_asset, ...(d.purchase_order_items ?? []).map((i) => i.linked_asset)].filter(Boolean) as AssetForAmc[];
+  await attachPurchasePos(supabase, linkedAssets);
+
+  // What is left of the advance, for the PO page. Only worked out once the advance has been paid.
+  const advance_usage = data.advance_status === "processed" ? await loadAdvanceUsage(createAdminClient(), id) : null;
+  return NextResponse.json({ data: { ...data, advance_usage }, audit_events: auditEvents ?? [] });
 }
 
 export async function PATCH(
@@ -138,6 +152,7 @@ export async function PATCH(
 
   const { action } = parsed.data;
   let updatePayload: Record<string, unknown> = {};
+  let withdrawResult: Awaited<ReturnType<typeof withdrawOpenBillsOfTerminatedAmc>> | null = null;
   const extraAuditChanges: Record<string, { old: unknown; new: unknown }> = {};
   const isRollback = (ROLLBACK_ACTIONS as readonly string[]).includes(action);
   if (isRollback && !canRollback(dbUser.role)) {
@@ -500,16 +515,12 @@ export async function PATCH(
       if (po.advance_status !== "processed") {
         return NextResponse.json({ error: "This advance has not been paid" }, { status: 422 });
       }
-      // New bills on this PO were pre-credited with the advance (amount_paid),
-      // so undoing the advance would leave them showing money that was never paid.
-      const { count: liveBills } = await supabase
-        .from("vendor_bills")
-        .select("id", { count: "exact", head: true })
-        .eq("po_id", id)
-        .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
-      if ((liveBills ?? 0) > 0) {
+      // An advance that has been applied to a bill (or credited to one before payment lines existed)
+      // is money that bill now shows as paid; undoing the advance would leave that standing.
+      const usage = await loadAdvanceUsage(createAdminClient(), id);
+      if (usage.applied + usage.legacyCredit > 0.005) {
         return NextResponse.json(
-          { error: "Bills on this PO were credited with the advance. Withdraw or reject them first." },
+          { error: "This advance has been applied to bills. Reverse those payments on the bills first." },
           { status: 422 }
         );
       }
@@ -524,8 +535,68 @@ export async function PATCH(
       break;
     }
 
+    case "cancel_advance": {
+      // For an advance that was never actually paid (e.g. marked processed with no UTR) on a contract that is being
+      // abandoned. Unlike reverse_advance it does not wait for the PO's bills to be withdrawn: bills that are out of play
+      // have their stale credit cleared; a live bill carrying credit still blocks, so a real shortfall is never hidden.
+      if (!["processed", "pending"].includes(po.advance_status ?? "")) {
+        return NextResponse.json({ error: "There is no advance to cancel on this PO" }, { status: 422 });
+      }
+      const { data: poBills } = await supabase
+        .from("vendor_bills")
+        .select("id, bill_number, approval_status, total_amount, gst_amount, amount_paid, vendor_bill_payments(amount, reversed_at)")
+        .eq("po_id", id);
+      const plan = planAdvanceCancel((poBills ?? []).map((b) => ({
+        id: b.id as string,
+        bill_number: b.bill_number as string,
+        approval_status: b.approval_status as string,
+        total_amount: Number(b.total_amount),
+        gst_amount: b.gst_amount != null ? Number(b.gst_amount) : null,
+        amount_paid: Number(b.amount_paid ?? 0),
+        payments: ((b.vendor_bill_payments ?? []) as Array<{ amount: number; reversed_at: string | null }>)
+          .filter((p) => !p.reversed_at).reduce((sum, p) => sum + Number(p.amount), 0),
+      })));
+      if (plan.blockers.length > 0) {
+        return NextResponse.json({ error: plan.blockers.join(" ") }, { status: 422 });
+      }
+      const admin = createAdminClient();
+      for (const c of plan.clears) {
+        const { error: clearError } = await admin
+          .from("vendor_bills")
+          .update({ amount_paid: c.amount_paid.to, payment_status: c.payment_status })
+          .eq("id", c.id);
+        if (clearError) return NextResponse.json({ error: `Could not clear the advance credit on ${c.bill_number}: ${clearError.message}` }, { status: 500 });
+      }
+      if (plan.clears.length > 0) {
+        extraAuditChanges.advance_credit_cleared = { old: null, new: plan.clears.map((c) => `${c.bill_number}: ${c.amount_paid.from} → ${c.amount_paid.to} (${c.payment_status})`).join("; ") };
+      }
+      updatePayload = {
+        advance_status: "not_required",
+        advance_approval_status: "rejected",
+        advance_processed_by: null,
+        advance_processed_at: null,
+        advance_payment_date: null,
+        advance_payment_mode: null,
+        advance_payment_reference: null,
+      };
+      break;
+    }
+
+    case "withdraw_open_bills": {
+      // A cancelled order or terminated AMC will never be paid, so its bills must not sit in the payables queue
+      // or hold their invoice numbers. Bills with a real payment are left (reverse the payment first).
+      if (po.status !== "cancelled" && !po.amc_terminated_at) {
+        return NextResponse.json({ error: "Only a cancelled order or a terminated AMC can have its open bills withdrawn" }, { status: 422 });
+      }
+      const result = await withdrawOpenBillsOfTerminatedAmc(createAdminClient(), id, dbUser.id, parsed.data.reason, true);
+      extraAuditChanges.bills_withdrawn = { old: null, new: result.withdrawn.join(", ") || "none" };
+      withdrawResult = result;
+      updatePayload = { updated_at: new Date().toISOString() };
+      break;
+    }
+
     case "reinstate_amc": {
-      if (po.po_type !== "service" || !po.amc_terminated_at) {
+      if (!po.amc_terminated_at) {
         return NextResponse.json({ error: "This contract has not been terminated" }, { status: 422 });
       }
       if (["cancelled", "partially_cancelled"].includes(po.status)) {
@@ -641,36 +712,20 @@ export async function PATCH(
       // Admin/manager only — terminating an AMC mid-contract is a destructive,
       // irreversible action. Once terminated, no new events can be logged and
       // the only way back is to create a new PO.
-      if (!["admin", "manager"].includes(dbUser.role)) {
+      if (!(TERMINATE_ROLES as readonly string[]).includes(dbUser.role)) {
         return NextResponse.json(
           { error: "Only admin and manager can terminate an AMC" },
           { status: 403 }
         );
       }
-      if (po.po_type !== "service") {
-        return NextResponse.json(
-          { error: "Termination is only available on service / AMC POs" },
-          { status: 422 }
-        );
+      let requestIsAmc = false;
+      if (po.pr_id) {
+        const { data: pr } = await supabase.from("purchase_requests").select("expenditure_type").eq("id", po.pr_id).maybeSingle();
+        requestIsAmc = pr?.expenditure_type === "amc";
       }
-      if (po.amc_terminated_at) {
-        return NextResponse.json(
-          { error: "This AMC has already been terminated" },
-          { status: 422 }
-        );
-      }
-      if (!["active", "expiring"].includes(po.amc_status ?? "")) {
-        return NextResponse.json(
-          { error: `Can only terminate an active or expiring AMC (current state: ${po.amc_status ?? "unknown"})` },
-          { status: 422 }
-        );
-      }
-      updatePayload = {
-        amc_terminated_at: new Date().toISOString(),
-        amc_terminated_by: dbUser.id,
-        amc_termination_reason: parsed.data.termination_reason.trim(),
-        amc_status: "terminated",
-      };
+      const blocker = terminateBlocker(po, requestIsAmc);
+      if (blocker) return NextResponse.json({ error: blocker }, { status: 422 });
+      updatePayload = terminationPatch(dbUser.id, parsed.data.termination_reason);
       break;
     }
   }
@@ -696,6 +751,8 @@ export async function PATCH(
       restore_cancelled: "cancel_restored",
       reopen_advance: "advance_reopened",
       reverse_advance: "advance_reversed",
+      cancel_advance: "advance_cancelled",
+      withdraw_open_bills: "open_bills_withdrawn",
       reinstate_amc: "amc_reinstated",
     } as Record<string, string>)[action] ?? action };
     extraAuditChanges.rollback_reason = { old: null, new: parsed.data.reason };
@@ -711,6 +768,17 @@ export async function PATCH(
       ...extraAuditChanges,
     },
   });
+
+  // A terminated AMC can never be paid, so its unapproved bills go with it (and stop blocking the same
+  // invoice number on the replacement AMC). Approved or paid ones are listed for a person.
+  if (action === "terminate_amc" && "termination_reason" in parsed.data) {
+    const bills = await withdrawOpenBillsOfTerminatedAmc(createAdminClient(), id, dbUser.id, parsed.data.termination_reason);
+    return NextResponse.json({ data: updated, bills_withdrawn: bills.withdrawn, bills_left: bills.left });
+  }
+
+  if (withdrawResult) {
+    return NextResponse.json({ data: updated, bills_withdrawn: withdrawResult.withdrawn, bills_left: withdrawResult.left });
+  }
 
   return NextResponse.json({ data: updated });
 }

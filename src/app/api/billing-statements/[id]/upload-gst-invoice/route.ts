@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectIfBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 import { stampSignatureOnPdf } from "@/lib/uploads/stamp-pdf-signature";
@@ -6,6 +7,11 @@ import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server"
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
+import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
+import { annexureFromSections } from "@/lib/electricity-annexure";
+import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
+import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
+import { extractFromPdf } from "@/lib/tally-pdf-extract";
 import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 
 /**
@@ -29,6 +35,8 @@ import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-l
  *   - B-series upload with IRN → 422
  *   - Customer has GSTIN but B-series uploaded → 422
  *   - Customer has no GSTIN but A-series uploaded → 422
+ *   - Period printed on the PDF shares no month with the statement's → 422 without acknowledge_period_mismatch
+ *   - Invoice date outside the period's months without acknowledge_off_period_date → 422
  */
 export const dynamic = "force-dynamic";
 
@@ -42,6 +50,10 @@ interface UploadBody {
   autofill_source: "qr" | "pdf_text" | "bridge_match" | "manual";
   qr_payload: Record<string, unknown> | null;
   nic_signature_verified: boolean;
+  /** Accounts confirmed an invoice date outside the billing period is intended. */
+  acknowledge_off_period_date?: boolean;
+  /** Accounts confirmed the period printed on the PDF differs from the statement's on purpose. */
+  acknowledge_period_mismatch?: boolean;
 }
 
 function badRequest(reason: string) {
@@ -53,6 +65,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const piBlock = await rejectIfBookingPiStatement(id);
+  if (piBlock) return piBlock;
   const supabase = await createClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -104,7 +118,7 @@ export async function POST(
     .from("billing_statements")
     .select(`
       id, total_amount, payment_status, handoff_state, issuance_channel,
-      statement_number, period_start, period_end, statement_type, razorpay_payment_link_url,
+      statement_number, period_start, period_end, statement_type, line_items, razorpay_payment_link_url,
       contract:contracts!billing_statements_contract_id_fkey(
         id, billing_mode, contract_number,
         lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
@@ -140,6 +154,7 @@ export async function POST(
     period_start: string | null;
     period_end: string | null;
     statement_type: string | null;
+    line_items: unknown;
     razorpay_payment_link_url: string | null;
     contract: {
       id: string;
@@ -248,6 +263,29 @@ export async function POST(
     );
   }
 
+  if (
+    isInvoiceDateOffPeriod(meta.invoice_date, statement.period_start, statement.period_end) &&
+    meta.acknowledge_off_period_date !== true
+  ) {
+    return badRequest(
+      `Invoice date ${meta.invoice_date} doesn't fit the billing period ` +
+      `${statement.period_start} → ${statement.period_end}. Confirm the date is intended to upload anyway.`,
+    );
+  }
+
+  // The period printed on the PDF is re-read here rather than trusted from the
+  // client, so the form's warning can't be skipped by leaving the field out.
+  // Unreadable PDFs and PDFs naming no period pass: absence of evidence isn't a mismatch.
+  if (file.type === "application/pdf" && meta.acknowledge_period_mismatch !== true) {
+    const { invoice_period_months } = await extractFromPdf(Buffer.from(await file.arrayBuffer()));
+    if (invoicePeriodMismatch(invoice_period_months, statement.period_start, statement.period_end)) {
+      return badRequest(
+        `This invoice says it bills ${invoice_period_months.join(", ")}, but the statement covers ` +
+        `${statement.period_start} → ${statement.period_end}. Confirm the period is correct to upload anyway.`,
+      );
+    }
+  }
+
   const customerHasGstin = !!partyLead?.gst_number;
 
   if (customerHasGstin && meta.tally_invoice_series !== "SDIPL-REG") {
@@ -309,6 +347,17 @@ export async function POST(
       if (supportingDocs.length > 0) {
         normalized.buffer = await mergeSupportingDocuments(adminClient, Buffer.from(normalized.buffer), supportingDocs);
       }
+    }
+
+    // Electricity re-bills: the customer receives this Tally PDF, not a CRM
+    // one, so the frozen Annexure A page is appended here (once, before
+    // storing) rather than in the view/resend routes. Fails soft.
+    if (statement.statement_type === "electricity") {
+      normalized.buffer = await appendElectricityAnnexure(normalized.buffer, {
+        invoiceNumber: meta.tally_invoice_number,
+        contractNumber: statement.contract?.contract_number ?? "",
+        annexure: annexureFromSections(statement.line_items),
+      });
     }
   }
 

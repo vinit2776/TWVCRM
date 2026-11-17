@@ -10,6 +10,12 @@ export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; deta
   return { error: message, details: fieldErrors };
 }
 
+// The first location (migration 00006) has the hand-written id
+// 00000000-0000-0000-0000-000000000001, which .uuid() rejects because it
+// carries no RFC version digit. Location ids are checked for shape only, so
+// records at that location can still be saved.
+const locationId = z.guid("Invalid location ID");
+
 // ==========================================
 // Lead Validations
 // ==========================================
@@ -40,6 +46,8 @@ export const createLeadSchema = z.object({
     "google_ads",
     "direct_walkin",
     "whatsapp",
+    "website",
+    "inbound_call",
     "referral",
     "cold_call",
     "aggregator",
@@ -62,7 +70,7 @@ export const createLeadSchema = z.object({
     .optional(),
   seat_capacity: z.number().int().positive().optional(),
   preferred_location: z.string().optional(),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   pan_number: z.string().optional(),
   gst_number: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, "Invalid GST number format (e.g. 33AAAAA0000A1Z5)").optional().or(z.literal("")).transform(v => v || undefined),
   working_hours: z.string().optional(),
@@ -109,7 +117,7 @@ export const importLeadSchema = z.object({
     "proposal_sent", "negotiating", "won", "lost", "junk",
   ]).default("new"),
   source: z.enum([
-    "meta_ads", "google_ads", "direct_walkin", "whatsapp", "referral", "cold_call", "aggregator",
+    "meta_ads", "google_ads", "direct_walkin", "whatsapp", "website", "inbound_call", "referral", "cold_call", "aggregator",
   ]).default("meta_ads"),
   industry: z.string().optional(),
   no_of_employees: z.number().int().positive().optional(),
@@ -166,8 +174,13 @@ export const createActivitySchema = z.object({
   meeting_location: z.string().optional(),
   meeting_start_at: z.string().optional(),
   meeting_end_at: z.string().optional(),
+  /** Who will host the tour; reminded 2 hours before, along with whoever booked it. */
+  tour_host_id: z.string().uuid().optional(),
   follow_up_date: z.string().optional(),
   follow_up_notes: z.string().optional(),
+  /** Set by the one-tap actions: this contact deals with the follow-ups already open on the lead,
+   *  so they are marked done and the new next step (if any) is the only one left. Never stored. */
+  closes_open_follow_ups: z.boolean().optional(),
 }).refine((v) => !v.follow_up_date || !!v.follow_up_notes?.trim(), {
   // The Follow-ups due list shows this as the "next action"; without it the person
   // picking the lead up has to open every lead to find out what the follow-up is for.
@@ -206,14 +219,25 @@ export const lineItemSchema = z.object({
   unit: z.string().optional(),
   unit_price: z.number().min(0, "Price must be non-negative"),
   total: z.number(),
+  // Absent = escalates (legacy lines). false = fixed, e.g. maintenance.
+  escalates: z.boolean().optional(),
+});
+
+export const proposalAddonSchema = z.object({
+  description: z.string().trim().min(1, "Add-on description is required").max(200),
+  amount: z.number().positive("Add-on amount must be more than zero"),
 });
 
 const proposalBaseSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   title: z.string().min(1, "Title is required"),
   description: z.string().optional(),
   items: z.array(lineItemSchema).min(1, "At least one line item is required"),
+  // Monthly add-ons: outside the subtotal, the deposit and any escalation.
+  recurring_addons: z.array(proposalAddonSchema).max(20).optional(),
+  // The agreed annual escalation on the monthly fee; 10 unless negotiated.
+  escalation_percentage: z.number().min(0).max(100).optional(),
   tax_percentage: z.number().min(0).max(100),
   discount_percentage: z.number().min(0).max(100),
   valid_until: z.string().optional(),
@@ -261,6 +285,9 @@ export const createInvoiceSchema = z.object({
   /** Bill the end client directly on a case that is billed to an aggregator. */
   bill_client_override: z.boolean().optional(),
   proposal_id: z.string().uuid().optional(),
+  // Which live contract this invoice belongs on. Optional: one live contract
+  // attaches by itself, several must be chosen (see decideAttachment()).
+  contract_id: z.string().uuid().optional(),
   title: z.string().min(1, "Title is required"),
   // Security deposits are never billed through an ad-hoc invoice — they go
   // through the proposal deposit link instead (GST-exempt, tracked against
@@ -288,7 +315,7 @@ export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 export const createContractSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
   proposal_id: z.string().uuid("A linked accepted proposal is required"),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   tenure_months: z.number().int().positive("Tenure must be positive"),
   start_date: z.string().min(1, "Start date is required"),
@@ -398,7 +425,7 @@ const operatingDaySchema = z.object({
 
 export const createSpaceSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  location_id: z.string().uuid("Invalid location ID"),
+  location_id: locationId,
   capacity: z.number().int().positive("Capacity must be positive"),
   pricing_model: z.enum(["hourly", "daily"]).default("hourly"),
   // Hourly rate: required for hourly-priced spaces, can be 0 for daily-priced.
@@ -708,7 +735,7 @@ const caseFieldsSchema = z.object({
   case_source: z.enum(["aggregator", "direct"]),
   aggregator_id: z.string().uuid("Invalid aggregator ID").optional().or(z.literal("")).transform(v => v || undefined),
   aggregator_contact_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
-  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: locationId.optional().or(z.literal("")).transform(v => v || undefined),
   purpose: z.enum(["gst_registration", "mca_registration", "branch_office", "mail_handling", "business_address"]),
   is_renewal: z.boolean(),
   parent_case_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),

@@ -59,8 +59,16 @@
       "schedule": "0 4 * * 6"
     },
     {
+      "path": "/api/cron/wa-reply-alert",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/rent-gap-alert",
       "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/cron/voucher-expiry-alert",
+      "schedule": "45 4 * * *"
     },
     {
       "path": "/api/cron/journey-nudge?send=1",
@@ -73,6 +81,10 @@
     {
       "path": "/api/cron/vo-renewal",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/auto-renew",
+      "schedule": "30 0 * * *"
     },
     {
       "path": "/api/cron/enquiry-reconcile",
@@ -119,6 +131,14 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/tour-reminders",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/lead-stale-archive",
+      "schedule": "30 22 * * *"
+    },
+    {
       "path": "/api/cron/lead-reminder-whatsapp",
       "schedule": "*/5 * * * *"
     },
@@ -161,6 +181,10 @@
     {
       "path": "/api/cron/energy-ledger-capture",
       "schedule": "7 * * * *"
+    },
+    {
+      "path": "/api/cron/energy-alerts",
+      "schedule": "14 * * * *"
     },
     {
       "path": "/api/cron/wifi-ledger-capture",

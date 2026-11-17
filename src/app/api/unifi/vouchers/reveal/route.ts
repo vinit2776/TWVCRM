@@ -7,7 +7,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigForLocationId, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 import { logAudit } from "@/lib/audit";
 import type { UnifiVoucher } from "@/lib/unifi";
 
@@ -20,21 +21,46 @@ export async function POST(request: NextRequest) {
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  let body: { voucher_id?: string };
+  let body: { voucher_id?: string; location_id?: string };
   try {
-    body = await request.json() as { voucher_id?: string };
+    body = await request.json() as { voucher_id?: string; location_id?: string };
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { voucher_id } = body;
+  const { voucher_id, location_id } = body;
+  if (!location_id || typeof location_id !== "string") {
+    return NextResponse.json({ error: "location_id is required" }, { status: 400 });
+  }
   if (!voucher_id || typeof voucher_id !== "string") {
     return NextResponse.json({ error: "voucher_id is required" }, { status: 400 });
   }
 
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = await siteConfigForLocationId(location_id);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
+  }
+
+  // If the CRM recorded where this voucher was issued and it is not this
+  // location's console, refuse rather than look the code up on the wrong console.
+  const admin = createAdminClient();
+  const [issuedHere, linkedHere] = await Promise.all([
+    admin.from("voucher_issuances").select("unifi_console_id").eq("unifi_voucher_id", voucher_id).not("unifi_console_id", "is", null).limit(1),
+    admin.from("unifi_adhoc_voucher_links").select("unifi_console_id").eq("unifi_voucher_id", voucher_id).not("unifi_console_id", "is", null).limit(1),
+  ]);
+  const recordedConsole = issuedHere.data?.[0]?.unifi_console_id ?? linkedHere.data?.[0]?.unifi_console_id;
+  if (recordedConsole && recordedConsole !== siteCfg.consoleId) {
+    return NextResponse.json(
+      { error: "This voucher was issued on a different UniFi console than this location's. Open it from the location it was issued for." },
+      { status: 409 }
+    );
+  }
+
   try {
     // Use cached list (60s TTL) — avoids re-fetching 19 MB on every reveal
-    const vouchers = await cachedUnifiRequest<UnifiVoucher[]>("/stat/voucher", {}, 60);
+    const vouchers = await cachedUnifiRequest<UnifiVoucher[]>("/stat/voucher", {}, 60, siteCfg);
     const voucher = vouchers.find((v) => v._id === voucher_id);
 
     if (!voucher) {
@@ -42,7 +68,6 @@ export async function POST(request: NextRequest) {
     }
 
     // Log the access to the audit trail (fire and forget)
-    const admin = createAdminClient();
     void logAudit(admin, {
       entityType: "unifi_voucher",
       entityId: voucher_id,

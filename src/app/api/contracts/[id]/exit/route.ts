@@ -7,6 +7,8 @@ import {
 } from "@/lib/contract-exit";
 import { getLiveExit, loadExitView, notifyAllUsers } from "@/lib/contract-exit-server";
 import { getLatestSettlement, getLiveSettlement } from "@/lib/exit-settlement-server";
+import { AUTO_RENEW_STOP_REASONS } from "@/lib/auto-renewal";
+import { stopAutoRenewal } from "@/lib/auto-renewal-server";
 
 const VIEW_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts"];
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid date");
@@ -91,6 +93,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     entityType: "contract", entityId: id, action: "exit_started", performedBy: me.id,
     changes: { notice_received_on: { old: null, new: notice_received_on }, last_day: { old: null, new: last_day }, reason: { old: null, new: reason }, early_exit: { old: null, new: early } },
   });
+
+  // A recorded notice ends any automatic renewal. No-op unless one was switched on.
+  await stopAutoRenewal(admin, id, me.id, AUTO_RENEW_STOP_REASONS.exitStarted);
 
   const lead = contract.lead as unknown as { first_name: string | null; last_name: string | null; company: string | null } | null;
   const customer = lead?.company || `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim() || "Customer";

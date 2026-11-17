@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
+import { StampUploadedDocument } from "@/components/cases/stamp-uploaded-document";
 import {
   FileText,
   Send,
@@ -39,6 +40,7 @@ import {
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
 import type { CaseAgreement } from "@/types";
+import { ADDRESS_STALE_REASON, agreementAddressGate, agreementAddressIsStale } from "@/lib/agreement-address-gate";
 
 interface LeegalityHealth {
   environment: string;
@@ -55,14 +57,31 @@ interface CaseLeaveAgreementTabProps {
   caseId: string;
   /** From the case's special clause: when blocked, nothing may leave the building. */
   clauseGate?: { blocked: boolean; reason: string | null };
+  /** The case's current client address, to warn when the agreement's copy is out of date. */
+  caseAddress?: string | null;
 }
 
-export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreementTabProps) {
-  const clauseBlocked = clauseGate?.blocked ?? false;
+export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, caseAddress }: CaseLeaveAgreementTabProps) {
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
   const { enabled: leegalityEnabled } = useLeegalityEnabled();
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
+  // A draft with no client address (or no pincode) may exist, but must not go out.
+  const addressGate = agreement
+    ? agreementAddressGate(((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined)
+    : { blocked: false, reason: null };
+  const addressStale = !!agreement && agreementAddressIsStale(
+    caseAddress,
+    ((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined,
+  );
+  // The case address moved on after this was generated: until it is regenerated,
+  // Regenerate is the only action offered. A signed one never gets here, because
+  // changing the address resets it to a draft first.
+  const needsRegenerate = addressStale && !["executed", "signing"].includes(agreement?.status ?? "");
+  const clauseGate = clauseGateFromCase?.blocked
+    ? clauseGateFromCase
+    : needsRegenerate ? { blocked: true, reason: ADDRESS_STALE_REASON } : addressGate;
+  const clauseBlocked = clauseGate.blocked;
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -255,7 +274,7 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreement
         const err = await res.json();
         throw new Error(err.error || "Failed to regenerate agreement");
       }
-      toast.success("Agreement regenerated from case data");
+      toast.success("Agreement regenerated with the current address. Next: send it to the customer or upload the signed copy.");
       fetchAgreement();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Regeneration failed");
@@ -565,7 +584,12 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreement
         const err = await res.json();
         throw new Error(err.error || "Failed to cancel the stamp");
       }
-      toast.success("Sign & seal stamp cancelled — the agreement is editable again");
+      const { data: cancelled } = await res.json().catch(() => ({ data: null }));
+      toast.success(
+        cancelled?.status === "executed"
+          ? "Sign & seal stamp cancelled — the uploaded signed copy is the current document again"
+          : "Sign & seal stamp cancelled — the agreement is editable again"
+      );
       setCancelStampOpen(false);
       fetchAgreement();
     } catch (err) {
@@ -583,6 +607,10 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreement
     ["draft", "internally_approved", "sent_to_client", "client_approved", "signing"].includes(
       agreement.status
     );
+
+  // "Upload Signed Document" keeps the customer's copy in generated_document_id;
+  // signed_document_id is only set by the stamp routes.
+  const uploadedCopyId = agreement?.signed_document_id ?? agreement?.generated_document_id ?? null;
 
   if (loading) {
     return <div className="text-center py-8 text-muted-foreground">Loading agreement...</div>;
@@ -677,6 +705,39 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreement
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* The address itself can't go out (missing, no pincode, unprintable letters): say so
+              on the page, with the fix, rather than only in a tooltip on a disabled button. */}
+          {!needsRegenerate && addressGate.blocked && !["executed", "signing"].includes(agreement.status) && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{addressGate.reason}</span>
+            </div>
+          )}
+          {needsRegenerate && (
+            <div className="flex flex-col gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  The case address has changed since this agreement was generated. <strong>Step 1:</strong> regenerate
+                  it to pick up the new address. <strong>Step 2:</strong> send it to the customer or upload the signed copy. The other
+                  actions stay locked until step 1 is done.
+                </span>
+              </div>
+              <Button size="sm" className="shrink-0" onClick={handleRegenerate} disabled={generating}>
+                {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Regenerate agreement
+              </Button>
+            </div>
+          )}
+          {!!agreement && !!(agreement.variables as Record<string, unknown> | null)?.address_reset_at && agreement.status !== "executed" && (
+            <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                The client address was changed after this agreement was signed. This agreement has been reset and
+                must be signed again. The previous signed version is kept in the documents.
+              </span>
+            </div>
+          )}
           {/* Agreement Info Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
             <div>
@@ -792,19 +853,19 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreement
               View PDF
             </Button>
 
-            <Button size="sm" variant="outline" onClick={handleDownloadForStampPaper} disabled={viewing}>
+            <Button size="sm" variant="outline" onClick={handleDownloadForStampPaper} disabled={viewing || needsRegenerate}>
               {viewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
               Download for Stamp Paper
             </Button>
 
-            {isEditable && (
+            {isEditable && !needsRegenerate && (
               <Button size="sm" variant="outline" onClick={openEditDialog}>
                 <Pencil className="mr-2 h-4 w-4" />
                 Edit Agreement
               </Button>
             )}
 
-            {isEditable && (
+            {isEditable && !needsRegenerate && (
               <Button size="sm" variant="outline" onClick={handleRegenerate} disabled={generating}>
                 {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Regenerate
@@ -872,6 +933,17 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreement
                 )}
                 Stamp with company seal
               </Button>
+            )}
+
+            {/* A signed copy was uploaded (which executes the agreement) before TWV's
+                stamp went on: stamp that copy itself, keeping the customer's signature. */}
+            {agreement.status === "executed" && uploadedCopyId && !agreement.stamp_reference && agreement.leegality_status !== "COMPLETED" && userRole === "admin" && (
+              <StampUploadedDocument
+                caseId={caseId}
+                agreementId={agreement.id}
+                signedDocumentId={uploadedCopyId}
+                onStamped={fetchAgreement}
+              />
             )}
 
             {agreement.signed_document_id && agreement.stamp_reference && userRole === "admin" && (
@@ -1245,7 +1317,9 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreement
             <DialogDescription>
               This removes the stamped signed document and reverts the agreement to its
               status before stamping — Edit Agreement becomes available again if that status
-              is draft or internally approved. You can re-stamp it afterward if needed.
+              is draft or internally approved. You can re-stamp it afterward if needed. If the
+              stamp was put on an uploaded signed copy, only the stamp is removed: that copy
+              stays as the signed agreement.
             </DialogDescription>
           </DialogHeader>
           {stampError && (

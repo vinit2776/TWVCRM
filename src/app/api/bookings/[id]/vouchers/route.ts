@@ -41,6 +41,8 @@ import {
   createUnifiVoucher,
   siteConfigFromLocation,
   isUnifiLocation,
+  buildVoucherNote,
+  UnifiConfigError,
 } from "@/lib/unifi";
 import {
   siteConfigFromLocation as ruijieSiteConfigFromLocation,
@@ -196,7 +198,7 @@ export async function POST(
   const { data: location } = bk.location_id
     ? await supabase
         .from("locations")
-        .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, ruijie_group_id")
+        .select("code, unifi_site_id, unifi_console_id, wifi_voucher_mode, ruijie_group_id")
         .eq("id", bk.location_id)
         .single()
     : { data: null };
@@ -205,7 +207,13 @@ export async function POST(
   // UNIFI PATH
   // ──────────────────────────────────────────────────────────────────
   if (location && isUnifiLocation(location)) {
-    const siteConfig = siteConfigFromLocation(location);
+    let siteConfig: ReturnType<typeof siteConfigFromLocation>;
+    try {
+      siteConfig = siteConfigFromLocation(location);
+    } catch (err) {
+      if (err instanceof UnifiConfigError) return NextResponse.json({ error: err.message }, { status: 400 });
+      throw err;
+    }
     // bk.duration_hours is a billing quantity (for daily-priced spaces it is
     // "1" meaning one day unit, NOT one hour) — never read it as a wall-clock
     // duration. Derive the real booking window from start_time/end_time.
@@ -226,7 +234,7 @@ export async function POST(
         const result = await createUnifiVoucher(
           {
             durationMinutes,
-            note: `booking_${id}_seat${seatNumber}`,
+            note: buildVoucherNote(location.code, `booking_${id}_seat${seatNumber}`),
             quota: 2,
           },
           siteConfig
@@ -255,6 +263,8 @@ export async function POST(
         seat_occupant_email: i === 0 && alreadyIssued === 0 ? (bk.guest_email || null) : null,
         unifi_voucher_id: unifiId,
         unifi_code: unifiCode,
+        unifi_console_id: siteConfig.consoleId,
+        unifi_location_code: location.code ?? null,
         duration_minutes: durationMinutes,
       });
 

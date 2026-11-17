@@ -24,23 +24,30 @@ export function fmtDuration(minutes: number): string {
 
 /**
  * Builds a plain-text, WhatsApp-friendly message to share with the customer.
+ *
+ * When the network name could not be fetched (`ssid` null) the message does not
+ * name one. It used to fall back to "WorkVilla Clients" — Nungambakkam's guest
+ * network — which sent customers at other sites looking for a network that
+ * does not exist there.
  */
 export function buildShareableMessage(voucher: ShareableVoucher): string {
   const duration = fmtDuration(voucher.durationMinutes);
   const devices  = voucher.quota === 1 ? "1 device" : `up to ${voucher.quota} devices`;
-  const ssid     = voucher.ssid ?? "WorkVilla Clients";
+  const ssid     = voucher.ssid?.trim() || null;
   const location = voucher.locationName || "The WorkVilla";
 
   return [
     `📶 *WiFi Access — ${location}*`,
     ``,
-    `Network:  ${ssid}`,
+    ...(ssid ? [`Network:  ${ssid}`] : []),
     `Code:     ${voucher.code}`,
     `Valid for: ${duration}`,
     `Devices:  ${devices}`,
     ``,
     `*How to connect:*`,
-    `1. Connect to "${ssid}" on your device`,
+    ssid
+      ? `1. Connect to "${ssid}" on your device`
+      : `1. Connect to the ${location} guest WiFi on your device`,
     `2. Open any browser`,
     `3. Enter your code at the login page`,
     ``,

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { holdReason, isTaskUnissued } from "@/lib/booking-extras";
 import { createClient } from "@/lib/supabase/server";
 import {
   AGING_ESCALATE_HOURS,
@@ -94,6 +95,8 @@ export async function GET(req: NextRequest) {
       held_at, hold_reason,
       gst_waived_at, gst_waived_reason,
       lifecycle_stage, tally_credit_note_number,
+      cancellation_requested_at, cancellation_reason,
+      cancellation_requested_by_user:users!billing_statements_cancellation_requested_by_fkey(full_name),
       statement_type, fixed_amount, usage_amount,
       service_usage_amount, booking_usage_amount,
       subtotal, tax_percentage, tax_amount,
@@ -142,7 +145,10 @@ export async function GET(req: NextRequest) {
       .order("updated_at", { ascending: false })
       .range((page - 1) * CLOSED_PAGE_SIZE, page * CLOSED_PAGE_SIZE);
   } else {
-    query = query.in("handoff_state", INBOX_ACTIONABLE_STATES as readonly string[])
+    // A pending cancellation is a task whatever state the invoice was in, so
+    // it is pulled in even when its handoff_state is not otherwise actionable.
+    query = query
+      .or(`handoff_state.in.(${INBOX_ACTIONABLE_STATES.join(",")}),cancellation_requested_at.not.is.null`)
       .is("voided_at", null)
       .order("updated_at", { ascending: true });
   }
@@ -206,6 +212,9 @@ export async function GET(req: NextRequest) {
     pi_cancelled_at: string | null;
     lifecycle_stage: string | null;
     tally_credit_note_number: string | null;
+    cancellation_requested_at: string | null;
+    cancellation_reason: string | null;
+    cancellation_requested_by_user: { full_name: string | null } | { full_name: string | null }[] | null;
     contract: {
       id: string;
       contract_number: string;
@@ -658,6 +667,11 @@ export async function GET(req: NextRequest) {
       pi_was_cancelled: !!s.pi_cancelled_at,
       lifecycle_stage: s.lifecycle_stage,
       tally_credit_note_number: s.tally_credit_note_number,
+      cancellation_requested_at: s.cancellation_requested_at,
+      cancellation_reason: s.cancellation_reason,
+      cancellation_requested_by_name: (Array.isArray(s.cancellation_requested_by_user)
+        ? s.cancellation_requested_by_user[0]?.full_name
+        : s.cancellation_requested_by_user?.full_name) ?? null,
       ...(timelineEvents ? { timeline_events: timelineEvents } : {}),
       contract: s.contract
         ? {
@@ -754,7 +768,7 @@ export async function GET(req: NextRequest) {
   let bookingTasksQuery = supabase
     .from("booking_gst_tasks")
     .select(`
-      id, handoff_state, updated_at, created_at,
+      id, handoff_state, updated_at, created_at, kind, sequence, amount_with_gst,
       gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
       voided_at, void_reason,
       booking:bookings!booking_gst_tasks_booking_id_fkey(
@@ -766,7 +780,7 @@ export async function GET(req: NextRequest) {
         space:spaces!bookings_space_id_fkey(id, name),
         location:locations!bookings_location_id_fkey(id, name),
         lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number, billing_emails, id_proof_path, street, city, state, zip_code),
-        booking_addons(id, description, addon_type, quantity, unit_price, amount, gst_rate, gst_amount, total_with_gst, unit_label)
+        booking_addons(id, description, addon_type, quantity, unit_price, amount, gst_rate, gst_amount, total_with_gst, unit_label, gst_task_id)
       )
     `);
 
@@ -786,6 +800,9 @@ export async function GET(req: NextRequest) {
     handoff_state: string;
     updated_at: string;
     created_at: string;
+    kind: string;
+    sequence: number;
+    amount_with_gst: number | null;
     gst_invoice_number: string | null;
     tally_invoice_number: string | null;
     gst_invoice_sent_at: string | null;
@@ -839,6 +856,7 @@ export async function GET(req: NextRequest) {
         gst_amount: number;
         total_with_gst: number;
         unit_label: string | null;
+        gst_task_id: string | null;
       }[];
     } | null;
   };
@@ -983,17 +1001,38 @@ export async function GET(req: NextRequest) {
     const customerHasGstin = !!customerGstin;
     const upload = bookingUploadsMap.get(t.id) ?? null;
 
+    // What this task invoices: the booking's whole total while it is still unissued, otherwise
+    // the amount recorded on the task. A supplement covers only an extra added after the
+    // first invoice was issued.
+    const isSupplement = t.kind === "supplement";
+    const unissued = isTaskUnissued({
+      handoff_state: t.handoff_state, gst_invoice_number: t.gst_invoice_number,
+      tally_invoice_number: t.tally_invoice_number, voided_at: t.voided_at,
+    });
+    const bookingTotal = Number(t.booking?.total_amount_with_gst ?? 0);
+    const taskAmount = unissued && !isSupplement ? bookingTotal : Number(t.amount_with_gst ?? bookingTotal);
+    const verifiedPaid = (bookingPaymentsMap.get(t.booking?.id ?? "") ?? [])
+      .filter((p) => p.status === "verified")
+      .reduce((s, p) => s + p.amount, 0);
+    // An extra on the booking that is not yet paid holds the task: it is shown, but not as
+    // work to do, and it releases by itself once the booking is paid.
+    const heldReason = holdReason({
+      unissued, bookingPaymentStatus: t.booking?.payment_status ?? "paid", balance: bookingTotal - verifiedPaid,
+    });
+    const rowAddons = (t.booking?.booking_addons ?? []).filter((a) =>
+      a.gst_task_id === t.id || (!isSupplement && unissued && !a.gst_task_id));
+
     // Whole-rupee comparison — see the matching comment on the statement
     // discrepancy check above.
     let hasDiscrepancy = false;
     let discrepancyReason: string | null = null;
-    if (upload && Math.round(Number(upload.invoice_amount)) !== Math.round(Number(t.booking?.total_amount_with_gst ?? 0))) {
+    if (upload && Math.round(Number(upload.invoice_amount)) !== Math.round(taskAmount)) {
       hasDiscrepancy = true;
-      discrepancyReason = `Upload amount ₹${upload.invoice_amount} does not match booking total ₹${t.booking?.total_amount_with_gst}`;
+      discrepancyReason = `Upload amount ₹${upload.invoice_amount} does not match ${isSupplement ? "the extra charge" : "booking total"} ₹${taskAmount}`;
     }
 
     const agingHours = Math.max(0, Math.round((now - Date.parse(t.updated_at)) / 3_600_000));
-    const bucket = bucketForBooking(t.handoff_state as BookingHandoffState, hasDiscrepancy);
+    const bucket = heldReason ? "in_flight" : bucketForBooking(t.handoff_state as BookingHandoffState, hasDiscrepancy);
 
     const customerName = [lead?.company, t.booking?.guest_company].find(isRealCompanyName)
       || [lead?.first_name ?? t.booking?.guest_name, lead?.last_name].filter(Boolean).join(" ")
@@ -1013,13 +1052,17 @@ export async function GET(req: NextRequest) {
       check_out_at: t.booking?.check_out_at ?? null,
       duration_hours: t.booking?.duration_hours ?? null,
       pricing_model: t.booking?.pricing_model ?? null,
-      base_amount: Number(t.booking?.total_amount ?? 0),
-      gst_amount: Number(t.booking?.gst_amount ?? 0),
+      base_amount: isSupplement ? 0 : Number(t.booking?.total_amount ?? 0),
+      // Room GST plus the GST on the extras this task covers, so the card's lines add up to its total.
+      gst_amount: (isSupplement ? 0 : Number(t.booking?.gst_amount ?? 0))
+        + rowAddons.reduce((s, a) => s + Number(a.gst_amount ?? 0), 0),
       gst_rate: Number(t.booking?.gst_rate ?? 18),
-      addons: (t.booking?.booking_addons ?? []),
+      addons: rowAddons,
+      task_kind: (isSupplement ? "supplement" : "main") as "main" | "supplement",
+      held_reason: heldReason,
       space_name: t.booking?.space?.name ?? null,
       location_name: t.booking?.location?.name ?? null,
-      statement_total_amount: Math.round(Number(t.booking?.total_amount_with_gst ?? 0)),
+      statement_total_amount: Math.round(taskAmount),
       payment_status: t.booking?.payment_status ?? "paid",
       handoff_state: t.handoff_state as BookingHandoffState,
       bucket,

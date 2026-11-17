@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logEmailActivity, logWhatsAppActivity } from "@/lib/audit";
+import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
 
 export const maxDuration = 30;
 
@@ -90,7 +91,10 @@ export async function POST(
 
   const depositAmount = Number(proposal.security_deposit_amount || 0);
   const depositMonths = Number(proposal.security_deposit_months || 0);
-  const hasDeposit = depositAmount > 0 && proposal.deposit_payment_status === "pending";
+  // A deposit already being collected in parts has its own links; accepting must
+  // not mint (or email) a whole-deposit link beside them.
+  const depositInParts = await hasLiveInstalments(createAdminClient(), id);
+  const hasDeposit = depositAmount > 0 && proposal.deposit_payment_status === "pending" && !depositInParts;
 
   // ── 1. Mark proposal accepted ─────────────────────────────────────────────
   await supabase.from("proposals").update({
@@ -209,7 +213,9 @@ export async function POST(
           <div style="background:#f0faf5;border-left:4px solid #015E65;padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0;">
             <p style="color:#015E65;font-size:13px;font-weight:600;margin:0 0 6px;">Proposal Summary</p>
             <p style="color:#333;font-size:13px;margin:0 0 4px;">Proposal: <strong>${proposal.proposal_number}</strong></p>
-            <p style="color:#333;font-size:13px;margin:0 0 4px;">Monthly Rental: <strong>₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month + GST</strong></p>
+            <p style="color:#333;font-size:13px;margin:0 0 4px;">Monthly Rental (excl. GST): <strong>₹${(Number(proposal.subtotal) - Number(proposal.discount_amount || 0)).toLocaleString("en-IN")}/month</strong></p>
+            <p style="color:#333;font-size:13px;margin:0 0 4px;">GST (${Number(proposal.tax_percentage)}%): <strong>₹${Number(proposal.tax_amount).toLocaleString("en-IN")}/month</strong></p>
+            <p style="color:#333;font-size:13px;margin:0 0 4px;">Total Monthly (incl. GST): <strong>₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month</strong></p>
             ${hasDeposit ? `<p style="color:#333;font-size:13px;margin:0;">Security Deposit: <strong>₹${depositAmount.toLocaleString("en-IN")}</strong> (${depositMonths} month${depositMonths > 1 ? "s" : ""}, fully refundable)</p>` : ""}
           </div>
 

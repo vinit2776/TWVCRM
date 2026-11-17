@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit, diffChanges } from "@/lib/audit";
@@ -69,6 +70,11 @@ export async function POST(
 
   if (proposal.deposit_payment_status === "not_required") {
     return NextResponse.json({ error: "No deposit required for this proposal" }, { status: 400 });
+  }
+
+  // Collected in parts: record against the specific part, never the whole deposit.
+  if (await hasLiveInstalments(createAdminClient(), id)) {
+    return NextResponse.json({ error: "This deposit is being collected in parts — record the payment against the part it belongs to." }, { status: 409 });
   }
 
   // Shortfall tolerance check — expected deposit amount (pre-GST), net of any credit applied and exception

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { phoneMatchClauses } from "@/lib/phone-search";
 
 // Lean lookup for the Cmd+K palette. The full /api/leads list does a count, an
 // overdue-follow-up scan and wide `*` + embed selects — far too heavy for type-ahead.
@@ -28,15 +29,11 @@ export async function GET(request: NextRequest) {
     .is("archived_at", null)
     .or(
       [
-        "first_name",
-        "last_name",
-        "email",
-        "phone",
-        "mobile",
-        "company",
-      ]
-        .map((col) => `${col}.ilike.${pattern}`)
-        .join(",")
+        ...["first_name", "last_name", "email", "phone", "mobile", "company"].map(
+          (col) => `${col}.ilike.${pattern}`,
+        ),
+        ...phoneMatchClauses(term, ["phone", "mobile"]),
+      ].join(",")
     )
     .order("created_at", { ascending: false })
     .limit(6);

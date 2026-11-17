@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { ElectricityTelemetryPanel } from "./electricity-telemetry-panel";
 import { ElectricityConnectionsCard } from "./electricity-connections-card";
+import { ElectricitySetupChecklist } from "./electricity-setup-checklist";
 
 interface Vendor { id: string; name: string }
 
@@ -133,6 +134,8 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
 
   return (
     <div className="space-y-6">
+      <ElectricitySetupChecklist locationId={locationId} refreshKey={String(config?.updated_at ?? "")} />
+
       {/* Master toggle */}
       <Card>
         <CardHeader>
