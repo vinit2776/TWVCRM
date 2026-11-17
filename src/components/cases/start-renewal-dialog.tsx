@@ -35,6 +35,7 @@ import {
   RENEWAL_ESCALATION_MODE_LABELS,
   RENEWAL_GST_PERCENT,
   renewalOffer,
+  termFee,
   type RenewalEscalationMode,
 } from "@/lib/vo-renewal-offer";
 
@@ -355,7 +356,7 @@ export function StartRenewalDialog({
               <Line label="New term starts" value={`${formatDate(offer.term.start)} (the next day)`} />
               <Line label="New term ends" value={formatDate(offer.term.end)} />
               <Separator />
-              <Line label={`Current fee (${setup.tenureMonths} months)`} value={formatCurrency(setup.currentFee)} />
+              <Line label={`Current fee (${setup.tenureMonths} months)`} value={formatCurrency(termFee(setup.currentFee, setup.tenureMonths))} />
               {duration !== setup.tenureMonths && (
                 <Line label={`Pro rata for ${duration} months`} value={formatCurrency(offer.baseFee)} />
               )}

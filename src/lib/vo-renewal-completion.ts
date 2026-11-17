@@ -19,6 +19,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
 import { nextRenewalTerm, statementCoversNextTerm, termMonthsFromPeriod } from "@/lib/vo-renewal-term";
 import { carriedChildRow, successorCaseRow } from "@/lib/vo-renewal-successor";
+import { annualRateFor } from "@/lib/vo-term-fee";
 
 export type RenewalCompletionOutcome =
   | "renewed"
@@ -83,13 +84,13 @@ export async function completeVoRenewal(
   const months = termMonthsFromPeriod(oldEnd, stmt.period_end as string | null) ?? currentTenure;
   const term = nextRenewalTerm(oldEnd, months);
 
-  // The rate the next renewal escalates from is the fee this term was billed
-  // at. Postpaid partner cases are billed monthly from `rate` and don't fit a
+  // The rate the next renewal escalates from is this term's fee as cases.rate
+  // stores it: the fee itself up to 12 months, the annual rate beyond. Postpaid partner cases are billed monthly from `rate` and don't fit a
   // one-off renewal statement yet, so their rate is left alone.
   const aggregator = Array.isArray(caseRow.aggregator) ? caseRow.aggregator[0] : caseRow.aggregator;
   const isPostpaid = !!caseRow.aggregator_id && (aggregator as { billing_method?: string } | null)?.billing_method === "postpaid";
   const billedFee = Number(stmt.fixed_amount);
-  const newRate = !isPostpaid && Number.isFinite(billedFee) && billedFee > 0 ? billedFee : null;
+  const newRate = !isPostpaid && Number.isFinite(billedFee) && billedFee > 0 ? annualRateFor(billedFee, months) : null;
 
   const outcome = await rollCaseToNextTerm(supabase, {
     caseRow,
