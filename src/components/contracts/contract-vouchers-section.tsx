@@ -24,6 +24,7 @@ import { formatDate, getValidityLabel } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { VOUCHER_STATUS_LABELS, VOUCHER_STATUS_COLORS } from "@/lib/constants";
+import { voucherDaysRemaining, VOUCHER_RENEWAL_WINDOW_DAYS } from "@/lib/voucher-validity";
 import { VoucherReplaceDialog } from "./voucher-replace-dialog";
 import { LinkRuijieVoucherDialog } from "./link-ruijie-voucher-dialog";
 
@@ -87,6 +88,38 @@ function resolveCode(issuance: VoucherIssuance): string {
   return issuance.voucher?.voucher_code || issuance.unifi_code || "";
 }
 
+/** Validity label plus how many days the issued voucher still has, from its valid_until. */
+function ValidityCell({ issuance }: { issuance: VoucherIssuance }) {
+  const days = issuance.valid_until ? voucherDaysRemaining(issuance.valid_until) : null;
+  const tone =
+    days == null ? ""
+    : days < 0 || days <= 7 ? "bg-red-100 text-red-800"
+    : days <= VOUCHER_RENEWAL_WINDOW_DAYS ? "bg-amber-100 text-amber-800"
+    : "bg-green-100 text-green-800";
+  const label =
+    days == null ? null
+    : days < 0 ? `Expired ${-days}d ago`
+    : days === 0 ? "Last day"
+    : `${days} day${days === 1 ? "" : "s"} left`;
+  return (
+    <div className="flex flex-col items-start gap-1">
+      {/* UniFi vouchers have no pool row, so the pool's validity label would read "Unclassified". */}
+      {!issuance.unifi_code && (
+        <Badge variant="outline" className="text-xs">{getValidityLabel(issuance.voucher?.validity_days)}</Badge>
+      )}
+      {label && (
+        <Badge
+          variant="secondary"
+          className={`text-xs ${tone}`}
+          title={`Works until ${formatDate(issuance.valid_until)}`}
+        >
+          {label}
+        </Badge>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function ContractVouchersSection({
@@ -107,6 +140,9 @@ export function ContractVouchersSection({
   const [loading, setLoading] = useState(true);
   const [issuingMember, setIssuingMember] = useState<string | null>(null);
   const [issuingAll, setIssuingAll] = useState(false);
+  // Issue failures show beside the button that was clicked, not in a toast that vanishes.
+  const [issueErrors, setIssueErrors] = useState<Record<string, string>>({});
+  const [issueAllError, setIssueAllError] = useState<string | null>(null);
   const [sendingIssuance, setSendingIssuance] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [inventoryCheck, setInventoryCheck] = useState<{
@@ -226,10 +262,11 @@ export function ContractVouchersSection({
 
   async function handleIssueMember(member: Member) {
     if (!member.email) {
-      toast.error(`${member.name} has no email address — add an email to issue a voucher`);
+      setIssueErrors((p) => ({ ...p, [member.id]: "Add an email to this member before issuing a voucher." }));
       return;
     }
     setIssuingMember(member.id);
+    setIssueErrors((p) => { const { [member.id]: _cleared, ...rest } = p; return rest; });
     try {
       // Find the next available seat number
       const activeSeatNumbers = new Set(activeIssuances.map((i) => i.seat_number));
@@ -247,7 +284,7 @@ export function ContractVouchersSection({
       });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(json.error ?? "Failed to issue voucher");
+        setIssueErrors((p) => ({ ...p, [member.id]: json.error ?? "Failed to issue voucher" }));
         return;
       }
       setMatchInfo({ matched_validity_days: json.matched_validity_days, match_warning: json.match_warning });
@@ -261,10 +298,11 @@ export function ContractVouchersSection({
   async function handleIssueAll() {
     const membersNeedingVouchers = unissuedMembers.filter((m) => !!m.email);
     if (membersNeedingVouchers.length === 0) {
-      toast.error("No members with email addresses need vouchers");
+      setIssueAllError("No members with email addresses need vouchers.");
       return;
     }
     setIssuingAll(true);
+    setIssueAllError(null);
     try {
       let issued = 0;
       const activeSeatNumbers = new Set(activeIssuances.map((i) => i.seat_number));
@@ -286,7 +324,7 @@ export function ContractVouchersSection({
         if (res.ok) issued++;
         else {
           const json = await res.json();
-          toast.error(`Failed for ${member.name}: ${json.error ?? "Unknown error"}`);
+          setIssueAllError(`Failed for ${member.name}: ${json.error ?? "Unknown error"}`);
           break;
         }
       }
@@ -357,12 +395,17 @@ export function ContractVouchersSection({
             </Button>
           )}
           {canIssue && unissuedMembers.filter((m) => !!m.email).length > 1 && (
-            <Button size="sm" onClick={handleIssueAll} disabled={issuingAll}>
-              {issuingAll
-                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Issuing...</>
-                : <><Wifi className="mr-2 h-4 w-4" />Issue All</>
-              }
-            </Button>
+            <>
+              {issueAllError && (
+                <p role="alert" className="max-w-xs text-right text-xs text-red-600">{issueAllError}</p>
+              )}
+              <Button size="sm" onClick={handleIssueAll} disabled={issuingAll}>
+                {issuingAll
+                  ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Issuing...</>
+                  : <><Wifi className="mr-2 h-4 w-4" />Issue All</>
+                }
+              </Button>
+            </>
           )}
         </div>
       </CardHeader>
@@ -479,10 +522,7 @@ export function ContractVouchersSection({
                         }
                       </td>
                       <td className="px-3 py-3 hidden sm:table-cell">
-                        {hasVoucher
-                          ? <Badge variant="outline" className="text-xs">{getValidityLabel(issuance.voucher?.validity_days)}</Badge>
-                          : "—"
-                        }
+                        {hasVoucher ? <ValidityCell issuance={issuance} /> : "—"}
                       </td>
                       <td className="px-3 py-3 hidden lg:table-cell">
                         {hasVoucher && issuance.emailed_at ? (
@@ -499,6 +539,9 @@ export function ContractVouchersSection({
                       </td>
                       <td className="px-3 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          {!hasVoucher && issueErrors[member.id] && (
+                            <p role="alert" className="max-w-[16rem] text-right text-xs text-red-600">{issueErrors[member.id]}</p>
+                          )}
                           {!hasVoucher && canIssue && (
                             <Button
                               size="sm"
@@ -562,7 +605,7 @@ export function ContractVouchersSection({
                                   open: true,
                                   issuanceId: issuance.id,
                                   seatNumber: issuance.seat_number,
-                                  voucherCode: issuance.voucher?.voucher_code || "",
+                                  voucherCode: resolveCode(issuance),
                                   seatEmail: member.email ?? undefined,
                                 })}
                                 title="Replace voucher"
@@ -606,7 +649,7 @@ export function ContractVouchersSection({
                         <td className="px-3 py-2.5 text-xs text-muted-foreground">{iss.seat_occupant_email ?? <span className="italic">—</span>}</td>
                         <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{maskCode(resolveCode(iss) || "—")}</td>
                         <td className="px-3 py-2.5 hidden sm:table-cell">
-                          <Badge variant="outline" className="text-xs">{getValidityLabel(iss.voucher?.validity_days)}</Badge>
+                          <ValidityCell issuance={iss} />
                         </td>
                         <td className="px-3 py-2.5 text-right">
                           <div className="flex items-center justify-end gap-1">
@@ -629,7 +672,7 @@ export function ContractVouchersSection({
                                 open: true,
                                 issuanceId: iss.id,
                                 seatNumber: iss.seat_number,
-                                voucherCode: iss.voucher?.voucher_code || "",
+                                voucherCode: resolveCode(iss),
                                 seatEmail: iss.seat_occupant_email,
                               })}
                               title="Replace voucher"

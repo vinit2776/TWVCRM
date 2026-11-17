@@ -174,6 +174,20 @@ export function BookingPaymentSummary({ booking, variant = "full", payments, onV
         icon: AlertCircle,
       };
     }
+    // Money already received (an extra added after checkout reopens the balance): show
+    // what is left, not the whole total again.
+    const verifiedPaid = (payments ?? [])
+      .filter((p) => p.status === "verified")
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+    if (verifiedPaid > 0) {
+      return {
+        kind: "pending" as const,
+        title: "Pending Collection",
+        sub: `${formatCurrency(Math.max(0, total - verifiedPaid))} left to collect · ${formatCurrency(verifiedPaid)} already paid`,
+        tone: "amber",
+        icon: AlertCircle,
+      };
+    }
     return {
       kind: "pending" as const,
       title: "Pending Collection",

@@ -5,6 +5,7 @@ import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { daysPastBooking } from "@/lib/process-registry";
 import { checkInPaymentState, roundToRupee } from "@/lib/booking-payment-rules";
 import { noteProvisionalCheckIn } from "@/lib/booking-payment-server";
@@ -14,7 +15,7 @@ import { getCachedSettings } from "@/lib/app-settings-cache";
 
 export const maxDuration = 30;
 
-const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state, wifi_voucher_mode), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, id_proof_path), facilities:booking_facilities(*)";
+const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state, wifi_voucher_mode), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, id_proof_path), facilities:booking_facilities(*), pi_sender:users!bookings_pi_sent_by_fkey(full_name)";
 
 /** Actual duration in hours between two real timestamps, to the minute
  *  (two decimals — the quantity column is DECIMAL(10,2)). Billed exactly:
@@ -1008,6 +1009,12 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // A rate, extension or reschedule that changed the total must reach the PI's
+  // Receivables statement, or it keeps chasing the old amount.
+  if ("total_amount" in updates || "total_amount_with_gst" in updates) {
+    await syncBookingPiStatement(createAdminClient(), id);
+  }
 
   // Create a Tally Inbox task when the booking is checked out AND already
   // paid. Must run after the update above commits — maybeCreateBookingGstTask

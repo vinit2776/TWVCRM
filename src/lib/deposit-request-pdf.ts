@@ -20,6 +20,8 @@ export interface DepositRequestPdfInput {
     title: string;
     intro: string;
     rows: [string, string][];
+    /** The deposit working: totals bold, components indented. Page-breaks as needed. */
+    breakdown?: { label: string; value: string; bold: boolean; indent: boolean }[];
     paymentReference: string;
   };
 }
@@ -104,6 +106,22 @@ export async function generateDepositRequestPDF(input: DepositRequestPdfInput): 
     doc.text(sanitize(value), left + 55, rowY);
   });
   y += rows.length * 8 + 10;
+
+  if (input.variant?.breakdown?.length) {
+    doc.setFontSize(10);
+    for (const r of input.variant.breakdown) {
+      if (y > 265) { doc.addPage(); y = 20; }
+      doc.setFont("helvetica", r.bold ? "bold" : "normal");
+      doc.setTextColor(...(r.bold ? BRAND_TEAL : BRAND_DARK));
+      const x = left + (r.indent ? 6 : 0);
+      const labelLines = doc.splitTextToSize(sanitize(r.label), width - 40 - (r.indent ? 6 : 0));
+      doc.text(labelLines, x, y);
+      if (r.value) doc.text(sanitize(r.value), right, y, { align: "right" });
+      if (r.bold && r.value) { doc.setDrawColor(200, 200, 200); doc.line(left, y - 4.5, right, y - 4.5); }
+      y += labelLines.length * 5 + 1.5;
+    }
+    y += 6;
+  }
 
   if (input.deposit_link_url) {
     doc.setFont("helvetica", "bold");
