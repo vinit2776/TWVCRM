@@ -183,6 +183,10 @@
       "schedule": "7 * * * *"
     },
     {
+      "path": "/api/cron/energy-alerts",
+      "schedule": "14 * * * *"
+    },
+    {
       "path": "/api/cron/wifi-ledger-capture",
       "schedule": "17 * * * *"
     },
