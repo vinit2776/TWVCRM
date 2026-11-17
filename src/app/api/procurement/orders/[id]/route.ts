@@ -9,12 +9,13 @@ import { attachPurchasePos } from "@/lib/procurement/amc-asset-receipts";
 import type { AssetForAmc } from "@/lib/procurement/amc-received";
 import { TERMINATE_ROLES, terminateBlocker, terminationPatch } from "@/lib/procurement/amc-terminate";
 import { planAdvanceCancel } from "@/lib/procurement/advance-cancel";
+import { withdrawOpenBillsOfTerminatedAmc } from "@/lib/procurement/terminate-open-bills-server";
 import { loadAdvanceUsage } from "@/lib/procurement/po-advance";
 import { amcStatusFor, poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
 
 // Admin-only corrections, one step back each. See src/lib/procurement/admin-rollback.ts.
 const ROLLBACK_ACTIONS = [
-  "unorder", "unmark_received", "restore_cancelled", "restore_partial_cancel", "reopen_advance", "reverse_advance", "cancel_advance", "reinstate_amc",
+  "unorder", "unmark_received", "restore_cancelled", "restore_partial_cancel", "reopen_advance", "reverse_advance", "cancel_advance", "reinstate_amc", "withdraw_open_bills",
 ] as const;
 
 // cancel_po_reversing_receipts / restore_cancelled_po (00611) raise these as the exception message.
@@ -61,6 +62,7 @@ const patchPoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reverse_advance"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("cancel_advance"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("reinstate_amc"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("withdraw_open_bills"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("approve_advance") }),
   z.object({ action: z.literal("reject_advance") }),
   z.object({
@@ -150,6 +152,7 @@ export async function PATCH(
 
   const { action } = parsed.data;
   let updatePayload: Record<string, unknown> = {};
+  let withdrawResult: Awaited<ReturnType<typeof withdrawOpenBillsOfTerminatedAmc>> | null = null;
   const extraAuditChanges: Record<string, { old: unknown; new: unknown }> = {};
   const isRollback = (ROLLBACK_ACTIONS as readonly string[]).includes(action);
   if (isRollback && !canRollback(dbUser.role)) {
@@ -579,6 +582,19 @@ export async function PATCH(
       break;
     }
 
+    case "withdraw_open_bills": {
+      // A cancelled order or terminated AMC will never be paid, so its bills must not sit in the payables queue
+      // or hold their invoice numbers. Bills with a real payment are left (reverse the payment first).
+      if (po.status !== "cancelled" && !po.amc_terminated_at) {
+        return NextResponse.json({ error: "Only a cancelled order or a terminated AMC can have its open bills withdrawn" }, { status: 422 });
+      }
+      const result = await withdrawOpenBillsOfTerminatedAmc(createAdminClient(), id, dbUser.id, parsed.data.reason, true);
+      extraAuditChanges.bills_withdrawn = { old: null, new: result.withdrawn.join(", ") || "none" };
+      withdrawResult = result;
+      updatePayload = { updated_at: new Date().toISOString() };
+      break;
+    }
+
     case "reinstate_amc": {
       if (!po.amc_terminated_at) {
         return NextResponse.json({ error: "This contract has not been terminated" }, { status: 422 });
@@ -736,6 +752,7 @@ export async function PATCH(
       reopen_advance: "advance_reopened",
       reverse_advance: "advance_reversed",
       cancel_advance: "advance_cancelled",
+      withdraw_open_bills: "open_bills_withdrawn",
       reinstate_amc: "amc_reinstated",
     } as Record<string, string>)[action] ?? action };
     extraAuditChanges.rollback_reason = { old: null, new: parsed.data.reason };
@@ -751,6 +768,17 @@ export async function PATCH(
       ...extraAuditChanges,
     },
   });
+
+  // A terminated AMC can never be paid, so its unapproved bills go with it (and stop blocking the same
+  // invoice number on the replacement AMC). Approved or paid ones are listed for a person.
+  if (action === "terminate_amc" && "termination_reason" in parsed.data) {
+    const bills = await withdrawOpenBillsOfTerminatedAmc(createAdminClient(), id, dbUser.id, parsed.data.termination_reason);
+    return NextResponse.json({ data: updated, bills_withdrawn: bills.withdrawn, bills_left: bills.left });
+  }
+
+  if (withdrawResult) {
+    return NextResponse.json({ data: updated, bills_withdrawn: withdrawResult.withdrawn, bills_left: withdrawResult.left });
+  }
 
   return NextResponse.json({ data: updated });
 }
