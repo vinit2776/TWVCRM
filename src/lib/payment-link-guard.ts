@@ -27,7 +27,7 @@ import { getCachedSettings } from "@/lib/app-settings-cache";
 import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { razorpayLinkDates } from "@/lib/razorpay-link-dates";
 
-export type LinkKind = "statement" | "deposit" | "topup" | "adhoc_invoice";
+export type LinkKind = "statement" | "deposit" | "topup" | "adhoc_invoice" | "booking_pi";
 
 /** live: checked and usable · regenerated: replaced a dead/missing link ·
  *  none: no link on record · disabled: Razorpay switched off in settings ·
@@ -85,6 +85,11 @@ const COLUMNS: Record<LinkKind, { table: string; id: string; url: string; create
   },
   adhoc_invoice: {
     table: "proforma_invoices", id: "razorpay_link_id", url: "razorpay_link_url",
+    created: "razorpay_link_created_at", expires: "razorpay_link_expires_at",
+  },
+  // The statement behind a booking PI shares the booking's link (see replaceDead below).
+  booking_pi: {
+    table: "billing_statements", id: "razorpay_payment_link_id", url: "razorpay_payment_link_url",
     created: "razorpay_link_created_at", expires: "razorpay_link_expires_at",
   },
 };
@@ -192,6 +197,12 @@ export interface EnsureLinkParams {
   callbackUrl: string;
   /** Statements make a link when none exists; the other kinds may be collected manually. */
   createIfMissing: boolean;
+  /**
+   * Replace an expired or cancelled link with a new one (default). A booking PI
+   * must not: its link is shared with the booking, and a replacement saved only
+   * on the statement would take a payment the booking never sees.
+   */
+  replaceDead?: boolean;
 }
 
 export async function ensureLiveLink(admin: SupabaseClient, p: EnsureLinkParams): Promise<GuardedLink> {
@@ -217,6 +228,7 @@ export async function ensureLiveLink(admin: SupabaseClient, p: EnsureLinkParams)
       await saveDates(admin, p.kind, p.rowId, link);
       return { url: link.short_url || p.linkUrl, createdAt, outcome: "live" };
     }
+    if (p.replaceDead === false) return unconfirmed;
     old = link; // expired / cancelled: replace below
   } else if (!p.createIfMissing) {
     return { url: p.linkUrl, createdAt: null, outcome: "none" };
@@ -306,6 +318,11 @@ export function ensureReceivableLink(admin: SupabaseClient, i: ReceivableLinkInp
       notes: { invoice_id: i.id, invoice_number: i.reference, type: "adhoc_invoice" },
       callback: "/invoices",
     },
+    booking_pi: {
+      description: `Booking ${i.reference} — The WorkVilla`,
+      notes: { statement_id: i.id, type: "booking_pi" },
+      callback: "/bookings",
+    },
   };
   const m = meta[i.kind];
   return ensureLiveLink(admin, {
@@ -313,6 +330,7 @@ export function ensureReceivableLink(admin: SupabaseClient, i: ReceivableLinkInp
     amountRupees: i.amount, reference: i.reference, description: m.description,
     customer: { name: i.partyName, ...(i.email ? { email: i.email } : {}), ...(phone ? { contact: phone } : {}) },
     notes: m.notes, callbackUrl: `${i.appUrl}${m.callback}`, createIfMissing: false,
+    replaceDead: i.kind !== "booking_pi",
   });
 }
 

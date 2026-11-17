@@ -59,8 +59,16 @@
       "schedule": "0 4 * * 6"
     },
     {
+      "path": "/api/cron/wa-reply-alert",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/rent-gap-alert",
       "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/cron/voucher-expiry-alert",
+      "schedule": "45 4 * * *"
     },
     {
       "path": "/api/cron/journey-nudge?send=1",
@@ -135,10 +143,6 @@
       "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/cron/attendance-punchin-reminder",
-      "schedule": "*/5 3-6 * * 1-6"
-    },
-    {
       "path": "/api/cron/cosec-booking-cleanup",
       "schedule": "*/30 * * * *"
     },
@@ -177,6 +181,10 @@
     {
       "path": "/api/cron/energy-ledger-capture",
       "schedule": "7 * * * *"
+    },
+    {
+      "path": "/api/cron/energy-alerts",
+      "schedule": "14 * * * *"
     },
     {
       "path": "/api/cron/wifi-ledger-capture",

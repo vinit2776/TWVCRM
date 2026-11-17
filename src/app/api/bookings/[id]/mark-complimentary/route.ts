@@ -25,7 +25,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { syncBookingPiStatement } from "@/lib/booking-pi-statement-server";
 import { logAudit } from "@/lib/audit";
 
 // floor_manager must go through the comp-request approval flow instead.
@@ -128,6 +129,9 @@ export async function PATCH(
       { status: 500 }
     );
   }
+
+  // A booking that now owes nothing must leave Receivables if it had a PI.
+  await syncBookingPiStatement(createAdminClient(), id);
 
   logAudit(supabase, {
     entityType: "booking",
