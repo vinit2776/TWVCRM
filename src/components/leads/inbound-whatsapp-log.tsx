@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Megaphone, MessageCircle } from "lucide-react";
+import { toast } from "sonner";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { formatSmartDate } from "@/lib/utils";
@@ -27,6 +28,7 @@ type LogRow = {
   group: InboundGroup;
   website_trigger: WebsiteTrigger | null;
   reference: string | null;
+  enquiry_id: string | null;
   lead_id: string | null;
 };
 
@@ -84,6 +86,42 @@ export function InboundWhatsAppLog() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Label the number behind a row so this and later messages from it stop opening enquiries. The
+  // same call the enquiry cards use; the toast's Undo restores the number and its enquiries.
+  const markNumber = async (row: LogRow, label: "staff" | "vendor" | "not_lead", done: string) => {
+    if (!row.enquiry_id) return;
+    const res = await fetch(`/api/enquiries/${row.enquiry_id}/not-a-lead`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    if (!res.ok) {
+      toast.error((await res.json().catch(() => null))?.error ?? "Could not label this number");
+      return;
+    }
+    const result = (await res.json()) as { stashed_ids: string[]; previous: unknown; lead_junked: boolean };
+    await load();
+    toast.success(done, {
+      duration: 15_000,
+      action: {
+        label: "Undo",
+        onClick: async () => {
+          const undo = await fetch(`/api/enquiries/${row.enquiry_id}/not-a-lead`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(result),
+          });
+          if (!undo.ok) {
+            toast.error((await undo.json().catch(() => null))?.error ?? "Could not undo");
+            return;
+          }
+          await load();
+          toast.success("Undone. The number and its enquiries are back.");
+        },
+      },
+    });
+  };
 
   const total = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0;
   const chip = (active: boolean) =>
@@ -168,6 +206,19 @@ export function InboundWhatsAppLog() {
                   <p className="flex items-center gap-1 text-xs text-muted-foreground sm:justify-end">
                     {inboundOutcomeDetail(r.outcome, r.reference)}
                   </p>
+                  {r.enquiry_id && r.group !== "junk" && r.group !== "ignored" && (
+                    <div className="flex flex-wrap gap-1.5 pt-1 sm:justify-end">
+                      <button className={chip(false)} onClick={() => markNumber(r, "not_lead", "Marked as junk. This number's messages will no longer open enquiries.")}>
+                        Junk
+                      </button>
+                      <button className={chip(false)} onClick={() => markNumber(r, "staff", "Marked as an internal number. Its messages will no longer open enquiries.")}>
+                        Internal number
+                      </button>
+                      <button className={chip(false)} onClick={() => markNumber(r, "vendor", "Marked as a vendor. Its messages will no longer open enquiries.")}>
+                        Vendor
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             );

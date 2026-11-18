@@ -89,13 +89,14 @@ export async function GET(request: NextRequest) {
       ? supabase.from("leads").select("id, first_name, last_name").in("id", leadIds)
       : Promise.resolve({ data: [] as { id: string; first_name: string | null; last_name: string | null }[] }),
     references.length
-      ? supabase.from("lead_enquiries").select("reference, lead_id").in("reference", references)
-      : Promise.resolve({ data: [] as { reference: string; lead_id: string | null }[] }),
+      ? supabase.from("lead_enquiries").select("id, reference, lead_id").in("reference", references)
+      : Promise.resolve({ data: [] as { id: string; reference: string; lead_id: string | null }[] }),
   ]);
   const nameOf = new Map(
     (leads ?? []).map((l) => [l.id, `${l.first_name ?? ""} ${l.last_name === "-" ? "" : l.last_name ?? ""}`.trim()])
   );
   const leadOfReference = new Map((enquiries ?? []).map((e) => [e.reference, e.lead_id]));
+  const idOfReference = new Map((enquiries ?? []).map((e) => [e.reference, e.id]));
 
   const data_ = shown.map(({ r, trigger }) => {
     const outcome = r.intake_outcome;
@@ -112,6 +113,7 @@ export async function GET(request: NextRequest) {
       group: inboundGroupOf(outcome),
       website_trigger: trigger,
       reference: r.enquiry_reference,
+      enquiry_id: (r.enquiry_reference && idOfReference.get(r.enquiry_reference)) || null,
       lead_id: (r.enquiry_reference && leadOfReference.get(r.enquiry_reference)) || r.entity_id || null,
     };
   });
