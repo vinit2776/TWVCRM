@@ -493,6 +493,9 @@ export interface Proposal {
   response_note?: string | null;
   withdrawn_at?: string | null;
   withdrawn_reason?: string | null;
+  signer_name?: string | null;
+  signer_email?: string | null;
+  signer_phone?: string | null;
   public_token?: string | null;
   deposit_waiver_verified_by?: string;
   deposit_waiver_verified_by_user?: { id: string; full_name: string } | null;

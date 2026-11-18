@@ -7,6 +7,7 @@ import { messaging } from "@/lib/whatsapp";
 import { voExpiryFrom } from "@/lib/vo-proposal";
 import { voSendBlockedReason } from "@/lib/vo-pricing-server";
 import { snapshotProposalTermsOnSend } from "@/lib/vo-terms-server";
+import { voProposalViewUrl } from "@/lib/vo-proposal-signer";
 
 // Allow larger request bodies for PDF attachments (default is 4.5MB)
 export const maxDuration = 30; // seconds
@@ -165,6 +166,11 @@ export async function POST(
   // ── Build tracking URL ──────────────────────────────────────────────────────
   const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://crm.theworkvilla.com";
   const trackingUrl = `${appBaseUrl}/api/proposals/${id}/track`;
+  // Virtual Office proposals can be viewed and answered online; the token is the only credential.
+  const voViewUrl =
+    proposal.kind === "virtual_office" && proposal.public_token
+      ? voProposalViewUrl(proposal.public_token, process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL)
+      : null;
 
   // ── Build email HTML ────────────────────────────────────────────────────────
   // Step 1 email: clean proposal — no deposit payment button.
@@ -247,6 +253,11 @@ export async function POST(
             Clicking opens the proposal PDF. Your review is automatically noted.
           </p>
         </div>
+
+        ${voViewUrl ? `<div style="text-align:center;margin:0 0 24px;">
+          <a href="${voViewUrl}" style="display:inline-block;background:#00AE6C;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 36px;border-radius:8px;">View &amp; accept online →</a>
+          <p style="color:#999;font-size:11px;margin:8px 0 0;">Review the proposal and accept, request changes or decline from this page.</p>
+        </div>` : ""}
 
         ${nextStepsHtml}
 

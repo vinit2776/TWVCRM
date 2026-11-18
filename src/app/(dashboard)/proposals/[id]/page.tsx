@@ -35,6 +35,7 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { signerForDisplay } from "@/lib/vo-proposal-signer";
 import {
   Dialog,
   DialogContent,
@@ -118,6 +119,8 @@ export default function ProposalDetailPage({
   // Manual deposit payment dialog state
   const [manualPayDialogOpen, setManualPayDialogOpen] = useState(false);
   const [cancelLinkOpen, setCancelLinkOpen] = useState(false);
+  const [voWithdrawOpen, setVoWithdrawOpen] = useState(false);
+  const [voWithdrawReason, setVoWithdrawReason] = useState("");
   const [cancelLinkReason, setCancelLinkReason] = useState("");
   const [cancellingLink, setCancellingLink] = useState(false);
   const [manualPayAmount, setManualPayAmount] = useState("");
@@ -840,9 +843,7 @@ export default function ProposalDetailPage({
   const isVoKind = proposal?.kind === "virtual_office";
   const needsWaiver = isZeroDeposit && !waiverVerified && !isVoKind;
 
-  const voAction = async (action: "withdraw" | "reissue") => {
-    const reason = action === "withdraw" ? window.prompt("Why are you withdrawing this proposal?") : "";
-    if (action === "withdraw" && !reason) return;
+  const voAction = async (action: "withdraw" | "reissue", reason = "") => {
     const res = await fetch(`/api/proposals/${id}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -853,6 +854,7 @@ export default function ProposalDetailPage({
       toast.error(json.error || `Could not ${action} the proposal`);
       return;
     }
+    if (action === "withdraw") setVoWithdrawOpen(false);
     toast.success(action === "withdraw" ? "Proposal withdrawn" : "New version created as a draft");
     if (action === "reissue" && json.data?.id) router.push(`/proposals/${json.data.id}`);
     else fetchProposal();
@@ -1111,7 +1113,7 @@ export default function ProposalDetailPage({
             </Button>
           )}
           {isVoKind && ["sent", "viewed", "changes_requested"].includes(proposal.status) && (
-            <Button variant="outline" size="sm" onClick={() => voAction("withdraw")}>Withdraw</Button>
+            <Button variant="outline" size="sm" onClick={() => { setVoWithdrawReason(""); setVoWithdrawOpen(true); }}>Withdraw</Button>
           )}
           {isVoKind && ["sent", "viewed", "changes_requested", "withdrawn", "declined", "expired"].includes(proposal.status) && (
             <Button variant="outline" size="sm" onClick={() => voAction("reissue")}>Reissue</Button>
@@ -1183,6 +1185,39 @@ export default function ProposalDetailPage({
 
       {isVoKind && <VoPricingPanel proposalId={proposal.id} canRequest={["admin", "manager", "sales_rep"].includes(currentUser?.role ?? "")} onChanged={fetchProposal} />}
       {isVoKind && <VoTermsPanel proposalId={proposal.id} />}
+      {isVoKind && proposal.status === "accepted" && (() => {
+        const signer = signerForDisplay(proposal);
+        return (
+          <Card>
+            <CardHeader><CardTitle className="text-sm">Signer (given by the customer when accepting)</CardTitle></CardHeader>
+            <CardContent className="text-sm">
+              {signer ? (
+                <dl className="grid grid-cols-[6rem_1fr] gap-y-1">
+                  <dt className="text-muted-foreground">Name</dt><dd>{signer.name || "—"}</dd>
+                  <dt className="text-muted-foreground">Email</dt><dd>{signer.email || "—"}</dd>
+                  <dt className="text-muted-foreground">Phone</dt><dd>{signer.phone || "—"}</dd>
+                </dl>
+              ) : (
+                <p className="text-muted-foreground">No signer details were captured with this acceptance. Ask the customer who will sign.</p>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
+      <Dialog open={voWithdrawOpen} onOpenChange={setVoWithdrawOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Withdraw proposal</DialogTitle></DialogHeader>
+          <div className="space-y-1">
+            <p className="text-sm text-muted-foreground">The customer link stops accepting answers. This is recorded with your reason.</p>
+            <Label className="text-xs">Why are you withdrawing it?</Label>
+            <Textarea rows={3} maxLength={500} value={voWithdrawReason} onChange={(e) => setVoWithdrawReason(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVoWithdrawOpen(false)}>Keep proposal</Button>
+            <Button variant="destructive" disabled={voWithdrawReason.trim().length < 3} onClick={() => voAction("withdraw", voWithdrawReason.trim())}>Withdraw</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* History: dates, references and reasons. What to do next is in the Customer journey panel above. */}
       <Card>
