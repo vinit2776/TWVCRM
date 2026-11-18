@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { extractFromPdf } from "@/lib/tally-pdf-extract";
+import { extractFromPdf, type ExpectedParty } from "@/lib/tally-pdf-extract";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { isInboxRole, type ExtractResponse } from "@/lib/tally-handoff";
 
@@ -27,6 +27,17 @@ import { isInboxRole, type ExtractResponse } from "@/lib/tally-handoff";
  */
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
+
+function parsePartyField(raw: FormDataEntryValue | null): ExpectedParty | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const v = JSON.parse(raw) as { names?: unknown; gstin?: unknown };
+    const names = Array.isArray(v.names) ? v.names.filter((n): n is string => typeof n === "string") : [];
+    return { names, gstin: typeof v.gstin === "string" ? v.gstin : null };
+  } catch {
+    return null;
+  }
+}
 
 export async function POST(
   request: NextRequest,
@@ -82,6 +93,9 @@ export async function POST(
       bridge_match: false,
       po_number_found: null,
       invoice_period_months: [],
+      text_readable: false,
+      party_name_found: null,
+      party_gstin_found: null,
     };
     return NextResponse.json(response);
   }
@@ -94,7 +108,10 @@ export async function POST(
   const buffer = Buffer.from(await file.arrayBuffer());
 
   // ── Layer 1: PDF text parse ──────────────────────────────────────────────
-  const parsed = await extractFromPdf(buffer, expectedPoNumber);
+  // Who the form says this invoice is for. Display-only here: the upload
+  // route re-derives it from the database and enforces the result itself.
+  const expectedParty = parsePartyField(formData.get("party"));
+  const parsed = await extractFromPdf(buffer, expectedPoNumber, expectedParty);
 
   // ── Layer 2: Bridge match cross-check ────────────────────────────────────
   // If we extracted an invoice number, see if the read-only bridge has
@@ -124,6 +141,9 @@ export async function POST(
     bridge_match: bridgeMatch,
     po_number_found: parsed.po_number_found,
     invoice_period_months: parsed.invoice_period_months,
+    text_readable: parsed.text_readable,
+    party_name_found: parsed.party_name_found,
+    party_gstin_found: parsed.party_gstin_found,
   };
 
   return NextResponse.json(response);
