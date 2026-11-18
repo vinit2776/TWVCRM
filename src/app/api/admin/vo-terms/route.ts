@@ -3,9 +3,9 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { ENTITY_TYPES, VO_TERM_DOCUMENTS, VO_TERM_PURPOSES } from "@/lib/constants";
+import { isMissingTermsTable as isMissingTable } from "@/lib/vo-terms";
 
 // Deploy precedes the hand-applied migration, so a missing table is a normal state, not a failure.
-const UNDEFINED_TABLE = "42P01";
 
 const READ_ROLES = ["admin", "manager", "sales_rep"];
 
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
       .eq("code", history)
       .maybeSingle();
     if (cErr) {
-      if (cErr.code === UNDEFINED_TABLE) return NextResponse.json({ data: [], notSetUp: true });
+      if (isMissingTable(cErr)) return NextResponse.json({ data: [], notSetUp: true });
       return NextResponse.json({ error: cErr.message }, { status: 500 });
     }
     if (!clause) return NextResponse.json({ error: "Clause not found" }, { status: 404 });
@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
     .select("id, code, title")
     .order("code");
   if (error) {
-    if (error.code === UNDEFINED_TABLE) return NextResponse.json({ data: [], notSetUp: true });
+    if (isMissingTable(error)) return NextResponse.json({ data: [], notSetUp: true });
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
     .select(VERSION_COLUMNS)
     .eq("is_current", true);
   if (vErr) {
-    if (vErr.code === UNDEFINED_TABLE) return NextResponse.json({ data: [], notSetUp: true });
+    if (isMissingTable(vErr)) return NextResponse.json({ data: [], notSetUp: true });
     return NextResponse.json({ error: vErr.message }, { status: 500 });
   }
 
@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
       .eq("code", input.code)
       .maybeSingle();
     if (cErr) {
-      if (cErr.code === UNDEFINED_TABLE) {
+      if (isMissingTable(cErr)) {
         return NextResponse.json({ error: "The terms library is not set up yet" }, { status: 503 });
       }
       return NextResponse.json({ error: cErr.message }, { status: 500 });
@@ -163,7 +163,7 @@ export async function POST(request: NextRequest) {
     .eq("id", input.version_id)
     .maybeSingle();
   if (fErr) {
-    if (fErr.code === UNDEFINED_TABLE) {
+    if (isMissingTable(fErr)) {
       return NextResponse.json({ error: "The terms library is not set up yet" }, { status: 503 });
     }
     return NextResponse.json({ error: fErr.message }, { status: 500 });

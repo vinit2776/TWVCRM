@@ -129,9 +129,9 @@ FROM (VALUES
     ARRAY['proposal'], ARRAY['gst_new','gst_existing'], NULL::INT, NULL::TEXT[]),
   ('T02', 'The address may be used only for the purpose stated above.',
     ARRAY['proposal','agreement','renewal'], ARRAY['gst_new','gst_existing'], NULL, NULL),
-  ('T03', 'The fee is payable in full in advance for the term of {term} months, including any multi-year term. No deposit is taken.',
+  ('T03', 'No deposit is taken. The fee for the term of {term} months is billed once for the whole term. A direct customer pays it in full in advance. Where an aggregator is billed for this address, the fee is invoiced to the aggregator on the terms of its agreement with us, and the customer owes us no separate payment.',
     ARRAY['proposal','agreement'], ARRAY['gst_new','gst_existing'], NULL, NULL),
-  ('T04', 'The agreement is executed and shared after full payment and KYC approval.',
+  ('T04', 'The agreement is executed and shared after KYC approval and, for a direct customer, after full payment. Where an aggregator is billed for this address, the agreement may be executed without waiting for payment.',
     ARRAY['proposal'], ARRAY['gst_new','gst_existing'], NULL, NULL),
   ('T05', 'A board resolution naming the signer is required. If the signer is not a director, their Aadhaar and PAN are also required.',
     ARRAY['proposal','agreement'], ARRAY['gst_new'], NULL, ARRAY['pvt_ltd','public_ltd']),
@@ -147,8 +147,8 @@ FROM (VALUES
     ARRAY['renewal'], ARRAY['gst_new','gst_existing'], NULL, NULL),
   ('T11', 'KYC documents already on file are reused unless details have changed.',
     ARRAY['renewal'], ARRAY['gst_new','gst_existing'], NULL, NULL),
-  ('T12', 'For a term of 24 months or more, the fee for the whole term is payable in advance. The fee is not revised during the term.',
-    ARRAY['proposal','agreement'], ARRAY['gst_new','gst_existing'], 24, NULL),
+  ('T12', 'The fee for the term is fixed and is not revised during the term. Any renewal is priced at the time it is offered.',
+    ARRAY['proposal','agreement'], ARRAY['gst_new','gst_existing'], NULL, NULL),
   ('T13', 'If the customer continues to use our address after the agreement ends, a holdover fee applies for each month of use, at the current fee plus the uplift set out in the proposal, until the customer removes our address from all registrations and confirms in writing.',
     ARRAY['agreement','renewal'], ARRAY['gst_new','gst_existing'], NULL, NULL)
 ) AS s(code, body, documents, purposes, min_term, company_types)

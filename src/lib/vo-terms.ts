@@ -134,3 +134,12 @@ export function diffSnapshots(
   for (const code of am.keys()) if (!bm.has(code)) removed.push(code);
   return { changed: changed.sort(), added: added.sort(), removed: removed.sort() };
 }
+
+/**
+ * True when a Supabase error means the terms tables are not there yet. Postgres reports 42P01;
+ * PostgREST answers PGRST205 when the table is not in its schema cache (not migrated yet, or
+ * migrated but the cache has not reloaded). Deploy precedes the hand-applied migration.
+ */
+export function isMissingTermsTable(error: { code?: string | null; message?: string | null }): boolean {
+  return error.code === "42P01" || error.code === "PGRST205" || /relation .* does not exist/i.test(error.message ?? "");
+}

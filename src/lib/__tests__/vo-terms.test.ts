@@ -4,6 +4,7 @@ import {
   diffSnapshots,
   fillPlaceholders,
   isApproved,
+  isMissingTermsTable,
   type VoClauseVersion,
 } from "@/lib/vo-terms";
 
@@ -131,5 +132,23 @@ describe("diffSnapshots", () => {
   it("is empty for identical snapshots", () => {
     const a = [{ code: "T01", version: 1 }];
     expect(diffSnapshots(a, [...a])).toEqual({ changed: [], added: [], removed: [] });
+  });
+});
+
+describe("isMissingTermsTable", () => {
+  it("recognises a Postgres undefined table", () => {
+    expect(isMissingTermsTable({ code: "42P01" })).toBe(true);
+  });
+  it("recognises a PostgREST schema cache miss", () => {
+    expect(
+      isMissingTermsTable({ code: "PGRST205", message: "Could not find the table 'public.vo_clauses' in the schema cache" }),
+    ).toBe(true);
+  });
+  it("recognises a relation-does-not-exist message", () => {
+    expect(isMissingTermsTable({ message: 'relation "vo_clauses" does not exist' })).toBe(true);
+  });
+  it("does not hide other errors", () => {
+    expect(isMissingTermsTable({ code: "23505", message: "duplicate key" })).toBe(false);
+    expect(isMissingTermsTable({ code: "42501", message: "permission denied" })).toBe(false);
   });
 });
