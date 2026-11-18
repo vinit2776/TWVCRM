@@ -587,7 +587,7 @@ export function CaseAgreementTab({ caseId, clauseGate: clauseGateFromCase, caseA
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="edit-rate">Monthly Rate (Rs.)</Label>
+              <Label htmlFor="edit-rate">Annual Rate (Rs.)</Label>
               <Input
                 id="edit-rate"
                 type="number"

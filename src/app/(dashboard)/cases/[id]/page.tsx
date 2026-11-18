@@ -355,7 +355,7 @@ export default function CaseDetailPage({
                 <CardContent>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                     <div>
-                      <span className="text-muted-foreground block text-xs">Monthly Rate</span>
+                      <span className="text-muted-foreground block text-xs">Annual Rate</span>
                       <span className="font-semibold">{caseData.rate ? formatCurrency(caseData.rate) : "Not set"}</span>
                     </div>
                     <div>
