@@ -19,6 +19,8 @@ import { hasBillingPeriod, isInvoiceDateOffPeriod } from "@/lib/invoice-date-per
 import { sameInvoiceNumber } from "@/lib/invoice-number";
 import { buildGstInvoiceEmail, buildUploadEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
 import { CustomerEmailPreview, type CustomerEmailPreviewData } from "@/components/accounting/customer-email-preview";
+import { InvoiceReasonStamp } from "@/components/accounting/invoice-reason-stamp";
+import { invoiceReasonFor } from "@/lib/invoice-reason";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
 import { AccountsNote } from "@/components/accounting/accounts-note";
 import { accountsNoteFor, isRealCompanyName, leadAddress, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
@@ -374,7 +376,10 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   return (
     <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="border-t bg-muted/30 p-4 space-y-3">
       <div className="text-sm">
-        <div className="font-medium">{replace ? "Replace Tally GST invoice" : "Upload Tally GST invoice"}</div>
+        <div className="font-medium flex items-center gap-2 flex-wrap">
+          {replace ? "Replace Tally GST invoice" : "Upload Tally GST invoice"}
+          <InvoiceReasonStamp reason={invoiceReasonFor(row)} />
+        </div>
         {replace && (
           <div className="text-xs text-amber-800 mt-0.5">
             Replaces <span className="font-mono">{row.latest_upload?.tally_invoice_number}</span>. Use this when the wrong file was attached.
