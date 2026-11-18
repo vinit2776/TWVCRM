@@ -30,6 +30,16 @@ describe("statement of account", () => {
     expect(ledger.closing).toBe(1000);
   });
 
+  it("keeps an unsent statement that has a payment on it", () => {
+    const ledger = buildLedger(
+      [stmt({ id: "p", proforma_sent_at: null })],
+      [{ billing_statement_id: "p", amount: 1000, tds_amount: 0, payment_date: "2026-07-01", payment_mode: "upi", payment_reference: null }],
+      soaRange("current", today),
+    );
+    expect(ledger.rows).toHaveLength(2);
+    expect(ledger.closing).toBe(0);
+  });
+
   it("drops payments of omitted statements and carries an opening balance", () => {
     const range = soaRange("current", today);
     const ledger = buildLedger(

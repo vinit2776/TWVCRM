@@ -90,10 +90,14 @@ export function soaRange(period: SoaPeriod, today: Date = new Date()): SoaRange 
   return { from: `${startYear}-04-01`, to: `${endYear + 1}-03-31`, label };
 }
 
-/** Whether the customer was ever given this statement. */
-export function isCustomerFacing(s: SoaStatementInput): boolean {
+/**
+ * Whether the customer was ever given this statement. Money already received
+ * against it counts too: a payment recorded on a statement with no "sent"
+ * stamp is still a real bill and dropping it would drop the payment.
+ */
+export function isCustomerFacing(s: SoaStatementInput, hasPayment = false): boolean {
   if (EXCLUDED_STATUSES.includes(s.status) || s.voided_at) return false;
-  return !!(s.proforma_sent_at || s.emailed_at || s.gst_invoice_number);
+  return !!(s.proforma_sent_at || s.emailed_at || s.gst_invoice_number || hasPayment);
 }
 
 const statementDate = (s: SoaStatementInput): string =>
@@ -113,7 +117,8 @@ export function buildLedger(
   payments: SoaPaymentInput[],
   range: SoaRange,
 ): SoaLedger {
-  const live = statements.filter(isCustomerFacing);
+  const paidIds = new Set(payments.map((p) => p.billing_statement_id));
+  const live = statements.filter((s) => isCustomerFacing(s, paidIds.has(s.id)));
   const liveIds = new Set(live.map((s) => s.id));
   const byId = new Map(live.map((s) => [s.id, s]));
 
