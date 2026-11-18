@@ -16,10 +16,10 @@ import {
  * nothing is sent to a customer.
  */
 
-/** app_settings key: legal has signed off the holdover clause (terms library). Absent or anything but "true" is no. */
+/** app_settings key: second switch alongside the terms-library approval (src/lib/vo-holdover-clause.ts). Absent or anything but "true" is no. */
 export const VO_HOLDOVER_CLAUSE_APPROVED_SETTING = "vo_holdover_clause_approved";
 
-export function isHoldoverClauseApproved(value: string | null | undefined): boolean {
+export function isHoldoverSwitchOn(value: string | null | undefined): boolean {
   return (value ?? "").trim().toLowerCase() === "true";
 }
 

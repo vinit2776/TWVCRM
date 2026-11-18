@@ -5,7 +5,7 @@ import {
   daysSinceLapse,
   decideHoldover,
   holdoverReference,
-  isHoldoverClauseApproved,
+  isHoldoverSwitchOn,
 } from "@/lib/vo-holdover-pi";
 import {
   dayOffsetFrom,
@@ -62,9 +62,9 @@ describe("helpers", () => {
     expect(cycleFromReference(null)).toBeNull();
   });
   it("clause approval is strict", () => {
-    expect(isHoldoverClauseApproved("true")).toBe(true);
-    expect(isHoldoverClauseApproved("false")).toBe(false);
-    expect(isHoldoverClauseApproved(undefined)).toBe(false);
+    expect(isHoldoverSwitchOn("true")).toBe(true);
+    expect(isHoldoverSwitchOn("false")).toBe(false);
+    expect(isHoldoverSwitchOn(undefined)).toBe(false);
   });
   it("day counts", () => {
     expect(daysSinceLapse("2026-01-01T10:00:00Z", "2026-01-31")).toBe(30);
