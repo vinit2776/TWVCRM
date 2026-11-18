@@ -594,7 +594,10 @@ export async function POST(
     // ── Create Razorpay payment link ──────────────────────────────────────────
     let rzpLinkId: string | null = null;
     let rzpLinkUrl: string | null = null;
-    if (rzpAuth) {
+    // A replacement keeps the link the statement already has: the link lives on
+    // the CRM row, not in the PDF, so the corrected email can carry it as is.
+    // (Same statement, same amount, so a payment on it reconciles normally.)
+    if (rzpAuth && !(meta.replace === true && statement.razorpay_payment_link_url)) {
       try {
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
         const payload: Record<string, unknown> & { reference_id: string; amount: number } = {
