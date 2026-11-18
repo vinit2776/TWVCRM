@@ -1,5 +1,39 @@
 import { describe, it, expect } from "vitest";
-import { computeAccessSetup, isSamePerson, phoneDigits, type PersonAccessRow } from "../contract-people";
+import {
+  computeAccessSetup,
+  FRESH_DOOR_RECORD_RESET,
+  hasLiveCard,
+  isSamePerson,
+  phoneDigits,
+  type PersonAccessRow,
+} from "../contract-people";
+
+describe("hasLiveCard", () => {
+  it("counts a card on a record still in use", () => {
+    expect(hasLiveCard([{ enrollment_status: "card_enrolled", nfc_card_number: "123" }])).toBe(true);
+    expect(hasLiveCard([{ enrollment_status: "provisioned", nfc_card_number: "123" }])).toBe(true);
+  });
+  it("ignores a card left on a blocked or deleted record", () => {
+    expect(hasLiveCard([{ enrollment_status: "blocked", nfc_card_number: "123" }])).toBe(false);
+    expect(hasLiveCard([{ enrollment_status: "deleted", nfc_card_number: "123" }])).toBe(false);
+  });
+  it("is false when no card is attached", () => {
+    expect(hasLiveCard([{ enrollment_status: "provisioned", nfc_card_number: null }])).toBe(false);
+    expect(hasLiveCard([])).toBe(false);
+  });
+});
+
+describe("FRESH_DOOR_RECORD_RESET", () => {
+  it("clears the card, enrolment times and block/delete marks so re-issuing starts clean", () => {
+    expect(FRESH_DOOR_RECORD_RESET).toEqual({
+      nfc_card_number: null,
+      card_enrolled_at: null,
+      biometric_enrolled_at: null,
+      blocked_at: null,
+      deleted_at: null,
+    });
+  });
+});
 
 function person(over: Partial<PersonAccessRow> & { contactId: string }): PersonAccessRow {
   return {

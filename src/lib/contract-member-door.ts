@@ -10,6 +10,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { provisionUser, memberCosecId, uuidToRefId, generatePin } from "@/lib/cosec";
 import { sendDoorPinEmail, type DoorPinEmailResult } from "@/lib/door-pin-email";
+import { FRESH_DOOR_RECORD_RESET } from "@/lib/contract-people";
 
 export interface ProvisionDoorResult {
   /** Devices at the location that were tried. 0 means there is nothing to provision on. */
@@ -69,6 +70,7 @@ export async function provisionMemberDoor(
           valid_until: contract.end_date ?? null,
           provisioned_at: now,
           updated_at: now,
+          ...FRESH_DOOR_RECORD_RESET,
         },
         { onConflict: "device_id,cosec_user_id" }
       );

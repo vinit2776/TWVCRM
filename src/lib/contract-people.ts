@@ -46,6 +46,32 @@ export function isSamePerson(
   return !!ea && ea === normalizeEmail(b.email);
 }
 
+// ─── Door records ────────────────────────────────────────────────────────────
+
+/**
+ * What a door record must forget when door access is issued again. Issuing again
+ * re-uses the same record (same reader + same user id), so without this the card
+ * from the previous setup stays attached: the screen says "card issued" and the
+ * setup wizard skips the card step, but the record is only `provisioned` and the
+ * person is never marked enrolled.
+ */
+export const FRESH_DOOR_RECORD_RESET = {
+  nfc_card_number: null,
+  card_enrolled_at: null,
+  biometric_enrolled_at: null,
+  blocked_at: null,
+  deleted_at: null,
+} as const;
+
+/** True when a card is attached to a door record that is still in use. */
+export function hasLiveCard(
+  rows: ReadonlyArray<{ enrollment_status: string; nfc_card_number: string | null }>
+): boolean {
+  return rows.some(
+    (r) => !!r.nfc_card_number && r.enrollment_status !== "blocked" && r.enrollment_status !== "deleted"
+  );
+}
+
 // ─── Setup state ─────────────────────────────────────────────────────────────
 
 export interface PersonAccessRow {
