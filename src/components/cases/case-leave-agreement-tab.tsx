@@ -66,6 +66,7 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
   const userRole = user?.role ?? null;
   const { enabled: leegalityEnabled } = useLeegalityEnabled();
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
+  const [unpaidWarning, setUnpaidWarning] = useState<string | null>(null);
   // A draft with no client address (or no pincode) may exist, but must not go out.
   const addressGate = agreement
     ? agreementAddressGate(((agreement.variables ?? {}) as Record<string, unknown>).client_address as string | undefined)
@@ -112,8 +113,10 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
         const json = await res.json();
         setAgreement(json.data || null);
         setPdfUrl(json.pdf_url || null);
+        setUnpaidWarning(json.unpaid_warning || null);
       } else {
         setAgreement(null);
+        setUnpaidWarning(null);
         setPdfUrl(null);
       }
     } finally {
@@ -711,6 +714,15 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
             <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{addressGate.reason}</span>
+            </div>
+          )}
+          {agreement.status === "executed" && unpaidWarning && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                This agreement is already executed but the case invoice is not paid. {unpaidWarning} Nothing has been
+                changed automatically; the warning clears once the invoice is paid.
+              </span>
             </div>
           )}
           {needsRegenerate && (

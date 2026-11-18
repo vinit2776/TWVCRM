@@ -58,9 +58,18 @@ export async function GET(
     pdfUrl = signedUrlData?.signedUrl || null;
   }
 
+  // An agreement executed before the payment rule existed (or by an
+  // override) may still have an unpaid case. Flag it on screen only; nothing
+  // is changed automatically.
+  const unpaidWarning =
+    agreement.status === "executed"
+      ? await checkVoExecutionPaymentGate(adminSupabase, caseId)
+      : null;
+
   return NextResponse.json({
     data: agreement,
     pdf_url: pdfUrl,
+    unpaid_warning: unpaidWarning,
   });
 }
 
