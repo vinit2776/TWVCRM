@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Loader2, Upload, CheckCircle, XCircle, Eye,
-  Banknote, Smartphone, CreditCard, ImageIcon, Maximize2, X,
+  Smartphone, CreditCard, ImageIcon, Maximize2, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
@@ -55,7 +55,7 @@ export function CollectPaymentDialog({
   const [payments, setPayments] = useState<BookingPayment[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<string>("cash");
+  const [paymentMode, setPaymentMode] = useState<string>("upi");
   const [amount, setAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
@@ -511,10 +511,7 @@ export function CollectPaymentDialog({
                         manual flow: the customer scans the static QR, and
                         the staff uploads the customer's confirmation
                         screenshot as proof for finance + GST invoicing. */}
-                    <TabsList className="grid w-full grid-cols-3">
-                      <TabsTrigger value="cash" className="text-xs gap-1">
-                        <Banknote className="h-3.5 w-3.5" />Cash
-                      </TabsTrigger>
+                    <TabsList className="grid w-full grid-cols-2">
                       <TabsTrigger value="upi" className="text-xs gap-1">
                         <Smartphone className="h-3.5 w-3.5" />UPI (Manual)
                       </TabsTrigger>
@@ -522,14 +519,6 @@ export function CollectPaymentDialog({
                         <CreditCard className="h-3.5 w-3.5" />Card
                       </TabsTrigger>
                     </TabsList>
-
-                    {/* Cash */}
-                    <TabsContent value="cash" className="mt-3">
-                      <div className="rounded-md bg-green-50 border border-green-200 p-3 text-sm text-green-800">
-                        <Banknote className="inline-block h-4 w-4 mr-1.5" />
-                        Cash payment of <strong>{formatCurrency(parseFloat(amount) || 0)}</strong> will be recorded as collected.
-                      </div>
-                    </TabsContent>
 
                     {/* UPI */}
                     <TabsContent value="upi" className="mt-3 space-y-4">
