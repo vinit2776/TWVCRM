@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Loader2, Upload, CheckCircle, XCircle, Eye,
-  Smartphone, CreditCard, ImageIcon, Maximize2, X,
+  Smartphone, CreditCard, ImageIcon, Maximize2, X, Camera,
 } from "lucide-react";
 import { toast } from "sonner";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
@@ -61,6 +61,13 @@ export function CollectPaymentDialog({
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  // "Take photo" only makes sense on a touch device; on a desktop the capture
+  // attribute just opens a file picker, so the button would be misleading.
+  const [hasTouchCamera, setHasTouchCamera] = useState(false);
+  useEffect(() => {
+    setHasTouchCamera(window.matchMedia("(pointer: coarse)").matches);
+  }, []);
 
   // QR code signed URL & lightbox
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
@@ -244,13 +251,13 @@ export function CollectPaymentDialog({
       return;
     }
 
-    // For UPI ("manual QR collected at the counter"), the staff MUST attach
-    // the customer's payment confirmation. The upload itself is the
-    // attestation — we then create the payment with verify_on_create so it
+    // For UPI ("manual QR collected at the counter"), the staff must give
+    // proof: a photo of the customer's confirmation, the UPI reference, or
+    // both. A photo is the attestation — we then create the payment with verify_on_create so it
     // lands in the verified state and the booking can move to checked-in
     // without a separate verification step.
-    if (paymentMode === "upi" && !screenshotFile) {
-      toast.error("Please upload the customer's payment confirmation screenshot");
+    if (paymentMode === "upi" && !screenshotFile && !paymentReference.trim()) {
+      toast.error("Enter the UPI reference or attach a photo of the confirmation");
       return;
     }
 
@@ -320,7 +327,10 @@ export function CollectPaymentDialog({
       // so include it in the optimistic total.
       const wasVerified = paymentMode === "cash" || paymentMode === "card" ||
         (paymentMode === "upi" && !!screenshotFile);
-      const newVerified = verifiedTotal + (wasVerified ? amt : 0);
+      // A reference-only UPI payment stays pending for accounts, but the server
+      // lets the guest check in on it, so close the dialog the same way.
+      const hasProof = paymentMode === "upi" && (!!screenshotFile || !!paymentReference.trim());
+      const newVerified = verifiedTotal + (wasVerified || hasProof ? amt : 0);
       if (newVerified >= totalAmount - tolerance) {
         onSuccess();
         onOpenChange(false);
@@ -599,11 +609,10 @@ export function CollectPaymentDialog({
                           is auto-marked paid so check-in can proceed. */}
                       <div className="space-y-1.5">
                         <Label className="text-xs flex items-center gap-1">
-                          Payment confirmation screenshot
-                          <span className="text-red-500">*</span>
+                          Payment confirmation photo
                         </Label>
                         <p className="text-[11px] text-muted-foreground -mt-1">
-                          Required. Upload the customer&apos;s UPI success screen — finance uses this as the GST-invoice reference and to reconcile against the bank statement.
+                          Enter the UPI reference above, attach a photo of the customer&apos;s UPI success screen, or both. A photo is marked paid straight away; a reference alone is checked by accounts.
                         </p>
                         {screenshotPreview ? (
                           <div className="relative border rounded-md p-2">
@@ -626,6 +635,17 @@ export function CollectPaymentDialog({
                             </Button>
                           </div>
                         ) : (
+                          <>
+                          {hasTouchCamera && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => cameraInputRef.current?.click()}
+                            >
+                              <Camera className="h-4 w-4 mr-2" />Take photo of customer&apos;s phone
+                            </Button>
+                          )}
                           <div
                             className="border-2 border-dashed rounded-lg p-3 text-center cursor-pointer hover:border-primary/50 transition-colors"
                             onClick={() => fileInputRef.current?.click()}
@@ -639,7 +659,20 @@ export function CollectPaymentDialog({
                             <Upload className="h-5 w-5 mx-auto text-muted-foreground mb-1" />
                             <p className="text-xs text-muted-foreground">Click or drag payment screenshot</p>
                           </div>
+                          </>
                         )}
+                        <input
+                          ref={cameraInputRef}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleFileSelect(file);
+                            e.target.value = "";
+                          }}
+                        />
                         <input
                           ref={fileInputRef}
                           type="file"
@@ -679,7 +712,7 @@ export function CollectPaymentDialog({
                 <Button
                   className="w-full"
                   onClick={handleSubmitPayment}
-                  disabled={saving || !amount || parseFloat(amount) <= 0 || (paymentMode === "upi" && !screenshotFile)}
+                  disabled={saving || !amount || parseFloat(amount) <= 0 || (paymentMode === "upi" && !screenshotFile && !paymentReference.trim())}
                 >
                   {saving ? (
                     <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>
@@ -688,7 +721,9 @@ export function CollectPaymentDialog({
                   ) : paymentMode === "upi" ? (
                     screenshotFile
                       ? `Confirm UPI Payment — ${formatCurrency(parseFloat(amount) || 0)}`
-                      : "Upload screenshot to confirm"
+                      : paymentReference.trim()
+                        ? `Record UPI Payment — ${formatCurrency(parseFloat(amount) || 0)}`
+                        : "Add reference or photo"
                   ) : (
                     `Record Card Payment — ${formatCurrency(parseFloat(amount) || 0)}`
                   )}
