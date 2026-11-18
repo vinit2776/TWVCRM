@@ -134,11 +134,12 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
     }),
     note: "The Pay Now link and UPI details are filled in when the email goes out. The attachment is the file you chose above.",
   };
-  const numberMatches = sameInvoiceNumber(confirmNumber, oldInvoiceNumber);
+  // Either number confirms: the one being uploaded (what people naturally type) or the one replaced.
+  const numberMatches = sameInvoiceNumber(confirmNumber, invoiceNumber) || sameInvoiceNumber(confirmNumber, oldInvoiceNumber);
   const confirmOk = confirmTick && numberMatches;
   // Why "Confirm and replace" is still disabled, shown next to it so it never fails silently.
   const confirmHints = [
-    ...(!numberMatches ? [`Type the invoice number ${oldInvoiceNumber || "shown above"} in the box above.`] : []),
+    ...(!numberMatches ? [`Type the invoice number ${invoiceNumber.trim() || "you are uploading"} in the box above.`] : []),
     ...(!confirmTick ? ["Tick the acknowledgement box."] : []),
   ];
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -919,7 +920,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
           <div className="font-semibold text-red-900">The customer will be notified with the new attachment</div>
           <CustomerEmailPreview preview={resendPreview} heading="Email the customer will receive" />
           <label className="block">
-            <span className="block mb-1">Type <span className="font-mono font-semibold">{oldInvoiceNumber}</span> to confirm</span>
+            <span className="block mb-1">Type the invoice number you are uploading, <span className="font-mono font-semibold">{invoiceNumber.trim()}</span>, to confirm</span>
             <input
               type="text"
               value={confirmNumber}
@@ -932,7 +933,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
             />
             {confirmNumber.trim() !== "" && (
               <span className={`mt-1 block ${numberMatches ? "text-green-700" : "text-amber-800"}`}>
-                {numberMatches ? "✓ Matches" : "Doesn't match yet — type the number exactly as shown above."}
+                {numberMatches ? "✓ Matches" : "Doesn't match yet — type the invoice number shown above."}
               </span>
             )}
           </label>

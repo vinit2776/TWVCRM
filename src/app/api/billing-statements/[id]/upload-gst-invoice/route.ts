@@ -306,8 +306,11 @@ export async function POST(
         return badRequest("Give a reason of at least 10 characters for replacing an invoice that was already sent.");
       }
       // Second step of the confirmation, re-checked here so the API can't be used to skip it.
-      if (!live.some((u) => sameInvoiceNumber(u.tally_invoice_number, meta.confirm_replace_number))) {
-        return badRequest("Confirmation failed: type the number of the invoice being replaced exactly to confirm.");
+      // The number being uploaded or the one being replaced both confirm intent.
+      const typedOk = sameInvoiceNumber(meta.tally_invoice_number, meta.confirm_replace_number)
+        || live.some((u) => sameInvoiceNumber(u.tally_invoice_number, meta.confirm_replace_number));
+      if (!typedOk) {
+        return badRequest("Confirmation failed: type the invoice number you are uploading to confirm.");
       }
     } else {
       if (statement.tally_delivered_at) {
