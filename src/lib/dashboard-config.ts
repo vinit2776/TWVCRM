@@ -43,7 +43,8 @@ export type WidgetId =
   | "week_in_review"
   | "quick_charge"
   | "accounts_overview"
-  | "accounts_work_queue";
+  | "accounts_work_queue"
+  | "it_work_queue";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   quick_charge:           { id: "quick_charge",           title: "Log a Charge" },
   accounts_overview:      { id: "accounts_overview",      title: "Accounts Overview" },
   accounts_work_queue:    { id: "accounts_work_queue",    title: "Accounts Work Queue" },
+  it_work_queue:          { id: "it_work_queue",          title: "IT Work Queue" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
@@ -192,15 +194,17 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   ],
 
   // IT Manager
+  // The work queue replaces My next steps: it carries the same IT-owned onboarding
+  // steps plus tickets and tasks, with lateness. Network and SLA risk stay for health.
   it_manager: [
-    "next_steps",
+    "it_work_queue",
     "network",
     "sla_risk",
   ],
 
   // IT Technician
   it_technician: [
-    "next_steps",
+    "it_work_queue",
     "network",
     "sla_risk",
   ],

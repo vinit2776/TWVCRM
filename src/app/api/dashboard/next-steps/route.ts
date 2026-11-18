@@ -16,6 +16,10 @@ export interface NextStepItem {
   /** false = waiting on someone else; shown muted. */
   actionable: boolean;
   since: string;
+  /** The live contract the steps act on, if there is one. Null while the customer is still at proposal stage. */
+  contractId: string | null;
+  /** When the contract was activated; null until then. */
+  activatedAt: string | null;
 }
 
 /**
@@ -58,6 +62,8 @@ export async function GET() {
           ctaLabel: s.ctaLabel,
           actionable: s.actionable,
           since: o.since,
+          contractId: o.contractId,
+          activatedAt: o.activatedAt,
         });
       }
     }

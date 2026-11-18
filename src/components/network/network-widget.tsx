@@ -44,7 +44,9 @@ export function NetworkWidget({ locationId }: NetworkWidgetProps) {
         const lid = locationId ?? unifiLocations[0].id;
         return fetch(`/api/unifi/dashboard?location_id=${lid}`)
           .then((r) => r.json())
-          .then((d) => setData(d))
+          // A failed call returns an error body with no `internet`; showing it
+          // would crash the whole dashboard, so the card stays hidden instead.
+          .then((d) => { if (d?.internet && d?.today) setData(d); })
           .catch(() => {});
       })
       .catch(() => {})
