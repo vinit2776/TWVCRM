@@ -22,6 +22,8 @@ export async function POST(
   const { id } = await params;
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
+  // Set by the Replace invoice flow so the audit entry says why this email went out.
+  const replacement = body.replacement === true;
   const toOverride: string[] = Array.isArray(body.to) ? (body.to as string[]).filter(Boolean) : [];
   const supabase = await createClient();
 
@@ -193,8 +195,8 @@ export async function POST(
       entity_type: "billing_statement",
       entity_id: id,
       action: "email_failed",
-      performed_by: null,
-      changes: { error: sendResult.error.message, recipient: toList.join(", "), trigger: "resend_gst_invoice" },
+      performed_by: dbUser.id,
+      changes: { error: sendResult.error.message, recipient: toList.join(", "), trigger: replacement ? "replaced_invoice_resend" : "resend_gst_invoice" },
     });
     return NextResponse.json(
       { error: `Email delivery failed: ${sendResult.error.message}` },
@@ -222,8 +224,8 @@ export async function POST(
     entity_type: "billing_statement",
     entity_id: id,
     action: "email_resent",
-    performed_by: null,
-    changes: { recipient: toList.join(", "), cc: additionalCc.length > 0 ? additionalCc : undefined, invoice_number: invoiceNumber, trigger: "resend_gst_invoice" },
+    performed_by: dbUser.id,
+    changes: { recipient: toList.join(", "), cc: additionalCc.length > 0 ? additionalCc : undefined, invoice_number: invoiceNumber, trigger: replacement ? "replaced_invoice_resend" : "resend_gst_invoice" },
   });
 
   return NextResponse.json({ ok: true, emailed_to: toList.join(", ") });

@@ -373,6 +373,9 @@ export async function GET(
       const to = HANDOFF_STATE_LABELS[handoff.new as HandoffState] ?? String(handoff.new);
       label = `Workflow → ${to}`;
       highlight = handoff.new === "direct_gst_requested";
+    } else if (a.action === "replace" && changes.gst_invoice_upload) {
+      label = `GST invoice replaced — ${changes.gst_invoice_upload.old ?? "?"} → ${changes.gst_invoice_upload.new ?? "?"}`;
+      highlight = !!changes.replaced_after_sent;
     } else if (a.action !== "update") {
       label = a.action.replace(/_/g, " ").replace(/^./, (c: string) => c.toUpperCase());
     } else {
@@ -386,6 +389,8 @@ export async function GET(
       id: `aud-${a.id}`, at: a.created_at, kind: "audit", label,
       detail: reversedPayment
         ? String(changes.rollback_reason?.new ?? "")
+        : a.action === "replace" && changes.replaced_after_sent
+          ? `After it was sent to the customer — ${String(changes.replace_reason?.new ?? "no reason recorded")}`
         : trigger ? `via ${trigger.replace(/_/g, " ")}` : null,
       actor: actorName(a.performed_by) ?? actorLabel ?? "System",
       highlight,

@@ -1692,7 +1692,9 @@ const InboxRowItem = memo(function InboxRowItem({
     (row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested");
   const canSend = !cancelling && row.handoff_state === "ready_to_send" && !row.has_discrepancy;
   // An uploaded invoice that has not gone out yet can be corrected in place.
-  const canReplace = !cancelling && row.handoff_state === "ready_to_send"
+  const canReplace = !cancelling
+    && (row.handoff_state === "ready_to_send" || row.handoff_state === "gst_sent_awaiting_payment" || row.handoff_state === "gst_sent")
+    && !!row.latest_upload
     && (currentUserRole === "accounts" || currentUserRole === "admin");
   const canRecordPayment = !cancelling && (
     row.handoff_state === "gst_sent_awaiting_payment"
@@ -2110,7 +2112,7 @@ const InboxRowItem = memo(function InboxRowItem({
               onClick={onToggle}
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
               aria-expanded={expanded}
-              title="Wrong invoice or period? Upload the corrected Tally invoice before it is sent"
+              title="Wrong invoice or period? Upload the corrected Tally invoice"
             >
               {expanded ? <><ChevronUp className="h-3 w-3" /> Close</> : <><Upload className="h-3 w-3" /> Replace invoice</>}
             </button>
