@@ -11,6 +11,7 @@ import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
 import { annexureFromSections } from "@/lib/electricity-annexure";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
+import { sameInvoiceNumber } from "@/lib/invoice-number";
 import { buildUploadEmail } from "@/lib/gst-invoice-email";
 import { logAudit } from "@/lib/audit";
 import { extractFromPdf } from "@/lib/tally-pdf-extract";
@@ -305,8 +306,7 @@ export async function POST(
         return badRequest("Give a reason of at least 10 characters for replacing an invoice that was already sent.");
       }
       // Second step of the confirmation, re-checked here so the API can't be used to skip it.
-      const typed = (meta.confirm_replace_number ?? "").trim().toLowerCase();
-      if (!live.some((u) => (u.tally_invoice_number ?? "").trim().toLowerCase() === typed) || !typed) {
+      if (!live.some((u) => sameInvoiceNumber(u.tally_invoice_number, meta.confirm_replace_number))) {
         return badRequest("Confirmation failed: type the number of the invoice being replaced exactly to confirm.");
       }
     } else {
