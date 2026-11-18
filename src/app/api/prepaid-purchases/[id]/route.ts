@@ -54,17 +54,29 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ error: "new_expires_at is required" }, { status: 400 });
   }
 
+  const { data: currentUser } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+  if (!currentUser || !["admin", "manager"].includes(currentUser.role)) {
+    return NextResponse.json({ error: "Only admins and managers can extend a package" }, { status: 403 });
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(new_expires_at)) || new_expires_at < new Date().toISOString().split("T")[0]) {
+    return NextResponse.json({ error: "new_expires_at must be a date that is not in the past" }, { status: 400 });
+  }
+
   // Fetch current purchase to validate it exists
   const { data: existing } = await supabase
     .from("prepaid_purchases")
-    .select("id, status, expires_at")
+    .select("id, status, payment_status, total_credits, credits_used, expires_at")
     .eq("id", id)
     .single();
 
   if (!existing) return NextResponse.json({ error: "Purchase not found" }, { status: 404 });
 
-  if (existing.status === "exhausted") {
+  if (existing.status === "exhausted" || Number(existing.total_credits) - Number(existing.credits_used) <= 0) {
     return NextResponse.json({ error: "Cannot extend an exhausted purchase" }, { status: 400 });
+  }
+  if (existing.payment_status !== "paid") {
+    return NextResponse.json({ error: "Cannot extend a purchase that has not been paid for" }, { status: 400 });
   }
 
   const { data, error } = await supabase

@@ -99,6 +99,9 @@ export const BookingSummarySection = memo(function BookingSummarySection() {
                 ? `Package covers (${coveredHours}h)`
                 : "Package applied";
             }
+            // The package pays for the covered portion's GST as well, so the
+            // credit must be grossed up before it is netted off the GST-inclusive total.
+            coveredAmount = coveredAmount * (1 + GST_RATE / 100);
             const topUpDue = Math.max(0, totalAmountWithGst - coveredAmount);
             return (
               <>

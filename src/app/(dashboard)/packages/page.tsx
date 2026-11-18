@@ -112,6 +112,7 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
     if (!name.trim()) { toast.error("Package name is required"); return; }
     if (!totalCredits || isNaN(Number(totalCredits))) { toast.error("Total credits required"); return; }
     if (!price || isNaN(Number(price))) { toast.error("Price required"); return; }
+    if (workspaceType === "__none" && spaceId === "__none") { toast.error("Choose the space type or space this package applies to"); return; }
 
     setSaving(true);
     try {
