@@ -97,6 +97,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
     totalDisplay: formatCurrency(row.statement_total_amount),
     contractNumber: row.contract?.contract_number ?? row.proposal?.proposal_number ?? row.invoice?.invoice_number ?? "",
     isReceipt: row.payment_status === "paid",
+    isReplacement: true,
   });
   const emailPreviewText = emailPreview.html.replace(/<br\s*\/?>/g, "\n").replace(/<\/p>/g, "\n").replace(/<[^>]+>/g, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   const confirmOk = confirmTick && !!oldInvoiceNumber

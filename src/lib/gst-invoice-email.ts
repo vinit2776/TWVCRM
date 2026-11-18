@@ -11,6 +11,8 @@ export interface GstInvoiceEmailInput {
   contractNumber: string;
   /** Statement already paid: the email is a receipt copy with no payment ask. */
   isReceipt: boolean;
+  /** Replaces an invoice file the customer was already emailed: says to ignore the earlier attachment. */
+  isReplacement?: boolean;
 }
 
 export function gstInvoiceFilename(invoiceNumber: string): string {
@@ -18,17 +20,23 @@ export function gstInvoiceFilename(invoiceNumber: string): string {
 }
 
 export function buildGstInvoiceEmail(i: GstInvoiceEmailInput): { subject: string; html: string } {
-  const subject = i.isReceipt
+  const base = i.isReceipt
     ? `GST tax invoice ${i.invoiceNumber} — receipt`
     : `GST tax invoice ${i.invoiceNumber} — ${i.totalDisplay} due`;
+  const subject = i.isReplacement ? `Corrected: ${base}` : base;
+
+  const replacementNote = i.isReplacement
+    ? `<p><strong>Please ignore the attachment in our previous email for this invoice — it was sent by a system error. The attachment in this email is the correct one.</strong></p>
+       `
+    : "";
 
   const html = i.isReceipt
     ? `<p>Dear ${i.partyName},</p>
-       <p>Please find attached your GST tax invoice <strong>${i.invoiceNumber}</strong> for <strong>${i.totalDisplay}</strong> against contract ${i.contractNumber}.</p>
+       ${replacementNote}<p>Please find attached your GST tax invoice <strong>${i.invoiceNumber}</strong> for <strong>${i.totalDisplay}</strong> against contract ${i.contractNumber}.</p>
        <p>This invoice is for your records. No further action is required.</p>
        <p>Regards,<br/>The WorkVilla — Accounts</p>`
     : `<p>Dear ${i.partyName},</p>
-       <p>Please find attached your GST tax invoice <strong>${i.invoiceNumber}</strong> for <strong>${i.totalDisplay}</strong> against contract ${i.contractNumber}.</p>
+       ${replacementNote}<p>Please find attached your GST tax invoice <strong>${i.invoiceNumber}</strong> for <strong>${i.totalDisplay}</strong> against contract ${i.contractNumber}.</p>
        <p>Kindly arrange payment at the earliest. If a payment link is needed, please reply to this email and we will share one promptly.</p>
        <p>Regards,<br/>The WorkVilla — Accounts</p>`;
 

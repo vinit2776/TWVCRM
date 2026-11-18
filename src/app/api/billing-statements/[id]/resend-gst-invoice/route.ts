@@ -135,7 +135,7 @@ export async function POST(
   const totalDisplay = formatCurrency(Number(statement.total_amount));
   const filename = gstInvoiceFilename(invoiceNumber);
   const { subject, html } = buildGstInvoiceEmail({
-    partyName, invoiceNumber, totalDisplay, contractNumber, isReceipt,
+    partyName, invoiceNumber, totalDisplay, contractNumber, isReceipt, isReplacement: replacement,
   });
 
   const nowIso = new Date().toISOString();
