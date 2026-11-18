@@ -937,7 +937,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                   <LogIn className="mr-1 h-4 w-4" />Check In
                 </Button>
               )}
-              {walkInBalanceDue > 0 && (userRole === "admin" || userRole === "manager") && (
+              {!needsCloseOut && walkInBalanceDue > 0 && (userRole === "admin" || userRole === "manager") && (
                 <Button variant="outline" size="sm" onClick={() => setOverrideDialogOpen(true)}>
                   Check in with balance due
                 </Button>
