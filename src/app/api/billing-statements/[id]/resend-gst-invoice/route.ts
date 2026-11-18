@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { formatCurrency } from "@/lib/utils";
+import { buildGstInvoiceEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
 import { logCommunication } from "@/lib/communications-log";
 
 /**
@@ -132,21 +133,10 @@ export async function POST(
   const partyName = lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "Customer";
   const isReceipt = statement.payment_status === "paid";
   const totalDisplay = formatCurrency(Number(statement.total_amount));
-  const filename = `${invoiceNumber.replace(/[^\w-]/g, "_")}.pdf`;
-
-  const subject = isReceipt
-    ? `GST tax invoice ${invoiceNumber} — receipt`
-    : `GST tax invoice ${invoiceNumber} — ${totalDisplay} due`;
-
-  const html = isReceipt
-    ? `<p>Dear ${partyName},</p>
-       <p>Please find attached your GST tax invoice <strong>${invoiceNumber}</strong> for <strong>${totalDisplay}</strong> against contract ${contractNumber}.</p>
-       <p>This invoice is for your records. No further action is required.</p>
-       <p>Regards,<br/>The WorkVilla — Accounts</p>`
-    : `<p>Dear ${partyName},</p>
-       <p>Please find attached your GST tax invoice <strong>${invoiceNumber}</strong> for <strong>${totalDisplay}</strong> against contract ${contractNumber}.</p>
-       <p>Kindly arrange payment at the earliest. If a payment link is needed, please reply to this email and we will share one promptly.</p>
-       <p>Regards,<br/>The WorkVilla — Accounts</p>`;
+  const filename = gstInvoiceFilename(invoiceNumber);
+  const { subject, html } = buildGstInvoiceEmail({
+    partyName, invoiceNumber, totalDisplay, contractNumber, isReceipt, isReplacement: replacement,
+  });
 
   const nowIso = new Date().toISOString();
   const sendResult = await resend.emails.send({

@@ -12,9 +12,11 @@
  */
 
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
+import { buildGstInvoiceEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
 import { isRealCompanyName, leadAddress, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
 import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
@@ -86,6 +88,19 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   const [confirmStep, setConfirmStep] = useState(false);
   const [confirmNumber, setConfirmNumber] = useState("");
   const [confirmTick, setConfirmTick] = useState(false);
+  // What the customer will be emailed on replace — same builder as the resend route.
+  const customerRecipients = Array.from(new Set(
+    [lead?.email, ...(lead?.billing_emails ?? [])].filter((e): e is string => !!e),
+  ));
+  const emailPreview = buildGstInvoiceEmail({
+    partyName,
+    invoiceNumber: invoiceNumber.trim() || "(new invoice number)",
+    totalDisplay: formatCurrency(row.statement_total_amount),
+    contractNumber: row.contract?.contract_number ?? row.proposal?.proposal_number ?? row.invoice?.invoice_number ?? "",
+    isReceipt: row.payment_status === "paid",
+    isReplacement: true,
+  });
+  const emailPreviewText = emailPreview.html.replace(/<br\s*\/?>/g, "\n").replace(/<\/p>/g, "\n").replace(/<[^>]+>/g, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   const confirmOk = confirmTick && !!oldInvoiceNumber
     && confirmNumber.trim().toLowerCase() === oldInvoiceNumber.trim().toLowerCase();
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -298,6 +313,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
           setSubmitting(false);
           return;
         }
+        toast.success(`Invoice replaced. The customer (${customerRecipients.join(", ") || "on file"}) has been emailed the new attachment.`);
       }
       if (body.email_warning) {
         setEmailWarning(body.email_warning);
@@ -862,6 +878,19 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
             <span className="font-mono">{invoiceNumber.trim()}</span> for {partyName}, and emailing the customer the
             new one. This is recorded against your user.
           </p>
+          <div className="rounded border border-red-200 bg-background p-2.5 text-foreground space-y-1">
+            <div className="font-semibold text-red-900">The customer will be notified with the new attachment</div>
+            {customerRecipients.length > 0 ? (
+              <>
+                <div><span className="text-muted-foreground">To:</span> {customerRecipients.join(", ")}</div>
+                <div><span className="text-muted-foreground">Subject:</span> {emailPreview.subject}</div>
+                <div><span className="text-muted-foreground">Attachment:</span> <span className="font-mono">{gstInvoiceFilename(invoiceNumber.trim() || "invoice")}</span> (the file you just attached)</div>
+                <div className="whitespace-pre-wrap rounded bg-muted/40 p-2 text-[11px] leading-relaxed">{emailPreviewText}</div>
+              </>
+            ) : (
+              <div className="text-amber-800">No email address is on file for this customer, so nothing will be sent. Add one, then use Resend email on this row.</div>
+            )}
+          </div>
           <label className="block">
             <span className="block mb-1">Type <span className="font-mono font-semibold">{oldInvoiceNumber}</span> to confirm</span>
             <input
