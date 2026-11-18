@@ -121,11 +121,17 @@ export function buildStatementOfAccountPdf({ ledger, party }: SoaResult): Buffer
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text(party.name, 15, y);
-  y += 5;
+  // Name and address can run to several lines; advance by the lines actually drawn.
+  const nameLines = doc.splitTextToSize(party.name, 180) as string[];
+  doc.text(nameLines, 15, y);
+  y += nameLines.length * 5;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
-  if (party.address) { doc.text(doc.splitTextToSize(party.address, 120), 15, y); y += 4.5; }
+  if (party.address) {
+    const addressLines = doc.splitTextToSize(party.address, 180) as string[];
+    doc.text(addressLines, 15, y);
+    y += addressLines.length * 4.2 + 0.5;
+  }
   if (party.gstin) { doc.text(`GSTIN: ${party.gstin}`, 15, y); y += 4.5; }
   y += 3;
   ctx.y = y;
