@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
+import { sameInvoiceNumber } from "@/lib/invoice-number";
 import { buildGstInvoiceEmail, buildUploadEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
 import { CustomerEmailPreview, type CustomerEmailPreviewData } from "@/components/accounting/customer-email-preview";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
@@ -133,8 +134,14 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
     }),
     note: "The Pay Now link and UPI details are filled in when the email goes out. The attachment is the file you chose above.",
   };
-  const confirmOk = confirmTick && !!oldInvoiceNumber
-    && confirmNumber.trim().toLowerCase() === oldInvoiceNumber.trim().toLowerCase();
+  // Either number confirms: the one being uploaded (what people naturally type) or the one replaced.
+  const numberMatches = sameInvoiceNumber(confirmNumber, invoiceNumber) || sameInvoiceNumber(confirmNumber, oldInvoiceNumber);
+  const confirmOk = confirmTick && numberMatches;
+  // Why "Confirm and replace" is still disabled, shown next to it so it never fails silently.
+  const confirmHints = [
+    ...(!numberMatches ? [`Type the invoice number ${invoiceNumber.trim() || "you are uploading"} in the box above.`] : []),
+    ...(!confirmTick ? ["Tick the acknowledgement box."] : []),
+  ];
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -913,14 +920,22 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
           <div className="font-semibold text-red-900">The customer will be notified with the new attachment</div>
           <CustomerEmailPreview preview={resendPreview} heading="Email the customer will receive" />
           <label className="block">
-            <span className="block mb-1">Type <span className="font-mono font-semibold">{oldInvoiceNumber}</span> to confirm</span>
+            <span className="block mb-1">Type the invoice number you are uploading, <span className="font-mono font-semibold">{invoiceNumber.trim()}</span>, to confirm</span>
             <input
               type="text"
               value={confirmNumber}
               onChange={(e) => setConfirmNumber(e.target.value)}
               className="w-full rounded border px-2 py-1.5 text-sm font-mono text-foreground"
               autoComplete="off"
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
             />
+            {confirmNumber.trim() !== "" && (
+              <span className={`mt-1 block ${numberMatches ? "text-green-700" : "text-amber-800"}`}>
+                {numberMatches ? "✓ Matches" : "Doesn't match yet — type the invoice number shown above."}
+              </span>
+            )}
           </label>
           <label className="flex items-start gap-2 cursor-pointer">
             <input type="checkbox" checked={confirmTick} onChange={(e) => setConfirmTick(e.target.checked)} className="mt-0.5" />
@@ -951,6 +966,12 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
         <div className="text-xs text-muted-foreground">
           Nothing is emailed on upload for a paid statement. You will see the customer email before it is sent.
         </div>
+      )}
+
+      {replaceSent && confirmStep && confirmHints.length > 0 && (
+        <ul className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded p-2 space-y-0.5">
+          {confirmHints.map((h) => <li key={h}>To continue: {h}</li>)}
+        </ul>
       )}
 
       <div className="flex items-center justify-end gap-2 pt-1">
