@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
-import { GROUP_OUTCOMES, INBOUND_GROUPS, inboundGroupOf, type InboundGroup } from "@/lib/whatsapp-inbound-log";
+import { INBOUND_GROUPS, inboundGroupOf, websiteTriggerOf, type InboundGroup } from "@/lib/whatsapp-inbound-log";
 import { last10Of } from "@/lib/whatsapp-gate";
 
-// GET /api/whatsapp/inbound-log — every inbound WhatsApp message and what the CRM did with it.
+// GET /api/whatsapp/inbound-log — inbound WhatsApp messages and what the CRM did with them.
+//   By default only messages sent by one of the website's prefilled WhatsApp buttons;
+//   &all=true     every inbound message on the number, for looking something up by hand
 //   ?group=new|re_enquiry|follow_up|junk|held|ignored|other|untracked   (default: all)
 //   &source=ad|direct       an ad reply, or a message typed straight to the number
 //   &days=7                 look-back window (default 7, max 90)
@@ -66,28 +68,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "The inbound log is not set up on this database yet." }, { status: 503 });
   }
 
-  // Counts: one pass over the window's outcome column, not a query per group.
-  const { data: outcomeRows, error: countError } = await supabase
-    .from("whatsapp_messages")
-    .select("intake_outcome, is_ad_reply")
-    .eq("direction", "inbound")
-    .eq("channel", "whatsapp")
-    .gte("created_at", since)
-    .limit(10000);
-  if (countError) return NextResponse.json({ error: countError.message }, { status: 500 });
-  const counts: Record<InboundGroup, number> = { new: 0, re_enquiry: 0, follow_up: 0, junk: 0, held: 0, ignored: 0, other: 0, untracked: 0 };
-  for (const r of (outcomeRows ?? []) as { intake_outcome: string | null; is_ad_reply: boolean | null }[]) {
-    if (source === "ad" && !r.is_ad_reply) continue;
-    if (source === "direct" && r.is_ad_reply) continue;
-    counts[inboundGroupOf(r.intake_outcome)] += 1;
-  }
-
-  let rowsQuery = base().order("created_at", { ascending: false }).limit(limit);
-  if (group === "untracked") rowsQuery = rowsQuery.is("intake_outcome", null);
-  else if (group) rowsQuery = rowsQuery.in("intake_outcome", GROUP_OUTCOMES[group]);
-  const { data, error } = await rowsQuery;
+  // The window's rows are matched in code (the prefilled texts are a prefix rule, not a column), so
+  // counts and rows come from one pass.
+  const all = sp.get("all") === "true";
+  const { data: windowRows, error } = await base().order("created_at", { ascending: false }).limit(5000);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  const rows = (data ?? []) as Row[];
+  const kept = ((windowRows ?? []) as Row[])
+    .map((r) => ({ r, trigger: websiteTriggerOf(r.message_body) }))
+    .filter((x) => all || x.trigger);
+  const counts: Record<InboundGroup, number> = { new: 0, re_enquiry: 0, follow_up: 0, junk: 0, held: 0, ignored: 0, other: 0, untracked: 0 };
+  for (const { r } of kept) counts[inboundGroupOf(r.intake_outcome)] += 1;
+  const shown = kept.filter(({ r }) => !group || inboundGroupOf(r.intake_outcome) === group).slice(0, limit);
+  const rows = shown.map((x) => x.r);
 
   // Names and enquiry links. A number with no lead yet (held, ignored) shows as the number alone.
   const leadIds = [...new Set(rows.map((r) => r.entity_id).filter((x): x is string => !!x))];
@@ -105,7 +97,7 @@ export async function GET(request: NextRequest) {
   );
   const leadOfReference = new Map((enquiries ?? []).map((e) => [e.reference, e.lead_id]));
 
-  const data_ = rows.map((r) => {
+  const data_ = shown.map(({ r, trigger }) => {
     const outcome = r.intake_outcome;
     return {
       id: r.id,
@@ -118,6 +110,7 @@ export async function GET(request: NextRequest) {
       ad_headline: r.ad_headline,
       outcome,
       group: inboundGroupOf(outcome),
+      website_trigger: trigger,
       reference: r.enquiry_reference,
       lead_id: (r.enquiry_reference && leadOfReference.get(r.enquiry_reference)) || r.entity_id || null,
     };

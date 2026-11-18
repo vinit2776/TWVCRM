@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { ArrowRight, Megaphone, MessageCircle } from "lucide-react";
+import { Megaphone, MessageCircle } from "lucide-react";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { formatSmartDate } from "@/lib/utils";
@@ -10,6 +9,8 @@ import {
   INBOUND_GROUPS,
   INBOUND_GROUP_LABEL,
   inboundOutcomeDetail,
+  WEBSITE_TRIGGER_LABEL,
+  type WebsiteTrigger,
   type InboundGroup,
 } from "@/lib/whatsapp-inbound-log";
 
@@ -24,6 +25,7 @@ type LogRow = {
   ad_headline: string | null;
   outcome: string | null;
   group: InboundGroup;
+  website_trigger: WebsiteTrigger | null;
   reference: string | null;
   lead_id: string | null;
 };
@@ -50,10 +52,10 @@ const WINDOWS = [
  * go" can be answered without asking an engineer. Read-only; the cards stay the place to act.
  */
 export function InboundWhatsAppLog() {
-  const router = useRouter();
   const [group, setGroup] = useState<InboundGroup | "all">("all");
   const [source, setSource] = useState<"any" | "ad" | "direct">("any");
   const [days, setDays] = useState(7);
+  const [showAll, setShowAll] = useState(false);
   const [rows, setRows] = useState<LogRow[]>([]);
   const [counts, setCounts] = useState<Record<InboundGroup, number> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -65,6 +67,7 @@ export function InboundWhatsAppLog() {
     const params = new URLSearchParams({ days: String(days) });
     if (group !== "all") params.set("group", group);
     if (source !== "any") params.set("source", source);
+    if (showAll) params.set("all", "true");
     try {
       const res = await fetch(`/api/whatsapp/inbound-log?${params}`);
       const json = await res.json();
@@ -76,7 +79,7 @@ export function InboundWhatsAppLog() {
     } finally {
       setLoading(false);
     }
-  }, [group, source, days]);
+  }, [group, source, days, showAll]);
 
   useEffect(() => {
     load();
@@ -114,6 +117,9 @@ export function InboundWhatsAppLog() {
             {label}
           </button>
         ))}
+        <button className={chip(showAll)} onClick={() => setShowAll((v) => !v)}>
+          Also show other messages
+        </button>
         <span className="ml-auto flex items-center gap-2">
           {WINDOWS.map((w) => (
             <button key={w.days} className={chip(days === w.days)} onClick={() => setDays(w.days)}>
@@ -130,21 +136,16 @@ export function InboundWhatsAppLog() {
       ) : rows.length === 0 ? (
         <EmptyState
           icon={MessageCircle}
-          title="No messages in this view"
-          description="Nothing matches these filters. Widen the window or pick All."
+          title="No website enquiries in this view"
+          description="Only messages sent from the website's WhatsApp buttons show here. Widen the window, or turn on Also show other messages."
         />
       ) : (
         <div className="divide-y rounded-md border">
           {rows.map((r) => {
-            const canOpen = !!r.lead_id;
             return (
               <div
                 key={r.id}
-                role={canOpen ? "link" : undefined}
-                tabIndex={canOpen ? 0 : undefined}
-                onClick={canOpen ? () => router.push(`/leads/${r.lead_id}`) : undefined}
-                onKeyDown={canOpen ? (e) => e.key === "Enter" && router.push(`/leads/${r.lead_id}`) : undefined}
-                className={`grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[110px_1fr_220px] sm:gap-4 ${canOpen ? "cursor-pointer hover:bg-muted/30" : ""}`}
+                className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[110px_1fr_220px] sm:gap-4"
               >
                 <span className="text-xs text-muted-foreground">{formatSmartDate(r.at)}</span>
                 <div className="min-w-0 space-y-0.5">
@@ -153,7 +154,7 @@ export function InboundWhatsAppLog() {
                     {r.name && r.number_last10 && <span className="text-xs text-muted-foreground">…{r.number_last10.slice(-4)}</span>}
                     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                       {r.is_ad_reply ? <Megaphone className="h-3 w-3" /> : <MessageCircle className="h-3 w-3" />}
-                      {r.is_ad_reply ? "Ad reply" : "Direct message"}
+                      {r.website_trigger ? `Website · ${WEBSITE_TRIGGER_LABEL[r.website_trigger]}` : r.is_ad_reply ? "Ad reply" : "Direct message"}
                     </span>
                   </div>
                   <p className="line-clamp-2 text-xs text-muted-foreground" title={r.message ?? undefined}>
@@ -166,7 +167,6 @@ export function InboundWhatsAppLog() {
                   </span>
                   <p className="flex items-center gap-1 text-xs text-muted-foreground sm:justify-end">
                     {inboundOutcomeDetail(r.outcome, r.reference)}
-                    {canOpen && <ArrowRight className="h-3 w-3 shrink-0" />}
                   </p>
                 </div>
               </div>
