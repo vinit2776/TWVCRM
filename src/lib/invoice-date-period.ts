@@ -26,3 +26,13 @@ export function isInvoiceDateOffPeriod(
   const m = month(invoiceDate);
   return m < monthBefore(periodStart) || m > month(periodEnd);
 }
+
+/**
+ * Whether a statement's period_start/period_end mean anything to the customer or
+ * to GST. A reimbursement bill (a purchase re-billed at cost) is dated by the day
+ * it was raised, so showing, checking or printing a "billing period" on it only
+ * misleads accounts.
+ */
+export function hasBillingPeriod(statementType: string | null | undefined): boolean {
+  return statementType !== "reimbursement";
+}

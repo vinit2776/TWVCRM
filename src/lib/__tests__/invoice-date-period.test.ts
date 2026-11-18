@@ -24,3 +24,14 @@ describe("isInvoiceDateOffPeriod", () => {
     expect(isInvoiceDateOffPeriod("", "2026-10-04", "2026-10-31")).toBe(false);
   });
 });
+
+import { hasBillingPeriod } from "../invoice-date-period";
+
+describe("hasBillingPeriod", () => {
+  it("is false only for reimbursement statements", () => {
+    expect(hasBillingPeriod("reimbursement")).toBe(false);
+    for (const t of ["rent", "usage", "combined", "electricity", null, undefined]) {
+      expect(hasBillingPeriod(t)).toBe(true);
+    }
+  });
+});

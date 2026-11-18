@@ -83,7 +83,8 @@ export function buildInboxSendEmail(i: InboxSendEmailInput): { subject: string; 
 // ── Email sent straight from an unpaid GST upload (upload-gst-invoice route) ─
 export interface UploadEmailInput {
   customerName: string;
-  periodLabel: string;
+  /** Null when the statement has no billing period (e.g. a reimbursement): the period lines are left out. */
+  periodLabel: string | null;
   invoiceNumber: string;
   /** "Contract" | "Proposal Ref" | "Invoice" */
   refLabel: string;
@@ -104,11 +105,11 @@ export function buildUploadEmail(i: UploadEmailInput): { subject: string; html: 
           </div>
           <div style="padding:32px;">
             <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
-            <p style="color:#333;font-size:14px;">Please find attached your GST tax invoice for <strong>${i.periodLabel}</strong>. Kindly make payment at your earliest convenience.</p>
+            <p style="color:#333;font-size:14px;">Please find attached your GST tax invoice${i.periodLabel ? ` for <strong>${i.periodLabel}</strong>` : ""}. Kindly make payment at your earliest convenience.</p>
             <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
               <tr><td style="padding:6px 0;color:#666;">Invoice No.</td><td style="padding:6px 0;font-weight:600;">${i.invoiceNumber}</td></tr>
               <tr><td style="padding:6px 0;color:#666;">${i.refLabel}</td><td style="padding:6px 0;">${i.contractNumber}</td></tr>
-              <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${i.periodLabel}</td></tr>
+              ${i.periodLabel ? `<tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${i.periodLabel}</td></tr>` : ""}
               <tr><td style="padding:6px 0;color:#666;">Invoice Date</td><td style="padding:6px 0;">${i.invoiceDateFormatted}</td></tr>
               <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${i.amountFormatted}</td></tr>
             </table>
