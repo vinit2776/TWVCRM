@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 const REUPLOAD_ALLOWED_ROLES = ["admin", "manager", "sales_rep", "office_admin"];
 
@@ -84,6 +85,13 @@ export async function POST(
 
   if (!agreement) {
     return NextResponse.json({ error: "L&L Agreement not found" }, { status: 404 });
+  }
+
+  // Same payment rule as every other execution route: no stamping or
+  // re-papering a Leave & License agreement until the case invoice is paid.
+  const unpaidMessage = await checkVoExecutionPaymentGate(supabase, caseId);
+  if (unpaidMessage) {
+    return NextResponse.json({ error: unpaidMessage }, { status: 403 });
   }
 
   const currentField = agreement.signed_document_id ? "signed_document_id" : "generated_document_id";
