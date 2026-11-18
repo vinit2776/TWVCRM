@@ -3,7 +3,6 @@ import { scaleForTerm } from "@/lib/vo-rates";
 import {
   VO_TERMS_MODE_KEY,
   assembleVoTerms,
-  holdoverApprovedIn,
   parseTermsMode,
   type AssembleVoTermsInput,
   type AssembledVoTerms,
@@ -54,15 +53,6 @@ export async function loadLibraryClauses(admin: SupabaseClient): Promise<Library
     console.error("[vo-terms] library load threw:", err);
     return null;
   }
-}
-
-/**
- * Has legal approved the holdover clause (T13)? The address watch must not draft
- * holdover proforma invoices until this is true. Not-set-up and errors read as false.
- */
-export async function isHoldoverClauseApproved(admin: SupabaseClient): Promise<boolean> {
-  const clauses = await loadLibraryClauses(admin);
-  return !!clauses && holdoverApprovedIn(clauses);
 }
 
 /** Approved renewal and notice clauses for a case, for the renewal reminder text. Empty when not set up. */

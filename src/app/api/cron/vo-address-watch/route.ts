@@ -12,6 +12,7 @@ import {
   parseWatchMode,
   type AddressVerdict,
 } from "@/lib/vo-address-watch";
+import { getHoldoverClauseStatus, holdoverClauseBlockReason } from "@/lib/vo-holdover-clause";
 import { isMissingSchema, isProofRecorded } from "@/lib/vo-address-evidence";
 import {
   VO_HOLDOVER_CLAUSE_APPROVED_SETTING,
@@ -20,7 +21,7 @@ import {
   daysSinceLapse,
   decideHoldover,
   holdoverReference,
-  isHoldoverClauseApproved,
+  isHoldoverSwitchOn,
   type HoldoverCase,
 } from "@/lib/vo-holdover-pi";
 
@@ -95,12 +96,20 @@ async function handler(request: Request) {
     return NextResponse.json({ success: true, date: today, mode, skipped: "vo_address_watch_mode is off" });
   }
   const live = mode === "live";
-  const clauseApproved = isHoldoverClauseApproved(settings[VO_HOLDOVER_CLAUSE_APPROVED_SETTING]);
+  // Billing needs BOTH the settings switch and an approved current T13 in the terms library.
+  const clauseStatus = await getHoldoverClauseStatus(admin);
+  const switchOn = isHoldoverSwitchOn(settings[VO_HOLDOVER_CLAUSE_APPROVED_SETTING]);
+  const clauseApproved = clauseStatus.approved && switchOn;
+  const billingBlockedReason = clauseApproved
+    ? null
+    : holdoverClauseBlockReason(clauseStatus) ?? `the ${VO_HOLDOVER_CLAUSE_APPROVED_SETTING} setting is not 'true'`;
+  if (billingBlockedReason) console.warn(`[cron/vo-address-watch] holdover billing skipped: ${billingBlockedReason}`);
   const holdover = parseHoldoverSettings(settings);
 
   const results = {
     mode,
     clauseApproved,
+    billingBlockedReason,
     wouldCreate: [] as string[],
     created: [] as string[],
     blocked: [] as string[],
@@ -185,7 +194,7 @@ async function handler(request: Request) {
 
         const ref = holdoverReference(c.case_number, decision.cycle);
         if (!clauseApproved) {
-          results.blocked.push(`${tag}: ${ref} is due but the holdover clause is not approved yet`);
+          results.blocked.push(`${tag}: ${ref} is due but holdover billing is blocked: ${billingBlockedReason}`);
           continue;
         }
         if (!live) {
