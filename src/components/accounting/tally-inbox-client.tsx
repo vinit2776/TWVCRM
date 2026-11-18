@@ -42,6 +42,8 @@ import {
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
+import { InvoiceReasonStamp } from "./invoice-reason-stamp";
+import { invoiceReasonFor } from "@/lib/invoice-reason";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import type { CustomerEmailPreviewData } from "./customer-email-preview";
 import { buildInboxSendEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
@@ -121,6 +123,20 @@ function bucketLabel(bucket: HandoffBucket): string {
     case "in_flight": return "In flight";
     default: return bucket;
   }
+}
+
+/** The step an in-flight invoice is waiting on, so accounts can tell "my move" from "customer's move". */
+function statusLabel(row: InboxRow): string {
+  if (row.bucket === "in_flight" && !row.has_discrepancy) {
+    switch (row.handoff_state) {
+      case "ready_to_send": return "Ready to send";
+      case "gst_sent_awaiting_payment":
+      case "pi_awaiting_payment": return "Awaiting payment";
+      case "gst_sent": return "Mark as done";
+      case "name_check_pending": return "Name check";
+    }
+  }
+  return bucketLabel(row.bucket);
 }
 
 function paymentStatusBadge(status: string): { label: string; cls: string } {
@@ -1789,9 +1805,10 @@ const InboxRowItem = memo(function InboxRowItem({
             <span
               className={`text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 ${bucketBadgeClass(row.bucket, row.has_discrepancy)}`}
             >
-              {bucketLabel(row.bucket)}
+              {statusLabel(row)}
             </span>
           )}
+          <InvoiceReasonStamp reason={invoiceReasonFor(row)} />
           <span className="font-medium text-sm truncate">{partyDisplay(row)}</span>
         </div>
         <div className="text-right">
