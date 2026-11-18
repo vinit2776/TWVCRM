@@ -603,6 +603,8 @@ export interface ExtractResponse {
   /** False when nothing could be read from the file (image, or scanned PDF), so
    *  name / GSTIN / period could not be checked and accounts must confirm by eye. */
   text_readable?: boolean;
+  /** Whether the file reads as a tax invoice at all; null = could not tell. */
+  is_tax_invoice?: boolean | null;
   /** Customer's name found on the invoice; null = could not tell. */
   party_name_found?: boolean | null;
   /** Customer's CRM GSTIN printed on the invoice; null = could not tell. */

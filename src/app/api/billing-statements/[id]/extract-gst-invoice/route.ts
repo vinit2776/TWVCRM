@@ -94,6 +94,7 @@ export async function POST(
       po_number_found: null,
       invoice_period_months: [],
       text_readable: false,
+      is_tax_invoice: null,
       party_name_found: null,
       party_gstin_found: null,
     };
@@ -142,6 +143,7 @@ export async function POST(
     po_number_found: parsed.po_number_found,
     invoice_period_months: parsed.invoice_period_months,
     text_readable: parsed.text_readable,
+    is_tax_invoice: parsed.is_tax_invoice,
     party_name_found: parsed.party_name_found,
     party_gstin_found: parsed.party_gstin_found,
   };

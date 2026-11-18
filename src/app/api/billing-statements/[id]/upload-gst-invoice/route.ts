@@ -374,6 +374,14 @@ export async function POST(
     }
     overrides.push("file text unreadable — name, GSTIN and period confirmed by eye");
   } else {
+    // First gate: is this a tax invoice at all? No override — a different
+    // document is the wrong file, not a judgement call.
+    if (extracted.is_tax_invoice === false) {
+      return badRequest(
+        "This file doesn't look like a GST tax invoice (no Tally invoice number or \"Tax Invoice\" heading found). " +
+        "Check you attached the invoice PDF and not another document.",
+      );
+    }
     if (meta.acknowledge_period_mismatch !== true
       && invoicePeriodMismatch(extracted.invoice_period_months, statement.period_start, statement.period_end)) {
       return badRequest(

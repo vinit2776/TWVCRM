@@ -13,6 +13,7 @@
  */
 
 import { extractInvoicePeriodMonths } from "@/lib/invoice-period-text";
+import { looksLikeTaxInvoice } from "@/lib/invoice-document-check";
 import { partyGstinInText, partyNameInText } from "@/lib/invoice-party-check";
 import type { ExtractedFields, AutofillSource } from "@/lib/tally-handoff";
 
@@ -25,6 +26,8 @@ export interface PdfExtractResult {
   invoice_period_months: string[];
   /** True when the PDF had extractable text; false for scanned/image PDFs, so nothing below could be checked. */
   text_readable: boolean;
+  /** Whether the text reads as a tax invoice at all. Null = no text to judge. */
+  is_tax_invoice: boolean | null;
   /** Whether the customer's name appears on the invoice. Null = could not tell. */
   party_name_found: boolean | null;
   /** Whether the customer's CRM GSTIN is printed on the invoice. Null = could not tell. */
@@ -165,6 +168,7 @@ export async function extractFromPdf(
       po_number_found: null,
       invoice_period_months: [],
       text_readable: false,
+      is_tax_invoice: null,
       party_name_found: null,
       party_gstin_found: null,
     };
@@ -178,6 +182,7 @@ export async function extractFromPdf(
       po_number_found: null,
       invoice_period_months: [],
       text_readable: false,
+      is_tax_invoice: null,
       party_name_found: null,
       party_gstin_found: null,
     };
@@ -215,6 +220,7 @@ export async function extractFromPdf(
     po_number_found: poNumberFound,
     invoice_period_months: extractInvoicePeriodMonths(text),
     text_readable: true,
+    is_tax_invoice: looksLikeTaxInvoice(text),
     party_name_found: expectedParty ? partyNameInText(text, expectedParty.names) : null,
     party_gstin_found: expectedParty ? partyGstinInText(text, expectedParty.gstin) : null,
   };
