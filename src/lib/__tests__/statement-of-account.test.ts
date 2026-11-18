@@ -54,4 +54,35 @@ describe("statement of account", () => {
     expect(ledger.rows).toHaveLength(1);
     expect(ledger.closing).toBe(1900);
   });
+
+  it("ages unpaid documents from the invoice date into buckets", () => {
+    const now = new Date("2026-11-18T06:00:00Z");
+    const ledger = buildLedger(
+      [
+        stmt({ id: "a", proforma_sent_at: "2026-11-10T05:00:00Z", total_amount: 100 }),
+        stmt({ id: "b", proforma_sent_at: "2026-09-20T05:00:00Z", total_amount: 200, gst_invoice_number: "TWV/1" }),
+        stmt({ id: "c", proforma_sent_at: "2026-06-01T05:00:00Z", total_amount: 300 }),
+        stmt({ id: "d", proforma_sent_at: "2026-06-01T05:00:00Z", total_amount: 400 }),
+      ],
+      [
+        { billing_statement_id: "d", amount: 400, tds_amount: 0, payment_date: "2026-07-01", payment_mode: "upi", payment_reference: null },
+        { billing_statement_id: "c", amount: 100, tds_amount: 0, payment_date: "2026-07-01", payment_mode: "upi", payment_reference: null },
+      ],
+      soaRange(2026), now,
+    );
+    expect(ledger.outstanding.map((o) => [o.document, o.kind, o.balance, o.bucket])).toEqual([
+      ["PI BS-c", "Pending PI", 200, "Over 90 days"],
+      ["TWV/1", "GST invoice", 200, "31-60 days"],
+      ["PI BS-a", "Pending PI", 100, "0-30 days"],
+    ]);
+    expect(ledger.agingTotals).toEqual([100, 200, 0, 200]);
+  });
+
+  it("measures aging to the FY end for a past year", () => {
+    const ledger = buildLedger(
+      [stmt({ id: "a", proforma_sent_at: "2026-02-01T05:00:00Z" })], [], soaRange(2025), new Date("2026-11-18T06:00:00Z"),
+    );
+    expect(ledger.asOf).toBe("2026-03-31");
+    expect(ledger.outstanding[0].days).toBe(58);
+  });
 });

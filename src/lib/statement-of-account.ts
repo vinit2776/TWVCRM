@@ -57,8 +57,28 @@ export interface SoaRow {
   balance: number;
 }
 
+export const AGING_BUCKETS = ["0-30 days", "31-60 days", "61-90 days", "Over 90 days"] as const;
+
+export interface SoaOutstanding {
+  date: string;
+  document: string;
+  /** "Pending PI" until a GST invoice exists, then "GST invoice". */
+  kind: "Pending PI" | "GST invoice";
+  amount: number;
+  paid: number;
+  balance: number;
+  /** Days since the invoice date, as at `asOf`. */
+  days: number;
+  bucket: (typeof AGING_BUCKETS)[number];
+}
+
 export interface SoaLedger {
   range: SoaRange;
+  /** The date aging is measured to: today, or the FY end for a past year. */
+  asOf: string;
+  outstanding: SoaOutstanding[];
+  /** Outstanding balance per AGING_BUCKETS entry. */
+  agingTotals: number[];
   opening: number;
   rows: SoaRow[];
   totalDebit: number;
@@ -116,6 +136,7 @@ export function buildLedger(
   statements: SoaStatementInput[],
   payments: SoaPaymentInput[],
   range: SoaRange,
+  today: Date = new Date(),
 ): SoaLedger {
   const paidIds = new Set(payments.map((p) => p.billing_statement_id));
   const live = statements.filter((s) => isCustomerFacing(s, paidIds.has(s.id)));
@@ -143,7 +164,7 @@ export function buildLedger(
       row: {
         date,
         document: describeStatement(s).document.split(" (")[0],
-        particulars: `Payment received (${mode})${ref}${tds > 0 ? ` incl. TDS ${tds}` : ""}`,
+        particulars: `Payment received (${mode})${ref}${tds > 0 ? ` incl. TDS Rs. ${tds.toLocaleString("en-IN")}` : ""}`,
         debit: 0, credit: paymentCredit(p),
       },
     });
@@ -164,7 +185,30 @@ export function buildLedger(
     balance += e.row.debit - e.row.credit;
     return { ...e.row, balance };
   });
+  const asOf = istDate(today.toISOString()) < range.to ? istDate(today.toISOString()) : range.to;
+  const outstanding: SoaOutstanding[] = [];
+  const agingTotals = AGING_BUCKETS.map(() => 0);
+  for (const st of live) {
+    const date = statementDate(st);
+    if (date > asOf) continue;
+    const amount = settlementAmount(st.total_amount);
+    const paid = payments
+      .filter((p) => p.billing_statement_id === st.id && p.payment_date.slice(0, 10) <= asOf)
+      .reduce((sum, p) => sum + paymentCredit(p), 0);
+    const balance = amount - paid;
+    if (balance <= 0) continue;
+    const days = Math.floor((Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86400e3);
+    const idx = days <= 30 ? 0 : days <= 60 ? 1 : days <= 90 ? 2 : 3;
+    agingTotals[idx] += balance;
+    outstanding.push({
+      date, document: describeStatement(st).document.split(" (")[0],
+      kind: st.gst_invoice_number ? "GST invoice" : "Pending PI",
+      amount, paid, balance, days, bucket: AGING_BUCKETS[idx],
+    });
+  }
+  outstanding.sort((a, b) => b.days - a.days);
+
   const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
   const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
-  return { range, opening, rows, totalDebit, totalCredit, closing: balance };
+  return { range, asOf, outstanding, agingTotals, opening, rows, totalDebit, totalCredit, closing: balance };
 }

@@ -4,7 +4,7 @@ import {
   BRAND_DARK, BRAND_TEAL, addBrandHeader, addFooter, createPdfContext, formatCurrency, formatDate,
 } from "@/lib/pdf-utils";
 import {
-  buildLedger, soaRange, type SoaLedger, type SoaPaymentInput, type SoaStatementInput,
+  AGING_BUCKETS, buildLedger, soaRange, type SoaLedger, type SoaPaymentInput, type SoaStatementInput,
 } from "@/lib/statement-of-account";
 
 const STATEMENT_COLUMNS =
@@ -157,12 +157,62 @@ export function buildStatementOfAccountPdf({ ledger, party }: SoaResult): Buffer
   }
   line({ date: "", doc: "", part: "Totals / closing balance", debit: formatCurrency(ledger.totalDebit), credit: formatCurrency(ledger.totalCredit), bal: formatCurrency(ledger.closing) }, true);
 
-  ctx.checkPageBreak(14);
-  ctx.y += 3;
+  if (ledger.outstanding.length) {
+    ctx.checkPageBreak(40);
+    ctx.y += 6;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text("Outstanding and aging", 15, ctx.y);
+    ctx.y += 5;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...BRAND_DARK);
+    doc.text(`Unpaid as at ${formatDate(ledger.asOf)}, counted from the invoice date.`, 15, ctx.y);
+    ctx.y += 6;
+    const heads = ["Document", "Type", "Invoice date", "Amount", "Paid", "Balance", "Days"];
+    const xs = [16, 52, 82, 124, 146, 170, 193];
+    const outHeader = () => {
+      doc.setFillColor(...BRAND_TEAL);
+      doc.rect(15, ctx.y - 4.5, 180, 7, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(255, 255, 255);
+      heads.forEach((h, i) => doc.text(h, xs[i], ctx.y, { align: i >= 3 ? "right" : "left" }));
+      ctx.y += 6;
+    };
+    outHeader();
+    for (const o of ledger.outstanding) {
+      const pages = doc.getNumberOfPages();
+      ctx.checkPageBreak(7);
+      if (doc.getNumberOfPages() !== pages) outHeader();
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(...BRAND_DARK);
+      const cells = [o.document, o.kind, shortDate(o.date), formatCurrency(o.amount), formatCurrency(o.paid), formatCurrency(o.balance), String(o.days)];
+      cells.forEach((c, i) => doc.text(c, xs[i], ctx.y, { align: i >= 3 ? "right" : "left" }));
+      ctx.y += 5.5;
+    }
+    ctx.checkPageBreak(24);
+    ctx.y += 4;
+    doc.setFont("helvetica", "bold");
+    doc.text("Aging summary", 15, ctx.y);
+    ctx.y += 5;
+    AGING_BUCKETS.forEach((b, i) => {
+      doc.setFont("helvetica", "normal");
+      doc.text(b, 16, ctx.y);
+      doc.text(formatCurrency(ledger.agingTotals[i]), 100, ctx.y, { align: "right" });
+      ctx.y += 5;
+    });
+    doc.setFont("helvetica", "bold");
+    doc.text("Total outstanding", 16, ctx.y);
+    doc.text(formatCurrency(ledger.agingTotals.reduce((a, b) => a + b, 0)), 100, ctx.y, { align: "right" });
+    ctx.y += 5;
+  }
+
+  // Pinned just above the footer band so it never spills onto a page of its own.
   doc.setFont("helvetica", "italic");
   doc.setFontSize(7.5);
   doc.setTextColor(110, 110, 110);
-  doc.text("Lists invoices and proforma invoices issued to you, and payments received. Cancelled and withdrawn documents are omitted.", 15, ctx.y);
+  doc.text("Lists invoices and proforma invoices issued to you, and payments received. Cancelled and withdrawn documents are omitted.", 15, doc.internal.pageSize.getHeight() - 18);
   addFooter(doc);
   return Buffer.from(doc.output("arraybuffer"));
 }
