@@ -11,6 +11,7 @@ import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
 import { annexureFromSections } from "@/lib/electricity-annexure";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
+import { hasBillingPeriod } from "@/lib/invoice-date-period";
 import { sameInvoiceNumber } from "@/lib/invoice-number";
 import { buildUploadEmail } from "@/lib/gst-invoice-email";
 import { logAudit } from "@/lib/audit";
@@ -343,6 +344,7 @@ export async function POST(
   }
 
   if (
+    hasBillingPeriod(statement.statement_type) &&
     isInvoiceDateOffPeriod(meta.invoice_date, statement.period_start, statement.period_end) &&
     meta.acknowledge_off_period_date !== true
   ) {
@@ -387,6 +389,7 @@ export async function POST(
       );
     }
     if (meta.acknowledge_period_mismatch !== true
+      && hasBillingPeriod(statement.statement_type)
       && invoicePeriodMismatch(extracted.invoice_period_months, statement.period_start, statement.period_end)) {
       return badRequest(
         `This invoice says it bills ${extracted.invoice_period_months.join(", ")}, but the statement covers ` +
@@ -729,11 +732,11 @@ export async function POST(
 
     // ── Send email to customer ────────────────────────────────────────────────
     if (customerEmail) {
-      const periodLabel = statement.period_start
+      const periodLabel = statement.period_start && hasBillingPeriod(statement.statement_type)
         ? new Date(statement.period_start + "T00:00:00").toLocaleDateString("en-IN", {
             timeZone: "Asia/Kolkata", month: "short", year: "numeric",
           })
-        : "this period";
+        : null;
       const amountFormatted = Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 });
       const invoiceDateFormatted = new Date(meta.invoice_date + "T00:00:00").toLocaleDateString("en-IN", {
         timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric",

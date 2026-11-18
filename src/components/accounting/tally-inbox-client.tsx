@@ -1919,7 +1919,11 @@ const InboxRowItem = memo(function InboxRowItem({
           >
             {bridgeStatus.label}
           </span>
-          {row.period_start && row.period_end && (
+          {(row.line_items?.statement_type as string | null) === "reimbursement" ? (
+            <span className="px-1.5 py-0.5 rounded border bg-violet-50 text-violet-900 border-violet-200" title="Purchase re-billed to the customer at cost — no billing period">
+              Reimbursement
+            </span>
+          ) : row.period_start && row.period_end && (
             <span className="text-muted-foreground">
               {row.period_start} → {row.period_end}
             </span>

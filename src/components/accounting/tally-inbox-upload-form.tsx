@@ -15,7 +15,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
-import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
+import { hasBillingPeriod, isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
 import { sameInvoiceNumber } from "@/lib/invoice-number";
 import { buildGstInvoiceEmail, buildUploadEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
 import { CustomerEmailPreview, type CustomerEmailPreviewData } from "@/components/accounting/customer-email-preview";
@@ -57,6 +57,9 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   // Tally against a B-series number while the row itself said IRN required.
   const voParty = voBillParty(row);
   const customerGstin = lead?.gst_number || voParty?.gstin || null;
+  // A reimbursement has no billing period: don't show, check or print one.
+  const periodStart = hasBillingPeriod(row.line_items?.statement_type) ? row.period_start : null;
+  const periodEnd = hasBillingPeriod(row.line_items?.statement_type) ? row.period_end : null;
   const customerHasGstin = !!customerGstin;
   const customerAddress = leadAddress(lead ?? null) || voParty?.address || null;
   const expectedSeries = customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG";
@@ -121,9 +124,9 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
     attachmentName,
     ...buildUploadEmail({
       customerName: partyName,
-      periodLabel: row.period_start
-        ? new Date(row.period_start + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" })
-        : "this period",
+      periodLabel: periodStart
+        ? new Date(periodStart + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" })
+        : null,
       invoiceNumber: newNumber,
       refLabel: row.contract ? "Contract" : row.proposal ? "Proposal Ref" : "Invoice",
       contractNumber: contractRef,
@@ -250,10 +253,10 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
     }
     if (!pdfFile) errors.push("Invoice PDF is required.");
     if (nameMismatch && !nameOverride) errors.push("Party name mismatch — tick 'Proceed anyway' below to override.");
-    if (isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end) && !dateOverride) {
+    if (isInvoiceDateOffPeriod(invoiceDate, periodStart, periodEnd) && !dateOverride) {
       errors.push("Invoice date is outside the billing period — confirm it below.");
     }
-    if (invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end) && !periodOverride) {
+    if (invoicePeriodMismatch(invoicePeriodMonths, periodStart, periodEnd) && !periodOverride) {
       errors.push("The period on the invoice does not match this statement — confirm it below.");
     }
     if (pdfNameMismatch && !pdfNameOverride) errors.push("The customer name on the invoice does not match the CRM — confirm it below.");
@@ -262,10 +265,10 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
     if (isTaxInvoice === false) errors.push("This file is not a GST tax invoice — attach the invoice PDF.");
     if (replaceSent && replaceReason.trim().length < 10) errors.push("Give a reason (at least 10 characters) for replacing the sent invoice.");
     return errors;
-  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end, pdfNameMismatch, pdfNameOverride, gstinMismatch, gstinOverride, unverifiable, unverifiedOverride, replaceSent, replaceReason, isTaxInvoice]);
+  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, periodStart, periodEnd, pdfNameMismatch, pdfNameOverride, gstinMismatch, gstinOverride, unverifiable, unverifiedOverride, replaceSent, replaceReason, isTaxInvoice]);
 
-  const dateOffPeriod = isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end);
-  const periodMismatch = invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end);
+  const dateOffPeriod = isInvoiceDateOffPeriod(invoiceDate, periodStart, periodEnd);
+  const periodMismatch = invoicePeriodMismatch(invoicePeriodMonths, periodStart, periodEnd);
 
   const canSubmit = validation.length === 0 && !submitting;
 
@@ -443,10 +446,10 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
               {row.invoice.internal_notes}
             </div>
           )}
-          {row.period_start && row.period_end && (
+          {periodStart && periodEnd && (
             <div className="md:col-span-2">
               <span className="text-muted-foreground">Period: </span>
-              {row.period_start} → {row.period_end}
+              {periodStart} → {periodEnd}
             </div>
           )}
           {row.tax.place_of_supply && (
@@ -708,7 +711,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
           <p>
             <strong>This invoice looks like it is for a different period.</strong> The PDF says it bills{" "}
             {invoicePeriodMonths.map(formatMonthLabel).join(", ")}, but this statement covers{" "}
-            {formatDate(row.period_start ?? "")} → {formatDate(row.period_end ?? "")}. Check you picked the
+            {formatDate(periodStart ?? "")} → {formatDate(periodEnd ?? "")}. Check you picked the
             right Tally voucher for this customer and month.
           </p>
           <label className="flex items-center gap-2">
@@ -726,7 +729,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
         <div className="rounded border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 space-y-2">
           <p>
             <strong>Invoice date does not fit the billing period.</strong> This invoice is dated{" "}
-            {formatDate(invoiceDate)} but covers {formatDate(row.period_start ?? "")} → {formatDate(row.period_end ?? "")}.
+            {formatDate(invoiceDate)} but covers {formatDate(periodStart ?? "")} → {formatDate(periodEnd ?? "")}.
             Check the date on the Tally voucher before sending — it decides the GST month.
           </p>
           <label className="flex items-center gap-2">
