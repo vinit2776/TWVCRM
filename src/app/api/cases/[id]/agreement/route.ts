@@ -11,6 +11,8 @@ import {
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { dltSms } from "@/lib/whatsapp";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { composeSpecialClause } from "@/lib/vo-terms-assemble";
+import { isNotMigrated, termsForCaseAgreement } from "@/lib/vo-terms-server";
 import { applyDraftWatermark, isDraftAgreement } from "@/lib/draft-watermark";
 
 /**
@@ -161,6 +163,17 @@ export async function POST(
   (variables as { special_clause_text?: string | null }).special_clause_text =
     caseData.special_clause_status === "approved" ? caseData.special_clause_text : null;
 
+  // Terms library (vo_terms_library_mode = on): the assembled approved clauses ride the same
+  // special-conditions section. Null when off, so nothing below changes. The exact text and
+  // clause versions are frozen on the agreement variables and the case.
+  const libraryTerms = await termsForCaseAgreement(createAdminClient(), caseData);
+  if (libraryTerms) {
+    const v = variables as unknown as Record<string, unknown>;
+    v.special_clause_text = composeSpecialClause(v.special_clause_text as string | null, libraryTerms.text);
+    v.vo_terms_text = libraryTerms.text;
+    v.vo_terms_snapshot = libraryTerms.snapshot;
+  }
+
   const pdfDoc = generateAgreementPdf(templateKey, variables);
   const pdfBuffer = Buffer.from(pdfDoc.output("arraybuffer"));
 
@@ -232,6 +245,15 @@ export async function POST(
         agreement_status: "draft",
       })
       .eq("id", caseId);
+
+    if (libraryTerms) {
+      // Own update: before migration 00690 the column is missing and this must not fail the agreement.
+      const { error: snapErr } = await supabase
+        .from("cases")
+        .update({ vo_terms_snapshot: libraryTerms.snapshot })
+        .eq("id", caseId);
+      if (snapErr && !isNotMigrated(snapErr.code)) console.error("[vo-terms] case snapshot failed:", snapErr.message);
+    }
   }
 
   // Audit
@@ -307,8 +329,17 @@ export async function PUT(
   // also repairs an agreement whose PDF fell behind (see agreementClauseGate).
   {
     const { data: kase } = await supabase.from("cases").select("special_clause_status, special_clause_text").eq("id", caseId).single();
-    (mergedVars as Record<string, unknown>).special_clause_text =
-      kase?.special_clause_status === "approved" ? kase.special_clause_text : null;
+    // Library terms are frozen at generation: an edit never re-reads the library, and the
+    // client cannot overwrite them.
+    const frozenTerms = typeof existingVars.vo_terms_text === "string" ? existingVars.vo_terms_text : null;
+    if (frozenTerms) {
+      (mergedVars as Record<string, unknown>).vo_terms_text = frozenTerms;
+      (mergedVars as Record<string, unknown>).vo_terms_snapshot = existingVars.vo_terms_snapshot ?? null;
+    }
+    (mergedVars as Record<string, unknown>).special_clause_text = composeSpecialClause(
+      kase?.special_clause_status === "approved" ? kase.special_clause_text : null,
+      frozenTerms,
+    );
   }
 
   // Regenerate PDF with updated variables

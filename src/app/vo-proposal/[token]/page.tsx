@@ -16,6 +16,8 @@ interface VoProposalView {
   expires_at: string | null;
   customer_name: string | null;
   blocked_reason: string | null;
+  /** Frozen library clauses this proposal was sent with; absent or empty when the terms library is off. */
+  terms?: { code: string; text: string }[] | null;
 }
 
 const inr = (n: number) =>
@@ -114,6 +116,16 @@ export default function VoProposalPage() {
             </tbody>
           </table>
           <p className="text-xs text-gray-500">No security deposit applies to this proposal.</p>
+          {data.terms && data.terms.length > 0 && (
+            <div className="space-y-1 border-t pt-3">
+              <h2 className="text-sm font-semibold text-gray-800">Terms</h2>
+              <ol className="list-decimal space-y-1 pl-5 text-xs text-gray-600">
+                {data.terms.map((t) => (
+                  <li key={t.code}>{t.text}</li>
+                ))}
+              </ol>
+            </div>
+          )}
           {data.expires_at && (
             <p className="text-xs text-gray-500">
               Valid until {new Date(data.expires_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}.

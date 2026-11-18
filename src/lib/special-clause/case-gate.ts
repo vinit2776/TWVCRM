@@ -14,6 +14,7 @@ export async function caseClauseGateError(supabase: SupabaseClient, caseId: stri
     caseStatus: k?.special_clause_status,
     caseText: k?.special_clause_text,
     agreementText: typeof vars.special_clause_text === "string" ? vars.special_clause_text : null,
+    termsText: typeof vars.vo_terms_text === "string" ? vars.vo_terms_text : null,
   });
   return gate.blocked ? gate.reason : null;
 }

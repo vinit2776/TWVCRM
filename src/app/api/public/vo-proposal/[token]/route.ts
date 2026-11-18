@@ -48,6 +48,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
     p.status = "viewed";
   }
 
+  // Own query: before migration 00690 the column is missing, and then there are no terms to show.
+  const { data: termsRow } = await createAdminClient().from("proposals").select("vo_terms_snapshot").eq("id", p.id).maybeSingle();
+  const terms = ((termsRow?.vo_terms_snapshot as { clauses?: { code: string; text: string }[] } | null)?.clauses ?? []).map((c) => ({
+    code: c.code,
+    text: c.text,
+  }));
+
   const lead = p.lead as unknown as { first_name?: string; last_name?: string; company?: string } | null;
   return NextResponse.json({
     data: {
@@ -64,6 +71,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
       expires_at: effectiveExpiry(p)?.toISOString() ?? null,
       customer_name: lead?.company || `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim() || null,
       blocked_reason: customerResponseBlockedReason(p),
+      terms,
     },
   });
 }
