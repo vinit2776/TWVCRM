@@ -4,12 +4,10 @@
  * BookingStepTracker — Booked → Paid → Check in → Check out.
  *
  * Gives a new staff member a map of where this booking is, next to the
- * NextActionBanner's "what to do now". Once a confirmed booking is paid it
- * also offers Check In inline, so the step after payment is one click away.
+ * NextActionBanner's "what to do now".
  */
 
-import { Check, LogIn } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Check } from "lucide-react";
 import type { Booking, BookingPayment } from "@/types";
 
 const SETTLED = new Set(["paid", "waived", "prepaid", "posted_to_bill"]);
@@ -17,11 +15,9 @@ const SETTLED = new Set(["paid", "waived", "prepaid", "posted_to_bill"]);
 interface Props {
   booking: Booking;
   payments: BookingPayment[];
-  onCheckIn: () => void;
-  checkInDisabled?: boolean;
 }
 
-export function BookingStepTracker({ booking, payments, onCheckIn, checkInDisabled }: Props) {
+export function BookingStepTracker({ booking, payments }: Props) {
   const { status } = booking;
   if (status === "cancelled" || status === "no_show") return null;
 
@@ -64,14 +60,6 @@ export function BookingStepTracker({ booking, payments, onCheckIn, checkInDisabl
           </li>
         ))}
       </ol>
-      {status === "confirmed" && paid && (
-        <div className="flex items-center justify-between gap-2 rounded bg-emerald-50 px-3 py-2">
-          <span className="text-sm text-emerald-800">Payment recorded. Ready to start the session.</span>
-          <Button size="sm" onClick={onCheckIn} disabled={checkInDisabled}>
-            <LogIn className="mr-1 h-4 w-4" />Check In now
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

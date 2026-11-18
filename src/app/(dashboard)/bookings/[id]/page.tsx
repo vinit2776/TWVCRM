@@ -1127,8 +1127,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       <BookingStepTracker
         booking={booking}
         payments={existingPayments}
-        onCheckIn={() => handleStatusAction("check_in")}
-        checkInDisabled={actionLoading}
       />
       <CheckinOverrideDialog
         open={overrideDialogOpen}
