@@ -78,3 +78,31 @@ export const GROUP_OUTCOMES: Record<Exclude<InboundGroup, "untracked">, string[]
   ignored: ["labelled_ignored"],
   other: ["logged_only", "request_recorded", "not_processed", "intake_error"],
 };
+
+// The website's prefilled WhatsApp messages. A message that opens with one of these is the trigger
+// for the Inbound WhatsApp log; everything else on the number is left out of it by default.
+// Keep in step with the website's wa.me links.
+export type WebsiteTrigger = "book_tour" | "know_more" | "centre_tour" | "workspace_finder" | "enquiry_form";
+
+export const WEBSITE_TRIGGER_LABEL: Record<WebsiteTrigger, string> = {
+  book_tour: "Book a tour",
+  know_more: "Know more (WhatsApp button)",
+  centre_tour: "Centre tour",
+  workspace_finder: "Workspace finder",
+  enquiry_form: "Enquiry form",
+};
+
+/** Which website button sent this message, or null when it is not one of the prefilled texts. */
+export function websiteTriggerOf(text: string | null | undefined): WebsiteTrigger | null {
+  if (!text) return null;
+  const t = text.replace(/[‘’]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+  const HEAD = "hi workvilla, ";
+  if (!t.startsWith(HEAD)) return null;
+  const rest = t.slice(HEAD.length).replace(/[.!]+$/, "");
+  if (rest === "i'd like to book a tour") return "book_tour";
+  if (rest === "i'd like to know more about your workspaces") return "know_more";
+  if (rest.startsWith("i'd like to book a tour of your")) return "centre_tour";
+  if (rest.startsWith("i'm looking for a")) return "workspace_finder";
+  if (rest.startsWith("i'm") && rest.includes("interested in:")) return "enquiry_form";
+  return null;
+}

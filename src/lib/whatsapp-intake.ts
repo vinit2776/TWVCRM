@@ -13,6 +13,7 @@ import { appendToOpenComplaint, recordComplaint, recordRequest } from "@/lib/com
 import { classifyRequest, REQUEST_OWNER_ROLE, REQUEST_TYPE_LABEL, type RequestType } from "@/lib/requests";
 import { notifyRoles } from "@/lib/notify-roles";
 import { PLACEHOLDER_NAME, extractNameFromMessage, isPlaceholderName } from "@/lib/whatsapp-names";
+import { websiteTriggerOf } from "@/lib/whatsapp-inbound-log";
 import { applyLabelToKind, labelSilencesNumber, shouldHoldForReview } from "@/lib/whatsapp-gate";
 
 const MAX_STORED_MESSAGES = 20;
@@ -209,7 +210,10 @@ export async function ingestInboundWhatsAppEnquiry(
   if (triage.kind === "spam" && input.matchedLeadId && leadStatus !== "junk" && leadStatus !== "new") {
     triage = { kind: "unsure", reason: "looks like spam but the number belongs to a known lead", source: triage.source };
   }
-  const kind = applyLabelToKind(senderLabel, triage.kind);
+  // A message typed by one of the website's WhatsApp buttons is an enquiry by construction, whatever
+  // its wording or sender history: it lands on the New tab as a first enquiry, a re-enquiry from a
+  // number we know, or joins the open conversation. A labelled number never reaches here.
+  const kind: TriageKind = websiteTriggerOf(input.messageBody) ? "enquiry" : applyLabelToKind(senderLabel, triage.kind);
 
   // A customer asking for something we can name (invoice copy, a pass, more seats, a contract
   // question, a booking change) is a request with an owner. Anything unnamed stays a note.
