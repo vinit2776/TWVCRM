@@ -108,10 +108,17 @@ const monthEnd = (y, m) => new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10
  */
 async function stmt(contract, y, m, total, o) {
   const subtotal = Math.round(total / 1.18);
+  // What the invoice lists: rent split from add-ons / usage so the Particulars column has real lines.
+  const rent = o.items ? subtotal - o.items.reduce((a, [, amt]) => a + amt, 0) : subtotal;
+  const lineItems = [
+    { type: "prepaid_rent", label: "Rent", items: [{ description: contract.rentLabel, amount: rent, quantity: 1, unit_price: rent }], subtotal: rent },
+    ...(o.items ? [{ type: "service_usage", label: "Add-ons and usage", items: o.items.map(([d, amt]) => ({ description: d, amount: amt, quantity: 1, unit_price: amt })), subtotal: o.items.reduce((a, [, amt]) => a + amt, 0) }] : []),
+  ];
   const sentDate = o.sentOn ?? (o.sent != null ? daysAgo(o.sent) : null);
   const row = await must(supa.from("billing_statements").insert({
     contract_id: contract.id, lead_id: lead.id, period_start: `${y}-${String(m).padStart(2, "0")}-01`, period_end: monthEnd(y, m),
     fixed_amount: subtotal, subtotal, tax_percentage: 18, tax_amount: total - subtotal, total_amount: total,
+    line_items: lineItems,
     status: o.status ?? "finalized", payment_status: o.paid ?? "unpaid", statement_type: "rent",
     due_date: sentDate ? new Date(Date.parse(`${sentDate}T00:00:00Z`) + 7 * 86400e3).toISOString().slice(0, 10) : null,
     proforma_sent_at: sentDate && !o.noStamp ? at(sentDate) : null,
@@ -130,9 +137,11 @@ async function stmt(contract, y, m, total, o) {
 }
 
 // Dates below are fixed calendar months for the invoices, relative days for the ones that must age.
+c1.rentLabel = "Dedicated desk x2, monthly rent";
+c2.rentLabel = "Dedicated desk x2, monthly rent (revised rate)";
 console.log("Contract 1 (ended):", c1.contract_number);
 await stmt(c1, 2025, 4, 23600, { sentOn: "2025-04-03", gstNo: true, paid: "paid", pay: [[Math.floor((Date.parse(today) - Date.parse("2025-04-10")) / 86400e3), 23600, "bank_transfer"]], note: "FY25-26 GST invoice, paid in full" });
-await stmt(c1, 2025, 5, 23600, { sentOn: "2025-05-03", gstNo: true, paid: "paid", pay: [[Math.floor((Date.parse(today) - Date.parse("2025-05-12")) / 86400e3), 21240, "bank_transfer", 2360]], note: "FY25-26 GST invoice, paid with TDS deducted (21,240 + 2,360)" });
+await stmt(c1, 2025, 5, 23600, { items: [["Parking, 1 slot", 1500]], sentOn: "2025-05-03", gstNo: true, paid: "paid", pay: [[Math.floor((Date.parse(today) - Date.parse("2025-05-12")) / 86400e3), 21240, "bank_transfer", 2360]], note: "FY25-26 GST invoice, paid with TDS deducted (21,240 + 2,360)" });
 await stmt(c1, 2025, 6, 23600, { sentOn: "2025-06-03", paid: "paid", pay: [[Math.floor((Date.parse(today) - Date.parse("2025-06-08")) / 86400e3), 23600, "upi"]], note: "FY25-26 PI, paid" });
 await stmt(c1, 2025, 7, 23600, { sentOn: "2025-07-03", status: "voided", note: "voided (left out)" });
 await stmt(c1, 2025, 8, 23600, { sentOn: "2025-08-03", status: "discarded", note: "discarded (left out)" });
@@ -144,10 +153,10 @@ console.log("Contract 2 (live):", c2.contract_number);
 await stmt(c2, 2026, 4, 29500, { sentOn: "2026-04-03", gstNo: true, paid: "paid", pay: [[Math.floor((Date.parse(today) - Date.parse("2026-04-12")) / 86400e3), 29500, "bank_transfer"]], note: "FY26-27 GST invoice, paid (new rent 29,500)" });
 await stmt(c2, 2026, 5, 29500, { sentOn: "2026-05-03", gstNo: true, paid: "paid", pay: [[Math.floor((Date.parse(today) - Date.parse("2026-05-11")) / 86400e3), 29500, "upi"]], note: "FY26-27 GST invoice, paid" });
 await stmt(c2, 2026, 6, 29500, { sent: 150, noStamp: true, paid: "paid", pay: [[140, 29500, "bank_transfer"]], note: "paid, no 'sent' stamp: still shown" });
-await stmt(c2, 2026, 7, 29500, { sent: 110, note: "PI pending, 110 days (over 90 bucket)" });
+await stmt(c2, 2026, 7, 29500, { items: [["Meeting room, 6 hrs", 2400], ["Printing, 180 pages", 600]], sent: 110, note: "PI pending, 110 days (over 90 bucket)" });
 await stmt(c2, 2026, 8, 29500, { sent: 75, note: "PI pending, 75 days (61-90 bucket)" });
 await stmt(c2, 2026, 9, 29500, { sent: 50, gstNo: true, paid: "partially_paid", pay: [[40, 15000, "upi"]], note: "GST invoice, part paid, 50 days (31-60 bucket)" });
-await stmt(c2, 2026, 10, 29500, { sent: 28, note: "PI pending, 28 days (0-30 bucket)" });
+await stmt(c2, 2026, 10, 29500, { items: [["Parking, 1 slot", 1500], ["Locker rental", 500], ["Meeting room, 4 hrs", 1200], ["Printing, 90 pages", 300], ["Day pass, guest", 500], ["Courier charges", 200]], sent: 28, note: "PI pending, 28 days (0-30 bucket)" });
 await stmt(c2, 2026, 11, 29500, { sent: 8, note: "PI pending, 8 days (0-30 bucket)" });
 await stmt(c2, 2026, 12, 29500, { note: "finalized but never sent (left out)" });
 await stmt(c2, 2027, 1, 29500, { status: "draft", note: "draft (left out)" });

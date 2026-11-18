@@ -35,7 +35,39 @@ export interface SoaStatementInput {
   period_start: string | null;
   period_end: string | null;
   statement_type: string | null;
-  invoice_number?: string | null;
+  /** What the charge belongs to, ready to print: "Contract TWV-C-0039", "Booking BK-0012", … */
+  reference?: string | null;
+  /** What was charged, one entry per line of the invoice. */
+  charges?: string[];
+}
+
+interface LineItemSection { type?: string; label?: string; items?: Record<string, unknown>[] }
+interface UsageChargeRow { description: string | null; is_waived?: boolean | null }
+
+/**
+ * The wording of each line on the invoice, taken from the same stored
+ * sections the PI/GST PDF is printed from (ad-hoc charges come from the live
+ * usage rows, as there). Empty when the statement predates line items.
+ */
+export function chargeDescriptions(
+  sections: LineItemSection[] | null | undefined,
+  usageCharges: UsageChargeRow[] | null | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const sec of sections || []) {
+    if (sec.type === "ad_hoc_charges") continue;
+    for (const item of sec.items || []) {
+      let text = String(item.description || item.booking_number || sec.label || "").trim();
+      if (sec.type === "booking_usage" && item.date) {
+        text = [item.date, item.space, item.time, item.duration].filter(Boolean).map(String).join(" · ");
+      }
+      if (text) out.push(text);
+    }
+  }
+  for (const c of usageCharges || []) {
+    if (!c.is_waived && c.description?.trim()) out.push(c.description.trim());
+  }
+  return [...new Set(out)];
 }
 
 export interface SoaPaymentInput {
@@ -64,6 +96,7 @@ export interface SoaOutstanding {
   document: string;
   /** "Pending PI" until a GST invoice exists, then "GST invoice". */
   kind: "Pending PI" | "GST invoice";
+  reference: string;
   amount: number;
   paid: number;
   balance: number;
@@ -123,13 +156,18 @@ export function isCustomerFacing(s: SoaStatementInput, hasPayment = false): bool
 const statementDate = (s: SoaStatementInput): string =>
   istDate(s.proforma_sent_at || s.finalized_at || s.created_at);
 
+const MAX_CHARGE_LINES = 4;
+
 function describeStatement(s: SoaStatementInput): { document: string; particulars: string } {
   const gst = s.gst_invoice_number;
-  const document = gst ? `${gst} (PI ${s.statement_number})` : `PI ${s.statement_number}`;
-  const particulars = s.period_start && s.period_end && s.statement_type !== "vo_case"
-    ? `Charges for ${s.period_start} to ${s.period_end}`
-    : s.invoice_number ? `Invoice ${s.invoice_number}` : "Charges";
-  return { document: gst ? document : `${document} (proforma)`, particulars };
+  const document = gst ? `${gst} (PI ${s.statement_number})` : `PI ${s.statement_number} (proforma)`;
+  const head = [s.reference, s.period_start && s.period_end && s.statement_type !== "vo_case"
+    ? `${s.period_start} to ${s.period_end}` : null].filter(Boolean).join(" · ");
+  const charges = s.charges || [];
+  const shown = charges.slice(0, MAX_CHARGE_LINES).map((c) => `- ${c}`);
+  if (charges.length > MAX_CHARGE_LINES) shown.push(`- +${charges.length - MAX_CHARGE_LINES} more`);
+  const particulars = [head || "Charges", ...shown].join("\n");
+  return { document, particulars };
 }
 
 export function buildLedger(
@@ -158,13 +196,14 @@ export function buildLedger(
     const tds = Number(p.tds_amount || 0);
     const mode = (p.payment_mode || "payment").replace(/_/g, " ");
     const ref = p.payment_reference ? ` · ref ${p.payment_reference}` : "";
+    const against = s.reference ? `\n${s.reference}` : "";
     const date = p.payment_date.slice(0, 10);
     entries.push({
       date, order: 1,
       row: {
         date,
         document: describeStatement(s).document.split(" (")[0],
-        particulars: `Payment received (${mode})${ref}${tds > 0 ? ` incl. TDS Rs. ${tds.toLocaleString("en-IN")}` : ""}`,
+        particulars: `Payment received (${mode})${ref}${tds > 0 ? ` incl. TDS Rs. ${tds.toLocaleString("en-IN")}` : ""}${against}`,
         debit: 0, credit: paymentCredit(p),
       },
     });
@@ -203,6 +242,7 @@ export function buildLedger(
     outstanding.push({
       date, document: describeStatement(st).document.split(" (")[0],
       kind: st.gst_invoice_number ? "GST invoice" : "Pending PI",
+      reference: (st.reference || "").replace(/^(Contract|Booking|Proposal|Invoice) /, ""),
       amount, paid, balance, days, bucket: AGING_BUCKETS[idx],
     });
   }

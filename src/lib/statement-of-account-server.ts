@@ -4,11 +4,16 @@ import {
   BRAND_DARK, BRAND_TEAL, addBrandHeader, addFooter, createPdfContext, formatCurrency, formatDate,
 } from "@/lib/pdf-utils";
 import {
-  AGING_BUCKETS, buildLedger, soaRange, type SoaLedger, type SoaPaymentInput, type SoaStatementInput,
+  AGING_BUCKETS, buildLedger, chargeDescriptions, soaRange, type SoaLedger, type SoaPaymentInput, type SoaStatementInput,
 } from "@/lib/statement-of-account";
 
 const STATEMENT_COLUMNS =
-  "id, status, statement_number, gst_invoice_number, total_amount, voided_at, proforma_sent_at, emailed_at, finalized_at, created_at, period_start, period_end, statement_type";
+  `id, status, statement_number, gst_invoice_number, total_amount, voided_at, proforma_sent_at, emailed_at, finalized_at, created_at, period_start, period_end, statement_type, line_items,
+   usage_charges:usage_charges(description, is_waived),
+   contract:contracts!billing_statements_contract_id_fkey(contract_number),
+   booking:bookings!billing_statements_booking_id_fkey(booking_number),
+   proposal:proposals!billing_statements_proposal_id_fkey(proposal_number),
+   invoice:proforma_invoices!billing_statements_invoice_id_fkey(invoice_number)`;
 
 interface LeadParty {
   name: string;
@@ -58,7 +63,21 @@ export async function loadStatementOfAccount(
     .is("voided_at", null);
   if (error) throw new Error(error.message);
 
-  const stmts = (statements || []) as unknown as SoaStatementInput[];
+  const stmts: SoaStatementInput[] = (statements || []).map((raw) => {
+    const r = raw as unknown as SoaStatementInput & {
+      line_items: Parameters<typeof chargeDescriptions>[0];
+      usage_charges: Parameters<typeof chargeDescriptions>[1];
+      contract: { contract_number: string } | null;
+      booking: { booking_number: string } | null;
+      proposal: { proposal_number: string } | null;
+      invoice: { invoice_number: string } | null;
+    };
+    const reference = r.contract ? `Contract ${r.contract.contract_number}`
+      : r.booking ? `Booking ${r.booking.booking_number}`
+      : r.proposal ? `Proposal ${r.proposal.proposal_number}`
+      : r.invoice ? `Invoice ${r.invoice.invoice_number}` : null;
+    return { ...r, reference, charges: chargeDescriptions(r.line_items, r.usage_charges) };
+  });
   let payments: SoaPaymentInput[] = [];
   if (stmts.length) {
     const { data: pays, error: payErr } = await admin
@@ -126,7 +145,7 @@ export function buildStatementOfAccountPdf({ ledger, party }: SoaResult): Buffer
     ctx.y += 6;
   };
   const line = (cells: { date: string; doc: string; part: string; debit: string; credit: string; bal: string }, bold = false) => {
-    const partLines = doc.splitTextToSize(cells.part, 50) as string[];
+    const partLines = (cells.part.split("\n").flatMap((l) => doc.splitTextToSize(l, 50)) as string[]);
     const docLines = doc.splitTextToSize(cells.doc, 36) as string[];
     const h = Math.max(partLines.length, docLines.length) * 4 + 1.5;
     const pagesBefore = doc.getNumberOfPages();
@@ -170,14 +189,14 @@ export function buildStatementOfAccountPdf({ ledger, party }: SoaResult): Buffer
     doc.setTextColor(...BRAND_DARK);
     doc.text(`Unpaid as at ${formatDate(ledger.asOf)}, counted from the invoice date.`, 15, ctx.y);
     ctx.y += 6;
-    const heads = ["Document", "Type", "Invoice date", "Amount", "Paid", "Balance", "Days"];
-    const xs = [16, 52, 82, 124, 146, 170, 193];
+    const heads = ["Document", "Type", "Contract / booking", "Invoice date", "Amount", "Paid", "Balance", "Days"];
+    const xs = [16, 46, 66, 98, 132, 153, 176, 193];
     const outHeader = () => {
       doc.setFillColor(...BRAND_TEAL);
       doc.rect(15, ctx.y - 4.5, 180, 7, "F");
       doc.setFont("helvetica", "bold");
       doc.setTextColor(255, 255, 255);
-      heads.forEach((h, i) => doc.text(h, xs[i], ctx.y, { align: i >= 3 ? "right" : "left" }));
+      heads.forEach((h, i) => doc.text(h, xs[i], ctx.y, { align: i >= 4 ? "right" : "left" }));
       ctx.y += 6;
     };
     outHeader();
@@ -187,8 +206,8 @@ export function buildStatementOfAccountPdf({ ledger, party }: SoaResult): Buffer
       if (doc.getNumberOfPages() !== pages) outHeader();
       doc.setFont("helvetica", "normal");
       doc.setTextColor(...BRAND_DARK);
-      const cells = [o.document, o.kind, shortDate(o.date), formatCurrency(o.amount), formatCurrency(o.paid), formatCurrency(o.balance), String(o.days)];
-      cells.forEach((c, i) => doc.text(c, xs[i], ctx.y, { align: i >= 3 ? "right" : "left" }));
+      const cells = [o.document, o.kind, o.reference || "-", shortDate(o.date), formatCurrency(o.amount), formatCurrency(o.paid), formatCurrency(o.balance), String(o.days)];
+      cells.forEach((c, i) => doc.text(c, xs[i], ctx.y, { align: i >= 4 ? "right" : "left" }));
       ctx.y += 5.5;
     }
     ctx.checkPageBreak(24);

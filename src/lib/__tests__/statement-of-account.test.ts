@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildLedger, soaFyOptions, soaRange, type SoaStatementInput } from "../statement-of-account";
+import { buildLedger, chargeDescriptions, soaFyOptions, soaRange, type SoaStatementInput } from "../statement-of-account";
 
 const stmt = (o: Partial<SoaStatementInput> & { id: string }): SoaStatementInput => ({
   status: "finalized", statement_number: `BS-${o.id}`, gst_invoice_number: null, total_amount: 1000,
@@ -84,5 +84,27 @@ describe("statement of account", () => {
     );
     expect(ledger.asOf).toBe("2026-03-31");
     expect(ledger.outstanding[0].days).toBe(58);
+  });
+
+  it("names the contract or booking and lists the charged lines", () => {
+    const ledger = buildLedger(
+      [
+        stmt({ id: "a", reference: "Contract TWV-C-0039", charges: ["Dedicated desk x2", "Parking", "Printing", "Meeting room", "Locker", "Extra"], period_start: "2026-06-01", period_end: "2026-06-30" }),
+        stmt({ id: "b", reference: "Booking BK-0012", charges: ["Conference room, 2 hrs"], proforma_sent_at: "2026-06-12T05:00:00Z" }),
+      ],
+      [{ billing_statement_id: "a", amount: 1000, tds_amount: 0, payment_date: "2026-07-01", payment_mode: "upi", payment_reference: "R1" }],
+      soaRange(2026),
+    );
+    expect(ledger.rows[0].particulars).toBe("Contract TWV-C-0039 · 2026-06-01 to 2026-06-30\n- Dedicated desk x2\n- Parking\n- Printing\n- Meeting room\n- +2 more");
+    expect(ledger.rows[1].particulars).toBe("Booking BK-0012\n- Conference room, 2 hrs");
+    expect(ledger.rows.find((r) => r.credit)!.particulars).toContain("Contract TWV-C-0039");
+    expect(ledger.outstanding.find((o) => o.reference === "BK-0012")).toBeTruthy();
+  });
+
+  it("reads charge descriptions from line items and live usage rows", () => {
+    expect(chargeDescriptions(
+      [{ type: "prepaid_rent", label: "Rent", items: [{ description: "Rent, 2 seats" }] }, { type: "ad_hoc_charges", items: [{ description: "frozen" }] }, { type: "booking_usage", items: [{ date: "2026-06-02", space: "Room A", time: "10:00-12:00" }] }],
+      [{ description: "Printing", is_waived: false }, { description: "Waived", is_waived: true }],
+    )).toEqual(["Rent, 2 seats", "2026-06-02 · Room A · 10:00-12:00", "Printing"]);
   });
 });
