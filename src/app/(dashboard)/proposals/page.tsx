@@ -117,7 +117,10 @@ export default function ProposalsPage() {
                 }}
               >
                 <td className="px-4 py-3 font-mono text-xs">{p.proposal_number}</td>
-                <td className="px-4 py-3 font-medium">{p.title}</td>
+                <td className="px-4 py-3 font-medium">
+                  {p.title}
+                  {p.kind === "virtual_office" && <Badge variant="outline" className="ml-2 align-middle text-[10px]">Virtual Office</Badge>}
+                </td>
                 <td className="px-4 py-3 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>{p.lead ? <Link href={`/leads/${p.lead.id}`} className="text-primary hover:underline">{p.lead.first_name} {p.lead.last_name}</Link> : "-"}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{p.lead?.company || "—"}</td>
                 <td className="px-4 py-3">
