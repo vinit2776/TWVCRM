@@ -397,6 +397,8 @@ export interface InboxRow {
   po_number: string | null;
   /** billing_statements.notes — the internal note the creator left for accounts (never printed on the invoice). */
   statement_notes?: string | null;
+  /** When the statement was raised; the date shown on one-off invoices that have no billing cycle. */
+  statement_created_at?: string | null;
   period_start: string | null;
   period_end: string | null;
   payment_status: string;
