@@ -23,6 +23,8 @@ interface Props {
   row: InboxRow;
   onUploaded: () => void;
   onCancel: () => void;
+  /** Correct the live upload (wrong invoice / period) before it has been sent. */
+  replace?: boolean;
 }
 
 // billing_statements.statement_type has more values than the narrow
@@ -42,7 +44,7 @@ function formatMonthLabel(ym: string): string {
   return new Date(`${ym}-01T00:00:00Z`).toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
+export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = false }: Props) {
   const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
   // Virtual Office statements have no lead — the buyer is the case's bill_to
   // party (the aggregator, for partner-billed cases) or the statement's own
@@ -251,6 +253,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           acknowledge_party_name_mismatch: pdfNameMismatch && pdfNameOverride,
           acknowledge_gstin_mismatch: gstinMismatch && gstinOverride,
           acknowledge_unverified_document: unverifiable && unverifiedOverride,
+          ...(replace ? { replace: true } : {}),
         }),
       );
 
@@ -281,7 +284,13 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   return (
     <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="border-t bg-muted/30 p-4 space-y-3">
       <div className="text-sm">
-        <div className="font-medium">Upload Tally GST invoice</div>
+        <div className="font-medium">{replace ? "Replace Tally GST invoice" : "Upload Tally GST invoice"}</div>
+        {replace && (
+          <div className="text-xs text-amber-800 mt-0.5">
+            Replaces <span className="font-mono">{row.latest_upload?.tally_invoice_number}</span>. The old invoice stays in the history
+            as superseded. Void or cancel it in Tally first if it is already posted there.
+          </div>
+        )}
         <div className="text-xs text-muted-foreground mt-0.5">
           Customer: <span className="font-medium">{partyName}</span>
           {customerGstin ? ` · GSTIN ${customerGstin}` : " · (no GSTIN on file)"}
@@ -811,7 +820,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           className="px-3 py-1.5 text-xs rounded bg-foreground text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
         >
           {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-          {submitting ? "Uploading & sending…" : "Upload & Send"}
+          {submitting ? "Uploading & sending…" : replace ? "Replace invoice" : "Upload & Send"}
         </button>
       </div>
     </form>
