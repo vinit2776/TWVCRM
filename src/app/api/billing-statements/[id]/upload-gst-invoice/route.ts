@@ -64,6 +64,10 @@ interface UploadBody {
   acknowledge_unverified_document?: boolean;
   /** Replace the live upload (wrong invoice / period) instead of adding the first one. */
   replace?: boolean;
+  /** Why the live upload is being replaced; required once the invoice has gone to the customer. */
+  replace_reason?: string;
+  /** Second confirmation: the number of the invoice being replaced, typed back by the user. */
+  confirm_replace_number?: string;
 }
 
 function conflict(reason: string) {
@@ -281,26 +285,43 @@ export async function POST(
   const live = liveUploads ?? [];
   const isInitialState = statement.handoff_state === "pi_paid_awaiting_gst" || statement.handoff_state === "direct_gst_requested";
 
+  const REPLACEABLE_STATES = ["ready_to_send", "gst_sent_awaiting_payment", "gst_sent"];
+  const replaceReason = (meta.replace_reason ?? "").trim();
+  // True when the customer already has the invoice being replaced. Replacing it
+  // is a deliberate act on a sent tax invoice, so it needs a recorded reason.
+  const replacingSent = meta.replace === true && statement.handoff_state !== "ready_to_send";
+
   if (meta.replace === true) {
     if (live.length === 0) return conflict("There is no uploaded invoice to replace.");
-    if (statement.handoff_state !== "ready_to_send") {
-      return conflict(
-        "Only an invoice that has not been sent to the customer can be replaced. " +
-        "For one already sent, ask an admin or manager to cancel it and issue a credit note.",
-      );
+    if (!REPLACEABLE_STATES.includes(statement.handoff_state ?? "")) {
+      return conflict("This invoice is past the point where it can be replaced (payment already confirmed or closed).");
     }
-    if (statement.tally_delivered_at || statement.voided_at || statement.cancellation_requested_at) {
-      return conflict("This invoice was already delivered, voided or is being cancelled, so it can't be replaced.");
+    if (statement.voided_at || statement.cancellation_requested_at) {
+      return conflict("This invoice is voided or being cancelled, so it can't be replaced.");
     }
-    const { data: sentRows } = await adminClient
-      .from("billing_send_log")
-      .select("id")
-      .eq("billing_statement_id", statement.id)
-      .eq("send_type", "gst_invoice")
-      .eq("status", "sent")
-      .limit(1);
-    if ((sentRows ?? []).length > 0) {
-      return conflict("This invoice was already emailed to the customer, so it can't be replaced.");
+    if (replacingSent) {
+      if (replaceReason.length < 10) {
+        return badRequest("Give a reason of at least 10 characters for replacing an invoice that was already sent.");
+      }
+      // Second step of the confirmation, re-checked here so the API can't be used to skip it.
+      const typed = (meta.confirm_replace_number ?? "").trim().toLowerCase();
+      if (!live.some((u) => (u.tally_invoice_number ?? "").trim().toLowerCase() === typed) || !typed) {
+        return badRequest("Confirmation failed: type the number of the invoice being replaced exactly to confirm.");
+      }
+    } else {
+      if (statement.tally_delivered_at) {
+        return conflict("This invoice was already delivered, so it can't be replaced here.");
+      }
+      const { data: sentRows } = await adminClient
+        .from("billing_send_log")
+        .select("id")
+        .eq("billing_statement_id", statement.id)
+        .eq("send_type", "gst_invoice")
+        .eq("status", "sent")
+        .limit(1);
+      if ((sentRows ?? []).length > 0) {
+        return conflict("This invoice was already emailed to the customer, so it can't be replaced from this state.");
+      }
     }
   } else if (live.length > 0 && !isInitialState) {
     return conflict("An invoice is already uploaded for this statement. Use Replace invoice to correct it.");
@@ -479,7 +500,12 @@ export async function POST(
       autofill_source: meta.autofill_source,
       nic_signature_verified: meta.nic_signature_verified,
       name_check_status: overrides.length ? "overridden" : "approved",
-      name_check_notes: overrides.length ? overrides.join("; ") : null,
+      name_check_notes: [
+        ...overrides,
+        ...(meta.replace === true
+          ? [`replaces ${live.map((u) => u.tally_invoice_number).join(", ")}${replaceReason ? `: ${replaceReason}` : ""}`]
+          : []),
+      ].join("; ") || null,
       name_check_decided_by: dbUser.id,
       name_check_decided_at: new Date().toISOString(),
     })
@@ -505,7 +531,8 @@ export async function POST(
       );
     }
     if (meta.replace === true) {
-      void logAudit(adminClient, {
+      // Awaited: a fire-and-forget write can be dropped once the response is sent.
+      await logAudit(adminClient, {
         entityType: "billing_statement",
         entityId: statement.id,
         action: "replace",
@@ -515,6 +542,14 @@ export async function POST(
             old: live.map((u) => u.tally_invoice_number).join(", "),
             new: meta.tally_invoice_number,
           },
+          ...(replacingSent
+            ? {
+                replaced_after_sent: { old: null, new: true },
+                replace_reason: { old: null, new: replaceReason },
+                replace_confirmed_by_typing_invoice_number: { old: null, new: true },
+                handoff_state_at_replace: { old: statement.handoff_state, new: statement.handoff_state },
+              }
+            : {}),
         },
       });
     }
@@ -562,6 +597,16 @@ export async function POST(
   }
 
   // ── Transition handoff_state ─────────────────────────────────────────────
+  if (replacingSent) {
+    // The customer already has an invoice, so the workflow state stays where it
+    // was. The caller re-sends the corrected PDF through resend-gst-invoice.
+    return NextResponse.json({
+      ok: true,
+      upload_id: insertedUpload.id,
+      handoff_state: statement.handoff_state,
+      needs_resend: true,
+    });
+  }
   await setHandoffState(supabase, statement.id, "ready_to_send", "gst_invoice_uploaded");
 
   // ── Razorpay link + email (unpaid statements reaching ready_to_send) ──────

@@ -77,6 +77,16 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   const [pdfNameOverride, setPdfNameOverride] = useState(false);
   const [gstinOverride, setGstinOverride] = useState(false);
   const [unverifiedOverride, setUnverifiedOverride] = useState(false);
+  // Replacing an invoice the customer already has takes two steps by the same
+  // user: fill in + give a reason, then retype the old invoice number to confirm.
+  const replaceSent = replace && row.handoff_state !== "ready_to_send";
+  const oldInvoiceNumber = row.latest_upload?.tally_invoice_number ?? "";
+  const [replaceReason, setReplaceReason] = useState("");
+  const [confirmStep, setConfirmStep] = useState(false);
+  const [confirmNumber, setConfirmNumber] = useState("");
+  const [confirmTick, setConfirmTick] = useState(false);
+  const confirmOk = confirmTick && !!oldInvoiceNumber
+    && confirmNumber.trim().toLowerCase() === oldInvoiceNumber.trim().toLowerCase();
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -192,8 +202,9 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
     if (pdfNameMismatch && !pdfNameOverride) errors.push("The customer name on the invoice does not match the CRM — confirm it below.");
     if (gstinMismatch && !gstinOverride) errors.push("The customer GSTIN is not on the invoice — confirm it below.");
     if (unverifiable && !unverifiedOverride) errors.push("This file can't be read automatically — confirm you checked it below.");
+    if (replaceSent && replaceReason.trim().length < 10) errors.push("Give a reason (at least 10 characters) for replacing the sent invoice.");
     return errors;
-  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end, pdfNameMismatch, pdfNameOverride, gstinMismatch, gstinOverride, unverifiable, unverifiedOverride]);
+  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end, pdfNameMismatch, pdfNameOverride, gstinMismatch, gstinOverride, unverifiable, unverifiedOverride, replaceSent, replaceReason]);
 
   const dateOffPeriod = isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end);
   const periodMismatch = invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end);
@@ -230,6 +241,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit || !pdfFile) return;
+    if (replaceSent && !confirmStep) { setConfirmStep(true); return; }
+    if (replaceSent && !confirmOk) return;
     setSubmitting(true);
     setServerError(null);
 
@@ -254,6 +267,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
           acknowledge_gstin_mismatch: gstinMismatch && gstinOverride,
           acknowledge_unverified_document: unverifiable && unverifiedOverride,
           ...(replace ? { replace: true } : {}),
+          ...(replaceSent ? { replace_reason: replaceReason.trim(), confirm_replace_number: confirmNumber.trim() } : {}),
         }),
       );
 
@@ -268,6 +282,20 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
       }
 
       const body = await res.json().catch(() => ({}));
+      if (body.needs_resend) {
+        // The corrected invoice is saved; now send it to the customer.
+        const resendRes = await fetch(`/api/billing-statements/${row.statement_id}/resend-gst-invoice`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ replacement: true }),
+        });
+        if (!resendRes.ok) {
+          const rb = await resendRes.json().catch(() => ({}));
+          setEmailWarning(`The corrected invoice is saved but the email to the customer failed: ${rb.error ?? `HTTP ${resendRes.status}`}. Use Resend email on this row.`);
+          setSubmitting(false);
+          return;
+        }
+      }
       if (body.email_warning) {
         setEmailWarning(body.email_warning);
         setSubmitting(false);
@@ -795,6 +823,52 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
         </div>
       )}
 
+      {replaceSent && (
+        <div className="rounded border border-red-300 bg-red-50 p-2.5 text-xs text-red-900 space-y-2">
+          <p>
+            <strong>The customer already has invoice {oldInvoiceNumber}.</strong> Replacing it emails them the
+            corrected invoice. The old invoice is <strong>not</strong> cancelled in Tally or on the GST portal by
+            this — do that yourself if it must not stand.
+          </p>
+          <label className="block">
+            <span className="block mb-1">Why is it being replaced? (recorded in the audit trail)</span>
+            <textarea
+              value={replaceReason}
+              onChange={(e) => setReplaceReason(e.target.value)}
+              rows={2}
+              disabled={confirmStep}
+              className="w-full rounded border px-2 py-1.5 text-sm text-foreground"
+              placeholder="e.g. Uploaded the October invoice against the November statement"
+            />
+          </label>
+        </div>
+      )}
+
+      {replaceSent && confirmStep && (
+        <div className="rounded border-2 border-red-400 bg-red-50 p-3 text-xs text-red-900 space-y-2">
+          <div className="font-semibold">Step 2 of 2 — confirm</div>
+          <p>
+            You are replacing <span className="font-mono">{oldInvoiceNumber}</span> with{" "}
+            <span className="font-mono">{invoiceNumber.trim()}</span> for {partyName}, and emailing the customer the
+            new one. This is recorded against your user.
+          </p>
+          <label className="block">
+            <span className="block mb-1">Type <span className="font-mono font-semibold">{oldInvoiceNumber}</span> to confirm</span>
+            <input
+              type="text"
+              value={confirmNumber}
+              onChange={(e) => setConfirmNumber(e.target.value)}
+              className="w-full rounded border px-2 py-1.5 text-sm font-mono text-foreground"
+              autoComplete="off"
+            />
+          </label>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input type="checkbox" checked={confirmTick} onChange={(e) => setConfirmTick(e.target.checked)} className="mt-0.5" />
+            <span>I understand the customer will receive the corrected invoice and the old one stays valid until it is cancelled in Tally.</span>
+          </label>
+        </div>
+      )}
+
       {emailWarning && (
         <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded p-2 flex items-start gap-1.5">
           <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" aria-hidden />
@@ -814,13 +888,23 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
         >
           Cancel
         </button>
+        {replaceSent && confirmStep && (
+          <button
+            type="button"
+            onClick={() => { setConfirmStep(false); setConfirmNumber(""); setConfirmTick(false); }}
+            disabled={submitting}
+            className="px-3 py-1.5 text-xs rounded border hover:bg-muted disabled:opacity-50"
+          >
+            Back
+          </button>
+        )}
         <button
           type="submit"
-          disabled={!canSubmit}
+          disabled={!canSubmit || (replaceSent && confirmStep && !confirmOk)}
           className="px-3 py-1.5 text-xs rounded bg-foreground text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
         >
           {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-          {submitting ? "Uploading & sending…" : replace ? "Replace invoice" : "Upload & Send"}
+          {submitting ? "Uploading & sending…" : replaceSent ? (confirmStep ? "Confirm and replace" : "Review replacement") : replace ? "Replace invoice" : "Upload & Send"}
         </button>
       </div>
     </form>
