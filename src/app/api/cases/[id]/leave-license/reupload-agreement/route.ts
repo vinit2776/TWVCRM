@@ -77,7 +77,7 @@ export async function POST(
 
   const { data: agreement } = await supabase
     .from("case_agreements")
-    .select("id, agreement_number, signed_document_id, generated_document_id")
+    .select("id, status, agreement_number, signed_document_id, generated_document_id")
     .eq("id", agreementId)
     .eq("case_id", caseId)
     .eq("type", "leave_license")
@@ -87,11 +87,14 @@ export async function POST(
     return NextResponse.json({ error: "L&L Agreement not found" }, { status: 404 });
   }
 
-  // Same payment rule as every other execution route: no stamping or
-  // re-papering a Leave & License agreement until the case invoice is paid.
-  const unpaidMessage = await checkVoExecutionPaymentGate(supabase, caseId);
-  if (unpaidMessage) {
-    return NextResponse.json({ error: unpaidMessage }, { status: 403 });
+  // Not yet executed: re-papering it is a route to execution, so the payment
+  // rule applies. An already-executed agreement is only flagged (see the GET
+  // route's unpaid_warning) — name/law changes must still be possible.
+  if (agreement.status !== "executed") {
+    const unpaidMessage = await checkVoExecutionPaymentGate(supabase, caseId);
+    if (unpaidMessage) {
+      return NextResponse.json({ error: unpaidMessage }, { status: 403 });
+    }
   }
 
   const currentField = agreement.signed_document_id ? "signed_document_id" : "generated_document_id";

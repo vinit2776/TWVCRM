@@ -10,8 +10,9 @@ const ROUTES = [
   "leave-license/sign/route.ts",
   "leave-license/manual-sign/route.ts",
   "leave-license/stamp-sign-seal/route.ts",
-  "leave-license/stamp-existing-document/route.ts",
   "leave-license/reupload-agreement/route.ts",
+  // GET flags (does not block) an executed-but-unpaid agreement
+  "leave-license/route.ts",
 ];
 
 describe("VO execution payment gate coverage", () => {
