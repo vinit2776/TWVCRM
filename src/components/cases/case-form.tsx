@@ -392,7 +392,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Monthly Rate (INR) {caseSource === "direct" && "*"}</Label>
+              <Label>Annual Rate (INR) {caseSource === "direct" && "*"}</Label>
               <Input
                 type="number"
                 {...register("rate", { valueAsNumber: true })}
