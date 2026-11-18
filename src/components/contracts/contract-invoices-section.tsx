@@ -92,13 +92,6 @@ interface ContractInvoicesSectionProps {
   contractId: string;
   billingMode?: 'proforma_first' | 'gst_direct' | null;
   contractStatus?: string;
-  /** Proposal linked to this contract — the pro-rata invoice that was
-   *  collected before activation lives on the proposal, not the contract,
-   *  so it needs its own lookup rather than showing up in `statements`. */
-  proposalId?: string;
-  proposalNumber?: string;
-  prorataPaymentStatus?: string;
-  prorataPaymentReceivedAt?: string;
   billingCycle?: string | null;
   nextBillingDate?: string | null;
   startDate?: string | null;
@@ -144,10 +137,6 @@ export function ContractInvoicesSection({
   contractId,
   billingMode,
   contractStatus,
-  proposalId,
-  proposalNumber,
-  prorataPaymentStatus,
-  prorataPaymentReceivedAt,
   billingCycle,
   nextBillingDate,
   startDate,
@@ -166,7 +155,6 @@ export function ContractInvoicesSection({
     "Contract billing mode switched to GST Direct — clearing pending proforma."
   );
   const [convertingId, setConvertingId] = useState<string | null>(null);
-  const [prorataStatement, setProrataStatement] = useState<Statement | null>(null);
   const [cycleDialogOpen, setCycleDialogOpen] = useState(false);
   const [cyclePreviewing, setCyclePreviewing] = useState(false);
   const [cyclePreview, setCyclePreview] = useState<CyclePreview | null>(null);
@@ -206,20 +194,6 @@ export function ContractInvoicesSection({
       .catch(() => setUserRole(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractId]);
-
-  // The pro-rata invoice (generated via the proposal's "Preview & Send GST
-  // Invoice" step) is a billing_statements row keyed by proposal_id, not
-  // contract_id — the contract didn't exist yet when it was sent.
-  useEffect(() => {
-    if (!proposalId) {
-      setProrataStatement(null);
-      return;
-    }
-    fetch(`/api/billing-statements?proposal_id=${proposalId}&limit=1`)
-      .then((r) => r.json())
-      .then((d) => setProrataStatement(((d.data || []) as Statement[])[0] || null))
-      .catch(() => setProrataStatement(null));
-  }, [proposalId]);
 
   // Only this contract's own statements belong in the invoice table — an
   // ancestor's rows are fetched for the coverage check, not for display.
@@ -542,62 +516,6 @@ export function ContractInvoicesSection({
           </Link>
         </div>
       </CardHeader>
-
-      {/* Pro-rata invoice — collected via the proposal before the contract
-          existed, so it never shows up in the monthly statements table below. */}
-      {proposalId && (
-        <div className="px-6 pb-3">
-          <div className="flex items-center justify-between rounded-md border bg-muted/20 px-3 py-2">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="font-medium text-muted-foreground">Pro-rata Invoice</span>
-              {prorataStatement ? (
-                canPreviewPdf(prorataStatement.status) ? (
-                  <Link
-                    href={`/api/billing-statements/${prorataStatement.id}/proforma-pdf`}
-                    target="_blank"
-                    className="font-mono text-primary hover:underline"
-                  >
-                    {prorataStatement.statement_number}
-                  </Link>
-                ) : (
-                  <span
-                    className="font-mono text-muted-foreground"
-                    title="Finalize this statement in Billing to preview the PDF"
-                  >
-                    {prorataStatement.statement_number}
-                  </span>
-                )
-              ) : proposalNumber ? (
-                <Link href={`/proposals/${proposalId}`} className="text-primary hover:underline">
-                  via {proposalNumber}
-                </Link>
-              ) : null}
-              {(prorataStatement?.total_amount ?? undefined) !== undefined && (
-                <span className="text-muted-foreground">· {formatCurrency(prorataStatement!.total_amount)}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {(() => {
-                const paid = prorataStatement ? prorataStatement.payment_status === "paid" : prorataPaymentStatus === "paid";
-                const paidAt = prorataStatement ? undefined : prorataPaymentReceivedAt;
-                return (
-                  <>
-                    {paid && paidAt && (
-                      <span className="text-[10px] text-muted-foreground">{formatDate(paidAt)}</span>
-                    )}
-                    <Badge
-                      variant="outline"
-                      className={`text-[10px] ${paid ? PAYMENT_STATUS_COLORS.paid : PAYMENT_STATUS_COLORS.unpaid}`}
-                    >
-                      {paid ? "Paid" : "Unpaid"}
-                    </Badge>
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Months already past their billing run with nothing charged against
           them. Deliberately a prompt, not an alarm — rent is sometimes
