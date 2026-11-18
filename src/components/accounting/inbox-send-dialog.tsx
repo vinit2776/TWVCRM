@@ -12,6 +12,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { CustomerEmailPreview, type CustomerEmailPreviewData } from "./customer-email-preview";
 
 interface InboxSendDialogProps {
   open: boolean;
@@ -20,6 +21,8 @@ interface InboxSendDialogProps {
   savedRecipients: string[];
   sending: boolean;
   onConfirm: (extraRecipients: string[]) => void;
+  /** The email as it will go out, minus recipients (those follow the list + one-time extras below). */
+  preview?: Omit<CustomerEmailPreviewData, "to"> | null;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -30,6 +33,7 @@ export function InboxSendDialog({
   savedRecipients,
   sending,
   onConfirm,
+  preview,
 }: InboxSendDialogProps) {
   const [extraInput, setExtraInput] = useState("");
   const [extras, setExtras] = useState<string[]>([]);
@@ -72,7 +76,7 @@ export function InboxSendDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-md">
+      <DialogContent className={preview ? "max-w-2xl max-h-[90vh] overflow-y-auto" : "max-w-md"}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Send className="h-4 w-4 text-primary" />
@@ -142,6 +146,10 @@ export function InboxSendDialog({
             </div>
           )}
         </div>
+
+        {preview && (
+          <CustomerEmailPreview preview={{ ...preview, to: [...savedRecipients, ...extras] }} />
+        )}
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => handleClose(false)} disabled={sending}>
