@@ -74,7 +74,10 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
       represented_by_name: caseData?.represented_by_name || "",
       represented_by_designation: caseData?.represented_by_designation || "",
       represented_by_id_type: caseData?.represented_by_id_type || "pan",
-      represented_by_id_number: caseData?.represented_by_id_number || "",
+      // The API returns a stored Aadhaar masked; leave the box empty and show
+      // the mask as a placeholder so a save can't write it back.
+      represented_by_id_number:
+        caseData?.represented_by_id_type === "aadhaar" ? "" : caseData?.represented_by_id_number || "",
       rate: caseData?.rate || undefined,
       tenure_months: caseData?.tenure_months || 12,
       renewal_escalation_percentage: caseData?.renewal_escalation_percentage ?? 0,
@@ -119,7 +122,14 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
   const onFormSubmit = async (data: CreateCaseInput) => {
     setSubmitting(true);
     try {
-      await onSubmit(data);
+      // Editing: an empty ID box means "keep the stored number". Drop the pair
+      // so neither the number nor a changed type reaches the server alone.
+      const payload = { ...data };
+      if (caseData && !payload.represented_by_id_number) {
+        delete payload.represented_by_id_number;
+        delete payload.represented_by_id_type;
+      }
+      await onSubmit(payload);
     } catch {
       // error handled by parent
     } finally {
@@ -339,7 +349,13 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
                     representedByIdType === "aadhaar" ? val.replace(/\D/g, "") : val.toUpperCase()
                   );
                 }}
-                placeholder={representedByIdType === "aadhaar" ? "12-digit Aadhaar number" : "e.g. ABCDE1234F"}
+                placeholder={
+                  representedByIdType === "aadhaar"
+                    ? caseData?.represented_by_id_type === "aadhaar" && caseData.represented_by_id_number
+                      ? `${caseData.represented_by_id_number} — type a new number to replace`
+                      : "12-digit Aadhaar number"
+                    : "e.g. ABCDE1234F"
+                }
                 maxLength={representedByIdType === "aadhaar" ? 12 : 10}
                 inputMode={representedByIdType === "aadhaar" ? "numeric" : "text"}
               />
