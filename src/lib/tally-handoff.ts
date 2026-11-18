@@ -200,6 +200,16 @@ export function formatAddressLine(
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
+/** The note the person who raised this statement left for accounts, or null when
+ *  there is none. The auto-filled default ("Reimbursement billing for PR-…") is not
+ *  a message, so it is ignored. */
+export function accountsNoteFor(row: Pick<InboxRow, "statement_notes" | "invoice">): string | null {
+  const note = row.statement_notes?.trim();
+  if (!note || /^Reimbursement billing for\s/i.test(note)) return null;
+  if (note === row.invoice?.internal_notes?.trim()) return null; // already shown as the invoice's own note
+  return note;
+}
+
 /** Formats a lead's billing address for display — same shape as voBillParty's
  *  address, so accounts sees one consistent format regardless of whether the
  *  invoice bills a lead, a case client, or an aggregator. */
@@ -385,6 +395,8 @@ export interface InboxRow {
    *  time. When set, accounts must put it on the Tally invoice — some customers
    *  require it for their own invoice processing. */
   po_number: string | null;
+  /** billing_statements.notes — the internal note the creator left for accounts (never printed on the invoice). */
+  statement_notes?: string | null;
   period_start: string | null;
   period_end: string | null;
   payment_status: string;

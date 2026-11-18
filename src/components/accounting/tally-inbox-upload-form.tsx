@@ -22,7 +22,8 @@ import { CustomerEmailPreview, type CustomerEmailPreviewData } from "@/component
 import { InvoiceReasonStamp } from "@/components/accounting/invoice-reason-stamp";
 import { invoiceReasonFor } from "@/lib/invoice-reason";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
-import { isRealCompanyName, leadAddress, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
+import { AccountsNote } from "@/components/accounting/accounts-note";
+import { accountsNoteFor, isRealCompanyName, leadAddress, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
 import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
 
 interface Props {
@@ -412,6 +413,10 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
             </span>
           </span>
         </div>
+      )}
+
+      {accountsNoteFor(row) && (
+        <div className="grid grid-cols-2"><AccountsNote note={accountsNoteFor(row)!} /></div>
       )}
 
       {/* Issuance context: everything accounts needs to re-create the invoice in Tally. */}
