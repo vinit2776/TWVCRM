@@ -81,7 +81,7 @@ function buildDrafts(input: JourneyInput): PhaseDraft[] {
 
     const rejected = proposal?.status === "rejected";
     const withdrew = rejected && !!proposal?.rejectionReason?.startsWith("Customer withdrew");
-    const needsWaiver = !!proposal && proposal.depositMonths <= 0 && !proposal.waiverVerified;
+    const needsWaiver = !!proposal && proposal.depositMonths <= 0 && !proposal.waiverVerified && !proposal.waiverExempt;
     phases.push({
       key: "proposal",
       title: "Proposal",

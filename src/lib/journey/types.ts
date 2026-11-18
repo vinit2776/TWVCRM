@@ -72,6 +72,8 @@ export interface JourneyInput {
     /** Why a rejected proposal was closed (the walk-away refund writes "Customer withdrew …"). */
     rejectionReason?: string | null;
     waiverVerified: boolean;
+    /** Virtual Office proposals carry zero deposit by design, so no waiver is needed. */
+    waiverExempt?: boolean;
     /** A non-voided first-month PI statement exists for this proposal. */
     prorataInvoiceSent: boolean;
   } | null;

@@ -17,7 +17,7 @@ import { formatCurrency, apiErrorMessage } from "@/lib/utils";
 import { toast } from "sonner";
 import { buildShareableMessage, fmtDuration } from "@/lib/unifi-share";
 import { emitApprovalChanged, onApprovalChanged } from "@/lib/approval-events";
-import { poValidity, PO_VALIDITY_CLASS, waitingSince } from "@/lib/approval-display";
+import { poValidity, PO_VALIDITY_CLASS, waitingSince, voFloorSummary } from "@/lib/approval-display";
 import { computeBatchDate, formatBatchDate, type PaymentBatchType } from "@/lib/payment-batch";
 import { PAYMENT_BATCH_TYPES, PAYMENT_BATCH_TYPE_LABELS } from "@/lib/constants";
 
@@ -78,6 +78,7 @@ const APPROVAL_TYPE_LABELS: Record<string, string> = {
   unifi_adhoc_voucher:   "WiFi Voucher Request",
   ruijie_adhoc_voucher:  "WiFi Voucher Request",
   comp_request:          "Comp Request",
+  vo_below_floor:        "VO Below-Floor Quote",
 };
 
 export function ApprovalBell() {
@@ -645,8 +646,11 @@ export function ApprovalBell() {
                           <span className="font-medium text-foreground">
                             {(a.requester as { full_name?: string } | null)?.full_name || "Unknown"}
                           </span>
-                          {" "}requested {a.approval_type === "escalation_waiver" ? "escalation waiver" : "escalation reduction"}
+                          {" "}requested {a.approval_type === "vo_below_floor" ? "a below-floor Virtual Office price" : a.approval_type === "escalation_waiver" ? "escalation waiver" : "escalation reduction"}
                         </p>
+                        {a.approval_type === "vo_below_floor" && (
+                          <p>{voFloorSummary(meta)}</p>
+                        )}
                         {meta.parent_escalation_percentage != null && (
                           <p>
                             Escalation: {String(meta.parent_escalation_percentage)}% → <span className="font-semibold text-foreground">{String(meta.proposed_escalation_percentage)}%</span>
@@ -664,9 +668,9 @@ export function ApprovalBell() {
 
                       <button
                         className="text-xs font-medium text-primary hover:underline"
-                        onClick={() => { setOpen(false); router.push(`/contracts/${a.entity_id}`); }}
+                        onClick={() => { setOpen(false); router.push(a.approval_type === "vo_below_floor" ? `/proposals/${a.entity_id}` : `/contracts/${a.entity_id}`); }}
                       >
-                        View contract →
+                        {a.approval_type === "vo_below_floor" ? "View proposal →" : "View contract →"}
                       </button>
 
                       {isRejecting && (

@@ -15,7 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "sonner";
 import { emitApprovalChanged, onApprovalChanged } from "@/lib/approval-events";
 import { formatCurrency, apiErrorMessage } from "@/lib/utils";
-import { poValidity, PO_VALIDITY_CLASS, waitingSince } from "@/lib/approval-display";
+import { poValidity, PO_VALIDITY_CLASS, waitingSince, voFloorSummary } from "@/lib/approval-display";
 import { computeBatchDate, formatBatchDate, type PaymentBatchType } from "@/lib/payment-batch";
 import { PAYMENT_BATCH_TYPES, PAYMENT_BATCH_TYPE_LABELS } from "@/lib/constants";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -89,9 +89,11 @@ const TYPE_LABELS: Record<string, string> = {
   escalation_reduction: "Escalation Reduction",
   escalation_waiver:    "Escalation Waiver",
   unifi_adhoc_voucher:  "WiFi Voucher",
+  vo_below_floor:       "VO Below-Floor Quote",
 };
 
 const ESCALATION_APPROVAL_TYPES = ["escalation_reduction", "escalation_waiver"];
+const VO_FLOOR_APPROVAL_TYPE = "vo_below_floor";
 
 // ---------------------------------------------------------------------------
 // Row component
@@ -319,7 +321,7 @@ function EscalationApprovalRow({
               <StatusBadge status={req.status} />
             </div>
             <p className="text-sm font-medium mt-0.5">
-              <Link href={`/contracts/${req.entity_id}`} className="hover:underline text-primary font-mono">
+              <Link href={req.approval_type === VO_FLOOR_APPROVAL_TYPE ? `/proposals/${req.entity_id}` : `/contracts/${req.entity_id}`} className="hover:underline text-primary font-mono">
                 {req.entity_reference || req.entity_id}
               </Link>
             </p>
@@ -333,6 +335,12 @@ function EscalationApprovalRow({
           <span className="font-medium text-foreground">Requested by: </span>
           {(req.requester as { full_name?: string } | null)?.full_name || "Unknown"}
         </div>
+        {req.approval_type === VO_FLOOR_APPROVAL_TYPE && (
+          <div className="col-span-2">
+            <span className="font-medium text-foreground">Price: </span>
+            {voFloorSummary(meta)}
+          </div>
+        )}
         {meta.parent_contract_number != null && (
           <div>
             <span className="font-medium text-foreground">Renewal of: </span>
@@ -617,6 +625,7 @@ export default function ApprovalsPage() {
   const userId = user?.id ?? null;
   const [requests, setRequests]     = useState<ApprovalRequest[]>([]);
   const [escalationRequests, setEscalationRequests] = useState<ApprovalRequest[]>([]);
+  const [voFloorRequests, setVoFloorRequests] = useState<ApprovalRequest[]>([]);
   const [history, setHistory]       = useState<ApprovalRequest[]>([]);
   const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
   const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(new Set());
@@ -647,6 +656,8 @@ export default function ApprovalsPage() {
         setEscalationRequests(
           isApprover ? all.filter(r => ESCALATION_APPROVAL_TYPES.includes(r.approval_type)) : []
         );
+        // Below-floor Virtual Office quotes: decided by admin/manager only.
+        setVoFloorRequests(isApprover ? all.filter(r => r.approval_type === VO_FLOOR_APPROVAL_TYPE) : []);
       }
 
       // Fetch pending vendor bills (only admins/managers see them — admins can act)
@@ -666,7 +677,7 @@ export default function ApprovalsPage() {
         const json = await historyRes.json();
         const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         const resolved = ((json.data || []) as ApprovalRequest[]).filter(
-          r => (r.approval_type === "comp_request" || ESCALATION_APPROVAL_TYPES.includes(r.approval_type))
+          r => (r.approval_type === "comp_request" || r.approval_type === VO_FLOOR_APPROVAL_TYPE || ESCALATION_APPROVAL_TYPES.includes(r.approval_type))
             && r.status !== "pending"
             && new Date(r.created_at) > cutoff
             && (isApprover || r.requested_by === userId)
@@ -768,9 +779,9 @@ export default function ApprovalsPage() {
           <TabsList className="w-full">
             <TabsTrigger value="pending" className="flex-1">
               Pending
-              {(requests.length + pendingBills.length + escalationRequests.length) > 0 && (
+              {(requests.length + pendingBills.length + escalationRequests.length + voFloorRequests.length) > 0 && (
                 <Badge className="ml-2 text-[10px] bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200">
-                  {requests.length + pendingBills.length + escalationRequests.length}
+                  {requests.length + pendingBills.length + escalationRequests.length + voFloorRequests.length}
                 </Badge>
               )}
             </TabsTrigger>
@@ -784,7 +795,7 @@ export default function ApprovalsPage() {
 
           {/* Pending tab */}
           <TabsContent value="pending" className="mt-4 space-y-6">
-            {requests.length === 0 && pendingBills.length === 0 && escalationRequests.length === 0 ? (
+            {requests.length === 0 && pendingBills.length === 0 && escalationRequests.length === 0 && voFloorRequests.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center">
                   <CheckCircle2 className="h-10 w-10 text-green-400 mx-auto mb-3" />
@@ -885,6 +896,26 @@ export default function ApprovalsPage() {
                   </section>
                 )}
 
+                {/* Below-floor Virtual Office quotes — the proposal cannot be sent until decided */}
+                {voFloorRequests.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Percent className="h-4 w-4 text-purple-600" />
+                      <h2 className="text-sm font-semibold">
+                        VO Below-Floor Quotes <span className="text-muted-foreground font-normal">({voFloorRequests.length})</span>
+                      </h2>
+                    </div>
+                    {voFloorRequests.map(req => (
+                      <EscalationApprovalRow
+                        key={req.id}
+                        req={req}
+                        canAct={isApprover}
+                        onActed={fetchData}
+                      />
+                    ))}
+                  </section>
+                )}
+
                 {/* Comp Requests section */}
                 {requests.length > 0 && (
                   <section className="space-y-3">
@@ -918,7 +949,7 @@ export default function ApprovalsPage() {
               </Card>
             ) : (
               history.map(req => (
-                ESCALATION_APPROVAL_TYPES.includes(req.approval_type) ? (
+                (ESCALATION_APPROVAL_TYPES.includes(req.approval_type) || req.approval_type === VO_FLOOR_APPROVAL_TYPE) ? (
                   <EscalationApprovalRow
                     key={req.id}
                     req={req}

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMissingTable } from "@/lib/vo-rates-db";
 import { computeTrend, type DirectRateRow, type QuoteOutcome, type Trend } from "@/lib/vo-rates";
-import { computeVoPricing, buildDirectSnapshot, type VoPricingResult } from "@/lib/vo-pricing";
+import { computeVoPricing, buildDirectSnapshot, voPriceChangedReason, type VoPricingResult } from "@/lib/vo-pricing";
 import type { AggregatorRateRow } from "@/lib/vo-aggregator-rates";
 
 export const VO_FLOOR_APPROVAL_TYPE = "vo_below_floor";
@@ -106,6 +106,7 @@ interface SnapshotShape {
   term_months?: number;
   guide_rate?: number;
   floor_rate?: number | null;
+  quoted_term_fee?: number | null;
 }
 
 /**
@@ -115,10 +116,18 @@ interface SnapshotShape {
  */
 export async function voSendBlockedReason(
   admin: SupabaseClient,
-  proposal: { id: string; kind?: string | null; vo_price_snapshot?: SnapshotShape | null },
+  proposal: {
+    id: string;
+    kind?: string | null;
+    vo_price_snapshot?: SnapshotShape | null;
+    subtotal?: number | string | null;
+    discount_percentage?: number | string | null;
+  },
 ): Promise<string | null> {
   if (proposal.kind !== "virtual_office") return null;
   const snap = proposal.vo_price_snapshot;
+  const changed = voPriceChangedReason(proposal);
+  if (changed) return changed;
   if (!snap?.requires_approval) return null;
   const approval = await latestFloorApproval(admin, proposal.id);
   const matches = approval && Number(approval.metadata?.quoted_rate) === Number(snap.quoted_rate) && Number(approval.metadata?.term_months) === Number(snap.term_months);
@@ -171,5 +180,20 @@ export async function requestFloorApproval(
     .select("id")
     .single();
   if (error || !data) return { error: error?.message ?? "Could not create the approval request" };
+  // Dynamic import keeps the mailer (env-dependent) out of the pure pricing modules and their tests.
+  const { notifyFloorApprovers } = await import("@/lib/vo-floor-notify");
+  await notifyFloorApprovers(admin, {
+    approvalId: data.id as string,
+    proposalId: input.proposalId,
+    proposalNumber: input.proposalNumber,
+    requestedBy: input.requestedBy,
+    reason: input.reason,
+    meta: {
+      quoted_rate: input.snapshot.quoted_rate,
+      floor_rate: input.snapshot.floor_rate,
+      guide_rate: input.snapshot.guide_rate,
+      term_months: input.snapshot.term_months,
+    },
+  });
   return { id: data.id as string };
 }

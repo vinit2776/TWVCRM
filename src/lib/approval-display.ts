@@ -75,3 +75,29 @@ export function staleBannerFor(
   if (diffDays < staleDays) return null;
   return `This PO's expected delivery date (${expectedDeliveryDate}) was ${diffDays} days ago. Verify the goods/services were actually delivered before approving payment.`;
 }
+
+export interface VoFloorMeta {
+  quoted_rate?: number | null;
+  floor_rate?: number | null;
+  guide_rate?: number | null;
+  term_months?: number | null;
+}
+
+const inr = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
+
+/**
+ * One-line "quoted vs floor" summary for a vo_below_floor approval request, e.g.
+ * "Quoted ₹8,000 vs floor ₹9,000 (₹1,000 below), 12 months". Rates above 12 months are per year.
+ */
+export function voFloorSummary(raw: VoFloorMeta | Record<string, unknown> | null | undefined): string {
+  // approval_requests.metadata is untyped JSON; trust only numeric values.
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const meta = { term_months: num(raw?.term_months) };
+  const quoted = num(raw?.quoted_rate);
+  const floor = num(raw?.floor_rate);
+  if (quoted === null) return "Below-floor Virtual Office quote";
+  const term = meta.term_months ? `, ${meta.term_months} months${meta.term_months > 12 ? " (per-year rate)" : ""}` : "";
+  if (floor === null) return `Quoted ${inr(quoted)}${term}`;
+  const gap = Math.max(0, floor - quoted);
+  return `Quoted ${inr(quoted)} vs floor ${inr(floor)}${gap > 0 ? ` (${inr(gap)} below)` : ""}${term}`;
+}
