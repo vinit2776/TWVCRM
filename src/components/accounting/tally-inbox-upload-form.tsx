@@ -315,8 +315,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
         <div className="font-medium">{replace ? "Replace Tally GST invoice" : "Upload Tally GST invoice"}</div>
         {replace && (
           <div className="text-xs text-amber-800 mt-0.5">
-            Replaces <span className="font-mono">{row.latest_upload?.tally_invoice_number}</span>. The old invoice stays in the history
-            as superseded. Void or cancel it in Tally first if it is already posted there.
+            Replaces <span className="font-mono">{row.latest_upload?.tally_invoice_number}</span>. Use this when the wrong file was attached.
+            The earlier upload stays in the history as superseded. Nothing is changed in Tally.
           </div>
         )}
         <div className="text-xs text-muted-foreground mt-0.5">
@@ -826,9 +826,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
       {replaceSent && (
         <div className="rounded border border-red-300 bg-red-50 p-2.5 text-xs text-red-900 space-y-2">
           <p>
-            <strong>The customer already has invoice {oldInvoiceNumber}.</strong> Replacing it emails them the
-            corrected invoice. The old invoice is <strong>not</strong> cancelled in Tally or on the GST portal by
-            this — do that yourself if it must not stand.
+            <strong>The customer already has the file uploaded for {oldInvoiceNumber}.</strong> Replacing it emails
+            them the corrected file. Only the CRM record and the attached file change; nothing is changed in Tally.
           </p>
           <label className="block">
             <span className="block mb-1">Why is it being replaced? (recorded in the audit trail)</span>
@@ -864,7 +863,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
           </label>
           <label className="flex items-start gap-2 cursor-pointer">
             <input type="checkbox" checked={confirmTick} onChange={(e) => setConfirmTick(e.target.checked)} className="mt-0.5" />
-            <span>I understand the customer will receive the corrected invoice and the old one stays valid until it is cancelled in Tally.</span>
+            <span>I understand the customer will be emailed the corrected file and the earlier upload will be marked superseded.</span>
           </label>
         </div>
       )}
