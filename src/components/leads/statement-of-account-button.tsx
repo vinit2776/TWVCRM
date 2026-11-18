@@ -7,23 +7,17 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { soaRange } from "@/lib/statement-of-account";
-
-type Period = "current" | "previous" | "both";
+import { soaFyOptions } from "@/lib/statement-of-account";
 
 /** Download-only: nothing is sent to the customer. */
 export function StatementOfAccountButton({ leadId }: { leadId: string }) {
   const [busy, setBusy] = useState(false);
-  const options: { period: Period; label: string }[] = [
-    { period: "current", label: soaRange("current").label },
-    { period: "previous", label: soaRange("previous").label },
-    { period: "both", label: "Both years" },
-  ];
+  const options = soaFyOptions();
 
-  async function download(period: Period) {
+  async function download(fyStartYear: number) {
     setBusy(true);
     try {
-      const res = await fetch(`/api/leads/${leadId}/statement-of-account?period=${period}`);
+      const res = await fetch(`/api/leads/${leadId}/statement-of-account?fy=${fyStartYear}`);
       if (!res.ok) {
         const j = await res.json().catch(() => null);
         throw new Error(j?.error || "Could not build the statement");
@@ -53,7 +47,7 @@ export function StatementOfAccountButton({ leadId }: { leadId: string }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {options.map((o) => (
-          <DropdownMenuItem key={o.period} onClick={() => download(o.period)}>
+          <DropdownMenuItem key={o.from} onClick={() => download(Number(o.from.slice(0, 4)))}>
             {o.label}
           </DropdownMenuItem>
         ))}

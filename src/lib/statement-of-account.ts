@@ -11,8 +11,6 @@
 
 import { paymentCredit, settlementAmount } from "@/lib/settlement";
 
-export type SoaPeriod = "current" | "previous" | "both";
-
 export interface SoaRange {
   /** Inclusive, YYYY-MM-DD. */
   from: string;
@@ -80,14 +78,16 @@ export function currentFyStartYear(today: Date = new Date()): number {
 const fyLabel = (startYear: number) =>
   `FY ${startYear}-${String(startYear + 1).slice(-2)}`;
 
-export function soaRange(period: SoaPeriod, today: Date = new Date()): SoaRange {
+/** One Indian financial year (April–March), named by the calendar year it starts in. */
+export function soaRange(startYear: number): SoaRange {
+  return { from: `${startYear}-04-01`, to: `${startYear + 1}-03-31`, label: fyLabel(startYear) };
+}
+
+/** FYs offered in the picker, newest first, starting with the current one. */
+export const SOA_FY_COUNT = 6;
+export function soaFyOptions(today: Date = new Date()): SoaRange[] {
   const cur = currentFyStartYear(today);
-  const startYear = period === "current" ? cur : cur - 1;
-  const endYear = period === "previous" ? cur - 1 : cur;
-  const label = period === "both"
-    ? `${fyLabel(cur - 1)} and ${fyLabel(cur)}`
-    : fyLabel(startYear);
-  return { from: `${startYear}-04-01`, to: `${endYear + 1}-03-31`, label };
+  return Array.from({ length: SOA_FY_COUNT }, (_, i) => soaRange(cur - i));
 }
 
 /**

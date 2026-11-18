@@ -2,15 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { buildStatementOfAccountPdf, loadStatementOfAccount } from "@/lib/statement-of-account-server";
-import type { SoaPeriod } from "@/lib/statement-of-account";
+import { currentFyStartYear, SOA_FY_COUNT } from "@/lib/statement-of-account";
 
 export const maxDuration = 30;
 
-const PERIODS: SoaPeriod[] = ["current", "previous", "both"];
 const ALLOWED_ROLES = ["admin", "manager", "accounts", "sales_rep"];
 
 /**
- * GET /api/leads/[id]/statement-of-account?period=current|previous|both
+ * GET /api/leads/[id]/statement-of-account?fy=<start year, e.g. 2026 for FY 2026-27>
  *
  * Download-only PDF ledger of what the customer was billed (PIs and GST
  * invoices) and paid. Read-only: sends nothing to the customer.
@@ -28,17 +27,20 @@ export async function GET(
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
-  const period = (req.nextUrl.searchParams.get("period") || "current") as SoaPeriod;
-  if (!PERIODS.includes(period)) return NextResponse.json({ error: "Invalid period" }, { status: 400 });
+  const cur = currentFyStartYear();
+  const fy = Number(req.nextUrl.searchParams.get("fy") ?? cur);
+  if (!Number.isInteger(fy) || fy > cur || fy <= cur - SOA_FY_COUNT) {
+    return NextResponse.json({ error: "Invalid financial year" }, { status: 400 });
+  }
 
   try {
-    const result = await loadStatementOfAccount(createAdminClient(), leadId, period);
+    const result = await loadStatementOfAccount(createAdminClient(), leadId, fy);
     if (!result) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
     const pdf = buildStatementOfAccountPdf(result);
     const admin = createAdminClient();
     void logAudit(admin, {
       entityType: "lead", entityId: leadId, action: "view", performedBy: dbUser.id,
-      changes: { statement_of_account: { old: null, new: period } },
+      changes: { statement_of_account: { old: null, new: fy } },
     });
     const filename = `Statement-of-Account-${result.ledger.range.label.replace(/[^A-Za-z0-9]+/g, "-")}.pdf`;
     return new NextResponse(new Uint8Array(pdf), {

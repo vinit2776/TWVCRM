@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildLedger, soaRange, type SoaStatementInput } from "../statement-of-account";
+import { buildLedger, soaFyOptions, soaRange, type SoaStatementInput } from "../statement-of-account";
 
 const stmt = (o: Partial<SoaStatementInput> & { id: string }): SoaStatementInput => ({
   status: "finalized", statement_number: `BS-${o.id}`, gst_invoice_number: null, total_amount: 1000,
@@ -11,10 +11,9 @@ describe("statement of account", () => {
   const today = new Date("2026-11-18T06:00:00Z");
 
   it("derives Indian financial-year ranges", () => {
-    expect(soaRange("current", today)).toMatchObject({ from: "2026-04-01", to: "2027-03-31" });
-    expect(soaRange("previous", today)).toMatchObject({ from: "2025-04-01", to: "2026-03-31" });
-    expect(soaRange("both", today)).toMatchObject({ from: "2025-04-01", to: "2027-03-31" });
-    expect(soaRange("current", new Date("2027-02-01T00:00:00Z")).from).toBe("2026-04-01");
+    expect(soaRange(2026)).toMatchObject({ from: "2026-04-01", to: "2027-03-31", label: "FY 2026-27" });
+    expect(soaFyOptions(today).map((r) => r.label).slice(0, 2)).toEqual(["FY 2026-27", "FY 2025-26"]);
+    expect(soaFyOptions(new Date("2027-02-01T00:00:00Z"))[0].from).toBe("2026-04-01");
   });
 
   it("omits voided, discarded, draft and never-sent statements", () => {
@@ -25,7 +24,7 @@ describe("statement of account", () => {
       stmt({ id: "dr", status: "draft" }),
       stmt({ id: "vo", voided_at: "2026-06-11T00:00:00Z" }),
       stmt({ id: "unsent", proforma_sent_at: null }),
-    ], [], soaRange("current", today));
+    ], [], soaRange(2026));
     expect(ledger.rows).toHaveLength(1);
     expect(ledger.closing).toBe(1000);
   });
@@ -34,14 +33,14 @@ describe("statement of account", () => {
     const ledger = buildLedger(
       [stmt({ id: "p", proforma_sent_at: null })],
       [{ billing_statement_id: "p", amount: 1000, tds_amount: 0, payment_date: "2026-07-01", payment_mode: "upi", payment_reference: null }],
-      soaRange("current", today),
+      soaRange(2026),
     );
     expect(ledger.rows).toHaveLength(2);
     expect(ledger.closing).toBe(0);
   });
 
   it("drops payments of omitted statements and carries an opening balance", () => {
-    const range = soaRange("current", today);
+    const range = soaRange(2026);
     const ledger = buildLedger(
       [stmt({ id: "old", proforma_sent_at: "2026-02-01T05:00:00Z", total_amount: 5000 }), stmt({ id: "gone", status: "voided" })],
       [

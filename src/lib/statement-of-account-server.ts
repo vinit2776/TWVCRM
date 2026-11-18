@@ -4,7 +4,7 @@ import {
   BRAND_DARK, BRAND_TEAL, addBrandHeader, addFooter, createPdfContext, formatCurrency, formatDate,
 } from "@/lib/pdf-utils";
 import {
-  buildLedger, soaRange, type SoaLedger, type SoaPaymentInput, type SoaPeriod, type SoaStatementInput,
+  buildLedger, soaRange, type SoaLedger, type SoaPaymentInput, type SoaStatementInput,
 } from "@/lib/statement-of-account";
 
 const STATEMENT_COLUMNS =
@@ -29,7 +29,7 @@ export interface SoaResult {
 export async function loadStatementOfAccount(
   admin: SupabaseClient,
   leadId: string,
-  period: SoaPeriod,
+  fyStartYear: number,
 ): Promise<SoaResult | null> {
   const { data: lead } = await admin
     .from("leads")
@@ -72,7 +72,7 @@ export async function loadStatementOfAccount(
   const name = lead.company || [lead.first_name, lead.last_name].filter(Boolean).join(" ") || "Customer";
   const address = [lead.street, lead.city, lead.state, lead.zip_code].filter(Boolean).join(", ") || null;
   return {
-    ledger: buildLedger(stmts, payments, soaRange(period)),
+    ledger: buildLedger(stmts, payments, soaRange(fyStartYear)),
     party: { name, address, gstin: (lead.gst_number as string | null) || null },
   };
 }
@@ -150,7 +150,7 @@ export function buildStatementOfAccountPdf({ ledger, party }: SoaResult): Buffer
   const money = (n: number) => (n ? formatCurrency(n) : "");
   line({ date: "", doc: "", part: "Opening balance", debit: "", credit: "", bal: formatCurrency(ledger.opening) }, true);
   if (!ledger.rows.length) {
-    line({ date: "", doc: "", part: "No billing in this period", debit: "", credit: "", bal: "" });
+    line({ date: "", doc: "", part: "No billing in this financial year", debit: "", credit: "", bal: "" });
   }
   for (const r of ledger.rows) {
     line({ date: shortDate(r.date), doc: r.document, part: r.particulars, debit: money(r.debit), credit: money(r.credit), bal: formatCurrency(r.balance) });
