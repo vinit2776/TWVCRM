@@ -37,11 +37,13 @@ import {
   type InboxResponse,
   type InboxRow,
   isRealCompanyName,
+  accountsNoteFor,
   leadAddress,
   voBillParty,
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
+import { AccountsNote } from "./accounts-note";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import type { CustomerEmailPreviewData } from "./customer-email-preview";
 import { buildInboxSendEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
@@ -1949,6 +1951,9 @@ const InboxRowItem = memo(function InboxRowItem({
             <span className="truncate">{displayAddress}</span>
           </div>
         )}
+
+        {/* ── Note the requester left for accounts (e.g. reimbursement billing) ── */}
+        {accountsNoteFor(row) && <AccountsNote note={accountsNoteFor(row)!} compact />}
 
         {/* ── Lifecycle tracker ── */}
         <InboxRowLifecycleTracker row={row} />
