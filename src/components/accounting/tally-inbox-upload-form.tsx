@@ -16,7 +16,8 @@ import { toast } from "sonner";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
-import { buildGstInvoiceEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
+import { buildGstInvoiceEmail, buildUploadEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
+import { CustomerEmailPreview, type CustomerEmailPreviewData } from "@/components/accounting/customer-email-preview";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
 import { isRealCompanyName, leadAddress, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
 import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
@@ -92,15 +93,46 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   const customerRecipients = Array.from(new Set(
     [lead?.email, ...(lead?.billing_emails ?? [])].filter((e): e is string => !!e),
   ));
-  const emailPreview = buildGstInvoiceEmail({
-    partyName,
-    invoiceNumber: invoiceNumber.trim() || "(new invoice number)",
-    totalDisplay: formatCurrency(row.statement_total_amount),
-    contractNumber: row.contract?.contract_number ?? row.proposal?.proposal_number ?? row.invoice?.invoice_number ?? "",
-    isReceipt: row.payment_status === "paid",
-    isReplacement: true,
-  });
-  const emailPreviewText = emailPreview.html.replace(/<br\s*\/?>/g, "\n").replace(/<\/p>/g, "\n").replace(/<[^>]+>/g, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  const contractRef = row.contract?.contract_number ?? row.proposal?.proposal_number ?? row.invoice?.invoice_number ?? "";
+  const ccRecipients = customerRecipients.slice(1);
+  const attachmentName = gstInvoiceFilename(invoiceNumber.trim() || "invoice");
+  const newNumber = invoiceNumber.trim() || "(new invoice number)";
+  // The resend route puts every recipient in To, so the preview does the same.
+  const resendPreview: CustomerEmailPreviewData = {
+    to: customerRecipients,
+    attachmentName,
+    ...buildGstInvoiceEmail({
+      partyName,
+      invoiceNumber: newNumber,
+      totalDisplay: formatCurrency(row.statement_total_amount),
+      contractNumber: contractRef,
+      isReceipt: row.payment_status === "paid",
+      isReplacement: true,
+    }),
+  };
+  // An unpaid upload emails the customer on the spot (payment link included);
+  // a paid one waits for the Send step, which has its own preview.
+  const uploadEmailsNow = row.payment_status !== "paid" && !replaceSent;
+  const uploadPreview: CustomerEmailPreviewData = {
+    to: customerRecipients.slice(0, 1),
+    cc: ccRecipients,
+    attachmentName,
+    ...buildUploadEmail({
+      customerName: partyName,
+      periodLabel: row.period_start
+        ? new Date(row.period_start + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" })
+        : "this period",
+      invoiceNumber: newNumber,
+      refLabel: row.contract ? "Contract" : row.proposal ? "Proposal Ref" : "Invoice",
+      contractNumber: contractRef,
+      invoiceDateFormatted: invoiceDate
+        ? new Date(invoiceDate + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })
+        : "",
+      amountFormatted: Math.round(row.statement_total_amount).toLocaleString("en-IN", { maximumFractionDigits: 0 }),
+      payLinkUrl: "[payment link created when sent]",
+    }),
+    note: "The Pay Now link and UPI details are filled in when the email goes out. The attachment is the file you chose above.",
+  };
   const confirmOk = confirmTick && !!oldInvoiceNumber
     && confirmNumber.trim().toLowerCase() === oldInvoiceNumber.trim().toLowerCase();
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -878,19 +910,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
             <span className="font-mono">{invoiceNumber.trim()}</span> for {partyName}, and emailing the customer the
             new one. This is recorded against your user.
           </p>
-          <div className="rounded border border-red-200 bg-background p-2.5 text-foreground space-y-1">
-            <div className="font-semibold text-red-900">The customer will be notified with the new attachment</div>
-            {customerRecipients.length > 0 ? (
-              <>
-                <div><span className="text-muted-foreground">To:</span> {customerRecipients.join(", ")}</div>
-                <div><span className="text-muted-foreground">Subject:</span> {emailPreview.subject}</div>
-                <div><span className="text-muted-foreground">Attachment:</span> <span className="font-mono">{gstInvoiceFilename(invoiceNumber.trim() || "invoice")}</span> (the file you just attached)</div>
-                <div className="whitespace-pre-wrap rounded bg-muted/40 p-2 text-[11px] leading-relaxed">{emailPreviewText}</div>
-              </>
-            ) : (
-              <div className="text-amber-800">No email address is on file for this customer, so nothing will be sent. Add one, then use Resend email on this row.</div>
-            )}
-          </div>
+          <div className="font-semibold text-red-900">The customer will be notified with the new attachment</div>
+          <CustomerEmailPreview preview={resendPreview} heading="Email the customer will receive" />
           <label className="block">
             <span className="block mb-1">Type <span className="font-mono font-semibold">{oldInvoiceNumber}</span> to confirm</span>
             <input
@@ -915,6 +936,20 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
             <span className="font-semibold block">Invoice uploaded but email failed to send.</span>
             {emailWarning}
           </span>
+        </div>
+      )}
+
+      {uploadEmailsNow && (
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground">
+            This upload emails the customer immediately. Check what they will receive:
+          </div>
+          <CustomerEmailPreview preview={uploadPreview} heading="Email sent on Upload & Send" />
+        </div>
+      )}
+      {!replace && row.payment_status === "paid" && (
+        <div className="text-xs text-muted-foreground">
+          Nothing is emailed on upload for a paid statement. You will see the customer email before it is sent.
         </div>
       )}
 

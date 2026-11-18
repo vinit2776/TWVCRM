@@ -5,12 +5,13 @@ import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/norm
 import { stampSignatureOnPdf } from "@/lib/uploads/stamp-pdf-signature";
 import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
 import { annexureFromSections } from "@/lib/electricity-annexure";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
+import { buildUploadEmail } from "@/lib/gst-invoice-email";
 import { logAudit } from "@/lib/audit";
 import { extractFromPdf } from "@/lib/tally-pdf-extract";
 import { isRealCompanyName } from "@/lib/tally-handoff";
@@ -735,41 +736,17 @@ export async function POST(
         timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric",
       });
 
-      const emailHtml = `
-        <div style="font-family:sans-serif;max-width:640px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
-          <div style="background:#015E65;padding:24px 32px;">
-            <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
-            <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Tax Invoice</p>
-          </div>
-          <div style="padding:32px;">
-            <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
-            <p style="color:#333;font-size:14px;">Please find attached your GST tax invoice for <strong>${periodLabel}</strong>. Kindly make payment at your earliest convenience.</p>
-            <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
-              <tr><td style="padding:6px 0;color:#666;">Invoice No.</td><td style="padding:6px 0;font-weight:600;">${invoiceNumber}</td></tr>
-              <tr><td style="padding:6px 0;color:#666;">${statement.contract ? "Contract" : statement.proposal ? "Proposal Ref" : "Invoice"}</td><td style="padding:6px 0;">${contractNumber}</td></tr>
-              <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
-              <tr><td style="padding:6px 0;color:#666;">Invoice Date</td><td style="padding:6px 0;">${invoiceDateFormatted}</td></tr>
-              <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${amountFormatted}</td></tr>
-            </table>
-            ${emailLinkUrl ? `
-            <h3 style="color:#015E65;font-size:14px;margin:20px 0 10px;">Payment Options</h3>
-            <table style="width:100%;border-collapse:collapse;font-size:13px;">
-              <tr><td style="padding:4px 0;color:#666;">Bank Transfer</td><td style="padding:4px 0;">${COMPANY_BANK_DETAILS.accountName}<br/>${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}<br/>A/C: ${COMPANY_BANK_DETAILS.accountNumber} | IFSC: ${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
-              ${upiId ? `<tr><td style="padding:4px 0;color:#666;">UPI</td><td style="padding:4px 0;">${upiId}</td></tr>` : ""}
-              <tr><td style="padding:4px 0;color:#666;">Pay Online</td><td style="padding:4px 0;"><a href="${emailLinkUrl}" style="color:#015E65;font-weight:bold;">${emailLinkUrl}</a></td></tr>
-            </table>
-            <div style="text-align:center;margin:24px 0;">
-              <a href="${emailLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
-            </div>
-            ` : ""}
-            <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
-          </div>
-          <div style="background:#015E65;padding:12px 32px;text-align:center;">
-            <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
-            <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:9px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | GSTIN: 33AAACU4245J1ZF</p>
-          </div>
-        </div>
-      `;
+      const { subject: emailSubject, html: emailHtml } = buildUploadEmail({
+        customerName,
+        periodLabel,
+        invoiceNumber,
+        refLabel: statement.contract ? "Contract" : statement.proposal ? "Proposal Ref" : "Invoice",
+        contractNumber,
+        invoiceDateFormatted,
+        amountFormatted,
+        payLinkUrl: emailLinkUrl,
+        upiId,
+      });
 
       // CC every additional billing contact on file — the primary "email" field
       // is only one of potentially several finance-team recipients the customer
@@ -789,7 +766,7 @@ export async function POST(
           to: [customerEmail],
           cc: ccEmails.length > 0 ? ccEmails : undefined,
           bcc: [EMAIL_REPLY_TO],
-          subject: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
+          subject: emailSubject,
           html: emailHtml,
           attachments: pdfAttachment
             ? [{ filename: safeFilename, content: pdfAttachment, contentType: "application/pdf" }]

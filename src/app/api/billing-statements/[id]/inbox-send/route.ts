@@ -1,6 +1,7 @@
 import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { buildInboxSendEmail } from "@/lib/gst-invoice-email";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 import { formatCurrency } from "@/lib/utils";
@@ -340,26 +341,9 @@ export async function POST(
     rzpLinkUrl = statement.razorpay_payment_link_url;
   }
 
-  const subject = isReceipt
-    ? `GST tax invoice ${invoiceNumber} — receipt`
-    : `GST tax invoice ${invoiceNumber} — ${totalDisplay} due`;
-
-  const html = isReceipt
-    ? `
-      <p>Dear ${partyName},</p>
-      <p>Thank you for your payment. Please find attached the GST tax invoice
-         <strong>${invoiceNumber}</strong> for <strong>${totalDisplay}</strong>,
-         as recorded against contract ${contractNumber}.</p>
-      <p>This invoice is for your records. No further action is required.</p>
-      <p>Regards,<br/>The WorkVilla — Accounts</p>
-    `
-    : `
-      <p>Dear ${partyName},</p>
-      <p>Please find attached the GST tax invoice <strong>${invoiceNumber}</strong>
-         for <strong>${totalDisplay}</strong>, against contract ${contractNumber}.</p>
-      ${rzpLinkUrl ? `<p>Pay online: <a href="${rzpLinkUrl}">${rzpLinkUrl}</a></p>` : "<p>Kindly arrange payment at the earliest.</p>"}
-      <p>Regards,<br/>The WorkVilla — Accounts</p>
-    `;
+  const { subject, html } = buildInboxSendEmail({
+    partyName, invoiceNumber, totalDisplay, contractNumber, isReceipt, payLinkUrl: rzpLinkUrl,
+  });
 
   const filename = `${invoiceNumber.replace(/[^\w-]/g, "_")}.pdf`;
 

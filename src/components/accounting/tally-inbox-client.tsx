@@ -43,6 +43,8 @@ import {
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
+import type { CustomerEmailPreviewData } from "./customer-email-preview";
+import { buildInboxSendEmail, gstInvoiceFilename } from "@/lib/gst-invoice-email";
 import { StatementHistoryDialog } from "./statement-history-dialog";
 import { BookingPaymentsToVerify } from "@/components/accounting/booking-payments-to-verify";
 import { ToVerifyPanel } from "./to-verify-panel";
@@ -289,7 +291,7 @@ export function TallyInboxClient() {
   const [historyRow, setHistoryRow] = useState<{ id: string; statement_number: string | null } | null>(null);
   // Pre-send dialog
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
-  const [pendingSend, setPendingSend] = useState<{ type: "statement"; id: string; recipients: string[] } | { type: "booking"; id: string; recipients: string[] } | null>(null);
+  const [pendingSend, setPendingSend] = useState<{ type: "statement"; id: string; recipients: string[]; preview: Omit<CustomerEmailPreviewData, "to"> } | { type: "booking"; id: string; recipients: string[] } | null>(null);
   // Record Payment dialog state
   const [payRow, setPayRow] = useState<{ id: string; statement_number: string | null; balance_due: number } | null>(null);
   const [payAmount, setPayAmount] = useState("");
@@ -468,7 +470,26 @@ export function TallyInboxClient() {
       lead?.email ?? voBillParty(row)?.email,
       ...(lead?.billing_emails ?? []),
     ].filter((e): e is string => !!e)));
-    setPendingSend({ type: "statement", id: statementId, recipients });
+    const isReceipt = row.payment_status === "paid";
+    const invoiceNumber = row.latest_upload?.tally_invoice_number ?? "";
+    const { subject, html } = buildInboxSendEmail({
+      partyName: (lead && isRealCompanyName(lead.company) ? lead.company : null)
+        || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ")
+        || voBillParty(row)?.name || "Customer",
+      invoiceNumber,
+      totalDisplay: formatCurrency(row.statement_total_amount),
+      contractNumber: row.contract?.contract_number ?? row.proposal?.proposal_number ?? row.invoice?.invoice_number ?? "",
+      isReceipt,
+      payLinkUrl: isReceipt ? null : "[payment link created when sent]",
+    });
+    setPendingSend({
+      type: "statement", id: statementId, recipients,
+      preview: {
+        subject, html,
+        attachmentName: gstInvoiceFilename(invoiceNumber || "invoice"),
+        note: isReceipt ? undefined : "The payment link is created (or the existing one reused) when the email is sent.",
+      },
+    });
     setSendDialogOpen(true);
   }, []);
 
@@ -1354,6 +1375,7 @@ export function TallyInboxClient() {
         open={sendDialogOpen}
         onOpenChange={(v) => { if (!v) setPendingSend(null); setSendDialogOpen(v); }}
         savedRecipients={pendingSend?.recipients ?? []}
+        preview={pendingSend?.type === "statement" ? pendingSend.preview : null}
         sending={!!(sendingId || sendingBookingId)}
         onConfirm={handleSendConfirm}
       />
