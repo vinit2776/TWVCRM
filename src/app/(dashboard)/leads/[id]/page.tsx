@@ -50,6 +50,7 @@ import { MarkLostDialog } from "@/components/leads/mark-lost-dialog";
 import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
 import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
+import { StatementOfAccountButton } from "@/components/leads/statement-of-account-button";
 import { LeadCreditsCard } from "@/components/leads/lead-credits-card";
 import { LeadCautionsBanner } from "@/components/leads/lead-cautions-banner";
 import dynamic from "next/dynamic";
@@ -237,6 +238,9 @@ export default function LeadDetailPage({
               <Printer className="mr-2 h-4 w-4" />
               Log Print Usage
             </Button>
+          )}
+          {["admin", "accounts", "manager", "sales_rep"].includes(userRole ?? "") && (
+            <StatementOfAccountButton leadId={lead.id} />
           )}
           <Button
             variant="outline"
