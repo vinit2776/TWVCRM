@@ -1181,7 +1181,7 @@ export default function ProposalDetailPage({
         </Card>
       )}
 
-      {isVoKind && <VoPricingPanel proposalId={proposal.id} canRequest={["admin", "manager", "sales_rep"].includes(currentUser?.role ?? "")} onChanged={fetchProposal} />}
+      {isVoKind && <VoPricingPanel proposalId={proposal.id} status={proposal.status} canRequest={["admin", "manager", "sales_rep"].includes(currentUser?.role ?? "")} onChanged={fetchProposal} />}
       {isVoKind && <VoTermsPanel proposalId={proposal.id} />}
 
       {/* History: dates, references and reasons. What to do next is in the Customer journey panel above. */}
