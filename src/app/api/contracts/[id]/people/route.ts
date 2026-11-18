@@ -7,6 +7,7 @@ import {
   addPerson,
   computeAccessSetup,
   DEFAULT_ACCESS_ROLES,
+  hasLiveCard,
   PERSON_ROLES,
   type PersonAccessRow,
 } from "@/lib/contract-people";
@@ -127,7 +128,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const doorAt = new Map<string, string>();
   for (const a of (accessRes.data ?? []) as unknown as { entity_id: string; enrollment_status: string; provisioned_at: string | null; blocked_at: string | null; valid_until: string | null; nfc_card_number: string | null; device: { supports_biometric: boolean } | null }[]) {
     if (a.device?.supports_biometric !== false) doorHasFingerprintReader.add(a.entity_id);
-    if (a.nfc_card_number) doorCardIssued.add(a.entity_id);
+    // A card on a blocked or deleted record is a leftover, not an issued card.
+    if (hasLiveCard([a])) doorCardIssued.add(a.entity_id);
     if (a.valid_until && !doorValidUntil.has(a.entity_id)) doorValidUntil.set(a.entity_id, a.valid_until);
     const list = doorStatuses.get(a.entity_id) ?? [];
     list.push(a.enrollment_status);
