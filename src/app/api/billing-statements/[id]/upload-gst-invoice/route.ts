@@ -11,6 +11,7 @@ import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
 import { annexureFromSections } from "@/lib/electricity-annexure";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
+import { logAudit } from "@/lib/audit";
 import { extractFromPdf } from "@/lib/tally-pdf-extract";
 import { isRealCompanyName } from "@/lib/tally-handoff";
 import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
@@ -61,6 +62,12 @@ interface UploadBody {
   acknowledge_gstin_mismatch?: boolean;
   /** The file's text could not be read (image / scanned PDF); accounts checked name, GSTIN and period by eye. */
   acknowledge_unverified_document?: boolean;
+  /** Replace the live upload (wrong invoice / period) instead of adding the first one. */
+  replace?: boolean;
+}
+
+function conflict(reason: string) {
+  return NextResponse.json({ error: reason }, { status: 409 });
 }
 
 function badRequest(reason: string) {
@@ -126,6 +133,7 @@ export async function POST(
     .select(`
       id, total_amount, payment_status, handoff_state, issuance_channel,
       statement_number, period_start, period_end, statement_type, line_items, razorpay_payment_link_url,
+      tally_delivered_at, voided_at, cancellation_requested_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, billing_mode, contract_number,
         lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
@@ -163,6 +171,9 @@ export async function POST(
     statement_type: string | null;
     line_items: unknown;
     razorpay_payment_link_url: string | null;
+    tally_delivered_at: string | null;
+    voided_at: string | null;
+    cancellation_requested_at: string | null;
     contract: {
       id: string;
       billing_mode: "proforma_first" | "gst_direct" | null;
@@ -258,6 +269,42 @@ export async function POST(
   const partyId = statement.contract?.id ?? statement.proposal?.id ?? statement.invoice?.id ?? statement.case?.id ?? statement.aggregator?.id ?? "unknown";
   const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? statement.case?.case_number ?? statement.aggregator?.name ?? "";
   const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead ?? leadFromVoSource(statement);
+
+  // ── Replace / duplicate-upload guard ─────────────────────────────────────
+  // Exactly one upload per statement is live. A second upload is only legal as
+  // an explicit replacement of an invoice that has not reached the customer.
+  const { data: liveUploads } = await adminClient
+    .from("gst_invoice_uploads")
+    .select("id, tally_invoice_number")
+    .eq("billing_statement_id", statement.id)
+    .is("superseded_by", null);
+  const live = liveUploads ?? [];
+  const isInitialState = statement.handoff_state === "pi_paid_awaiting_gst" || statement.handoff_state === "direct_gst_requested";
+
+  if (meta.replace === true) {
+    if (live.length === 0) return conflict("There is no uploaded invoice to replace.");
+    if (statement.handoff_state !== "ready_to_send") {
+      return conflict(
+        "Only an invoice that has not been sent to the customer can be replaced. " +
+        "For one already sent, ask an admin or manager to cancel it and issue a credit note.",
+      );
+    }
+    if (statement.tally_delivered_at || statement.voided_at || statement.cancellation_requested_at) {
+      return conflict("This invoice was already delivered, voided or is being cancelled, so it can't be replaced.");
+    }
+    const { data: sentRows } = await adminClient
+      .from("billing_send_log")
+      .select("id")
+      .eq("billing_statement_id", statement.id)
+      .eq("send_type", "gst_invoice")
+      .eq("status", "sent")
+      .limit(1);
+    if ((sentRows ?? []).length > 0) {
+      return conflict("This invoice was already emailed to the customer, so it can't be replaced.");
+    }
+  } else if (live.length > 0 && !isInitialState) {
+    return conflict("An invoice is already uploaded for this statement. Use Replace invoice to correct it.");
+  }
 
   // ── Hard-block rules ──────────────────────────────────────────────────────
   // Compare at whole-rupee level — Razorpay collects in paise and the stored
@@ -441,6 +488,36 @@ export async function POST(
 
   if (insertErr) {
     return NextResponse.json({ error: insertErr.message }, { status: 500 });
+  }
+
+  // ── Retire earlier live uploads ───────────────────────────────────────────
+  // Keeps "one live upload per statement" true for replacements and also heals
+  // any duplicate left by an earlier double upload. Rows are never deleted.
+  if (live.length > 0) {
+    const { error: supersedeErr } = await adminClient
+      .from("gst_invoice_uploads")
+      .update({ superseded_by: insertedUpload.id })
+      .in("id", live.map((u) => u.id));
+    if (supersedeErr) {
+      return NextResponse.json(
+        { error: `New invoice saved (id: ${insertedUpload.id}) but the old one could not be retired: ${supersedeErr.message}. Refresh and check the statement.` },
+        { status: 500 },
+      );
+    }
+    if (meta.replace === true) {
+      void logAudit(adminClient, {
+        entityType: "billing_statement",
+        entityId: statement.id,
+        action: "replace",
+        performedBy: dbUser.id,
+        changes: {
+          gst_invoice_upload: {
+            old: live.map((u) => u.tally_invoice_number).join(", "),
+            new: meta.tally_invoice_number,
+          },
+        },
+      });
+    }
   }
 
   // ── Mirror onto billing_statements + stamp issuance_channel='tally' ───────
