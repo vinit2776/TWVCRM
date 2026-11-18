@@ -74,6 +74,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   const [nameFoundOnPdf, setNameFoundOnPdf] = useState<boolean | null>(null);
   const [gstinFoundOnPdf, setGstinFoundOnPdf] = useState<boolean | null>(null);
   const [textReadable, setTextReadable] = useState(true);
+  const [isTaxInvoice, setIsTaxInvoice] = useState<boolean | null>(null);
   const [pdfNameOverride, setPdfNameOverride] = useState(false);
   const [gstinOverride, setGstinOverride] = useState(false);
   const [unverifiedOverride, setUnverifiedOverride] = useState(false);
@@ -125,6 +126,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
       setNameFoundOnPdf(data.party_name_found ?? null);
       setGstinFoundOnPdf(data.party_gstin_found ?? null);
       setTextReadable(data.text_readable ?? true);
+      setIsTaxInvoice(data.is_tax_invoice ?? null);
       setPdfNameOverride(false);
       setGstinOverride(false);
       setUnverifiedOverride(false);
@@ -202,9 +204,10 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
     if (pdfNameMismatch && !pdfNameOverride) errors.push("The customer name on the invoice does not match the CRM — confirm it below.");
     if (gstinMismatch && !gstinOverride) errors.push("The customer GSTIN is not on the invoice — confirm it below.");
     if (unverifiable && !unverifiedOverride) errors.push("This file can't be read automatically — confirm you checked it below.");
+    if (isTaxInvoice === false) errors.push("This file is not a GST tax invoice — attach the invoice PDF.");
     if (replaceSent && replaceReason.trim().length < 10) errors.push("Give a reason (at least 10 characters) for replacing the sent invoice.");
     return errors;
-  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end, pdfNameMismatch, pdfNameOverride, gstinMismatch, gstinOverride, unverifiable, unverifiedOverride, replaceSent, replaceReason]);
+  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end, pdfNameMismatch, pdfNameOverride, gstinMismatch, gstinOverride, unverifiable, unverifiedOverride, replaceSent, replaceReason, isTaxInvoice]);
 
   const dateOffPeriod = isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end);
   const periodMismatch = invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end);
@@ -677,6 +680,13 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
         </div>
       )}
 
+      {isTaxInvoice === false && (
+        <div className="rounded border border-red-300 bg-red-50 p-2.5 text-xs text-red-900">
+          <strong>This doesn&apos;t look like a GST tax invoice.</strong> No Tally invoice number or &ldquo;Tax Invoice&rdquo;
+          heading was found in the file, so it may be a different document. Attach the invoice PDF to continue.
+        </div>
+      )}
+
       {pdfNameMismatch && (
         <div className="rounded border border-red-300 bg-red-50 p-2.5 text-xs text-red-900 space-y-2">
           <p>
@@ -774,6 +784,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
             setNameFoundOnPdf(null);
             setGstinFoundOnPdf(null);
             setTextReadable(true);
+            setIsTaxInvoice(null);
             setPdfNameOverride(false);
             setGstinOverride(false);
             setUnverifiedOverride(false);
