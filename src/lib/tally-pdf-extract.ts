@@ -13,6 +13,7 @@
  */
 
 import { extractInvoicePeriodMonths } from "@/lib/invoice-period-text";
+import { partyGstinInText, partyNameInText } from "@/lib/invoice-party-check";
 import type { ExtractedFields, AutofillSource } from "@/lib/tally-handoff";
 
 export interface PdfExtractResult {
@@ -22,6 +23,18 @@ export interface PdfExtractResult {
   po_number_found: boolean | null;
   /** Calendar months (YYYY-MM) the invoice text says it covers; empty when none is named. */
   invoice_period_months: string[];
+  /** True when the PDF had extractable text; false for scanned/image PDFs, so nothing below could be checked. */
+  text_readable: boolean;
+  /** Whether the customer's name appears on the invoice. Null = could not tell. */
+  party_name_found: boolean | null;
+  /** Whether the customer's CRM GSTIN is printed on the invoice. Null = could not tell. */
+  party_gstin_found: boolean | null;
+}
+
+/** Who the statement is for, to be looked for in the invoice text. */
+export interface ExpectedParty {
+  names: Array<string | null | undefined>;
+  gstin: string | null;
 }
 
 /**
@@ -125,7 +138,11 @@ function textContainsPoNumber(text: string, expectedPoNumber: string): boolean {
  * check against the *full* extracted text (not just the 200-char snippet)
  * confirming accounts actually put it on the Tally invoice.
  */
-export async function extractFromPdf(pdfBuffer: Buffer, expectedPoNumber?: string | null): Promise<PdfExtractResult> {
+export async function extractFromPdf(
+  pdfBuffer: Buffer,
+  expectedPoNumber?: string | null,
+  expectedParty?: ExpectedParty | null,
+): Promise<PdfExtractResult> {
   // pdf-parse's index.js has a debug-mode path that calls
   // fs.readFileSync('./test/data/05-versions-space.pdf') relative to CWD.
   // In Next.js (webpack/Turbopack), module.parent is unset so isDebugMode=true
@@ -147,6 +164,9 @@ export async function extractFromPdf(pdfBuffer: Buffer, expectedPoNumber?: strin
       source: "manual",
       po_number_found: null,
       invoice_period_months: [],
+      text_readable: false,
+      party_name_found: null,
+      party_gstin_found: null,
     };
   }
 
@@ -157,6 +177,9 @@ export async function extractFromPdf(pdfBuffer: Buffer, expectedPoNumber?: strin
       source: "manual",
       po_number_found: null,
       invoice_period_months: [],
+      text_readable: false,
+      party_name_found: null,
+      party_gstin_found: null,
     };
   }
 
@@ -191,5 +214,8 @@ export async function extractFromPdf(pdfBuffer: Buffer, expectedPoNumber?: strin
     source: "pdf_text",
     po_number_found: poNumberFound,
     invoice_period_months: extractInvoicePeriodMonths(text),
+    text_readable: true,
+    party_name_found: expectedParty ? partyNameInText(text, expectedParty.names) : null,
+    party_gstin_found: expectedParty ? partyGstinInText(text, expectedParty.gstin) : null,
   };
 }

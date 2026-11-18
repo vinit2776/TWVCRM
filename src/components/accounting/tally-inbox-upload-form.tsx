@@ -68,6 +68,13 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [dateOverride, setDateOverride] = useState(false);
   const [invoicePeriodMonths, setInvoicePeriodMonths] = useState<string[]>([]);
   const [periodOverride, setPeriodOverride] = useState(false);
+  // Null = nothing read yet / could not tell. Set from the extract response.
+  const [nameFoundOnPdf, setNameFoundOnPdf] = useState<boolean | null>(null);
+  const [gstinFoundOnPdf, setGstinFoundOnPdf] = useState<boolean | null>(null);
+  const [textReadable, setTextReadable] = useState(true);
+  const [pdfNameOverride, setPdfNameOverride] = useState(false);
+  const [gstinOverride, setGstinOverride] = useState(false);
+  const [unverifiedOverride, setUnverifiedOverride] = useState(false);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -89,6 +96,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
     try {
       const fd = new FormData();
       fd.append("file", file);
+      fd.append("party", JSON.stringify({ names: [partyName], gstin: customerGstin }));
       const res = await fetch(`/api/billing-statements/${row.statement_id}/extract-gst-invoice`, {
         method: "POST",
         body: fd,
@@ -102,6 +110,12 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
       setPoNumberFound(data.po_number_found);
       setInvoicePeriodMonths(data.invoice_period_months ?? []);
       setPeriodOverride(false);
+      setNameFoundOnPdf(data.party_name_found ?? null);
+      setGstinFoundOnPdf(data.party_gstin_found ?? null);
+      setTextReadable(data.text_readable ?? true);
+      setPdfNameOverride(false);
+      setGstinOverride(false);
+      setUnverifiedOverride(false);
       const filled = new Set<string>();
       if (data.fields.invoice_number) {
         setInvoiceNumber(data.fields.invoice_number);
@@ -140,6 +154,11 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
     return invoiceName.length > 0 && invoiceName !== crmName;
   }, [partyNameOnInvoice, partyName]);
 
+  const pdfNameMismatch = nameFoundOnPdf === false;
+  const gstinMismatch = gstinFoundOnPdf === false;
+  // Images are never text-parsed; an unreadable PDF is the same situation.
+  const unverifiable = !!pdfFile && (pdfFile.type !== "application/pdf" || !textReadable);
+
   const validation = useMemo(() => {
     const errors: string[] = [];
     if (!invoiceNumber.trim()) errors.push("Tally invoice number is required.");
@@ -168,8 +187,11 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
     if (invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end) && !periodOverride) {
       errors.push("The period on the invoice does not match this statement — confirm it below.");
     }
+    if (pdfNameMismatch && !pdfNameOverride) errors.push("The customer name on the invoice does not match the CRM — confirm it below.");
+    if (gstinMismatch && !gstinOverride) errors.push("The customer GSTIN is not on the invoice — confirm it below.");
+    if (unverifiable && !unverifiedOverride) errors.push("This file can't be read automatically — confirm you checked it below.");
     return errors;
-  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end]);
+  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end, pdfNameMismatch, pdfNameOverride, gstinMismatch, gstinOverride, unverifiable, unverifiedOverride]);
 
   const dateOffPeriod = isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end);
   const periodMismatch = invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end);
@@ -226,6 +248,9 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           nic_signature_verified: false,
           acknowledge_off_period_date: dateOffPeriod && dateOverride,
           acknowledge_period_mismatch: periodMismatch && periodOverride,
+          acknowledge_party_name_mismatch: pdfNameMismatch && pdfNameOverride,
+          acknowledge_gstin_mismatch: gstinMismatch && gstinOverride,
+          acknowledge_unverified_document: unverifiable && unverifiedOverride,
         }),
       );
 
@@ -615,6 +640,54 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         </div>
       )}
 
+      {pdfNameMismatch && (
+        <div className="rounded border border-red-300 bg-red-50 p-2.5 text-xs text-red-900 space-y-2">
+          <p>
+            <strong>This invoice does not seem to be addressed to this customer.</strong> The CRM name is &ldquo;{partyName}&rdquo; but it was not found on the PDF. Check you picked the right Tally voucher.
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={pdfNameOverride}
+              onChange={(e) => setPdfNameOverride(e.target.checked)}
+            />
+            <span>The name is correct — proceed anyway</span>
+          </label>
+        </div>
+      )}
+
+      {gstinMismatch && (
+        <div className="rounded border border-red-300 bg-red-50 p-2.5 text-xs text-red-900 space-y-2">
+          <p>
+            <strong>Customer GSTIN not found on the invoice.</strong> The CRM has {customerGstin} but the PDF does not print it. A wrong GSTIN voids the customer&apos;s input tax credit.
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={gstinOverride}
+              onChange={(e) => setGstinOverride(e.target.checked)}
+            />
+            <span>The GSTIN is correct — proceed anyway</span>
+          </label>
+        </div>
+      )}
+
+      {unverifiable && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 space-y-2">
+          <p>
+            <strong>This file can&apos;t be checked automatically.</strong> Images and scanned PDFs can&apos;t be read, so the customer name, GSTIN and billing period were not verified. Check them against the CRM yourself.
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={unverifiedOverride}
+              onChange={(e) => setUnverifiedOverride(e.target.checked)}
+            />
+            <span>I checked the name, GSTIN and period on the invoice — proceed anyway</span>
+          </label>
+        </div>
+      )}
+
       {/* Party name check — compare Tally invoice name against CRM record */}
       <label className="block text-xs">
         <span className="block mb-1 text-muted-foreground">
@@ -661,6 +734,12 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           onChange={(e) => {
             const f = e.target.files?.[0] ?? null;
             setPdfFile(f);
+            setNameFoundOnPdf(null);
+            setGstinFoundOnPdf(null);
+            setTextReadable(true);
+            setPdfNameOverride(false);
+            setGstinOverride(false);
+            setUnverifiedOverride(false);
             if (f && f.type === "application/pdf") {
               void runAutofill(f);
             }

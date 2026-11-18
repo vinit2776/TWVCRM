@@ -12,6 +12,7 @@ import { annexureFromSections } from "@/lib/electricity-annexure";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
 import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
 import { extractFromPdf } from "@/lib/tally-pdf-extract";
+import { isRealCompanyName } from "@/lib/tally-handoff";
 import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 
 /**
@@ -54,6 +55,12 @@ interface UploadBody {
   acknowledge_off_period_date?: boolean;
   /** Accounts confirmed the period printed on the PDF differs from the statement's on purpose. */
   acknowledge_period_mismatch?: boolean;
+  /** Accounts confirmed the customer name on the PDF differs from the CRM's on purpose. */
+  acknowledge_party_name_mismatch?: boolean;
+  /** Accounts confirmed the customer GSTIN on the PDF differs from the CRM's on purpose. */
+  acknowledge_gstin_mismatch?: boolean;
+  /** The file's text could not be read (image / scanned PDF); accounts checked name, GSTIN and period by eye. */
+  acknowledge_unverified_document?: boolean;
 }
 
 function badRequest(reason: string) {
@@ -273,17 +280,53 @@ export async function POST(
     );
   }
 
-  // The period printed on the PDF is re-read here rather than trusted from the
-  // client, so the form's warning can't be skipped by leaving the field out.
-  // Unreadable PDFs and PDFs naming no period pass: absence of evidence isn't a mismatch.
-  if (file.type === "application/pdf" && meta.acknowledge_period_mismatch !== true) {
-    const { invoice_period_months } = await extractFromPdf(Buffer.from(await file.arrayBuffer()));
-    if (invoicePeriodMismatch(invoice_period_months, statement.period_start, statement.period_end)) {
+  // What the PDF says is re-read here rather than trusted from the client, so
+  // the form's warnings can't be skipped by leaving a field out. A PDF whose
+  // text names no period / name / GSTIN passes that check: absence of evidence
+  // isn't a mismatch. A file with no readable text at all (image, scanned PDF)
+  // can't be checked by anything, so accounts must say they checked it by eye.
+  const partyNames = [
+    isRealCompanyName(partyLead?.company) ? partyLead.company : null,
+    [partyLead?.first_name, partyLead?.last_name].filter(Boolean).join(" ") || null,
+  ];
+  const overrides: string[] = [];
+  const extracted = file.type === "application/pdf"
+    ? await extractFromPdf(Buffer.from(await file.arrayBuffer()), null, {
+        names: partyNames,
+        gstin: partyLead?.gst_number ?? null,
+      })
+    : null;
+
+  if (!extracted?.text_readable) {
+    if (meta.acknowledge_unverified_document !== true) {
       return badRequest(
-        `This invoice says it bills ${invoice_period_months.join(", ")}, but the statement covers ` +
+        "The text of this file can't be read, so the customer name, GSTIN and billing period could not be checked. " +
+        "Confirm you checked them on the invoice to upload anyway.",
+      );
+    }
+    overrides.push("file text unreadable — name, GSTIN and period confirmed by eye");
+  } else {
+    if (meta.acknowledge_period_mismatch !== true
+      && invoicePeriodMismatch(extracted.invoice_period_months, statement.period_start, statement.period_end)) {
+      return badRequest(
+        `This invoice says it bills ${extracted.invoice_period_months.join(", ")}, but the statement covers ` +
         `${statement.period_start} → ${statement.period_end}. Confirm the period is correct to upload anyway.`,
       );
     }
+    if (extracted.party_name_found === false && meta.acknowledge_party_name_mismatch !== true) {
+      return badRequest(
+        `The customer name on this invoice doesn't match the CRM ("${partyNames.find(Boolean)}"). ` +
+        "Check you picked the right Tally voucher, or confirm the name is correct to upload anyway.",
+      );
+    }
+    if (extracted.party_name_found === false) overrides.push("customer name on invoice differs from CRM");
+    if (extracted.party_gstin_found === false && meta.acknowledge_gstin_mismatch !== true) {
+      return badRequest(
+        `The customer GSTIN ${partyLead?.gst_number} from the CRM isn't printed on this invoice. ` +
+        "Check you picked the right Tally voucher, or confirm the GSTIN is correct to upload anyway.",
+      );
+    }
+    if (extracted.party_gstin_found === false) overrides.push("customer GSTIN on invoice differs from CRM");
   }
 
   const customerHasGstin = !!partyLead?.gst_number;
@@ -388,7 +431,8 @@ export async function POST(
       qr_payload: meta.qr_payload,
       autofill_source: meta.autofill_source,
       nic_signature_verified: meta.nic_signature_verified,
-      name_check_status: "approved",
+      name_check_status: overrides.length ? "overridden" : "approved",
+      name_check_notes: overrides.length ? overrides.join("; ") : null,
       name_check_decided_by: dbUser.id,
       name_check_decided_at: new Date().toISOString(),
     })

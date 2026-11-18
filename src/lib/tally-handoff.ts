@@ -600,4 +600,11 @@ export interface ExtractResponse {
   po_number_found: boolean | null;
   /** Calendar months (YYYY-MM) the PDF says it bills; empty when it names no period. */
   invoice_period_months?: string[];
+  /** False when nothing could be read from the file (image, or scanned PDF), so
+   *  name / GSTIN / period could not be checked and accounts must confirm by eye. */
+  text_readable?: boolean;
+  /** Customer's name found on the invoice; null = could not tell. */
+  party_name_found?: boolean | null;
+  /** Customer's CRM GSTIN printed on the invoice; null = could not tell. */
+  party_gstin_found?: boolean | null;
 }
