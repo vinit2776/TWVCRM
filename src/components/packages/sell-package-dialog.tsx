@@ -13,7 +13,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import { useLocations } from "@/hooks/use-locations";
+import { addDaysToDate, istDateString } from "@/lib/prepaid";
 import { CREDIT_TYPE_LABELS } from "@/lib/constants";
 import type { PrepaidPackage } from "@/types";
 
@@ -54,6 +56,13 @@ export function SellPackageDialog({
 
   const [packageId, setPackageId] = useState(preselectedPackageId || "");
   const [selectedPackage, setSelectedPackage] = useState<PrepaidPackage | null>(null);
+
+  // Terms agreed at the point of sale
+  const { locations } = useLocations();
+  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>(locationId ? [locationId] : []);
+  const [validityDays, setValidityDays] = useState("30");
+  const [windowHours, setWindowHours] = useState("2");
+  const [noRestore, setNoRestore] = useState(false);
 
   // Customer search
   const [customerQuery, setCustomerQuery] = useState("");
@@ -98,6 +107,11 @@ export function SellPackageDialog({
   useEffect(() => {
     const pkg = packages.find(p => p.id === packageId) || null;
     setSelectedPackage(pkg);
+    if (pkg) {
+      setValidityDays(String(pkg.validity_days || 30));
+      setNoRestore(pkg.default_cancellation_window_hours === null);
+      setWindowHours(pkg.default_cancellation_window_hours == null ? "2" : String(pkg.default_cancellation_window_hours));
+    }
   }, [packageId, packages]);
 
   // Close suggestions on outside click
@@ -178,6 +192,10 @@ export function SellPackageDialog({
       return;
     }
     if (!paymentMode) { toast.error("Please select a payment mode"); return; }
+    if (selectedLocationIds.length === 0) { toast.error("Choose at least one location this package can be redeemed at"); return; }
+    const validity = Number(validityDays);
+    if (!Number.isInteger(validity) || validity < 1) { toast.error("Validity must be a whole number of days, 1 or more"); return; }
+    if (!noRestore && !(Number(windowHours) >= 0)) { toast.error("Enter the free-cancellation window in hours, or tick 'never restore'"); return; }
 
     // Determine the company_name to send based on scope
     const resolvedCompanyName = scope === "company"
@@ -191,6 +209,9 @@ export function SellPackageDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           package_id: packageId,
+          location_ids: selectedLocationIds,
+          validity_days: validity,
+          cancellation_window_hours: noRestore ? null : Number(windowHours),
           lead_id: selectedLead?.id || undefined,
           company_name: resolvedCompanyName,
           payment_mode: paymentMode,
@@ -238,6 +259,7 @@ export function SellPackageDialog({
     setNotifySms(true);
     setNotifyEmail(true);
     setNotes("");
+    setSelectedLocationIds(locationId ? [locationId] : []);
     onOpenChange(false);
   };
 
@@ -278,6 +300,52 @@ export function SellPackageDialog({
               </p>
             )}
           </div>
+
+          {/* Terms agreed at sale */}
+          {selectedPackage && (
+            <div className="space-y-3 rounded-md border p-3">
+              <div className="space-y-2">
+                <Label>Redeemable at *</Label>
+                <div className="flex flex-wrap gap-2">
+                  {locations.map(l => {
+                    const on = selectedLocationIds.includes(l.id);
+                    return (
+                      <button
+                        key={l.id}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => setSelectedLocationIds(ids => on ? ids.filter(i => i !== l.id) : [...ids, l.id])}
+                        className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                          on ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground hover:bg-muted/30"
+                        }`}
+                      >
+                        {l.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Valid for (days) *</Label>
+                  <Input type="number" min={1} step={1} value={validityDays} onChange={(e) => setValidityDays(e.target.value)} />
+                  {Number.isInteger(Number(validityDays)) && Number(validityDays) >= 1 && (
+                    <p className="text-xs text-muted-foreground">
+                      Expires {formatDate(addDaysToDate(istDateString(), Number(validityDays)))}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>Free cancellation up to (hrs before start)</Label>
+                  <Input type="number" min={0} step="0.5" value={windowHours} disabled={noRestore} onChange={(e) => setWindowHours(e.target.value)} />
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={noRestore} onChange={(e) => setNoRestore(e.target.checked)} />
+                    Never restore credits
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Customer search */}
           <div className="space-y-2">

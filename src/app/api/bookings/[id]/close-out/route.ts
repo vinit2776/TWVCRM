@@ -155,7 +155,7 @@ export async function POST(
       bookingDate: booking.booking_date,
       startTime: booking.start_time,
       endTime: booking.end_time,
-    }, { skipWaitlistOffer: true });
+    }, { skipWaitlistOffer: true, prepaid: { trigger: "no_show", actorId: dbUser.id } });
   } else {
     // A paid booking goes straight to the Tally Inbox. An unpaid one waits:
     // the same helper runs again when its payment is verified.

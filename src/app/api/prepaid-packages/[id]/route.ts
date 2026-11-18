@@ -51,10 +51,19 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (body.description !== undefined) updates.description = body.description?.trim() || null;
   if (body.price !== undefined) updates.price = Number(body.price);
   if (body.validity_days !== undefined) updates.validity_days = Number(body.validity_days);
+  if (body.default_cancellation_window_hours !== undefined) {
+    const w = body.default_cancellation_window_hours;
+    if (w !== null && !(Number(w) >= 0)) {
+      return NextResponse.json({ error: "default_cancellation_window_hours must be 0 or more, or empty for no restores" }, { status: 400 });
+    }
+    updates.default_cancellation_window_hours = w === null ? null : Number(w);
+  }
   if (body.is_active !== undefined) updates.is_active = Boolean(body.is_active);
   if (body.workspace_type !== undefined) updates.workspace_type = body.workspace_type || null;
   if (body.location_id !== undefined) updates.location_id = body.location_id || null;
   if (body.space_id !== undefined) updates.space_id = body.space_id || null;
+
+  const { data: before } = await supabase.from("prepaid_packages").select("is_active").eq("id", id).single();
 
   const { data, error } = await supabase
     .from("prepaid_packages")
@@ -70,5 +79,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     logAudit(supabase, { entityType: "prepaid_package", entityId: id, action: "update", performedBy: dbUser.id, changes: Object.fromEntries(Object.entries(updates).filter(([k]) => k !== "updated_at").map(([k, v]) => [k, { old: null, new: v }])) });
   }
 
-  return NextResponse.json({ data });
+  // The database sends a live package back to inactive when someone other than an
+  // admin or manager edits it; tell the caller so the UI can say why.
+  const sentBackForApproval = !!before?.is_active && !data.is_active && body.is_active === undefined;
+  return NextResponse.json({ data, sent_back_for_approval: sentBackForApproval });
 }

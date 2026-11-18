@@ -1,4 +1,4 @@
-import { isPrepaidApplicableToSpace, isPrepaidOwnedByCustomer } from "@/lib/prepaid";
+import { isPrepaidApplicableToSpace, isPrepaidOwnedByCustomer, isPrepaidValidAtLocation } from "@/lib/prepaid";
 import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -454,9 +454,16 @@ export async function POST(request: NextRequest) {
     if (prepaidPurchase.status !== "active") {
       return NextResponse.json({ error: "Prepaid purchase is not active" }, { status: 400 });
     }
-    const todayStr = new Date().toISOString().split("T")[0];
-    if (prepaidPurchase.expires_at < todayStr) {
-      return NextResponse.json({ error: "Prepaid purchase has expired" }, { status: 400 });
+    // Valid on the day of the booking, not just today
+    if (prepaidPurchase.expires_at < input.booking_date) {
+      return NextResponse.json({ error: `This package expires on ${prepaidPurchase.expires_at}, before the booking date` }, { status: 400 });
+    }
+    const { data: purchaseLocations } = await supabase
+      .from("prepaid_purchase_locations")
+      .select("location_id")
+      .eq("purchase_id", prepaidPurchase.id);
+    if (!isPrepaidValidAtLocation((purchaseLocations ?? []).map((l) => l.location_id), space.location_id)) {
+      return NextResponse.json({ error: "This package is not valid at this location" }, { status: 400 });
     }
 
     const creditsRemaining = Number(prepaidPurchase.total_credits) - Number(prepaidPurchase.credits_used);

@@ -17,6 +17,7 @@
 import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
 import { createAdminClient } from "@/lib/supabase/server";
 import { cancelBookingPiStatement } from "@/lib/booking-pi-statement-server";
+import { applyPrepaidCancellation, type PrepaidCancellationResult } from "@/lib/prepaid-cancellation";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseAny = any;
@@ -38,6 +39,16 @@ export interface CancelSideEffectOptions {
   skipUsageChargeWaiver?: boolean;
   /** Override the revoke_reason stored on the issuance row. */
   revokeReason?: string;
+  /**
+   * Set on cancel and no-show paths so credits used from a prepaid package are
+   * restored or forfeited by the package's cancellation window. Leave unset on
+   * checkout, where the credits were genuinely used.
+   */
+  prepaid?: {
+    trigger: "cancel" | "no_show";
+    actorId: string;
+    override?: { restore: boolean; reason: string };
+  };
 }
 
 export interface CancelSideEffectResult {
@@ -52,6 +63,8 @@ export interface CancelSideEffectResult {
   vouchersStillLive: number;
   usageChargeWaived: boolean;
   waitlistOffered: boolean;
+  /** Present when the booking used a package and this cancellation was recorded. */
+  prepaid?: PrepaidCancellationResult;
 }
 
 /**
@@ -214,6 +227,19 @@ export async function executeBookingCancellationSideEffects(
   // Keeps a cancelled booking out of Receivables and the follow-up ladder.
   // Never throws; a statement that already holds money is left for a manual refund.
   await cancelBookingPiStatement(createAdminClient(), booking.bookingId, options.revokeReason ?? "Booking cancelled");
+
+  // ── 5. Prepaid package credits ─────────────────────────────────
+  if (options.prepaid) {
+    const prepaid = await applyPrepaidCancellation(supabase, {
+      bookingId: booking.bookingId,
+      bookingDate: booking.bookingDate,
+      startTime: booking.startTime,
+      trigger: options.prepaid.trigger,
+      actorId: options.prepaid.actorId,
+      override: options.prepaid.override,
+    });
+    if (prepaid) result.prepaid = prepaid;
+  }
 
   return result;
 }
