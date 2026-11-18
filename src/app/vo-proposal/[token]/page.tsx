@@ -25,7 +25,7 @@ const inr = (n: number) =>
 
 type Action = "accept" | "request_changes" | "decline";
 const DONE_TEXT: Record<Action, string> = {
-  accept: "Thank you. You have accepted this proposal. We will contact you shortly for the signer details.",
+  accept: "Thank you. You have accepted this proposal. We have the signer details you gave us and will be in touch shortly.",
   request_changes: "Thank you. We have your requested changes and will send you a revised proposal.",
   decline: "Understood. We have recorded that you have declined this proposal.",
 };
@@ -38,6 +38,7 @@ export default function VoProposalPage() {
   const [note, setNote] = useState("");
   const [asking, setAsking] = useState<Action | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [signer, setSigner] = useState({ name: "", email: "", phone: "" });
   const [done, setDone] = useState<Action | null>(null);
 
   useEffect(() => {
@@ -62,7 +63,7 @@ export default function VoProposalPage() {
       const res = await fetch(`/api/public/vo-proposal/${token}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, note: note.trim() || undefined }),
+        body: JSON.stringify({ action, note: note.trim() || undefined, ...(action === "accept" ? { signer } : {}) }),
       });
       const json = await res.json();
       if (!res.ok) setError(json.error || "Something went wrong");
@@ -141,6 +142,14 @@ export default function VoProposalPage() {
             <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-800">{data.blocked_reason}</div>
           ) : (
             <div className="space-y-3">
+              {asking === "accept" && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-gray-800">Who will sign the agreement?</p>
+                  <input className="w-full rounded-md border p-2 text-sm" placeholder="Signer's full name" autoComplete="name" value={signer.name} onChange={(e) => setSigner({ ...signer, name: e.target.value })} />
+                  <input className="w-full rounded-md border p-2 text-sm" type="email" placeholder="Signer's email" autoComplete="email" value={signer.email} onChange={(e) => setSigner({ ...signer, email: e.target.value })} />
+                  <input className="w-full rounded-md border p-2 text-sm" type="tel" placeholder="Signer's phone" autoComplete="tel" value={signer.phone} onChange={(e) => setSigner({ ...signer, phone: e.target.value })} />
+                </div>
+              )}
               {asking && (
                 <textarea
                   className="w-full rounded-md border p-2 text-sm"
@@ -156,7 +165,7 @@ export default function VoProposalPage() {
                   <>
                     <button
                       className="rounded-md bg-[#015E65] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-                      disabled={submitting || (asking === "request_changes" && !note.trim())}
+                      disabled={submitting || (asking === "request_changes" && !note.trim()) || (asking === "accept" && !(signer.name.trim() && signer.email.trim() && signer.phone.trim()))}
                       onClick={() => respond(asking)}
                     >
                       {submitting ? "Sending..." : "Confirm"}

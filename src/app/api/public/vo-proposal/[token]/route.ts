@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { signerSchema } from "@/lib/vo-proposal-signer";
 import { voProposalColumnsPresent, VO_PROPOSAL_NOT_READY } from "@/lib/vo-proposal-server";
 import {
   CUSTOMER_ACTION_STATUS,
@@ -20,7 +21,9 @@ const responseSchema = z
   .object({
     action: z.enum(["accept", "request_changes", "decline"]),
     note: z.string().trim().max(2000).optional(),
+    signer: signerSchema.optional(),
   })
+  .refine((d) => d.action !== "accept" || !!d.signer, { message: "Tell us who will sign the agreement.", path: ["signer"] })
   .refine((d) => d.action !== "request_changes" || !!d.note, { message: "Tell us what you would like changed.", path: ["note"] });
 
 const SELECT =
@@ -90,7 +93,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const blocked = customerResponseBlockedReason(p);
   if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
 
-  const { action, note } = parsed.data;
+  const { action, note, signer } = parsed.data;
   const next = CUSTOMER_ACTION_STATUS[action];
   const now = new Date().toISOString();
   const admin = createAdminClient();
@@ -114,6 +117,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ error: "This proposal changed while you were answering. Please reload the page." }, { status: 409 });
   }
 
+  // Own update: before migration 00731 the signer columns are missing, and the
+  // acceptance itself must still stand. Staff then collect the details by hand.
+  let signerSaved = false;
+  if (action === "accept" && signer) {
+    const { error: signerError } = await admin
+      .from("proposals")
+      .update({ signer_name: signer.name, signer_email: signer.email, signer_phone: signer.phone })
+      .eq("id", p.id);
+    signerSaved = !signerError;
+    if (signerError && !["42703", "42P01", "PGRST204", "PGRST205"].includes(signerError.code ?? "")) {
+      console.error("[vo-proposal] signer save failed:", signerError.message);
+    }
+  }
+
   logAudit(admin, {
     entityType: "proposal",
     entityId: p.id,
@@ -123,6 +140,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       action: { old: null, new: `customer_${action}` },
       status: { old: p.status, new: next },
       ...(note ? { response_note: { old: null, new: note } } : {}),
+      ...(signerSaved ? { signer_captured: { old: null, new: true } } : {}),
     },
   });
 

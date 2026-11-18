@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { voProposalColumnsPresent, VO_PROPOSAL_NOT_READY, proposalPiPaymentBlock, retireProposalPayments } from "@/lib/vo-proposal-server";
+import { withdrawReasonSchema as bodySchema } from "@/lib/vo-proposal-signer";
 import { VO_WITHDRAWABLE, voWithdrawBlockedReason } from "@/lib/vo-proposal";
 
 const ROLES = ["admin", "manager", "sales_rep"];
-const bodySchema = z.object({ reason: z.string().trim().min(3, "Give a short reason").max(500) });
 
 /**
  * POST /api/proposals/[id]/withdraw  (Virtual Office proposals only)
@@ -60,7 +59,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     changes: {
       action: { old: null, new: "withdrawn" },
       status: { old: p.status, new: "withdrawn" },
-      withdrawn_reason: { old: null, new: parsed.data.reason },
+      // The reason itself lives on the proposal; free text stays out of the audit trail.
+      withdrawn_reason: { old: null, new: `given (${parsed.data.reason.length} chars)` },
     },
   });
 
