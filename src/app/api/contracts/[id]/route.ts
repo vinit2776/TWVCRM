@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { loadDepositCollection } from "@/lib/deposit-instalment-server";
 import { partialDepositWarning } from "@/lib/deposit-activation";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { syncAddonsToContractTerm } from "@/lib/contract-addon-sync";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
@@ -29,7 +30,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months, tenure_months, lock_in_months, notice_period_months), commitment_overridden_by_user:users!contracts_commitment_overridden_by_fkey(full_name), location:locations!contracts_location_id_fkey(id, name, code, address, city, state, proposal_amenity_icons, agreement_terms), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name), rate_phases:contract_rate_phases(*)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months, tenure_months, lock_in_months, notice_period_months), commitment_overridden_by_user:users!contracts_commitment_overridden_by_fkey(full_name), location:locations!contracts_location_id_fkey(id, name, code, address, city, state, proposal_amenity_icons, agreement_terms), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name), rate_phases:contract_rate_phases(*), recurring_addons:contract_addons(*)")
     .eq("id", id)
     .single();
 
@@ -604,6 +605,16 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Add-ons left on the default dates follow the term when it moves.
+  if (oldContract.start_date && oldContract.end_date && data?.start_date && data?.end_date) {
+    await syncAddonsToContractTerm(
+      createAdminClient(),
+      id,
+      { start: oldContract.start_date as string, end: oldContract.end_date as string },
+      { start: data.start_date as string, end: data.end_date as string }
+    );
+  }
 
   // Close the exit workflow when a live contract is terminated: marks the exit
   // completed and tells the team. A no-op when there was no exit.

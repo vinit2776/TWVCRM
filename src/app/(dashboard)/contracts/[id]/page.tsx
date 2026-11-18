@@ -105,6 +105,7 @@ import { useExit } from "@/components/contracts/exit/use-exit";
 import { EXIT_START_ROLES } from "@/lib/contract-exit";
 import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
 import { ContractPricingSplitDialog } from "@/components/contracts/contract-pricing-split-dialog";
+import { pricingCorrectionBlocker } from "@/lib/contract-pricing-split";
 import { InvoiceCustomerWizard } from "@/components/contracts/invoice-customer-wizard";
 import { canUseInvoiceWizard } from "@/lib/invoice-wizard-availability";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
@@ -1829,17 +1830,6 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
-          {/* Recurring Add-ons */}
-          <div id="section-addons" className="scroll-mt-4">
-          <ContractAddonsSection
-            contractId={id}
-            contractStartDate={contract.start_date}
-            contractEndDate={contract.end_date}
-            taxPercentage={contract.tax_percentage ?? 18}
-            openAddSignal={addonOpenSignal}
-          />
-          </div>
-
           {/* Tiered Rate Schedule — only editable pre-activation, mirrors the
               API's own lock gate (same statuses as quota locking). */}
           <ContractRatePhasesSection
@@ -2044,7 +2034,12 @@ export default function ContractDetailPage({
           {/* Line Items Table */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Line Items</CardTitle>
+              <CardTitle className="text-base flex flex-wrap items-center gap-2">
+                Monthly billable
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                  escalates {Number(contract.escalation_percentage ?? 10)}% on renewal
+                </span>
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="rounded-md border overflow-x-auto">
@@ -2079,6 +2074,20 @@ export default function ContractDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Recurring Add-ons: kept with the monthly fee they sit beside, but never
+              escalated; each has its own dates and can be paused or ended. */}
+          <div id="section-addons" className="scroll-mt-4">
+          <ContractAddonsSection
+            contractId={id}
+            contractStartDate={contract.start_date}
+            contractEndDate={contract.end_date}
+            taxPercentage={contract.tax_percentage ?? 18}
+            monthlyFee={Number(contract.subtotal ?? 0)}
+            canEndBilling={["admin", "manager", "sales_rep"].includes(userRole ?? "")}
+            openAddSignal={addonOpenSignal}
+          />
+          </div>
 
           {/* Agreement document history — old executed versions stay
               visible/downloadable after a reupload (e.g. customer name
@@ -2265,6 +2274,19 @@ export default function ContractDetailPage({
             />
           )}
 
+          {/* An accepted renewal awaiting activation has no Renewal card, but still needs the pricing correction */}
+          {!["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) &&
+            pricingCorrectionBlocker(contract) === null && userRole === "admin" && (
+            <Card>
+              <CardContent className="pt-6">
+                <Button size="sm" variant="outline" className="w-full" onClick={() => setPricingSplitOpen(true)}>
+                  <Scale className="mr-1.5 h-3.5 w-3.5" />
+                  Edit pricing split
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Renewal Card — pinned to top of sidebar for active/expired/renewal_in_progress/renewed contracts */}
           {["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) && (
             <Card>
@@ -2350,7 +2372,7 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
-                {contract.status === "active" && userRole === "admin" && (
+                {pricingCorrectionBlocker(contract) === null && userRole === "admin" && (
                   <Button size="sm" variant="outline" className="w-full" onClick={() => setPricingSplitOpen(true)}>
                     <Scale className="mr-1.5 h-3.5 w-3.5" />
                     Edit pricing split
