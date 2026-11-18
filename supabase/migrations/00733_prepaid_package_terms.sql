@@ -1,4 +1,4 @@
--- Migration 00731: Prepaid package sale terms, cancellation restore, activation guard
+-- Migration 00733: Prepaid package sale terms, cancellation restore, activation guard
 --
 -- 1. Cancellation window (hours before start) on templates and on each sale
 -- 2. Redeemable locations per sold package
