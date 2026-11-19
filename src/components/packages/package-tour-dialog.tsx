@@ -51,7 +51,7 @@ export function PackageTourDialog({ openSignal = 0 }: PackageTourDialogProps) {
             </div>
           ))}
         </div>
-        <ul className="space-y-1 text-sm text-muted-foreground">
+        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
           <li>Cancel early enough and the hours come back. A late cancel or no-show uses them up.</li>
           <li>Every booking and cancellation shows on a statement you can send from the lead page.</li>
           <li>Sales can create packages. A manager activates them before they can be sold.</li>
