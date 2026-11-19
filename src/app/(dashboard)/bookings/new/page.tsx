@@ -109,7 +109,7 @@ function NewBookingForm() {
   const [loiNumber, setLoiNumber] = useState("");
   const [accessProvidedBy, setAccessProvidedBy] = useState("");
   const [collectAdvancePayment, setCollectAdvancePayment] = useState(false);
-  const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("cash");
+  const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("upi");
   const [advancePaymentReference, setAdvancePaymentReference] = useState("");
   const [advancePaymentAmount, setAdvancePaymentAmount] = useState("");
   const [razorpayEnabled, setRazorpayEnabled] = useState(false);
@@ -471,7 +471,7 @@ function NewBookingForm() {
     if (!hasPrepaidTarget) { setActivePurchase(null); return; }
     let cancelled = false;
     setPrepaidChecking(true);
-    const params = new URLSearchParams({ space_id: debouncedSpaceId });
+    const params = new URLSearchParams({ space_id: debouncedSpaceId, booking_date: debouncedBookingDate });
     if (debouncedLeadId) params.set("lead_id", debouncedLeadId);
     if (debouncedGuestCompany) params.set("company_name", debouncedGuestCompany);
     fetch(`/api/prepaid-purchases/check?${params}`)
@@ -482,7 +482,7 @@ function NewBookingForm() {
       .catch(() => { if (!cancelled) setActivePurchase(null); })
       .finally(() => { if (!cancelled) setPrepaidChecking(false); });
     return () => { cancelled = true; };
-  }, [debouncedLeadId, debouncedGuestCompany, debouncedSpaceId]);
+  }, [debouncedLeadId, debouncedGuestCompany, debouncedSpaceId, debouncedBookingDate]);
 
   // Contracts
   useEffect(() => {

@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
     total_credits,
     price,
     validity_days,
+    default_cancellation_window_hours,
   } = body;
 
   if (!name || !credit_type || !total_credits || price == null || !validity_days) {
@@ -53,6 +54,17 @@ export async function POST(request: NextRequest) {
 
   if (!["hours", "days", "bookings"].includes(credit_type)) {
     return NextResponse.json({ error: "credit_type must be 'hours', 'days', or 'bookings'" }, { status: 400 });
+  }
+
+  if (!workspace_type && !space_id) {
+    return NextResponse.json({ error: "A package must be limited to a space type or a specific space" }, { status: 400 });
+  }
+  if (![total_credits, price, validity_days].every((n) => Number.isFinite(Number(n))) || Number(total_credits) <= 0 || Number(price) < 0 || Number(validity_days) <= 0) {
+    return NextResponse.json({ error: "total_credits and validity_days must be positive and price cannot be negative" }, { status: 400 });
+  }
+
+  if (default_cancellation_window_hours != null && !(Number(default_cancellation_window_hours) >= 0)) {
+    return NextResponse.json({ error: "default_cancellation_window_hours must be 0 or more, or empty for no restores" }, { status: 400 });
   }
 
   const { data, error } = await supabase
@@ -67,6 +79,8 @@ export async function POST(request: NextRequest) {
       total_credits: Number(total_credits),
       price: Number(price),
       validity_days: Number(validity_days),
+      default_cancellation_window_hours:
+        default_cancellation_window_hours === undefined ? 2 : default_cancellation_window_hours === null ? null : Number(default_cancellation_window_hours),
       is_active: false,
       created_by: user.id,
     })

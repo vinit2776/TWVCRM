@@ -1,6 +1,7 @@
+import { isPrepaidApplicableToSpace, isPrepaidOwnedByCustomer, isPrepaidValidAtLocation } from "@/lib/prepaid";
 import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createBookingSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
@@ -431,23 +432,38 @@ export async function POST(request: NextRequest) {
   let prepaidPurchaseId: string | undefined;
   let prepaidCreditsUsed: number | undefined;
   let prepaidTopupAmount: number | undefined;
+  let prepaidOwner: { lead_id: string | null; company_name: string | null } | undefined;
 
   if (body.prepaid_purchase_id) {
     const { data: prepaidPurchase, error: ppErr } = await supabase
       .from("prepaid_purchases")
-      .select("id, status, expires_at, credit_type, total_credits, credits_used")
+      .select("id, lead_id, company_name, status, payment_status, expires_at, credit_type, total_credits, credits_used, package:prepaid_packages(workspace_type, space_id)")
       .eq("id", body.prepaid_purchase_id)
       .single();
 
     if (ppErr || !prepaidPurchase) {
       return NextResponse.json({ error: "Prepaid purchase not found" }, { status: 404 });
     }
+    if (prepaidPurchase.payment_status !== "paid") {
+      return NextResponse.json({ error: "Prepaid purchase has not been paid for" }, { status: 400 });
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (!isPrepaidApplicableToSpace(prepaidPurchase.package as any, space)) {
+      return NextResponse.json({ error: "This package cannot be used for the selected space" }, { status: 400 });
+    }
     if (prepaidPurchase.status !== "active") {
       return NextResponse.json({ error: "Prepaid purchase is not active" }, { status: 400 });
     }
-    const todayStr = new Date().toISOString().split("T")[0];
-    if (prepaidPurchase.expires_at < todayStr) {
-      return NextResponse.json({ error: "Prepaid purchase has expired" }, { status: 400 });
+    // Valid on the day of the booking, not just today
+    if (prepaidPurchase.expires_at < input.booking_date) {
+      return NextResponse.json({ error: `This package expires on ${prepaidPurchase.expires_at}, before the booking date` }, { status: 400 });
+    }
+    const { data: purchaseLocations } = await supabase
+      .from("prepaid_purchase_locations")
+      .select("location_id")
+      .eq("purchase_id", prepaidPurchase.id);
+    if (!isPrepaidValidAtLocation((purchaseLocations ?? []).map((l) => l.location_id), space.location_id)) {
+      return NextResponse.json({ error: "This package is not valid at this location" }, { status: 400 });
     }
 
     const creditsRemaining = Number(prepaidPurchase.total_credits) - Number(prepaidPurchase.credits_used);
@@ -456,12 +472,13 @@ export async function POST(request: NextRequest) {
     }
 
     prepaidPurchaseId = prepaidPurchase.id;
+    prepaidOwner = { lead_id: prepaidPurchase.lead_id, company_name: prepaidPurchase.company_name };
 
     if (prepaidPurchase.credit_type === "hours") {
       const creditsToDeduct = Math.min(durationHours, creditsRemaining);
       prepaidCreditsUsed = creditsToDeduct;
       const topupHours = durationHours - creditsToDeduct;
-      prepaidTopupAmount = topupHours > 0 ? parseFloat((topupHours * effectiveRate).toFixed(2)) : 0;
+      prepaidTopupAmount = topupHours > 0 ? parseFloat((topupHours * effectiveRate * (1 + gstRate / 100)).toFixed(2)) : 0;
     } else {
       // Days pass OR Booking Slots pass: 1 credit per booking regardless of duration
       prepaidCreditsUsed = Math.min(1, creditsRemaining);
@@ -713,6 +730,18 @@ export async function POST(request: NextRequest) {
     // Note: usage charge is already linked to contract via contractId + contract.lead_id
   }
 
+  // 4b. The package must belong to whoever is being booked (their own, or their company's)
+  if (prepaidPurchaseId && prepaidOwner) {
+    let customerCompany: string | null = null;
+    if (leadId) {
+      const { data: bookedLead } = await supabase.from("leads").select("company").eq("id", leadId).single();
+      customerCompany = bookedLead?.company ?? null;
+    }
+    if (!isPrepaidOwnedByCustomer(prepaidOwner, { leadId, company: customerCompany })) {
+      return NextResponse.json({ error: "This package belongs to a different customer" }, { status: 403 });
+    }
+  }
+
   // 5. Insert booking
   const { data: booking, error: bookingErr } = await supabase
     .from("bookings")
@@ -767,6 +796,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: bookingErr.message }, { status: 500 });
   }
 
+  // Prepaid redemption must succeed or the booking is rolled back; otherwise the
+  // booking would read as prepaid while no credit was ever deducted.
+  if (prepaidPurchaseId && prepaidCreditsUsed) {
+    const { data: rpcResult, error: rpcError } = await supabase.rpc("redeem_prepaid_credits", {
+      p_purchase_id: prepaidPurchaseId,
+      p_booking_id: booking.id,
+      p_credits_to_deduct: prepaidCreditsUsed,
+      p_redeemed_by: dbUser.id,
+    });
+    if (rpcError || !rpcResult?.[0]?.success) {
+      console.error("[booking] prepaid redemption failed, rolling back booking:", rpcError?.message ?? "insufficient credits");
+      const { error: rollbackErr } = await createAdminClient().from("bookings").delete().eq("id", booking.id);
+      if (rollbackErr) console.error("[booking] rollback of booking after failed redemption failed:", rollbackErr.message);
+      return NextResponse.json({ error: "Package credits could not be applied. Please try again." }, { status: 409 });
+    }
+  }
+
   // ── Post-insert: run all independent side-effects in parallel ────
   // Steps 6–11 are independent of each other and can run concurrently.
   // This replaces ~12 sequential DB calls with one parallel batch,
@@ -818,24 +864,6 @@ export async function POST(request: NextRequest) {
         });
       } else {
         console.error("[booking] credit redemption failed — credit no longer active or insufficient hours");
-      }
-    })());
-  }
-
-  // 6b. Prepaid redemption — atomic RPC prevents double-spend
-  if (prepaidPurchaseId && prepaidCreditsUsed) {
-    postInsertTasks.push((async () => {
-      const { data: rpcResult, error: rpcError } = await supabase.rpc("redeem_prepaid_credits", {
-        p_purchase_id: prepaidPurchaseId,
-        p_booking_id: booking.id,
-        p_credits_to_deduct: prepaidCreditsUsed,
-        p_redeemed_by: dbUser.id,
-      });
-
-      if (rpcError) {
-        console.error("[booking] prepaid redemption RPC error:", rpcError);
-      } else if (rpcResult && rpcResult.length > 0 && !rpcResult[0].success) {
-        console.error("[booking] prepaid redemption failed — insufficient credits or purchase not found");
       }
     })());
   }

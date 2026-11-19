@@ -58,7 +58,7 @@ export function GetPaymentChooser({
             <div>
               <div className="font-semibold">At counter</div>
               <div className="text-[12px] text-muted-foreground mt-0.5">
-                Customer is here now — record cash, UPI (manual + screenshot), or card.
+                Customer is here now — record UPI (manual + screenshot) or card.
               </div>
             </div>
           </button>

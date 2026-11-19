@@ -1272,6 +1272,7 @@ export type AuditEntityType =
   | "pc_entry"
   | "support_ticket"
   | "prepaid_package"
+  | "prepaid_purchase"
   | "location"
   | "stock_transfer"
   | "consumption_log"
@@ -3034,6 +3035,8 @@ export interface PrepaidPackage {
   total_credits: number;
   price: number;
   validity_days: number;
+  /** Hours before start a booking can be cancelled for credits to be restored. null = never restored. */
+  default_cancellation_window_hours?: number | null;
   is_active: boolean;
   created_by?: string;
   created_at: string;
@@ -3058,6 +3061,10 @@ export interface PrepaidPurchase {
   payment_reference?: string;
   purchased_at: string;
   expires_at: string;
+  /** Negotiated at sale. null = credits are never restored on cancellation. */
+  cancellation_window_hours?: number | null;
+  /** Locations this package can be redeemed at. Empty on legacy purchases = everywhere. */
+  locations?: { location: { id: string; name: string } | null }[];
   status: PrepaidPurchaseStatus;
   payment_status: 'pending_payment' | 'paid';
   razorpay_payment_link_id?: string;

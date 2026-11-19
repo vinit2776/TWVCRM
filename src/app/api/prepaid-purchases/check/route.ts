@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isPrepaidApplicableToSpace, isPrepaidValidAtLocation, escapeLike, istDateString } from "@/lib/prepaid";
 
 /**
  * GET /api/prepaid-purchases/check
@@ -21,6 +22,7 @@ export async function GET(request: NextRequest) {
   const leadId = searchParams.get("lead_id");
   const companyName = searchParams.get("company_name");
   const spaceId = searchParams.get("space_id");
+  const bookingDate = searchParams.get("booking_date");
 
   if (!spaceId) return NextResponse.json({ error: "space_id is required" }, { status: 400 });
   if (!leadId && !companyName) {
@@ -30,11 +32,12 @@ export async function GET(request: NextRequest) {
   // Fetch the space's workspace_type so we can filter packages
   const { data: space } = await supabase
     .from("spaces")
-    .select("id, workspace_type")
+    .select("id, workspace_type, location_id")
     .eq("id", spaceId)
     .single();
 
-  const today = new Date().toISOString().split("T")[0];
+  // A package must still be valid on the day of the booking, not just today.
+  const today = bookingDate && /^\d{4}-\d{2}-\d{2}$/.test(bookingDate) ? bookingDate : istDateString();
 
   // Build OR filter: match by lead_id OR by company_name
   // Also optionally match the lead's company if we have a lead_id
@@ -48,44 +51,47 @@ export async function GET(request: NextRequest) {
     companyFromLead = lead?.company || null;
   }
 
-  // Fetch all active, non-expired purchases for this customer / company
-  const orFilters: string[] = [];
-  if (leadId) orFilters.push(`lead_id.eq.${leadId}`);
-  if (companyFromLead) orFilters.push(`company_name.ilike.${companyFromLead}`);
-  if (companyName && companyName !== companyFromLead) orFilters.push(`company_name.ilike.${companyName}`);
-
-  if (orFilters.length === 0) {
-    return NextResponse.json({ data: null });
-  }
-
-  const { data: purchases, error } = await supabase
+  // Fetch all active, paid, non-expired purchases for this lead, plus any bought
+  // for their company. Queried separately so company names are matched literally
+  // (a comma, bracket or % in a name must not alter the filter).
+  const companyNames = [companyFromLead, companyName].filter((n): n is string => !!n && n.trim() !== "");
+  const usable = () => supabase
     .from("prepaid_purchases")
     .select(`
       *,
-      package:prepaid_packages(id, name, workspace_type, space_id, credit_type, total_credits)
+      package:prepaid_packages(id, name, workspace_type, space_id, credit_type, total_credits),
+      locations:prepaid_purchase_locations(location_id, location:locations(id, name))
     `)
     .eq("status", "active")
     .eq("payment_status", "paid")
-    .gte("expires_at", today)
-    .or(orFilters.join(","))
-    .order("expires_at", { ascending: true }); // soonest to expire first (FIFO)
+    .gte("expires_at", today);
+
+  const lookups = [
+    ...(leadId ? [usable().eq("lead_id", leadId)] : []),
+    ...companyNames.map((n) => usable().ilike("company_name", escapeLike(n.trim()))),
+  ];
+  if (lookups.length === 0) return NextResponse.json({ data: null });
+
+  const results = await Promise.all(lookups);
+  const error = results.find((r) => r.error)?.error;
+  const byId = new Map<string, NonNullable<(typeof results)[number]["data"]>[number]>();
+  for (const r of results) for (const row of r.data ?? []) byId.set(row.id, row);
+  // soonest to expire first (FIFO)
+  const purchases = [...byId.values()].sort((x, y) => String(x.expires_at).localeCompare(String(y.expires_at)));
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // Filter by workspace_type compatibility
-  const spaceWorkspaceType = space?.workspace_type;
 
   const compatible = (purchases || []).filter((p) => {
     const creditsRemaining = Number(p.total_credits) - Number(p.credits_used);
     if (creditsRemaining <= 0) return false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pkg = p.package as any;
-    const pkgWorkspaceType = pkg?.workspace_type;
-    // Package applies if it has no workspace_type restriction OR matches the space's type
-    if (pkgWorkspaceType && spaceWorkspaceType && pkgWorkspaceType !== spaceWorkspaceType) return false;
-    // Gap 1: if package is bound to a specific space, it must match exactly
-    const pkgSpaceId = pkg?.space_id;
-    if (pkgSpaceId && pkgSpaceId !== spaceId) return false;
+    if (!space) return false;
+    if (!isPrepaidApplicableToSpace(pkg, space)) return false;
+    const locationIds = ((p.locations ?? []) as { location_id: string }[]).map((l) => l.location_id);
+    if (!isPrepaidValidAtLocation(locationIds, space.location_id)) return false;
     return true;
   });
 

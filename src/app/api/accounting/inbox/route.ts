@@ -652,6 +652,7 @@ export async function GET(req: NextRequest) {
       statement_total_amount: Math.round(Number(s.total_amount)),
       po_number: s.po_number,
       statement_notes: s.notes,
+      statement_created_at: s.created_at,
       period_start: s.period_start,
       period_end: s.period_end,
       payment_status: s.payment_status,

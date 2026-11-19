@@ -1,6 +1,7 @@
 import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { addDaysToDate, istDateString } from "@/lib/prepaid";
 
 // GET — list purchases (optionally filtered)
 export async function GET(request: NextRequest) {
@@ -21,6 +22,7 @@ export async function GET(request: NextRequest) {
       package:prepaid_packages(id,name,credit_type,total_credits,workspace_type,validity_days,price),
       lead:leads(id,first_name,last_name,company,phone,email),
       location:locations(id,name),
+      locations:prepaid_purchase_locations(location:locations(id,name)),
       redemptions:prepaid_redemptions(id,credits_deducted,booking_id,redeemed_at)
     `)
     .order("created_at", { ascending: false });
@@ -58,18 +60,31 @@ export async function POST(request: NextRequest) {
     package_id,
     lead_id,
     company_name,
-    location_id,
     payment_mode,
     payment_reference,
     notes,
     notify_sms,
     notify_email,
+    location_ids,
+    validity_days,
+    cancellation_window_hours,
   } = body;
 
   if (!package_id) return NextResponse.json({ error: "package_id is required" }, { status: 400 });
   if (!payment_mode) return NextResponse.json({ error: "payment_mode is required" }, { status: 400 });
   if (!lead_id && !company_name) {
     return NextResponse.json({ error: "Either lead_id or company_name is required" }, { status: 400 });
+  }
+
+  const locationIds: string[] = Array.isArray(location_ids) ? [...new Set(location_ids.filter((l: unknown): l is string => typeof l === "string" && l !== ""))] : [];
+  if (locationIds.length === 0) {
+    return NextResponse.json({ error: "Choose at least one location this package can be redeemed at" }, { status: 400 });
+  }
+  if (validity_days !== undefined && (!Number.isInteger(Number(validity_days)) || Number(validity_days) < 1 || Number(validity_days) > 3650)) {
+    return NextResponse.json({ error: "validity_days must be a whole number of days, 1 or more" }, { status: 400 });
+  }
+  if (cancellation_window_hours != null && !(Number(cancellation_window_hours) >= 0)) {
+    return NextResponse.json({ error: "cancellation_window_hours must be 0 or more, or empty for no restores" }, { status: 400 });
   }
 
   // Fetch package template to copy credit details
@@ -82,10 +97,16 @@ export async function POST(request: NextRequest) {
 
   if (pkgErr || !pkg) return NextResponse.json({ error: "Package not found or inactive" }, { status: 404 });
 
-  // Compute expiry: purchased_at + validity_days
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + pkg.validity_days);
-  const expiresAtStr = expiresAt.toISOString().split("T")[0]; // DATE only
+  // Expiry: purchase date (IST) + validity, 30 days unless the sale says otherwise
+  const validityDays = validity_days !== undefined ? Number(validity_days) : Number(pkg.validity_days) || 30;
+  const expiresAtStr = addDaysToDate(istDateString(), validityDays);
+
+  // Cancellation window: the package default unless this sale negotiated another.
+  // undefined = use the default, null = this sale never restores credits.
+  const windowHours: number | null =
+    cancellation_window_hours === undefined
+      ? (pkg.default_cancellation_window_hours == null ? null : Number(pkg.default_cancellation_window_hours))
+      : cancellation_window_hours === null ? null : Number(cancellation_window_hours);
 
   // payment_link mode: purchase starts as pending_payment; others are immediately paid
   const paymentStatus = payment_mode === "payment_link" ? "pending_payment" : "paid";
@@ -94,7 +115,7 @@ export async function POST(request: NextRequest) {
     .from("prepaid_purchases")
     .insert({
       package_id,
-      location_id: location_id || pkg.location_id || null,
+      location_id: locationIds.length === 1 ? locationIds[0] : null,
       lead_id: lead_id || null,
       company_name: company_name?.trim() || null,
       credit_type: pkg.credit_type,
@@ -105,6 +126,7 @@ export async function POST(request: NextRequest) {
       payment_status: paymentStatus,
       payment_reference: payment_reference?.trim() || null,
       expires_at: expiresAtStr,
+      cancellation_window_hours: windowHours,
       status: "active",
       notes: notes?.trim() || null,
       sold_by: user.id,
@@ -118,6 +140,15 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { error: locErr } = await supabase
+    .from("prepaid_purchase_locations")
+    .insert(locationIds.map((l) => ({ purchase_id: data.id, location_id: l })));
+  if (locErr) {
+    // A package with no locations would read as valid everywhere, so undo the sale.
+    await createAdminClient().from("prepaid_purchases").delete().eq("id", data.id);
+    return NextResponse.json({ error: "Could not save the package locations: " + locErr.message }, { status: 500 });
+  }
 
   const creditsRemaining = Number(data.total_credits) - Number(data.credits_used);
   const result: Record<string, unknown> = { ...data, credits_remaining: creditsRemaining };
