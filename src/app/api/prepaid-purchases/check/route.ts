@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { isPrepaidApplicableToSpace, escapeLike } from "@/lib/prepaid";
+import { isPrepaidApplicableToSpace, isPrepaidValidAtLocation, escapeLike, istDateString } from "@/lib/prepaid";
 
 /**
  * GET /api/prepaid-purchases/check
@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
   const leadId = searchParams.get("lead_id");
   const companyName = searchParams.get("company_name");
   const spaceId = searchParams.get("space_id");
+  const bookingDate = searchParams.get("booking_date");
 
   if (!spaceId) return NextResponse.json({ error: "space_id is required" }, { status: 400 });
   if (!leadId && !companyName) {
@@ -31,11 +32,12 @@ export async function GET(request: NextRequest) {
   // Fetch the space's workspace_type so we can filter packages
   const { data: space } = await supabase
     .from("spaces")
-    .select("id, workspace_type")
+    .select("id, workspace_type, location_id")
     .eq("id", spaceId)
     .single();
 
-  const today = new Date().toISOString().split("T")[0];
+  // A package must still be valid on the day of the booking, not just today.
+  const today = bookingDate && /^\d{4}-\d{2}-\d{2}$/.test(bookingDate) ? bookingDate : istDateString();
 
   // Build OR filter: match by lead_id OR by company_name
   // Also optionally match the lead's company if we have a lead_id
@@ -57,7 +59,8 @@ export async function GET(request: NextRequest) {
     .from("prepaid_purchases")
     .select(`
       *,
-      package:prepaid_packages(id, name, workspace_type, space_id, credit_type, total_credits)
+      package:prepaid_packages(id, name, workspace_type, space_id, credit_type, total_credits),
+      locations:prepaid_purchase_locations(location_id, location:locations(id, name))
     `)
     .eq("status", "active")
     .eq("payment_status", "paid")
@@ -87,6 +90,8 @@ export async function GET(request: NextRequest) {
     const pkg = p.package as any;
     if (!space) return false;
     if (!isPrepaidApplicableToSpace(pkg, space)) return false;
+    const locationIds = ((p.locations ?? []) as { location_id: string }[]).map((l) => l.location_id);
+    if (!isPrepaidValidAtLocation(locationIds, space.location_id)) return false;
     return true;
   });
 

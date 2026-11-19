@@ -52,6 +52,7 @@ import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
 import { StatementOfAccountButton } from "@/components/leads/statement-of-account-button";
 import { LeadCreditsCard } from "@/components/leads/lead-credits-card";
+import { LeadPackagesCard } from "@/components/leads/lead-packages-card";
 import { LeadCautionsBanner } from "@/components/leads/lead-cautions-banner";
 import dynamic from "next/dynamic";
 const LeadBillingSnippet = dynamic(
@@ -667,6 +668,10 @@ export default function LeadDetailPage({
               {/* Time Credits — partial-checkout carry-forward (auto-hides
                   when the lead has no credits in any state) */}
               <LeadCreditsCard leadId={lead.id} />
+
+              {/* Prepaid packages — own and company-wide, with statement download and email.
+                  Auto-hides when there are none. */}
+              <LeadPackagesCard leadId={lead.id} leadEmail={lead.email} />
 
               {/* Tags */}
               {(lead.tags ?? []).length > 0 && (

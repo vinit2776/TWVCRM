@@ -1,8 +1,10 @@
 "use client";
 
+import { PackageTip } from "@/components/packages/package-tips";
 import { Ticket, AlertTriangle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
+import { istDateString } from "@/lib/prepaid";
 import type { PrepaidPurchase } from "@/types";
 
 interface PrepaidBannerProps {
@@ -33,7 +35,8 @@ export function PrepaidBanner({
   if (creditType === "hours" && durationHours > 0) {
     coveredHours = Math.min(durationHours, creditsRemaining);
     topupHours = Math.max(0, durationHours - coveredHours);
-    topupAmount = topupHours * effectiveRate;
+    // The package covers its hours including GST; the extra hours are billed at the list rate plus GST
+    topupAmount = topupHours * effectiveRate * 1.18;
   }
   const isFullyCovered = creditType === "days" || creditType === "bookings" || (creditType === "hours" && topupAmount === 0);
 
@@ -41,7 +44,13 @@ export function PrepaidBanner({
     timeZone: "Asia/Kolkata",
     day: "numeric",
     month: "short",
+    year: "numeric",
   });
+  const daysLeft = Math.round(
+    (new Date(purchase.expires_at + "T00:00:00Z").getTime() - new Date(istDateString() + "T00:00:00Z").getTime()) / 86_400_000,
+  );
+  const locationNames = (purchase.locations ?? []).map((l) => l.location?.name).filter(Boolean) as string[];
+  const windowHours = purchase.cancellation_window_hours;
 
   const packageName = (purchase.package as { name?: string } | undefined)?.name || "Prepaid Package";
   const creditsLabel =
@@ -52,6 +61,7 @@ export function PrepaidBanner({
       : `${creditsRemaining} day pass${creditsRemaining !== 1 ? "es" : ""} remaining`;
 
   return (
+    <div className="space-y-2">
     <div
       className={`rounded-lg border p-3 flex flex-col sm:flex-row sm:items-center gap-3 ${
         usePrepaid
@@ -72,7 +82,15 @@ export function PrepaidBanner({
             {packageName}
           </p>
           <p className={`text-xs ${usePrepaid ? (lowBalance ? "text-amber-700" : "text-green-700") : "text-muted-foreground"}`}>
-            {creditsLabel} · Expires {expiryDate}
+            {creditsLabel} · Expires {expiryDate} ({daysLeft === 0 ? "today" : `${daysLeft} day${daysLeft !== 1 ? "s" : ""} left`})
+          </p>
+          {locationNames.length > 0 && (
+            <p className="text-xs text-muted-foreground">Valid at {locationNames.join(", ")}</p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {windowHours == null
+              ? "Credits are not restored if the booking is cancelled"
+              : `Credits restored if cancelled at least ${windowHours} hr${Number(windowHours) !== 1 ? "s" : ""} before start`}
           </p>
           {usePrepaid && durationHours > 0 && creditType === "hours" && (
             <p className={`text-xs mt-0.5 ${isFullyCovered ? "text-green-700" : "text-amber-700"}`}>
@@ -114,6 +132,8 @@ export function PrepaidBanner({
           </Button>
         )}
       </div>
+    </div>
+      <PackageTip>The hours are taken from the package. GST on them was paid when the package was sold, so there is nothing to collect for covered hours.</PackageTip>
     </div>
   );
 }

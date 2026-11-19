@@ -1,5 +1,7 @@
 "use client";
 
+import { PackageTourDialog } from "@/components/packages/package-tour-dialog";
+import { PackageTipsToggle } from "@/components/packages/package-tips";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
@@ -63,6 +65,8 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
   const [totalCredits, setTotalCredits] = useState("");
   const [price, setPrice] = useState("");
   const [validityDays, setValidityDays] = useState("30");
+  const [windowHours, setWindowHours] = useState("2");
+  const [noRestore, setNoRestore] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Load spaces when location changes
@@ -101,10 +105,13 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
       setTotalCredits(String(pkg.total_credits));
       setPrice(String(pkg.price));
       setValidityDays(String(pkg.validity_days));
+      setNoRestore(pkg.default_cancellation_window_hours === null);
+      setWindowHours(pkg.default_cancellation_window_hours == null ? "2" : String(pkg.default_cancellation_window_hours));
     } else {
       setName(""); setDescription(""); setLocationId("__none"); setWorkspaceType("__none");
       setSpaceId("__none"); setSpaces([]);
       setCreditType("hours"); setTotalCredits(""); setPrice(""); setValidityDays("30");
+      setWindowHours("2"); setNoRestore(false);
     }
   }, [pkg, open]);
 
@@ -112,6 +119,7 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
     if (!name.trim()) { toast.error("Package name is required"); return; }
     if (!totalCredits || isNaN(Number(totalCredits))) { toast.error("Total credits required"); return; }
     if (!price || isNaN(Number(price))) { toast.error("Price required"); return; }
+    if (!noRestore && !(Number(windowHours) >= 0)) { toast.error("Enter the free-cancellation window in hours, or tick 'never restore'"); return; }
     if (workspaceType === "__none" && spaceId === "__none") { toast.error("Choose the space type or space this package applies to"); return; }
 
     setSaving(true);
@@ -136,6 +144,7 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
         total_credits: Number(totalCredits),
         price: Number(price),
         validity_days: Number(validityDays),
+        default_cancellation_window_hours: noRestore ? null : Number(windowHours),
       };
 
       const res = pkg
@@ -144,7 +153,11 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
 
       const json = await res.json();
       if (res.ok) {
-        toast.success(pkg ? "Package updated" : "Package created");
+        if (json.sent_back_for_approval) {
+          toast.success("Package updated and set to inactive. An admin or manager must approve it again before it can be sold.");
+        } else {
+          toast.success(pkg ? "Package updated" : "Package created. It stays inactive until an admin or manager activates it.");
+        }
         onSuccess();
         onOpenChange(false);
       } else {
@@ -243,7 +256,17 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
             <div className="space-y-2">
               <Label>Validity (days) *</Label>
               <Input type="number" min="1" value={validityDays} onChange={e => setValidityDays(e.target.value)} />
+              <p className="text-xs text-muted-foreground">Default when selling. Can be changed per sale.</p>
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Free cancellation up to (hrs before start)</Label>
+            <Input type="number" min="0" step="0.5" value={windowHours} disabled={noRestore} onChange={e => setWindowHours(e.target.value)} />
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input type="checkbox" checked={noRestore} onChange={e => setNoRestore(e.target.checked)} />
+              Never restore credits on cancellation
+            </label>
+            <p className="text-xs text-muted-foreground">Default when selling. Cancelling later than this, or a no-show, forfeits the credits.</p>
           </div>
           <div className="space-y-2">
             <Label>Price (₹) *</Label>
@@ -334,6 +357,7 @@ function ExtendPurchaseDialog({ open, onOpenChange, purchase, onSuccess }: Exten
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function PackagesPage() {
+  const [tourSignal, setTourSignal] = useState(0);
   const [packages, setPackages] = useState<PrepaidPackage[]>([]);
   const [purchases, setPurchases] = useState<PrepaidPurchase[]>([]);
   const [packagesLoading, setPackagesLoading] = useState(true);
@@ -450,7 +474,12 @@ export default function PackagesPage() {
             <p className="text-sm text-muted-foreground">Prepaid bulk hour &amp; day passes</p>
           </div>
         </div>
+        <div className="flex items-center gap-4">
+          <PackageTipsToggle />
+          <Button variant="link" size="sm" onClick={() => setTourSignal(n => n + 1)}>Take the tour</Button>
+        </div>
       </div>
+      <PackageTourDialog openSignal={tourSignal} />
 
       <Tabs defaultValue="packages">
         <TabsList>

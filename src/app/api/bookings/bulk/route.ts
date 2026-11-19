@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
             bookingDate: booking.booking_date,
             startTime: booking.start_time,
             endTime: booking.end_time,
-          });
+          }, { prepaid: { trigger: "cancel", actorId: dbUser.id } });
 
           results.push({ id: bookingId, success: true });
           break;
