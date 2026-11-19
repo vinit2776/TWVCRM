@@ -47,6 +47,20 @@ export function isQuietAcknowledgement(text: string): boolean {
 
 const NEGATIVE_CUE_RE =
   /\b(not|n't|broken|problem|issue|complain\w*|leak\w*|dirty|noise|noisy|refund|wrong|stopped|down|failed|damag\w*|bad|worst|poor|overcharg\w*)\b/i;
+// Bank-transfer and accounts talk ("UTR shared on mail", "amount transferred"): a customer or a vendor
+// settling a payment, not a prospect.
+const PAYMENT_RE =
+  /\b(utr|neft|rtgs|imps|upi ref\w*|transaction (?:id|ref\w*|details?)|transferred|remittance|payment (?:done|made|details?|screenshot|receipt|status|confirmation)|paid|tds|cheque|receipts?|invoices?|statement of account)\b/i;
+
+/** The held messages are all accounts talk and none of them asks about space, price or a visit.
+ *  Only used to label and sort the Possible leads tray: it never hides or discards a message, so a
+ *  real enquiry that happens to mention a payment still sits in the tray one tap from "It's a lead". */
+export function looksLikePaymentChatter(texts: string[]): boolean {
+  const joined = texts.filter(Boolean);
+  if (joined.length === 0) return false;
+  return joined.some((t) => PAYMENT_RE.test(t)) && !joined.some((t) => ENQUIRY_RE.test(t) || STRONG_ENQUIRY_RE.test(t));
+}
+
 const NON_TEXT_TYPES = new Set(["sticker", "reaction"]);
 
 const count = (re: RegExp, s: string) => (s.match(re) ?? []).length;

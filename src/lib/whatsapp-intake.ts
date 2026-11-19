@@ -432,10 +432,14 @@ export async function openEnquiryFromHeld(
   if (error) console.error("[whatsapp-intake] could not record enquiry from held message:", error.message);
   const reference = (enquiry?.reference as string | undefined) ?? null;
   await supabase.from("whatsapp_possible_leads").update({ lead_id: leadId }).eq("id", held.id);
-  await alertStaff(supabase, {
-    leadId, reference, displayName, isReEnquiry: !!existingLeadId,
-    mobile: held.mobile, body: messages.map((m) => m.text).join(" / "),
-  });
+  // A person who tapped "It's a lead" already knows: the team-wide email, push and WhatsApp are for
+  // an enquiry that arrives on its own. The enquiry still lands on the New tab.
+  if (!opts.decidedBy) {
+    await alertStaff(supabase, {
+      leadId, reference, displayName, isReEnquiry: !!existingLeadId,
+      mobile: held.mobile, body: messages.map((m) => m.text).join(" / "),
+    });
+  }
   return { leadId, reference, isReEnquiry: !!existingLeadId };
 }
 

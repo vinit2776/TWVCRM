@@ -15,6 +15,7 @@ type Held = {
   messages: { at: string; text: string }[];
   first_at: string;
   last_at: string;
+  payment_chatter?: boolean;
 };
 type Labelled = { last10: string; label: NumberLabel; name: string | null };
 
@@ -37,7 +38,11 @@ export function PossibleLeadsTray({ onChanged }: { onChanged?: () => void }) {
 
   const load = useCallback(async () => {
     const [h, l] = await Promise.all([fetch("/api/whatsapp/possible-leads"), fetch("/api/whatsapp/number-labels")]);
-    if (h.ok) setHeld(((await h.json()).data ?? []) as Held[]);
+    if (h.ok) {
+      // Accounts talk sinks to the bottom; nothing is hidden.
+      const rows = ((await h.json()).data ?? []) as Held[];
+      setHeld([...rows.filter((r) => !r.payment_chatter), ...rows.filter((r) => r.payment_chatter)]);
+    }
     if (l.ok) setLabels(((await l.json()).data ?? []) as Labelled[]);
   }, []);
 
@@ -78,7 +83,7 @@ export function PossibleLeadsTray({ onChanged }: { onChanged?: () => void }) {
     <Card className="p-3 space-y-3 border-amber-200">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-medium">Possible leads {held.length > 0 && <span className="ml-1 rounded bg-amber-100 px-1.5 text-xs text-amber-800">{held.length}</span>}</p>
+          <p className="text-sm font-medium">Possible leads {held.length > 0 && <span className="ml-1 rounded bg-amber-100 px-1.5 text-xs text-amber-800">{held.filter((h) => !h.payment_chatter).length}</span>}</p>
           <p className="text-xs text-muted-foreground">Unknown numbers we couldn&apos;t judge. Nothing here is lost; no lead is created until you say so.</p>
         </div>
         {labels.length > 0 && (
@@ -94,16 +99,29 @@ export function PossibleLeadsTray({ onChanged }: { onChanged?: () => void }) {
             <span className="font-medium">{h.profile_name ?? h.mobile}</span>
             <span className="text-xs text-muted-foreground">{ago(h.last_at)}</span>
           </div>
+          {h.payment_chatter && (
+            <p className="text-xs text-amber-700">
+              Reads like payment talk (UTR, transfers), so probably a customer or vendor. Use <strong>Not a lead</strong> or <strong>Label number</strong> to stop these appearing.
+            </p>
+          )}
           <div className="space-y-0.5 text-sm">
             {h.messages.slice(-3).map((m, i) => (
               <p key={i} className="text-muted-foreground">&ldquo;{m.text}&rdquo;</p>
             ))}
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={busy === h.id} onClick={() => decide(h.id, { action: "lead" }, "Enquiry created")}>
+            <Button
+              size="sm"
+              variant={h.payment_chatter ? "outline" : "default"}
+              disabled={busy === h.id}
+              onClick={() => {
+                if (h.payment_chatter && !window.confirm("These messages look like payment talk, not an enquiry. Create an enquiry anyway?")) return;
+                void decide(h.id, { action: "lead" }, "Enquiry created");
+              }}
+            >
               It&apos;s a lead
             </Button>
-            <Button size="sm" variant="outline" disabled={busy === h.id} onClick={() => decide(h.id, { action: "not_lead" }, "Marked as not a lead")}>
+            <Button size="sm" variant={h.payment_chatter ? "default" : "outline"} disabled={busy === h.id} onClick={() => decide(h.id, { action: "not_lead" }, "Marked as not a lead")}>
               Not a lead
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setLabelling(labelling === h.id ? null : h.id)}>
