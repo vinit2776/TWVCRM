@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { Banknote, CreditCard, Smartphone, Link2 } from "lucide-react";
+import { CreditCard, Smartphone, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -63,7 +63,8 @@ export const PaymentSection = memo(function PaymentSection() {
                     <Label>Payment Method</Label>
                     <div className="flex gap-1.5 flex-wrap">
                       {[
-                        { mode: "cash", icon: Banknote, label: "Cash" },
+                        // Cash is hidden on purpose: it auto-verifies and clears the
+                        // walk-in check-in gate with no proof of money received.
                         { mode: "card", icon: CreditCard, label: "Card" },
                         { mode: "upi", icon: Smartphone, label: "UPI" },
                         // Send Link is a card sub-option (pay by card remotely
@@ -96,12 +97,6 @@ export const PaymentSection = memo(function PaymentSection() {
                     </div>
                   )}
                 </div>
-                {advancePaymentMode === "cash" && (
-                  <p className="text-xs text-green-700 bg-green-50 rounded px-2.5 py-1.5">
-                    <Banknote className="inline h-3.5 w-3.5 mr-1" />
-                    Cash payment of {formatCurrency(parseFloat(advancePaymentAmount) || 0)} will be recorded as collected.
-                  </p>
-                )}
                 {advancePaymentMode === "upi" && (
                   <p className="text-xs text-amber-700 bg-amber-50 rounded px-2.5 py-1.5">
                     <Smartphone className="inline h-3.5 w-3.5 mr-1" />
