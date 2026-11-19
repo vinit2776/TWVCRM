@@ -26,7 +26,8 @@ interface Statement {
   id: string;
   statement_number: string;
   contract_id: string | null;
-  contract?: { contract_number: string } | null;
+  contract?: { id: string; contract_number: string } | null;
+  on_behalf?: { id: string; contract_number: string } | null;
   billed_on_behalf_of_contract_id: string | null;
   statement_type: string;
   prepaid_month: number | null;
@@ -242,6 +243,13 @@ export function ContractInvoicesSection({
     ),
     [statements, contractId],
   );
+
+  // On the parent, a row billed for the renewal is the parent's record but
+  // the renewal's period: shown muted and linked, outside the parent's own term.
+  const forRenewal = (s: Statement) =>
+    s.contract_id === contractId &&
+    !!s.billed_on_behalf_of_contract_id &&
+    s.billed_on_behalf_of_contract_id !== contractId;
 
   // Voided statements stay for the audit trail but are tucked away by default —
   // an inline voided Oct row beside the live one reads like double billing.
@@ -776,7 +784,10 @@ export function ContractInvoicesSection({
               </thead>
               <tbody className="divide-y">
                 {visibleStatements.map((s) => (
-                  <tr key={s.id} className="hover:bg-muted/30 transition-colors">
+                  <tr
+                    key={s.id}
+                    className={`hover:bg-muted/30 transition-colors ${forRenewal(s) ? "bg-muted/40" : ""}`}
+                  >
                     <td className="py-2.5 pr-4 whitespace-nowrap">
                       {periodLabel(s.period_start, s.period_end)}
                     </td>
@@ -799,7 +810,19 @@ export function ContractInvoicesSection({
                       )}
                       {s.contract_id && s.contract_id !== contractId && s.contract?.contract_number && (
                         <div className="text-[10px] text-muted-foreground">
-                          Billed on {s.contract.contract_number} (parent)
+                          Raised on{" "}
+                          <Link href={`/contracts/${s.contract.id}`} className="text-primary hover:underline">
+                            {s.contract.contract_number}
+                          </Link>{" "}
+                          before this contract was active
+                        </div>
+                      )}
+                      {forRenewal(s) && s.on_behalf?.contract_number && (
+                        <div className="text-[10px] text-muted-foreground">
+                          Billed for renewal{" "}
+                          <Link href={`/contracts/${s.on_behalf.id}`} className="text-primary hover:underline">
+                            {s.on_behalf.contract_number}
+                          </Link>
                         </div>
                       )}
                     </td>
