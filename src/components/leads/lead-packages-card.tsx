@@ -6,6 +6,7 @@
  * of how each was used that can be downloaded or emailed to the customer.
  */
 
+import { PackageTip } from "@/components/packages/package-tips";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -122,6 +123,7 @@ export function LeadPackagesCard({ leadId, leadEmail }: Props) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
+        <PackageTip>The statement lists each booking used, each cancellation with hours before start, and whether hours came back.</PackageTip>
         {packages.map((p) => {
           const inactive = p.status === "expired" || p.status === "exhausted";
           const pct = p.total_credits > 0 ? Math.round((p.credits_remaining / p.total_credits) * 100) : 0;

@@ -1,5 +1,6 @@
 "use client";
 
+import { PackageTip } from "@/components/packages/package-tips";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Loader2, Search, Users, User, Link2 } from "lucide-react";
 import {
@@ -306,6 +307,7 @@ export function SellPackageDialog({
             <div className="space-y-3 rounded-md border p-3">
               <div className="space-y-2">
                 <Label>Redeemable at *</Label>
+                <PackageTip>The customer can only redeem at the places you tick. At least one is required.</PackageTip>
                 <div className="flex flex-wrap gap-2">
                   {locations.map(l => {
                     const on = selectedLocationIds.includes(l.id);
@@ -337,6 +339,7 @@ export function SellPackageDialog({
                 </div>
                 <div className="space-y-2">
                   <Label>Free cancellation up to (hrs before start)</Label>
+                  <PackageTip>Cancel earlier than this and the hours come back. Later, or a no-show, and they are used up.</PackageTip>
                   <Input type="number" min={0} step="0.5" value={windowHours} disabled={noRestore} onChange={(e) => setWindowHours(e.target.value)} />
                   <label className="flex items-center gap-2 text-xs text-muted-foreground">
                     <input type="checkbox" checked={noRestore} onChange={(e) => setNoRestore(e.target.checked)} />

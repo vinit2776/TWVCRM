@@ -1,5 +1,6 @@
 "use client";
 
+import { PackageTip } from "@/components/packages/package-tips";
 import { Ticket, AlertTriangle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
@@ -60,6 +61,7 @@ export function PrepaidBanner({
       : `${creditsRemaining} day pass${creditsRemaining !== 1 ? "es" : ""} remaining`;
 
   return (
+    <div className="space-y-2">
     <div
       className={`rounded-lg border p-3 flex flex-col sm:flex-row sm:items-center gap-3 ${
         usePrepaid
@@ -130,6 +132,8 @@ export function PrepaidBanner({
           </Button>
         )}
       </div>
+    </div>
+      <PackageTip>The hours are taken from the package. GST on them was paid when the package was sold, so there is nothing to collect for covered hours.</PackageTip>
     </div>
   );
 }
