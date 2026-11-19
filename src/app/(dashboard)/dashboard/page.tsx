@@ -44,6 +44,7 @@ import { WeekInReviewWidget } from "@/components/dashboard/widgets/week-in-revie
 import { QuickChargeWidget } from "@/components/dashboard/widgets/quick-charge-widget";
 import { AccountsOverviewWidget } from "@/components/dashboard/widgets/accounts-overview-widget";
 import { AccountsWorkQueueWidget } from "@/components/dashboard/widgets/accounts-work-queue-widget";
+import { ItWorkQueueWidget } from "@/components/dashboard/widgets/it-work-queue-widget";
 
 import Link from "next/link";
 import { Zap } from "lucide-react";
@@ -259,13 +260,15 @@ export default function DashboardPage() {
         return <AccountsOverviewWidget key="accounts_overview" />;
       case "accounts_work_queue":
         return <AccountsWorkQueueWidget key="accounts_work_queue" />;
+      case "it_work_queue":
+        return <ItWorkQueueWidget key="it_work_queue" />;
       default:
         return null;
     }
   }
 
   // live_enquiries and kpi_stats always render full-width outside the grid
-  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review", "accounts_overview", "accounts_work_queue", "sales", "procurement_po", "facility", "meter_telemetry"];
+  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review", "accounts_overview", "accounts_work_queue", "it_work_queue", "sales", "procurement_po", "facility", "meter_telemetry"];
   const topWidgets = widgetIds.filter((id) => FULL_WIDTH.includes(id));
   const gridWidgets = widgetIds.filter((id) => !FULL_WIDTH.includes(id));
 
