@@ -1,5 +1,7 @@
 "use client";
 
+import { PackageTourDialog } from "@/components/packages/package-tour-dialog";
+import { PackageTipsToggle } from "@/components/packages/package-tips";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
@@ -355,6 +357,7 @@ function ExtendPurchaseDialog({ open, onOpenChange, purchase, onSuccess }: Exten
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function PackagesPage() {
+  const [tourSignal, setTourSignal] = useState(0);
   const [packages, setPackages] = useState<PrepaidPackage[]>([]);
   const [purchases, setPurchases] = useState<PrepaidPurchase[]>([]);
   const [packagesLoading, setPackagesLoading] = useState(true);
@@ -471,7 +474,12 @@ export default function PackagesPage() {
             <p className="text-sm text-muted-foreground">Prepaid bulk hour &amp; day passes</p>
           </div>
         </div>
+        <div className="flex items-center gap-4">
+          <PackageTipsToggle />
+          <Button variant="link" size="sm" onClick={() => setTourSignal(n => n + 1)}>Take the tour</Button>
+        </div>
       </div>
+      <PackageTourDialog openSignal={tourSignal} />
 
       <Tabs defaultValue="packages">
         <TabsList>
