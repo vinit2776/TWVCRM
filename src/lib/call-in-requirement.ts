@@ -37,12 +37,12 @@ export function describeCallInRequirement(r: CallInRequirement): string {
 /** A lead needs a name. When the caller gave none, name it from how to reach them. */
 export function callInLeadName(input: { name?: string | null; phone?: string | null; email?: string | null }): {
   first_name: string;
-  last_name?: string;
+  last_name: string;
 } {
   const name = input.name?.trim();
   if (name) {
     const [first, ...rest] = name.split(/\s+/);
-    return { first_name: first, last_name: rest.join(" ") || undefined };
+    return { first_name: first, last_name: rest.join(" ") };
   }
-  return { first_name: "Caller", last_name: input.phone?.trim() || input.email?.trim() || undefined };
+  return { first_name: "Caller", last_name: input.phone?.trim() || input.email?.trim() || "" };
 }

@@ -31,7 +31,7 @@ describe("describeCallInRequirement", () => {
 describe("callInLeadName", () => {
   it("splits a given name", () => {
     expect(callInLeadName({ name: "Ravi Kumar Shah" })).toEqual({ first_name: "Ravi", last_name: "Kumar Shah" });
-    expect(callInLeadName({ name: "Ravi" })).toEqual({ first_name: "Ravi", last_name: undefined });
+    expect(callInLeadName({ name: "Ravi" })).toEqual({ first_name: "Ravi", last_name: "" });
   });
 
   it("names a nameless caller from how to reach them", () => {
