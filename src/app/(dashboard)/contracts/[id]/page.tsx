@@ -60,6 +60,7 @@ import { ContractDepositAdjustmentsSection } from "@/components/contracts/contra
 import { ContractDepositTopupsSection } from "@/components/contracts/contract-deposit-topups-section";
 import { ContractInvoicesSection } from "@/components/contracts/contract-invoices-section";
 import { ContractAttributedInvoicesSection } from "@/components/contracts/contract-attributed-invoices-section";
+import { ContractProposalCommercialsSection } from "@/components/contracts/contract-proposal-commercials-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
@@ -301,6 +302,7 @@ export default function ContractDetailPage({
   const contractIsLive = contract?.status === "active" || contract?.status === "renewal_in_progress";
   const [leadDepositShortfall, setLeadDepositShortfall] = useState<number | null>(null);
   const [depositTick, setDepositTick] = useState(0);
+  const [commercialsTick, setCommercialsTick] = useState(0);
   useEffect(() => {
     if (!contractIsLive || !contract?.lead_id) { setLeadDepositShortfall(null); return; }
     let cancelled = false;
@@ -1845,6 +1847,14 @@ export default function ContractDetailPage({
             onPhasesUpdated={() => fetchContract(false)}
           />
 
+          {/* Deposit + first invoice collected through the proposal, before activation */}
+          <ContractProposalCommercialsSection
+            contractId={id}
+            proposal={linkedProposal ?? contract.proposal}
+            contract={contract}
+            refreshKey={commercialsTick}
+          />
+
           {/* Security Deposit Snapshot — renders pre-activation off the linked
               proposal, or post-activation off the contract's own snapshot
               even when no proposal is (or ever was) linked. */}
@@ -1882,10 +1892,6 @@ export default function ContractDetailPage({
             contractId={id}
             billingMode={contract.billing_mode}
             contractStatus={contract.status}
-            proposalId={contract.proposal_id}
-            proposalNumber={contract.proposal?.proposal_number}
-            prorataPaymentStatus={contract.proposal?.payment_status}
-            prorataPaymentReceivedAt={contract.proposal?.payment_received_at}
             billingCycle={contract.billing_cycle}
             nextBillingDate={contract.next_billing_date}
             startDate={contract.start_date}
@@ -1899,7 +1905,7 @@ export default function ContractDetailPage({
           <ContractAttributedInvoicesSection
             contractId={id}
             currentUserRole={userRole ?? ""}
-            onAttributionChanged={() => fetchContract(false)}
+            onAttributionChanged={() => { fetchContract(false); setCommercialsTick((t) => t + 1); }}
           />
 
           {/* Agreement Details Card */}
