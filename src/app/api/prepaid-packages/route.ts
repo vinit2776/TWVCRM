@@ -55,6 +55,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "credit_type must be 'hours', 'days', or 'bookings'" }, { status: 400 });
   }
 
+  if (!workspace_type && !space_id) {
+    return NextResponse.json({ error: "A package must be limited to a space type or a specific space" }, { status: 400 });
+  }
+  if (![total_credits, price, validity_days].every((n) => Number.isFinite(Number(n))) || Number(total_credits) <= 0 || Number(price) < 0 || Number(validity_days) <= 0) {
+    return NextResponse.json({ error: "total_credits and validity_days must be positive and price cannot be negative" }, { status: 400 });
+  }
+
   const { data, error } = await supabase
     .from("prepaid_packages")
     .insert({
