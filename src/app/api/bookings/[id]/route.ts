@@ -736,7 +736,32 @@ export async function PATCH(
           const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
           const paymentState = checkInPaymentState(grandTotal, bookingPayments || []);
 
-          if (!paymentState.covered) {
+          // Manager override: lets an admin/manager check a guest in with the
+          // balance still due (e.g. payment channel down). Reason is mandatory
+          // and audit-logged; the balance stays outstanding and is chased at
+          // checkout. This replaces staff faking a cash payment to get past the gate.
+          const overrideReason = typeof body.payment_override_reason === "string"
+            ? body.payment_override_reason.trim()
+            : "";
+          const canOverride = ["admin", "manager"].includes(dbUser.role);
+          if (!paymentState.covered && overrideReason) {
+            if (!canOverride) {
+              return NextResponse.json({ error: "Only an admin or manager can override the payment check" }, { status: 403 });
+            }
+            if (overrideReason.length < 10) {
+              return NextResponse.json({ error: "Override reason must be at least 10 characters" }, { status: 400 });
+            }
+            logAudit(supabase, {
+              entityType: "booking",
+              entityId: id,
+              action: "update",
+              performedBy: dbUser.id,
+              changes: {
+                checkin_payment_override: { old: null, new: overrideReason },
+                balance_due_at_checkin: { old: null, new: Math.max(0, grandTotal - paymentState.verified - paymentState.provisional) },
+              },
+            });
+          } else if (!paymentState.covered) {
             return NextResponse.json({
               error: "Payment required before check-in",
               payment_required: true,

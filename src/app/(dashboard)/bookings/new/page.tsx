@@ -109,7 +109,7 @@ function NewBookingForm() {
   const [loiNumber, setLoiNumber] = useState("");
   const [accessProvidedBy, setAccessProvidedBy] = useState("");
   const [collectAdvancePayment, setCollectAdvancePayment] = useState(false);
-  const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("cash");
+  const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("upi");
   const [advancePaymentReference, setAdvancePaymentReference] = useState("");
   const [advancePaymentAmount, setAdvancePaymentAmount] = useState("");
   const [razorpayEnabled, setRazorpayEnabled] = useState(false);

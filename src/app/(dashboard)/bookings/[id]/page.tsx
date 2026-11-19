@@ -40,6 +40,9 @@ const GetPaymentChooser      = dynamic(() => import("@/components/bookings/get-p
 import { NextActionBanner, NextActionTarget, computeNextActionTarget } from "@/components/bookings/next-action-banner";
 import { OvertimeChargeBanner } from "@/components/bookings/overtime-charge-banner";
 import { TransactionSummary, type TxnAddon } from "@/components/bookings/transaction-summary";
+import { checkInPaymentState } from "@/lib/booking-payment-rules";
+import { BookingStepTracker } from "@/components/bookings/booking-step-tracker";
+import { CheckinOverrideDialog } from "@/components/bookings/checkin-override-dialog";
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
@@ -184,6 +187,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // True once accounts has uploaded the GST invoice — payment methods are then frozen.
   const [paymentMethodLocked, setPaymentMethodLocked] = useState(false);
   const [correctingPayment, setCorrectingPayment] = useState<BookingPayment | null>(null);
+  const [overrideDialogOpen, setOverrideDialogOpen] = useState(false);
   const [upiId, setUpiId] = useState("");
   const [upiQrCodePath, setUpiQrCodePath] = useState("");
   const [zoomedScreenshotUrl, setZoomedScreenshotUrl] = useState<string | null>(null);
@@ -813,6 +817,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // Computed once per render from the same logic the textual banner uses
   // so the two stay in sync. Exactly one region lights up at a time.
   const nextActionTarget = computeNextActionTarget(booking, existingPayments, compRequest);
+  // Walk-ins can't be checked in until fully paid (enforced server-side with
+  // a 402). Swap the Check In button for the payment step so the one primary
+  // button always is the next thing staff must do, instead of failing on click.
+  const walkInBalanceDue = (() => {
+    if (booking.status !== "confirmed" || booking.customer_type !== "walk_in") return 0;
+    if (["paid", "waived", "prepaid", "posted_to_bill"].includes(booking.payment_status)) return 0;
+    const grandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
+    const state = checkInPaymentState(grandTotal, existingPayments);
+    return state.covered ? 0 : Math.max(0, grandTotal - state.verified - state.provisional);
+  })();
 
   // A booking from an earlier day that was never checked in/out. It is closed
   // out (billed as booked, lapse recorded) instead of being checked in "now".
@@ -914,9 +928,18 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 <Button size="sm" onClick={() => setCloseOutDialogOpen(true)} disabled={actionLoading}>
                   <CheckCircle2 className="mr-1 h-4 w-4" />Close out
                 </Button>
+              ) : walkInBalanceDue > 0 ? (
+                <Button size="sm" onClick={() => setGetPaymentChooserOpen(true)}>
+                  <IndianRupee className="mr-1 h-4 w-4" />Collect {formatCurrency(walkInBalanceDue)} to check in
+                </Button>
               ) : (
                 <Button size="sm" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
                   <LogIn className="mr-1 h-4 w-4" />Check In
+                </Button>
+              )}
+              {!needsCloseOut && walkInBalanceDue > 0 && (userRole === "admin" || userRole === "manager") && (
+                <Button variant="outline" size="sm" onClick={() => setOverrideDialogOpen(true)}>
+                  Check in with balance due
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={() => setRescheduleDialogOpen(true)}>
@@ -998,7 +1021,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               Visible whenever payment is due regardless of customer
               type — contract holders can also collect at counter or
               via link if they choose to. */}
-          {booking.payment_status !== "paid"
+          {walkInBalanceDue === 0
+            && booking.payment_status !== "paid"
             && booking.payment_status !== "waived"
             && booking.payment_status !== "prepaid"
             && booking.payment_status !== "posted_to_bill" && (
@@ -1100,6 +1124,17 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           to memorise the state machine. Veterans can ignore it; the
           action buttons remain. */}
       <NextActionBanner booking={booking} existingPayments={existingPayments} compRequest={compRequest} />
+      <BookingStepTracker
+        booking={booking}
+        payments={existingPayments}
+      />
+      <CheckinOverrideDialog
+        open={overrideDialogOpen}
+        onOpenChange={setOverrideDialogOpen}
+        bookingId={booking.id}
+        balanceDue={walkInBalanceDue}
+        onSuccess={fetchBooking}
+      />
 
       {/* Persistent overtime notice for contract holders — replaces the old
           15-second toast that offered nothing collectible (contract-holder
