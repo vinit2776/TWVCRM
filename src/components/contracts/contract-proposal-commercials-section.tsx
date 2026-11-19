@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Receipt, ExternalLink } from "lucide-react";
+import { Receipt, ExternalLink, FileText, FileCheck } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -25,9 +26,31 @@ interface ProrataStatement {
   statement_number: string;
   status: string;
   payment_status: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  due_date: string | null;
+  subtotal: number | null;
+  tax_percentage: number | null;
+  tax_amount: number | null;
   total_amount: number;
   gst_invoice_number: string | null;
+  proforma_sent_at: string | null;
+  emailed_at: string | null;
+  finalized_at: string | null;
 }
+
+interface StatementPayment {
+  id: string;
+  amount: number;
+  payment_date: string;
+  payment_mode: string;
+  payment_reference: string | null;
+  razorpay_payment_id: string | null;
+}
+
+// The proforma-pdf route 400s on draft/voided statements. Keep in sync with
+// src/app/api/billing-statements/[id]/proforma-pdf/route.ts.
+const canPreviewPdf = (status: string) => status !== "draft" && status !== "voided";
 
 interface AttributedInvoice {
   id: string;
@@ -58,6 +81,7 @@ interface Props {
 export function ContractProposalCommercialsSection({ contractId, proposal, contract, refreshKey = 0 }: Props) {
   const proposalId: string | undefined = proposal?.id ?? contract?.proposal_id;
   const [statement, setStatement] = useState<ProrataStatement | null>(null);
+  const [payments, setPayments] = useState<StatementPayment[]>([]);
   const [attributed, setAttributed] = useState<AttributedInvoice[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -75,8 +99,15 @@ export function ContractProposalCommercialsSection({ contractId, proposal, contr
       requests.push(
         fetch(`/api/billing-statements?proposal_id=${proposalId}&limit=1`)
           .then((r) => r.json())
-          .then((j) => { if (!cancelled) setStatement(((j.data || []) as ProrataStatement[])[0] || null); })
-          .catch(() => { if (!cancelled) setStatement(null); })
+          .then(async (j) => {
+            const stmt = ((j.data || []) as ProrataStatement[])[0] || null;
+            if (cancelled) return;
+            setStatement(stmt);
+            if (!stmt) { setPayments([]); return; }
+            const pj = await fetch(`/api/billing-statements/${stmt.id}/payment`).then((r) => r.json()).catch(() => ({}));
+            if (!cancelled) setPayments(pj.data || []);
+          })
+          .catch(() => { if (!cancelled) { setStatement(null); setPayments([]); } })
       );
     }
     Promise.all(requests).finally(() => { if (!cancelled) setLoading(false); });
@@ -158,47 +189,115 @@ export function ContractProposalCommercialsSection({ contractId, proposal, contr
           </div>
         )}
 
-        <div className="flex items-start justify-between gap-4 py-3 last:pb-0">
-          <div>
-            <p className="font-medium">First invoice (pro-rata)</p>
-            {adhocFirst ? (
-              <p className="text-xs text-muted-foreground">
-                Settled by attributed invoice {adhocFirst.invoice_number}
-                {adhocFirst.paid_at && `, ${formatDate(adhocFirst.paid_at)}`}. See Ad-hoc Invoices below.
-              </p>
-            ) : statement ? (
-              <p className="text-xs text-muted-foreground flex flex-wrap items-center gap-x-2">
-                <Link
-                  href={`/api/billing-statements/${statement.id}/proforma-pdf`}
-                  target="_blank"
-                  className="font-mono text-primary hover:underline inline-flex items-center gap-1"
-                >
-                  {statement.statement_number}
-                  <ExternalLink className="h-3 w-3" />
-                </Link>
-                {statement.gst_invoice_number && <span>GST invoice {statement.gst_invoice_number}</span>}
-                {proposalFirstPaid && proposal?.payment_received_at && (
-                  <span>Paid {formatDate(proposal.payment_received_at)}</span>
+        <div className="py-3 last:pb-0 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="font-medium">First invoice (pro-rata)</p>
+              {adhocFirst ? (
+                <p className="text-xs text-muted-foreground">
+                  Settled by attributed invoice {adhocFirst.invoice_number}
+                  {adhocFirst.paid_at && `, ${formatDate(adhocFirst.paid_at)}`}. See Ad-hoc Invoices below.
+                </p>
+              ) : statement ? (
+                <p className="text-xs text-muted-foreground font-mono">{statement.statement_number}</p>
+              ) : proposalFirstPaid ? (
+                <p className="text-xs text-muted-foreground">
+                  Paid via proposal
+                  {proposal?.payment_received_at && `, ${formatDate(proposal.payment_received_at)}`}. No invoice document on file.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Not yet invoiced</p>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              {adhocFirst && <span className="font-medium">{formatCurrency(Number(adhocFirst.total_amount))}</span>}
+              {paidBadge(firstSettled)}
+            </div>
+          </div>
+
+          {statement && !adhocFirst && (
+            <div className="rounded-md border bg-muted/20 p-3 space-y-3">
+              <div className="flex flex-wrap gap-2">
+                {canPreviewPdf(statement.status) ? (
+                  <Button variant="outline" size="sm" asChild>
+                    <a href={`/api/billing-statements/${statement.id}/proforma-pdf`} target="_blank" rel="noopener noreferrer">
+                      <FileText className="mr-1.5 h-3.5 w-3.5" />
+                      View invoice
+                    </a>
+                  </Button>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Invoice PDF available once finalized</span>
                 )}
-              </p>
-            ) : proposalFirstPaid ? (
-              <p className="text-xs text-muted-foreground">
-                Paid via proposal
-                {proposal?.payment_received_at && `, ${formatDate(proposal.payment_received_at)}`}. No invoice document on file.
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">Not yet invoiced</p>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            {statement && !adhocFirst && (
-              <span className="font-medium">{formatCurrency(Number(statement.total_amount))}</span>
-            )}
-            {adhocFirst && <span className="font-medium">{formatCurrency(Number(adhocFirst.total_amount))}</span>}
-            {paidBadge(firstSettled)}
-          </div>
+                {statement.gst_invoice_number && (
+                  <Button variant="outline" size="sm" asChild>
+                    <a href={`/api/billing-statements/${statement.id}/gst-invoice-pdf`} target="_blank" rel="noopener noreferrer">
+                      <FileCheck className="mr-1.5 h-3.5 w-3.5" />
+                      View GST invoice
+                    </a>
+                  </Button>
+                )}
+              </div>
+
+              <dl className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-xs">
+                <Detail label="Proforma no." value={statement.statement_number} mono />
+                <Detail label="GST invoice no." value={statement.gst_invoice_number || "Issued on payment"} mono={!!statement.gst_invoice_number} />
+                <Detail
+                  label="Period"
+                  value={statement.period_start && statement.period_end ? `${formatDate(statement.period_start)} to ${formatDate(statement.period_end)}` : "—"}
+                />
+                <Detail
+                  label="Sent"
+                  value={(() => {
+                    const sent = statement.proforma_sent_at || statement.emailed_at || statement.finalized_at;
+                    return sent ? formatDate(sent) : "Not sent";
+                  })()}
+                />
+                <Detail label="Due" value={statement.due_date ? formatDate(statement.due_date) : "—"} />
+                <Detail label="Taxable value" value={statement.subtotal != null ? formatCurrency(Number(statement.subtotal)) : "—"} />
+                <Detail
+                  label={`GST${statement.tax_percentage != null ? ` (${Number(statement.tax_percentage)}%)` : ""}`}
+                  value={statement.tax_amount != null ? formatCurrency(Number(statement.tax_amount)) : "—"}
+                />
+                <Detail label="Invoice total" value={formatCurrency(Number(statement.total_amount))} strong />
+              </dl>
+
+              <div className="border-t pt-2 text-xs">
+                <p className="text-muted-foreground mb-1">Payment</p>
+                {payments.length > 0 ? (
+                  <ul className="space-y-1">
+                    {payments.map((pay) => (
+                      <li key={pay.id} className="flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          {formatDate(pay.payment_date)}, {MEDIUM_LABELS[pay.payment_mode] ?? pay.payment_mode}
+                          {(pay.payment_reference || pay.razorpay_payment_id) && (
+                            <span className="text-muted-foreground font-mono"> · {pay.payment_reference || pay.razorpay_payment_id}</span>
+                          )}
+                        </span>
+                        <span className="font-medium">{formatCurrency(Number(pay.amount))}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : proposalFirstPaid ? (
+                  <p>
+                    Paid{proposal?.payment_received_at ? ` ${formatDate(proposal.payment_received_at)}` : ""}. No payment record on the statement.
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground">No payment received yet.</p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function Detail({ label, value, mono, strong }: { label: string; value: string; mono?: boolean; strong?: boolean }) {
+  return (
+    <div>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={`${mono ? "font-mono" : ""} ${strong ? "font-semibold" : "font-medium"}`}>{value}</dd>
+    </div>
   );
 }
