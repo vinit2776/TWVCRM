@@ -26,6 +26,7 @@ interface Statement {
   id: string;
   statement_number: string;
   contract_id: string | null;
+  contract?: { contract_number: string } | null;
   billed_on_behalf_of_contract_id: string | null;
   statement_type: string;
   prepaid_month: number | null;
@@ -228,16 +229,30 @@ export function ContractInvoicesSection({
     [statements, contractId],
   );
 
+  // A renewal awaiting activation is billed on its parent (the parent is the
+  // only billable contract until then), so its opening PI carries the parent's
+  // contract_id and is tagged billed_on_behalf_of this contract. It is this
+  // contract's invoice, so the table lists it, labelled with the parent.
+  const tableStatements = useMemo(
+    () => statements.filter(
+      (s) =>
+        !s.contract_id ||
+        s.contract_id === contractId ||
+        s.billed_on_behalf_of_contract_id === contractId,
+    ),
+    [statements, contractId],
+  );
+
   // Voided statements stay for the audit trail but are tucked away by default —
   // an inline voided Oct row beside the live one reads like double billing.
   const [showVoided, setShowVoided] = useState(false);
   const voidedStatements = useMemo(
-    () => ownStatements.filter((s) => s.status === "voided" || !!s.voided_at),
-    [ownStatements],
+    () => tableStatements.filter((s) => s.status === "voided" || !!s.voided_at),
+    [tableStatements],
   );
   const visibleStatements = useMemo(
-    () => (showVoided ? ownStatements : ownStatements.filter((s) => !voidedStatements.includes(s))),
-    [showVoided, ownStatements, voidedStatements],
+    () => (showVoided ? tableStatements : tableStatements.filter((s) => !voidedStatements.includes(s))),
+    [showVoided, tableStatements, voidedStatements],
   );
 
   // Proformas still open under the old Proforma First flow — switching to
@@ -741,7 +756,7 @@ export function ContractInvoicesSection({
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : ownStatements.length === 0 ? (
+        ) : tableStatements.length === 0 ? (
           <p className="text-sm text-muted-foreground py-4 text-center">
             No invoices generated yet. Statements are created automatically each month after contract activation.
           </p>
@@ -781,6 +796,11 @@ export function ContractInvoicesSection({
                         >
                           {s.statement_number}
                         </span>
+                      )}
+                      {s.contract_id && s.contract_id !== contractId && s.contract?.contract_number && (
+                        <div className="text-[10px] text-muted-foreground">
+                          Billed on {s.contract.contract_number} (parent)
+                        </div>
                       )}
                     </td>
                     <td className="py-2.5 pr-4 text-right tabular-nums font-medium whitespace-nowrap">
