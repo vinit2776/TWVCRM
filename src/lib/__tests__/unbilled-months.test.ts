@@ -421,3 +421,39 @@ describe("unbilledMonths — renewal_in_progress window", () => {
     ]);
   });
 });
+
+// TWV-C-0160: starts on the 1st, activated 13 Nov after the month-end run. The
+// proposal's pro-rata invoice is the full November rent (statement owned by the
+// proposal, no prepaid_month), and callers feed it in as coverage.
+describe("unbilledMonths — proposal pro-rata as coverage", () => {
+  const base = {
+    startDate: "2026-11-01",
+    endDate: "2029-10-31",
+    createdAt: "2026-10-30T09:00:00Z",
+    today: "2026-11-19",
+    contractId: "c160",
+    contractStatus: "active",
+  };
+  const prorata: RentCoverage = {
+    statement_type: "rent",
+    period_start: "2026-11-01",
+    period_end: "2026-11-30",
+    prepaid_month: null,
+    prepaid_year: null,
+    voided_at: null,
+    contract_id: "c160",
+  };
+
+  it("flags the start month when only contract-owned statements are counted", () => {
+    expect(unbilledMonths({ ...base, statements: [] })).toEqual([{ year: 2026, month: 11 }]);
+  });
+
+  it("does not flag the start month once the proposal's pro-rata is counted", () => {
+    expect(unbilledMonths({ ...base, statements: [prorata] })).toEqual([]);
+  });
+
+  it("still flags it when the pro-rata was voided", () => {
+    expect(unbilledMonths({ ...base, statements: [{ ...prorata, voided_at: "2026-11-02T00:00:00Z" }] }))
+      .toEqual([{ year: 2026, month: 11 }]);
+  });
+});

@@ -24,6 +24,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { unbilledMonths, backfillableRentMonths, RENT_BACKFILL_FLOOR, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
 import { computeRenewalSplitRentSegments, fetchRatePhasesByContract } from "@/lib/billing";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { fetchProrataCoverageByProposal } from "@/lib/renewal-chain";
 
 export type UnbilledCategory =
   | "current_cycle"
@@ -245,6 +246,7 @@ interface EligibleContract {
   created_at: string;
   activated_at: string | null;
   terminated_at: string | null;
+  proposal_id: string | null;
   lead_id: string | null;
   billing_cycle: string | null;
   subtotal: number | null;
@@ -345,7 +347,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   // an audit of history, so expired/terminated contracts must be included.
   const { data: contracts } = await supabase
     .from("contracts")
-    .select("id, contract_number, status, start_date, end_date, created_at, activated_at, terminated_at, lead_id, billing_cycle, subtotal, total_amount, phase_start_date, tax_percentage")
+    .select("id, contract_number, status, start_date, end_date, created_at, activated_at, terminated_at, proposal_id, lead_id, billing_cycle, subtotal, total_amount, phase_start_date, tax_percentage")
     .in("status", ["active", "renewal_in_progress", "renewed", "expired", "terminated"]);
 
   if (!contracts || contracts.length === 0) return [];
@@ -376,6 +378,12 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     list.push(s);
     statementsByContract.set(s.contract_id as string, list);
   }
+
+  // Rent the proposal collected before the contract existed (pro-rata / first month).
+  const prorataByProposal = await fetchProrataCoverageByProposal(
+    supabase,
+    eligible.map((c) => c.proposal_id as string).filter(Boolean),
+  );
 
   // Lead names, batched.
   const leadIds = [...new Set(eligible.map((c) => c.lead_id).filter(Boolean) as string[])];
@@ -417,7 +425,11 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   const rows: InternalRow[] = [];
   for (const c of eligible) {
     const chain = chainByContract.get(c.id) ?? [c.id];
-    const chainStatements = chain.flatMap((id) => statementsByContract.get(id) ?? []);
+    const chainStatements = [
+      ...chain.flatMap((id) => statementsByContract.get(id) ?? []),
+      // Own proposal only: an ancestor's pro-rata belongs to the ancestor's term.
+      ...(c.proposal_id ? (prorataByProposal.get(c.proposal_id) ?? []).map((s) => ({ ...s, contract_id: c.id })) : []),
+    ];
     const missing: BillingMonth[] = unbilledMonths({
       startDate: c.start_date,
       endDate: c.end_date,

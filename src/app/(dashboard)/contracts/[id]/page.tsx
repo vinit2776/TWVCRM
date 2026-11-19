@@ -1892,6 +1892,7 @@ export default function ContractDetailPage({
             contractId={id}
             billingMode={contract.billing_mode}
             contractStatus={contract.status}
+            proposalId={contract.proposal_id ?? undefined}
             billingCycle={contract.billing_cycle}
             nextBillingDate={contract.next_billing_date}
             startDate={contract.start_date}

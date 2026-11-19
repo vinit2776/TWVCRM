@@ -92,6 +92,9 @@ interface ContractInvoicesSectionProps {
   contractId: string;
   billingMode?: 'proforma_first' | 'gst_direct' | null;
   contractStatus?: string;
+  /** Proposal linked to this contract — its pro-rata invoice is rent the
+   *  contract never owned as a row, read here as coverage for the gap check. */
+  proposalId?: string;
   billingCycle?: string | null;
   nextBillingDate?: string | null;
   startDate?: string | null;
@@ -137,6 +140,7 @@ export function ContractInvoicesSection({
   contractId,
   billingMode,
   contractStatus,
+  proposalId,
   billingCycle,
   nextBillingDate,
   startDate,
@@ -155,6 +159,11 @@ export function ContractInvoicesSection({
     "Contract billing mode switched to GST Direct — clearing pending proforma."
   );
   const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [prorataStatement, setProrataStatement] = useState<Statement | null>(null);
+  // The gap check must not run before the pro-rata lookup lands — it would
+  // flash the start month as missed for a contract whose first month was
+  // collected through the proposal.
+  const [prorataLoaded, setProrataLoaded] = useState(!proposalId);
   const [cycleDialogOpen, setCycleDialogOpen] = useState(false);
   const [cyclePreviewing, setCyclePreviewing] = useState(false);
   const [cyclePreview, setCyclePreview] = useState<CyclePreview | null>(null);
@@ -194,6 +203,23 @@ export function ContractInvoicesSection({
       .catch(() => setUserRole(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractId]);
+
+  // The proposal's pro-rata invoice is a billing_statements row keyed by
+  // proposal_id, not contract_id — the contract didn't exist yet when it was
+  // sent. It is only read here as rent coverage for the missed-month check.
+  useEffect(() => {
+    if (!proposalId) {
+      setProrataStatement(null);
+      setProrataLoaded(true);
+      return;
+    }
+    setProrataLoaded(false);
+    fetch(`/api/billing-statements?proposal_id=${proposalId}&limit=1`)
+      .then((r) => r.json())
+      .then((d) => setProrataStatement(((d.data || []) as Statement[])[0] || null))
+      .catch(() => setProrataStatement(null))
+      .finally(() => setProrataLoaded(true));
+  }, [proposalId]);
 
   // Only this contract's own statements belong in the invoice table — an
   // ancestor's rows are fetched for the coverage check, not for display.
@@ -289,17 +315,22 @@ export function ContractInvoicesSection({
   // can be listed (and billed anyway) below; missedMonths then drops them.
   const unbilledIncludingWaived = useMemo(() => {
     // Until the statements arrive every past month looks unbilled — wait.
-    if (loading || !startDate || !endDate || !createdAt) return [];
+    if (loading || !prorataLoaded || !startDate || !endDate || !createdAt) return [];
+    // The proposal's pro-rata invoice is rent the contract never owned as a row
+    // (contract_id null) — count it unless it was voided or cancelled.
+    const prorataCoverage = prorataStatement && !prorataStatement.voided_at && !prorataStatement.pi_cancelled_at && prorataStatement.status !== "discarded"
+      ? [{ ...prorataStatement, contract_id: contractId }]
+      : [];
     return unbilledMonths({
       startDate, endDate, createdAt,
       today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      statements,
+      statements: [...statements, ...prorataCoverage],
       contractId,
       contractStatus,
       activatedAt,
       terminatedAt,
     });
-  }, [loading, startDate, endDate, createdAt, statements, contractId, contractStatus, activatedAt, terminatedAt]);
+  }, [loading, prorataLoaded, prorataStatement, startDate, endDate, createdAt, statements, contractId, contractStatus, activatedAt, terminatedAt]);
 
   const waiverByMonthKey = useMemo(
     () => new Map(waivers.map((w) => [w.waived_month.slice(0, 7), w])),
