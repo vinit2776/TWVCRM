@@ -43,6 +43,7 @@ import {
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
+import { groupInboxRows, cycleLabel, rowCycle, ONE_OFF_CYCLE, INBOX_GROUP_BY_OPTIONS, type InboxGroupBy } from "@/lib/inbox-grouping";
 import { InvoiceReasonStamp } from "./invoice-reason-stamp";
 import { invoiceReasonFor } from "@/lib/invoice-reason";
 import { AccountsNote } from "./accounts-note";
@@ -296,6 +297,21 @@ export function TallyInboxClient() {
   // discrepancy appearing) open on their own without clobbering a group the
   // user deliberately collapsed.
   const [groupOverrides, setGroupOverrides] = useState<Record<string, boolean>>({});
+  // How the open list is grouped. Remembered per browser; "action" is the default.
+  const [groupBy, setGroupByState] = useState<InboxGroupBy>("action");
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("tallyInbox.groupBy");
+      if (saved === "customer" || saved === "cycle" || saved === "none") setGroupByState(saved);
+    } catch { /* storage unavailable: keep the default */ }
+  }, []);
+  const setGroupBy = useCallback((g: InboxGroupBy) => {
+    setGroupByState(g);
+    try { window.localStorage.setItem("tallyInbox.groupBy", g); } catch { /* not remembered */ }
+  }, []);
+  // Click a cycle pill or a customer name to narrow the list to it.
+  const [focusCycle, setFocusCycle] = useState<string | null>(null);
+  const [focusCustomer, setFocusCustomer] = useState<string | null>(null);
   // Completion confirmations — kept visible until the user dismisses them,
   // even after the underlying row drops out of the "open" list.
   const [completions, setCompletions] = useState<CompletionInfo[]>([]);
@@ -890,6 +906,24 @@ export function TallyInboxClient() {
     return data.rows.filter((r) => r.bucket === tab && !r.has_discrepancy && !r.cancellation_requested_at);
   }, [data, tab]);
 
+  const focusedRows = useMemo(
+    () =>
+      visibleRows.filter((r) => {
+        if (focusCycle) {
+          const c = rowCycle(r);
+          if (focusCycle === ONE_OFF_CYCLE ? c !== null : c !== focusCycle) return false;
+        }
+        if (focusCustomer && partyDisplay(r) !== focusCustomer) return false;
+        return true;
+      }),
+    [visibleRows, focusCycle, focusCustomer],
+  );
+
+  const groupedByOther = useMemo(
+    () => (groupBy === "customer" || groupBy === "cycle" ? groupInboxRows(focusedRows, groupBy, partyDisplay) : []),
+    [focusedRows, groupBy],
+  );
+
   // Only meaningful on the "All open" tab, where rows needing five different
   // actions are otherwise interleaved by last-updated order. visibleRows is
   // already search-filtered (server-side), so grouping it directly keeps
@@ -897,11 +931,11 @@ export function TallyInboxClient() {
   const groupedRows = useMemo(() => {
     const map = new Map<ActionGroupKey, InboxRow[]>();
     for (const g of ACTION_GROUPS) map.set(g.key, []);
-    for (const row of visibleRows) {
+    for (const row of focusedRows) {
       map.get(getRowActionGroup(row))!.push(row);
     }
     return map;
-  }, [visibleRows]);
+  }, [focusedRows]);
 
   const visibleBookingRows = useMemo(() => {
     if (!data?.booking_rows) return [];
@@ -933,6 +967,8 @@ export function TallyInboxClient() {
       onCancelUpload={() => setExpandedId(null)}
       onGstinUpdated={() => void refreshRow(row.statement_id)}
       onRecordPayment={() => openPayDialog(row)}
+      onFocusCycle={setFocusCycle}
+      onFocusCustomer={setFocusCustomer}
       onCreditNoteUploaded={() => void load()}
       onViewHistory={() => setHistoryRow({ id: row.statement_id, statement_number: row.statement_number })}
       onQueryChanged={() => void refreshRow(row.statement_id)}
@@ -1039,7 +1075,28 @@ export function TallyInboxClient() {
         })}
 
         {/* Search — visible on all tabs but most useful on Closed */}
-        <div className="ml-auto relative">
+        <div className="ml-auto flex items-center gap-3 flex-wrap">
+        {activeType === "contracts" && tab !== "to_verify" && tab !== "closed" && (
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground">Group by</span>
+            <div className="inline-flex rounded-md border overflow-hidden" role="group" aria-label="Group by">
+              {INBOX_GROUP_BY_OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => setGroupBy(o.key)}
+                  aria-pressed={groupBy === o.key}
+                  className={`px-2.5 py-1.5 border-l first:border-l-0 ${
+                    groupBy === o.key ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="relative">
           <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
           <input
             type="text"
@@ -1059,7 +1116,26 @@ export function TallyInboxClient() {
             </button>
           )}
         </div>
+        </div>
       </div>
+
+      {(focusCycle || focusCustomer) && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Showing only</span>
+          {focusCycle && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-teal-900">
+              Cycle: {focusCycle === ONE_OFF_CYCLE ? "one-off" : cycleLabel(focusCycle, false)}
+              <button type="button" onClick={() => setFocusCycle(null)} aria-label="Clear cycle focus" className="rounded-full px-1 hover:bg-teal-100">×</button>
+            </span>
+          )}
+          {focusCustomer && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-teal-900">
+              Customer: {focusCustomer}
+              <button type="button" onClick={() => setFocusCustomer(null)} aria-label="Clear customer focus" className="rounded-full px-1 hover:bg-teal-100">×</button>
+            </span>
+          )}
+        </div>
+      )}
 
       {openNotice && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-start justify-between gap-3">
@@ -1085,7 +1161,7 @@ export function TallyInboxClient() {
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           Loading inbox…
         </div>
-      ) : (activeType === "contracts" ? visibleRows.length === 0 : visibleBookingRows.length === 0) ? (
+      ) : (activeType === "contracts" ? focusedRows.length === 0 : visibleBookingRows.length === 0) ? (
         <EmptyState tab={tab} totalOpen={activeStats.total_open} />
       ) : (
         <>
@@ -1098,7 +1174,7 @@ export function TallyInboxClient() {
           {completions.map((c) => (
             <CompletionBanner key={c.id} completion={c} onDismiss={() => dismissCompletion(c.id)} />
           ))}
-          {activeType === "contracts" && tab === "all" ? (
+          {activeType === "contracts" && tab === "all" && groupBy === "action" ? (
             <div className="space-y-2">
               {ACTION_GROUPS.map((g) => {
                 const rows = groupedRows.get(g.key) ?? [];
@@ -1129,9 +1205,51 @@ export function TallyInboxClient() {
                 );
               })}
             </div>
+          ) : activeType === "contracts" && tab !== "closed" && (groupBy === "customer" || groupBy === "cycle") ? (
+            <div className="space-y-2">
+              {groupedByOther.map((g) => {
+                const gk = `${g.kind}:${g.key}`;
+                const isOpen = groupOverrides[gk] ?? true;
+                return (
+                  <div key={gk} className="rounded-lg border bg-muted/30 p-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setGroupOverrides((prev) => ({ ...prev, [gk]: !isOpen }))}
+                      aria-expanded={isOpen}
+                      className="w-full flex items-center gap-2 py-1 text-left flex-wrap"
+                    >
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                        aria-hidden
+                      />
+                      <span className="text-sm font-semibold">{g.title}</span>
+                      {g.subtitle && <span className="font-mono text-[11px] text-muted-foreground">{g.subtitle}</span>}
+                      <span className="text-xs text-muted-foreground">
+                        {g.rows.length} invoice{g.rows.length === 1 ? "" : "s"}
+                      </span>
+                      {g.needs > 0 ? (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-blue-50 text-blue-900 border-blue-200">
+                          {g.needs} need{g.needs === 1 ? "s" : ""} you
+                        </span>
+                      ) : (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-muted text-muted-foreground">
+                          waiting on customer
+                        </span>
+                      )}
+                      <span className="ml-auto text-sm font-semibold tabular-nums">{formatCurrency(g.total)}</span>
+                    </button>
+                    {isOpen && (
+                      <ul className="mt-2 rounded-lg border overflow-hidden divide-y bg-background" role="list">
+                        {g.rows.map(renderStatementRow)}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <ul className="rounded-lg border overflow-hidden divide-y" role="list">
-              {activeType === "contracts" && visibleRows.map(renderStatementRow)}
+              {activeType === "contracts" && focusedRows.map(renderStatementRow)}
               {activeType === "bookings" && visibleBookingRows.map((row) => (
                 <BookingInboxRowItem
                   key={row.task_id}
@@ -1609,6 +1727,8 @@ const InboxRowItem = memo(function InboxRowItem({
   onCancelUpload,
   onGstinUpdated,
   onRecordPayment,
+  onFocusCycle,
+  onFocusCustomer,
   onViewHistory,
   onQueryChanged,
   currentUserRole,
@@ -1629,6 +1749,8 @@ const InboxRowItem = memo(function InboxRowItem({
   onCancelUpload: () => void;
   onGstinUpdated: () => void;
   onRecordPayment: () => void;
+  onFocusCycle?: (cycle: string) => void;
+  onFocusCustomer?: (customer: string) => void;
   onViewHistory: () => void;
   onQueryChanged: () => void;
   currentUserRole: string;
@@ -1811,9 +1933,35 @@ const InboxRowItem = memo(function InboxRowItem({
             </span>
           )}
           <InvoiceReasonStamp reason={invoiceReasonFor(row)} />
-          <span className="font-medium text-sm truncate">{partyDisplay(row)}</span>
+          <button
+            type="button"
+            onClick={() => onFocusCustomer?.(partyDisplay(row))}
+            title="Show only this customer"
+            className="font-medium text-sm truncate text-left hover:underline"
+          >
+            {partyDisplay(row)}
+          </button>
         </div>
         <div className="text-right">
+          {rowCycle(row) ? (
+            <button
+              type="button"
+              onClick={() => onFocusCycle?.(rowCycle(row)!)}
+              title={`Billing cycle ${cycleLabel(rowCycle(row)!, false)} — click to show only this cycle`}
+              className="mb-1 inline-block rounded-md bg-primary px-2.5 py-0.5 text-xs font-semibold tracking-wide text-primary-foreground hover:opacity-90"
+            >
+              {cycleLabel(rowCycle(row)!, true)}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onFocusCycle?.(ONE_OFF_CYCLE)}
+              title="No billing cycle — click to show only one-off invoices"
+              className="mb-1 inline-block rounded-md border border-violet-300 bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-900 hover:bg-violet-100"
+            >
+              One-off{row.statement_created_at ? ` · ${formatDate(row.statement_created_at)}` : ""}
+            </button>
+          )}
           <div className="font-medium tabular-nums text-sm">
             {formatCurrency(row.statement_total_amount)}
           </div>

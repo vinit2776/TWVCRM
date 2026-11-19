@@ -94,6 +94,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   const oldInvoiceNumber = row.latest_upload?.tally_invoice_number ?? "";
   const [replaceReason, setReplaceReason] = useState("");
   const [confirmStep, setConfirmStep] = useState(false);
+  // Unpaid uploads email the customer the moment they are saved, so they get a review step first.
+  const [sendStep, setSendStep] = useState(false);
   const [confirmNumber, setConfirmNumber] = useState("");
   const [confirmTick, setConfirmTick] = useState(false);
   // What the customer will be emailed on replace — same builder as the resend route.
@@ -304,6 +306,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit || !pdfFile) return;
+    if (uploadEmailsNow && !sendStep) { setSendStep(true); return; }
     if (replaceSent && !confirmStep) { setConfirmStep(true); return; }
     if (replaceSent && !confirmOk) return;
     setSubmitting(true);
@@ -849,6 +852,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
           onChange={(e) => {
             const f = e.target.files?.[0] ?? null;
             setPdfFile(f);
+            setSendStep(false);
             setNameFoundOnPdf(null);
             setGstinFoundOnPdf(null);
             setTextReadable(true);
@@ -967,17 +971,18 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
         </div>
       )}
 
-      {uploadEmailsNow && (
-        <div className="space-y-1">
-          <div className="text-xs text-muted-foreground">
-            This upload emails the customer immediately. Check what they will receive:
-          </div>
-          <CustomerEmailPreview preview={uploadPreview} heading="Email sent on Upload & Send" />
+      {uploadEmailsNow && sendStep && (
+        <div className="rounded border-2 border-teal-300 bg-teal-50/50 p-3 text-xs space-y-2">
+          <div className="font-semibold text-foreground">Step 2 of 2 — check what the customer will receive</div>
+          <p className="text-muted-foreground">
+            Saving this invoice emails it to the customer straight away. Nothing has been sent yet.
+          </p>
+          <CustomerEmailPreview preview={uploadPreview} heading="Email sent when you confirm" />
         </div>
       )}
       {!replace && row.payment_status === "paid" && (
         <div className="text-xs text-muted-foreground">
-          Nothing is emailed on upload for a paid statement. You will see the customer email before it is sent.
+          Nothing is emailed on upload for a paid statement. You will see the customer email in the Send step before it goes out.
         </div>
       )}
 
@@ -996,6 +1001,16 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
         >
           Cancel
         </button>
+        {uploadEmailsNow && sendStep && (
+          <button
+            type="button"
+            onClick={() => setSendStep(false)}
+            disabled={submitting}
+            className="px-3 py-1.5 text-xs rounded border hover:bg-muted disabled:opacity-50"
+          >
+            Back
+          </button>
+        )}
         {replaceSent && confirmStep && (
           <button
             type="button"
@@ -1012,7 +1027,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel, replace = fals
           className="px-3 py-1.5 text-xs rounded bg-foreground text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
         >
           {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-          {submitting ? "Uploading & sending…" : replaceSent ? (confirmStep ? "Confirm and replace" : "Review replacement") : replace ? "Replace invoice" : "Upload & Send"}
+          {submitting ? "Uploading & sending…" : replaceSent ? (confirmStep ? "Confirm and replace" : "Review replacement") : uploadEmailsNow ? (sendStep ? "Confirm and send" : "Review email") : replace ? "Replace invoice" : "Upload invoice"}
         </button>
       </div>
     </form>
