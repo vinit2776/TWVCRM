@@ -1514,7 +1514,7 @@ export function generateMembershipAgreementPDF(
     ["14", "Payment Due Upon Signing",
       "\u2022 Interest Free Refundable Security Deposit\n" +
       "\u2022 1st month's pro-rata Monthly Membership Fees\n" +
-      "\u2022 GST Registration fee of Rs. 20,000 plus GST"],
+      "\u2022 GST registration NOC will be charged at Rs 20000 + GST and any other GST registration services will be extra as applicable."],
     ["15", "Move In Formalities",
       "\u2022 Signing of Membership Agreement\n" +
       "\u2022 KYC of Member and its Employees/Agents/Representatives using the Work Space."],
