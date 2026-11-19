@@ -9,7 +9,7 @@ import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE, CONTRACT_PRE_ACTIVATION_STATUSES, canWithdrawContract } from "@/lib/constants";
 import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
-import { renewalChainContractIds } from "@/lib/renewal-chain";
+import { renewalChainContractIds, fetchProrataCoverageByProposal } from "@/lib/renewal-chain";
 import { getRenewalProrataGate, PRORATA_UNSENT_ERROR } from "@/lib/renewal-prorata";
 import { setUserActive } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, siteConfigForStoredVoucher, buildVoucherNote, isUnifiLocation } from "@/lib/unifi";
@@ -702,13 +702,16 @@ export async function PATCH(
         .from("billing_statements")
         .select("contract_id, billed_on_behalf_of_contract_id, statement_type, period_start, period_end, prepaid_month, prepaid_year, voided_at")
         .in("contract_id", chain);
+      const prorata = oldContract.proposal_id
+        ? (await fetchProrataCoverageByProposal(admin, [oldContract.proposal_id as string])).get(oldContract.proposal_id as string) ?? []
+        : [];
 
       const missing = unbilledMonths({
         startDate: oldContract.start_date as string,
         endDate: oldContract.end_date as string,
         createdAt: oldContract.created_at as string,
         today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
-        statements: (existing ?? []) as RentCoverage[],
+        statements: [...((existing ?? []) as RentCoverage[]), ...prorata.map((s) => ({ ...s, contract_id: id }))],
         contractId: id,
         contractStatus: oldContract.status as string,
       });
