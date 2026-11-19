@@ -181,6 +181,11 @@ export function ContractProposalCommercialsSection({ contractId, proposal, contr
                   <span>Paid {formatDate(proposal.payment_received_at)}</span>
                 )}
               </p>
+            ) : proposalFirstPaid ? (
+              <p className="text-xs text-muted-foreground">
+                Paid via proposal
+                {proposal?.payment_received_at && `, ${formatDate(proposal.payment_received_at)}`}. No invoice document on file.
+              </p>
             ) : (
               <p className="text-xs text-muted-foreground">Not yet invoiced</p>
             )}
