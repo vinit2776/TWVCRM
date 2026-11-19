@@ -165,42 +165,48 @@ function paymentStatusBadge(status: string): { label: string; cls: string } {
  */
 type ActionGroupKey = "cancel_credit_note" | "discrepancy" | "upload_gst" | "send_to_customer" | "record_payment" | "mark_accounted";
 
-const ACTION_GROUPS: { key: ActionGroupKey; title: string; caption: string; wrapCls: string }[] = [
+const ACTION_GROUPS: { key: ActionGroupKey; title: string; caption: string; wrapCls: string; headCls: string }[] = [
   {
     key: "cancel_credit_note",
     title: "Cancellations — upload credit note",
     caption: "An admin or manager asked to cancel these GST invoices. Issue the credit note in Tally and upload it here.",
-    wrapCls: "bg-red-50 border-red-300",
+    wrapCls: "bg-red-50 border-red-400",
+    headCls: "bg-red-800",
   },
   {
     key: "discrepancy",
     title: "Discrepancies to resolve",
     caption: "Amount, name, or GST number doesn't match what Tally expects. Always cleared first.",
-    wrapCls: "bg-red-50/60 border-red-200",
+    wrapCls: "bg-red-50 border-red-300",
+    headCls: "bg-red-700",
   },
   {
     key: "upload_gst",
     title: "Upload GST invoice",
     caption: "Payment's in, or GST was requested direct — issue the invoice in Tally and upload it here.",
-    wrapCls: "bg-blue-50/60 border-blue-200",
+    wrapCls: "bg-blue-50 border-blue-300",
+    headCls: "bg-blue-700",
   },
   {
     key: "send_to_customer",
     title: "Send to customer",
     caption: "GST invoice is uploaded and name-matched — one click sends it on.",
-    wrapCls: "bg-violet-50/60 border-violet-200",
+    wrapCls: "bg-violet-50 border-violet-300",
+    headCls: "bg-violet-700",
   },
   {
     key: "record_payment",
     title: "Record payment",
     caption: "Customer already has the invoice. Bank statement in hand? Log it here.",
-    wrapCls: "bg-amber-50/60 border-amber-200",
+    wrapCls: "bg-amber-50 border-amber-300",
+    headCls: "bg-amber-700",
   },
   {
     key: "mark_accounted",
     title: "Mark as accounted",
     caption: "GST already sent and payment already collected via the PI — just needs closing out.",
-    wrapCls: "bg-green-50/60 border-green-200",
+    wrapCls: "bg-green-50 border-green-300",
+    headCls: "bg-green-700",
   },
 ];
 
@@ -1181,21 +1187,25 @@ export function TallyInboxClient() {
                 if (rows.length === 0) return null;
                 const isOpen = groupOverrides[g.key] ?? true;
                 return (
-                  <div key={g.key} className={`rounded-lg border p-2.5 ${g.wrapCls}`}>
+                  <div key={g.key} className={`rounded-lg border-2 p-2.5 ${g.wrapCls}`}>
+                    {/* Pinned within its section while scrolling; the next group's header pushes it off. */}
                     <button
                       type="button"
                       onClick={() => setGroupOverrides((prev) => ({ ...prev, [g.key]: !isOpen }))}
                       aria-expanded={isOpen}
-                      className="w-full flex items-baseline gap-2 py-1 text-left"
+                      className={`sticky top-0 z-10 w-full flex items-center gap-2 rounded-md px-3 py-2 text-left text-white shadow-sm ${g.headCls}`}
                     >
                       <span className="text-sm font-semibold">{g.title}</span>
-                      <span className="text-xs text-muted-foreground">({rows.length})</span>
+                      <span className="text-xs text-white/80">({rows.length})</span>
+                      <span className="ml-auto text-sm font-semibold tabular-nums">
+                        {formatCurrency(rows.reduce((sum, r) => sum + Number(r.statement_total_amount || 0), 0))}
+                      </span>
                       <ChevronDown
-                        className={`h-3.5 w-3.5 ml-auto text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                        className={`h-4 w-4 flex-shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
                         aria-hidden
                       />
                     </button>
-                    <p className="text-xs text-muted-foreground mb-2">{g.caption}</p>
+                    <p className="text-xs text-muted-foreground my-2">{g.caption}</p>
                     {isOpen && (
                       <ul className="rounded-lg border overflow-hidden divide-y bg-background" role="list">
                         {rows.map(renderStatementRow)}
@@ -1211,28 +1221,28 @@ export function TallyInboxClient() {
                 const gk = `${g.kind}:${g.key}`;
                 const isOpen = groupOverrides[gk] ?? true;
                 return (
-                  <div key={gk} className="rounded-lg border bg-muted/30 p-2.5">
+                  <div key={gk} className="rounded-lg border-2 border-slate-300 bg-slate-50 p-2.5">
                     <button
                       type="button"
                       onClick={() => setGroupOverrides((prev) => ({ ...prev, [gk]: !isOpen }))}
                       aria-expanded={isOpen}
-                      className="w-full flex items-center gap-2 py-1 text-left flex-wrap"
+                      className="sticky top-0 z-10 w-full flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-left text-primary-foreground shadow-sm flex-wrap"
                     >
                       <ChevronDown
-                        className={`h-3.5 w-3.5 text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                        className={`h-4 w-4 flex-shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
                         aria-hidden
                       />
                       <span className="text-sm font-semibold">{g.title}</span>
-                      {g.subtitle && <span className="font-mono text-[11px] text-muted-foreground">{g.subtitle}</span>}
-                      <span className="text-xs text-muted-foreground">
+                      {g.subtitle && <span className="font-mono text-[11px] text-primary-foreground/80">{g.subtitle}</span>}
+                      <span className="text-xs text-primary-foreground/80">
                         {g.rows.length} invoice{g.rows.length === 1 ? "" : "s"}
                       </span>
                       {g.needs > 0 ? (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-blue-50 text-blue-900 border-blue-200">
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-white text-blue-900 font-medium">
                           {g.needs} need{g.needs === 1 ? "s" : ""} you
                         </span>
                       ) : (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-muted text-muted-foreground">
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/20 text-primary-foreground">
                           waiting on customer
                         </span>
                       )}
