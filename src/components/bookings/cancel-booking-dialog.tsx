@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
+import { decidePrepaidRestore, hoursBeforeStart } from "@/lib/prepaid";
 import {
   BOOKING_CANCELLATION_REASONS,
   BOOKING_CANCELLATION_REASON_LABELS,
@@ -70,6 +71,35 @@ export function CancelBookingDialog({
 
   const [submitting, setSubmitting] = useState(false);
 
+  // Package credits: what happens to them if this booking is cancelled now
+  const [packageWindow, setPackageWindow] = useState<number | null | undefined>(undefined);
+  const [canOverride, setCanOverride] = useState(false);
+  const [overrideOn, setOverrideOn] = useState(false);
+  const [overrideRestore, setOverrideRestore] = useState(true);
+  const [overrideReason, setOverrideReason] = useState("");
+
+  useEffect(() => {
+    if (!open || !booking.prepaid_purchase_id) { setPackageWindow(undefined); return; }
+    let ignore = false;
+    fetch(`/api/prepaid-purchases/${booking.prepaid_purchase_id}`)
+      .then((r) => r.json())
+      .then((j) => { if (!ignore) setPackageWindow(j.data?.cancellation_window_hours == null ? null : Number(j.data.cancellation_window_hours)); })
+      .catch(() => { if (!ignore) setPackageWindow(undefined); });
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((j) => { if (!ignore) setCanOverride(["admin", "manager"].includes(j.role)); })
+      .catch(() => { if (!ignore) setCanOverride(false); });
+    return () => { ignore = true; };
+  }, [open, booking.prepaid_purchase_id]);
+
+  const packageDecision = packageWindow === undefined
+    ? null
+    : decidePrepaidRestore({
+        trigger: "cancel",
+        hoursBeforeStart: hoursBeforeStart(booking.booking_date, booking.start_time),
+        windowHours: packageWindow,
+      });
+
   // Reset everything whenever the dialog opens
   useEffect(() => {
     if (!open) return;
@@ -81,6 +111,9 @@ export function CancelBookingDialog({
     setRefundEligible(null);
     setRefundDetails("");
     setRefundReason("centre_at_fault");
+    setOverrideOn(false);
+    setOverrideRestore(true);
+    setOverrideReason("");
 
     // Pre-fill the refund amount with the verified-payment total — staff
     // can edit down for partial refunds.
@@ -154,6 +187,10 @@ export function CancelBookingDialog({
           severity: cautionSeverity,
         };
       }
+      if (overrideOn && packageDecision) {
+        if (!overrideReason.trim()) { toast.error("Enter a reason for the package credit override"); return; }
+        body.prepaid_restore_override = { restore: overrideRestore, reason: overrideReason.trim() };
+      }
       if (refundEligible === "yes") {
         body.refund_request = {
           amount: parseFloat(refundAmount),
@@ -178,6 +215,8 @@ export function CancelBookingDialog({
       if (json.refund_request_id) bits.push("refund request submitted");
       if (json.caution_created) bits.push("caution added to customer profile");
       if (json.gst_invoice_required) bits.push("flagged for GST invoice");
+      if (json.prepaid?.outcome === "restored") bits.push(`${json.prepaid.creditsRestored} package credit(s) restored`);
+      if (json.prepaid?.outcome === "forfeited") bits.push("package credits not restored");
       toast.success(
         `Booking cancelled${bits.length ? ` — ${bits.join(" · ")}` : ""}`
       );
@@ -299,6 +338,43 @@ export function CancelBookingDialog({
               </div>
             )}
           </div>
+
+          {/* Package credits — restored or forfeited by the package's cancellation window */}
+          {packageDecision && (
+            <div className="space-y-2 rounded-md border p-3">
+              <p className="text-sm font-medium">Package credits</p>
+              <p className={`text-sm ${(overrideOn ? overrideRestore : packageDecision.restore) ? "text-green-700" : "text-red-700"}`}>
+                {overrideOn
+                  ? (overrideRestore ? "Credits will be restored (manager override)." : "Credits will not be restored (manager override).")
+                  : (packageDecision.restore ? "Credits will be restored. " : "Credits will not be restored. ") + packageDecision.reason + "."}
+              </p>
+              {canOverride && (
+                <>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={overrideOn} onChange={(e) => { setOverrideOn(e.target.checked); setOverrideRestore(!packageDecision.restore); }} />
+                    Override this decision
+                  </label>
+                  {overrideOn && (
+                    <div className="space-y-2">
+                      <div className="flex gap-2">
+                        {[true, false].map((v) => (
+                          <button
+                            key={String(v)}
+                            type="button"
+                            onClick={() => setOverrideRestore(v)}
+                            className={`flex-1 rounded-md border px-3 py-1.5 text-sm ${overrideRestore === v ? "border-primary bg-primary/5" : "border-border"}`}
+                          >
+                            {v ? "Restore credits" : "Do not restore"}
+                          </button>
+                        ))}
+                      </div>
+                      <Input value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} placeholder="Reason for the override (required)" />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {/* Refund branch — only when payment was collected */}
           {hasCollectedPayment && (

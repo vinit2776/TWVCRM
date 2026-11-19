@@ -140,6 +140,20 @@ export async function POST(
     }
   }
 
+  // Manager override of the package restore rule. Reason is mandatory and is
+  // stored on the audit record the statement of account reads from.
+  let prepaidOverride: { restore: boolean; reason: string } | undefined;
+  if (body.prepaid_restore_override) {
+    const reasonText = String(body.prepaid_restore_override.reason ?? "").trim();
+    if (!canManage) {
+      return NextResponse.json({ error: "Only admins and managers can override package credit restore" }, { status: 403 });
+    }
+    if (!reasonText) {
+      return NextResponse.json({ error: "A reason is required to override package credit restore" }, { status: 400 });
+    }
+    prepaidOverride = { restore: body.prepaid_restore_override.restore === true, reason: reasonText };
+  }
+
   // ── 2. Update booking ───────────────────────────────────────────
   // gst_invoice_required is set when payment was kept (no refund) so
   // finance can see this on their queue.
@@ -176,6 +190,8 @@ export async function POST(
     bookingDate: booking.booking_date,
     startTime: booking.start_time,
     endTime: booking.end_time,
+  }, {
+    prepaid: { trigger: "cancel", actorId: dbUser.id, override: prepaidOverride },
   });
 
   // ── 4. Optional lead caution ────────────────────────────────────
@@ -253,5 +269,6 @@ export async function POST(
     // Ruijie codes released but NOT switched off (no revocation API). Staff
     // must be told, or they'll assume cancelling cut the guest's internet.
     vouchers_still_live: sideEffects.vouchersStillLive,
+    prepaid: sideEffects.prepaid ?? null,
   });
 }

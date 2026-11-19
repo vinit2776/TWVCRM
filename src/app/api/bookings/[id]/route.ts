@@ -967,7 +967,7 @@ export async function PATCH(
           bookingDate: booking.booking_date,
           startTime: booking.start_time,
           endTime: booking.end_time,
-        });
+        }, { prepaid: { trigger: "cancel", actorId: dbUser.id } });
         break;
       }
 
@@ -998,7 +998,7 @@ export async function PATCH(
           bookingDate: booking.booking_date,
           startTime: booking.start_time,
           endTime: booking.end_time,
-        }, { skipWaitlistOffer: true });
+        }, { skipWaitlistOffer: true, prepaid: { trigger: "no_show", actorId: dbUser.id } });
         break;
       }
 

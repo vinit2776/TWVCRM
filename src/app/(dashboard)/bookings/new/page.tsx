@@ -471,7 +471,7 @@ function NewBookingForm() {
     if (!hasPrepaidTarget) { setActivePurchase(null); return; }
     let cancelled = false;
     setPrepaidChecking(true);
-    const params = new URLSearchParams({ space_id: debouncedSpaceId });
+    const params = new URLSearchParams({ space_id: debouncedSpaceId, booking_date: debouncedBookingDate });
     if (debouncedLeadId) params.set("lead_id", debouncedLeadId);
     if (debouncedGuestCompany) params.set("company_name", debouncedGuestCompany);
     fetch(`/api/prepaid-purchases/check?${params}`)
@@ -482,7 +482,7 @@ function NewBookingForm() {
       .catch(() => { if (!cancelled) setActivePurchase(null); })
       .finally(() => { if (!cancelled) setPrepaidChecking(false); });
     return () => { cancelled = true; };
-  }, [debouncedLeadId, debouncedGuestCompany, debouncedSpaceId]);
+  }, [debouncedLeadId, debouncedGuestCompany, debouncedSpaceId, debouncedBookingDate]);
 
   // Contracts
   useEffect(() => {
