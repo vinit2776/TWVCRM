@@ -12,10 +12,13 @@ import { CONTRACT_QUOTA_LOCKED_STATUSES } from "@/lib/constants";
 const MEDIUM_LABELS: Record<string, string> = {
   neft: "NEFT",
   rtgs: "RTGS",
+  imps: "IMPS",
+  bank_transfer: "Bank transfer",
   upi: "UPI",
   cheque: "Cheque",
   cash: "Cash",
   razorpay: "Razorpay",
+  other: "Other",
 };
 
 const PAID_CLASS = "bg-green-50 text-green-700 border-green-200";
