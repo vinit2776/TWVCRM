@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isPrepaidApplicableToSpace, escapeLike } from "@/lib/prepaid";
 
 /**
  * GET /api/prepaid-purchases/check
@@ -48,17 +49,11 @@ export async function GET(request: NextRequest) {
     companyFromLead = lead?.company || null;
   }
 
-  // Fetch all active, non-expired purchases for this customer / company
-  const orFilters: string[] = [];
-  if (leadId) orFilters.push(`lead_id.eq.${leadId}`);
-  if (companyFromLead) orFilters.push(`company_name.ilike.${companyFromLead}`);
-  if (companyName && companyName !== companyFromLead) orFilters.push(`company_name.ilike.${companyName}`);
-
-  if (orFilters.length === 0) {
-    return NextResponse.json({ data: null });
-  }
-
-  const { data: purchases, error } = await supabase
+  // Fetch all active, paid, non-expired purchases for this lead, plus any bought
+  // for their company. Queried separately so company names are matched literally
+  // (a comma, bracket or % in a name must not alter the filter).
+  const companyNames = [companyFromLead, companyName].filter((n): n is string => !!n && n.trim() !== "");
+  const usable = () => supabase
     .from("prepaid_purchases")
     .select(`
       *,
@@ -66,26 +61,32 @@ export async function GET(request: NextRequest) {
     `)
     .eq("status", "active")
     .eq("payment_status", "paid")
-    .gte("expires_at", today)
-    .or(orFilters.join(","))
-    .order("expires_at", { ascending: true }); // soonest to expire first (FIFO)
+    .gte("expires_at", today);
+
+  const lookups = [
+    ...(leadId ? [usable().eq("lead_id", leadId)] : []),
+    ...companyNames.map((n) => usable().ilike("company_name", escapeLike(n.trim()))),
+  ];
+  if (lookups.length === 0) return NextResponse.json({ data: null });
+
+  const results = await Promise.all(lookups);
+  const error = results.find((r) => r.error)?.error;
+  const byId = new Map<string, NonNullable<(typeof results)[number]["data"]>[number]>();
+  for (const r of results) for (const row of r.data ?? []) byId.set(row.id, row);
+  // soonest to expire first (FIFO)
+  const purchases = [...byId.values()].sort((x, y) => String(x.expires_at).localeCompare(String(y.expires_at)));
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // Filter by workspace_type compatibility
-  const spaceWorkspaceType = space?.workspace_type;
 
   const compatible = (purchases || []).filter((p) => {
     const creditsRemaining = Number(p.total_credits) - Number(p.credits_used);
     if (creditsRemaining <= 0) return false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pkg = p.package as any;
-    const pkgWorkspaceType = pkg?.workspace_type;
-    // Package applies if it has no workspace_type restriction OR matches the space's type
-    if (pkgWorkspaceType && spaceWorkspaceType && pkgWorkspaceType !== spaceWorkspaceType) return false;
-    // Gap 1: if package is bound to a specific space, it must match exactly
-    const pkgSpaceId = pkg?.space_id;
-    if (pkgSpaceId && pkgSpaceId !== spaceId) return false;
+    if (!space) return false;
+    if (!isPrepaidApplicableToSpace(pkg, space)) return false;
     return true;
   });
 
