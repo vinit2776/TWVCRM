@@ -92,6 +92,10 @@ interface ContractInvoicesSectionProps {
   contractId: string;
   billingMode?: 'proforma_first' | 'gst_direct' | null;
   contractStatus?: string;
+  /** The proposal this contract came from. Its pro-rata invoice has no contract_id,
+   *  so it is fetched separately and counted toward rent coverage only — it is
+   *  listed in the Proposal commercials card, not in this table. */
+  proposalId?: string;
   billingCycle?: string | null;
   nextBillingDate?: string | null;
   startDate?: string | null;
@@ -137,6 +141,7 @@ export function ContractInvoicesSection({
   contractId,
   billingMode,
   contractStatus,
+  proposalId,
   billingCycle,
   nextBillingDate,
   startDate,
@@ -147,6 +152,8 @@ export function ContractInvoicesSection({
 }: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
+  const [proposalCoverage, setProposalCoverage] = useState<Statement[]>([]);
+  const [proposalCoverageLoaded, setProposalCoverageLoaded] = useState(!proposalId);
   const [savingMode, setSavingMode] = useState(false);
   const [currentMode, setCurrentMode] = useState<'proforma_first' | 'gst_direct'>(billingMode || 'proforma_first');
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -194,6 +201,26 @@ export function ContractInvoicesSection({
       .catch(() => setUserRole(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractId]);
+
+  // The proposal's pro-rata invoice is raised before the contract exists, so
+  // it carries no contract_id and the fetch above never returns it. It still
+  // bills a real month's rent (the first, partial one), so it must count as
+  // coverage — otherwise a paid first month is reported as "no rent invoiced".
+  useEffect(() => {
+    if (!proposalId) {
+      setProposalCoverage([]);
+      setProposalCoverageLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    setProposalCoverageLoaded(false);
+    fetch(`/api/billing-statements?proposal_id=${proposalId}&limit=10`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setProposalCoverage((d.data || []) as Statement[]); })
+      .catch(() => { if (!cancelled) setProposalCoverage([]); })
+      .finally(() => { if (!cancelled) setProposalCoverageLoaded(true); });
+    return () => { cancelled = true; };
+  }, [proposalId]);
 
   // Only this contract's own statements belong in the invoice table — an
   // ancestor's rows are fetched for the coverage check, not for display.
@@ -289,17 +316,17 @@ export function ContractInvoicesSection({
   // can be listed (and billed anyway) below; missedMonths then drops them.
   const unbilledIncludingWaived = useMemo(() => {
     // Until the statements arrive every past month looks unbilled — wait.
-    if (loading || !startDate || !endDate || !createdAt) return [];
+    if (loading || !proposalCoverageLoaded || !startDate || !endDate || !createdAt) return [];
     return unbilledMonths({
       startDate, endDate, createdAt,
       today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      statements,
+      statements: [...statements, ...proposalCoverage],
       contractId,
       contractStatus,
       activatedAt,
       terminatedAt,
     });
-  }, [loading, startDate, endDate, createdAt, statements, contractId, contractStatus, activatedAt, terminatedAt]);
+  }, [loading, proposalCoverageLoaded, startDate, endDate, createdAt, statements, proposalCoverage, contractId, contractStatus, activatedAt, terminatedAt]);
 
   const waiverByMonthKey = useMemo(
     () => new Map(waivers.map((w) => [w.waived_month.slice(0, 7), w])),
