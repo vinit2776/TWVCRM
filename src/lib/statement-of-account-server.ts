@@ -233,11 +233,14 @@ export function buildStatementOfAccountPdf({ ledger, party }: SoaResult): Buffer
     ctx.y += 5;
   }
 
-  // Pinned just above the footer band so it never spills onto a page of its own.
+  // Pinned just above the footer band; make room first so it never overprints the last rows.
+  ctx.checkPageBreak(14);
   doc.setFont("helvetica", "italic");
   doc.setFontSize(7.5);
   doc.setTextColor(110, 110, 110);
-  doc.text("Lists invoices and proforma invoices issued to you, and payments received. Cancelled and withdrawn documents are omitted.", 15, doc.internal.pageSize.getHeight() - 18);
+  const noteY = doc.internal.pageSize.getHeight() - 18;
+  doc.text("Lists invoices and proforma invoices issued to you, and payments received. Cancelled and withdrawn documents are omitted.", 15, noteY - 4);
+  doc.text("This is a system-generated statement. Any discrepancy must be reported within 3 working days of receipt.", 15, noteY);
   addFooter(doc);
   return Buffer.from(doc.output("arraybuffer"));
 }
