@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useMemo, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, SlidersHorizontal, Phone, CalendarDays, BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,12 +41,27 @@ import { ToursView } from "@/components/leads/tours-view";
 import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import type { TourGroup } from "@/lib/tours";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import { LeadsViewTabs } from "@/components/leads/leads-view-tabs";
+import { leadsViewHref, parseLeadsView, type LeadsView } from "@/lib/leads-views";
 
-type LeadsTab = "enquiries" | "replies" | "followups" | "tours" | "all" | "whatsapp";
-
+// useSearchParams needs a Suspense boundary above it or the page cannot be prerendered.
 export default function LeadsPage() {
+  return (
+    <Suspense fallback={null}>
+      <LeadsPageContent />
+    </Suspense>
+  );
+}
+
+function LeadsPageContent() {
   const router = useRouter();
-  const [page, setPage] = useState(1);
+  const searchParams = useSearchParams();
+  // The view lives in the URL (?view=), so a view can be linked to and the back button returns to it.
+  const tab = parseLeadsView(searchParams.get("view"));
+  // The page number belongs to the view it was set in; another view starts again at page 1.
+  const [pageState, setPageState] = useState<{ view: LeadsView; page: number }>({ view: tab, page: 1 });
+  const page = pageState.view === tab ? pageState.page : 1;
+  const setPage = (next: number) => setPageState({ view: tab, page: next });
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
@@ -57,7 +72,6 @@ export default function LeadsPage() {
   const [showDisabled, setShowDisabled] = useState(false);
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [tab, setTab] = useState<LeadsTab>("all");
   const [followupSummary, setFollowupSummary] = useState<FollowupSummary | null>(null);
   // Tours waiting for someone to say what happened, for the tab's badge.
   const [tourCounts, setTourCounts] = useState<Record<TourGroup, number> | null>(null);
@@ -164,15 +178,14 @@ export default function LeadsPage() {
     setPage(1);
   };
 
-  const switchTab = (next: LeadsTab) => {
-    setTab(next);
-    setPage(1);
+  const switchTab = (next: LeadsView) => {
+    router.push(leadsViewHref(next));
   };
 
   // The follow-ups tab lists only leads with an overdue/due-today follow-up, but still
   // within whatever filters are applied — clear them so nothing hides the leads that need action.
   const handleReviewOverdue = () => {
-    setTab("followups");
+    switchTab("followups");
     setStatusFilter("");
     setSourceFilter([]);
     setLocationFilter(null);
@@ -220,8 +233,10 @@ export default function LeadsPage() {
       </div>
 
       {/* ── View tabs: new enquiries stay discoverable instead of competing with the follow-up backlog ── */}
-      <div className="flex flex-wrap gap-2">
-        {([
+      <LeadsViewTabs
+        active={tab}
+        onSelect={switchTab}
+        tabs={[
           { key: "enquiries", label: "New", count: activeCount, tone: "bg-emerald-500 text-white" },
           { key: "replies", label: "Replies", count: replyCounts?.mine ?? 0, tone: "bg-blue-600 text-white" },
           {
@@ -233,25 +248,8 @@ export default function LeadsPage() {
           { key: "tours", label: "Tours", count: tourCounts?.needs_update ?? 0, tone: "bg-violet-600 text-white" },
           { key: "all", label: "All leads", count: 0, tone: "" },
           { key: "whatsapp", label: "WhatsApp log", count: 0, tone: "" },
-        ] as const).map((t) => (
-          <button
-            key={t.key}
-            onClick={() => switchTab(t.key)}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors ${
-              tab === t.key
-                ? "bg-foreground text-background border-foreground"
-                : "text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            {t.label}
-            {t.count > 0 && (
-              <span className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold ${t.tone}`}>
-                {t.count}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+        ]}
+      />
 
       {tab === "enquiries" && <EnquiryTracker />}
 
