@@ -234,7 +234,7 @@ export async function POST(
         // dropping it made the copy read as the parent's own rent.
         billed_on_behalf_of_contract_id: statement.billed_on_behalf_of_contract_id ?? null,
         status: "draft",
-        // Parsed by view-statement-dialog to show the reason collapsed — keep the shape.
+        // Parsed by parseReissueNote (src/lib/void-note.ts) — keep the shape in sync.
         notes: `Replaces voided ${statement.statement_number || statement.gst_invoice_number || id.slice(0, 8)}.\nVoid reason: ${voidReason}`,
         created_by: dbUser.id,
         voided_statement_id: id, // back-reference to the voided original
