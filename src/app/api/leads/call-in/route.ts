@@ -9,7 +9,9 @@ import { istLocalToUtcIso } from "@/lib/utils";
 
 const bodySchema = z
   .object({
-    location_ids: z.array(z.string().uuid()).min(1, "Pick at least one location"),
+    location_ids: z.array(z.string().uuid()),
+    /** A place we have no centre in (or none of the listed ones): kept in the call's history, not on the lead's location. */
+    other_location: z.string().trim().max(120).optional(),
     workspace_types: z.array(z.enum(WORKSPACE_TYPES)).min(1, "Pick what they are looking for"),
     seats: z.number().int().min(1, "How many seats?"),
     start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -28,6 +30,10 @@ const bodySchema = z
     pin: z.boolean().optional(),
     /** Contacting back a public-form enquiry: its lead takes the confirmed details and the saver claims it. */
     enquiry_id: z.string().uuid().optional(),
+  })
+  .refine((v) => v.location_ids.length > 0 || !!v.other_location, {
+    message: "Pick a location, or name the one they asked about",
+    path: ["location_ids"],
   })
   .refine((v) => !!v.phone?.trim() || !!v.email?.trim(), {
     message: "Add a phone number or an email",
@@ -62,10 +68,13 @@ export async function POST(request: NextRequest) {
   // Locations in the order the caller preferred them; the first becomes the lead's own location.
   const { data: locationRows } = await supabase.from("locations").select("id, name").in("id", b.location_ids);
   const nameById = new Map((locationRows ?? []).map((l) => [l.id as string, l.name as string]));
-  const locationNames = b.location_ids.map((id) => nameById.get(id)).filter((n): n is string => !!n);
-  if (locationNames.length === 0) {
+  const listedNames = b.location_ids.map((id) => nameById.get(id)).filter((n): n is string => !!n);
+  if (b.location_ids.length > 0 && listedNames.length === 0 && !b.other_location) {
     return NextResponse.json({ error: "Those locations were not found" }, { status: 400 });
   }
+  const locationNames = b.other_location ? [...listedNames, `Other: ${b.other_location}`] : listedNames;
+  // The lead's own location is the first listed centre; an "Other" only caller has none.
+  const primaryLocationId = listedNames.length > 0 ? b.location_ids[0] : null;
 
   let leadId = b.existing_lead_id ?? null;
   let created = false;
@@ -90,7 +99,7 @@ export async function POST(request: NextRequest) {
         status: "contacted",
         rating: "none",
         score: 0,
-        location_id: b.location_ids[0],
+        location_id: primaryLocationId,
         workspace_type: b.workspace_types[0],
         seat_capacity: b.seats,
         budget_per_seat: b.budget_per_seat ?? null,
@@ -185,7 +194,7 @@ async function applyContactBack(
     .single();
 
   const patch: Record<string, unknown> = {
-    location_id: b.location_ids[0],
+    ...(b.location_ids[0] ? { location_id: b.location_ids[0] } : {}),
     workspace_type: b.workspace_types[0],
     seat_capacity: b.seats,
   };

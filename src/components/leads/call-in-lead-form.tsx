@@ -59,6 +59,8 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
   const hints = contactBack?.hints;
 
   const [locationIds, setLocationIds] = useState<string[]>(pre?.locationIds ?? []);
+  const [otherOn, setOtherOn] = useState(false);
+  const [otherLocation, setOtherLocation] = useState("");
   const [types, setTypes] = useState<string[]>(pre?.types ?? []);
   const [seats, setSeats] = useState(pre?.seats ?? 1);
   const [startDate, setStartDate] = useState(pre?.startDate ?? "");
@@ -129,7 +131,7 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
 
   const emailOk = !email.trim() || /^\S+@\S+\.\S+$/.test(email.trim());
   const canSave =
-    locationIds.length > 0 &&
+    (locationIds.length > 0 || (otherOn && otherLocation.trim() !== "")) &&
     types.length > 0 &&
     seats >= 1 &&
     (phone.trim() !== "" || email.trim() !== "") &&
@@ -146,6 +148,7 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           location_ids: locationIds,
+          other_location: otherOn ? otherLocation.trim() || undefined : undefined,
           workspace_types: types,
           seats,
           start_date: startDate || undefined,
@@ -217,7 +220,18 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
               {l.name}
             </button>
           ))}
+          <button type="button" className={chip(otherOn)} onClick={() => setOtherOn((v) => !v)}>
+            Other
+          </button>
         </div>
+        {otherOn && (
+          <Input
+            value={otherLocation}
+            onChange={(e) => setOtherLocation(e.target.value)}
+            placeholder="Which location or area did they ask about?"
+            maxLength={120}
+          />
+        )}
       </Step>
 
       <Step n={2} title="What are they looking for?" hint="one or more" said={hints?.type}>

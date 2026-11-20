@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { COORDINATOR_ROLE } from "@/lib/restricted-roles";
 import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import {
   NOT_INTERESTED_REASONS,
   NOT_INTERESTED_REASON_LABELS,
   NOT_INTERESTED_TO_LOST_REASON,
+  LEAD_HANDLER_ROLES,
 } from "@/lib/constants";
 
 const bodySchema = z.object({
@@ -18,8 +20,8 @@ const bodySchema = z.object({
 // The one-tap "Not interested" action on the Leads list: records why, closes the lead (lost, or
 // junk when it was never a real lead). It does NOT disable the lead: a lost lead stays in the
 // list and in search so it can be reviewed or revived, and "disabled" (archive route, admin/manager
-// only) is kept for contacts who asked not to be contacted again. A sales rep who just got a "no"
-// on the phone has to be able to close their own lead, so this runs under normal lead permissions.
+// only) is kept for contacts who asked not to be contacted again. Admin, manager, sales rep and coordinator
+// may close any lead.
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -41,14 +43,12 @@ export async function POST(
   const { data: oldLead } = await supabase.from("leads").select("*").eq("id", id).single();
   if (!oldLead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
-  // Archiving is deliberately limited (see the archive route). A sales rep may close a lead that is
-  // theirs, or that nobody has picked up yet; admins and managers may close any.
-  const canClose =
-    dbUser?.role === "admin" ||
-    dbUser?.role === "manager" ||
-    (dbUser?.role === "sales_rep" && (!oldLead.assigned_to || oldLead.assigned_to === dbUser.id));
+  // Closing is not destructive (the lead stays listed and can be revived), and the person who just
+  // heard "no" on the phone is often not the handler (leave, a shared inbox, the coordinator). So any
+  // role that works leads may close any lead; the audit trail records who did.
+  const canClose = !!dbUser && (LEAD_HANDLER_ROLES as readonly string[]).concat(COORDINATOR_ROLE).includes(dbUser.role);
   if (!canClose) {
-    return NextResponse.json({ error: "Only the person handling this lead, or a manager, can close it" }, { status: 403 });
+    return NextResponse.json({ error: "Your role can't close a lead" }, { status: 403 });
   }
   if (oldLead.status === "won") {
     return NextResponse.json({ error: "A won lead can't be closed as not interested" }, { status: 409 });

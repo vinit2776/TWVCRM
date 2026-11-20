@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyByRules, decideGrouping, type TriageContext } from "../whatsapp-triage";
+import { classifyByRules, decideGrouping, looksLikePaymentChatter, type TriageContext } from "../whatsapp-triage";
 
 const NEW_NUMBER: TriageContext = { isCustomer: false, hasActiveContract: false, leadStatus: null, hasReferral: false, knownSender: false, hasOpenEnquiry: false };
 const k = (text: string, ctx: Partial<TriageContext> = {}, type = "text") => classifyByRules(text, type, { ...NEW_NUMBER, ...ctx }).kind;
@@ -88,5 +88,21 @@ describe("parseAiReply", () => {
   });
   it("tolerates text around the JSON", () => {
     expect(parseAiReply('Sure: {"kind":"enquiry","confidence":0.8,"reason":"asks about price"} done')?.kind).toBe("enquiry");
+  });
+});
+
+describe("looksLikePaymentChatter", () => {
+  it("flags a thread that is only accounts talk", () => {
+    expect(looksLikePaymentChatter(["Hi mam have you checked the utr details waiting for that", "The UTR details shared on mail"])).toBe(true);
+    expect(looksLikePaymentChatter(["Could you please share the details of the clients to whom you have transferred the amounts"])).toBe(true);
+  });
+  it("never flags a thread that also asks about space, price or a visit", () => {
+    expect(looksLikePaymentChatter(["UTR shared", "do you have a cabin available for 4 seats?"])).toBe(false);
+    expect(looksLikePaymentChatter(["I paid the booking fee. Can I visit tomorrow?"])).toBe(false);
+  });
+  it("does not flag plain or empty messages", () => {
+    expect(looksLikePaymentChatter(["Looking for v.o"])).toBe(false);
+    expect(looksLikePaymentChatter(["please wait"])).toBe(false);
+    expect(looksLikePaymentChatter([])).toBe(false);
   });
 });

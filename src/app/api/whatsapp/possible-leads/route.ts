@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
+import { looksLikePaymentChatter } from "@/lib/whatsapp-triage";
 
 // GET /api/whatsapp/possible-leads
 // Messages from unknown numbers that the rules could not judge, waiting for one tap.
@@ -22,5 +23,10 @@ export async function GET() {
     .order("last_at", { ascending: false })
     .limit(100);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ data: data ?? [] });
+  // payment_chatter only labels and orders the tray; every held number stays listed.
+  const rows = (data ?? []).map((r) => ({
+    ...r,
+    payment_chatter: looksLikePaymentChatter(((r.messages ?? []) as { text: string }[]).map((m) => m.text)),
+  }));
+  return NextResponse.json({ data: rows });
 }
