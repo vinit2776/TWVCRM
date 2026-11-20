@@ -12,6 +12,11 @@ describe("canAddToEntry", () => {
     expect(canAddToEntry("accounts", "u2", entry("approved"))).toBe(true);
     expect(canAddToEntry("admin", "u2", entry("approved"))).toBe(true);
   });
+  it("refuses a withdrawn expense for everyone", () => {
+    const w = { submitted_by: "u1", status: "rejected", withdrawn_at: "2026-11-20T10:00:00Z" };
+    expect(canAddToEntry("manager", "u1", w)).toBe(false);
+    expect(canAddToEntry("accounts", "u2", w)).toBe(false);
+  });
   it("refuses someone else's expense", () => {
     expect(canAddToEntry("manager", "u2", entry("pending_manager"))).toBe(false);
   });

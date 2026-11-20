@@ -19,7 +19,12 @@ export function canManageAnyAttachment(role: string): boolean {
  * expense is approved (so a rejected one can be fixed). After approval only accounts/admin
  * can add a missing bill.
  */
-export function canAddToEntry(role: string, userId: string, entry: { submitted_by: string; status: string }): boolean {
+export function canAddToEntry(
+  role: string,
+  userId: string,
+  entry: { submitted_by: string; status: string; withdrawn_at?: string | null },
+): boolean {
+  if (entry.withdrawn_at) return false; // a withdrawn expense is closed
   if (canManageAnyAttachment(role)) return true;
   return entry.submitted_by === userId && entry.status !== "approved";
 }

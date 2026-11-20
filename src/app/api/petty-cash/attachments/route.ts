@@ -98,11 +98,13 @@ export async function POST(request: NextRequest) {
 
   if (entry_id) {
     const { data: entry } = await supabase
-      .from("petty_cash_entries").select("id, submitted_by, status").eq("id", entry_id).single();
+      .from("petty_cash_entries").select("id, submitted_by, status, withdrawn_at").eq("id", entry_id).single();
     if (!entry) return NextResponse.json({ error: "Expense not found" }, { status: 404 });
     if (!canAddToEntry(dbUser.role, dbUser.id, entry)) {
       return NextResponse.json({
-        error: entry.status === "approved"
+        error: entry.withdrawn_at
+          ? "This expense was withdrawn, so it is closed. Log a new expense instead."
+          : entry.status === "approved"
           ? "This expense is already approved. Ask Accounts to add the bill."
           : "Only the person who logged this expense can add a bill to it.",
       }, { status: 403 });

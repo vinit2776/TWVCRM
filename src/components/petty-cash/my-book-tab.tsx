@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Wallet, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { LedgerStatement } from "@/components/petty-cash/ledger-statement";
 import { usePettyCashBooks, usePettyCashRequests, usePettyCashEntries } from "@/hooks/use-petty-cash";
 import { PC_REQUEST_STATUS_LABELS, PC_REQUEST_STATUS_COLORS, PC_ENTRY_STATUS_LABELS, PC_ENTRY_STATUS_COLORS } from "@/lib/constants";
 
@@ -110,6 +111,7 @@ export function MyBookTab() {
           </CardContent>
         </Card>
       </div>
+      <LedgerStatement title="My statement" />
     </div>
   );
 }

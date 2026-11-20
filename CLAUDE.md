@@ -214,7 +214,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Record payments (vendor bills) | `accounts`, `admin`; `office_admin` **cash/petty cash only** — **only from Finance > Acc Payables**, and only on an approved bill |
 | Record payments (customer: invoices, deposits, top-ups, ad-hoc) | `admin`, `accounts` only — `PAYMENT_RECORDING_ROLES` in `src/lib/constants.ts`. Everyone else uses **Report paid**, which routes to accounts to verify against the bank. `office_admin` keeps its existing carve-out for settling a pending deposit top-up. Front-desk **booking** payments are separate and unaffected. |
 | Record petty cash (submit an entry) | **Any authenticated user** — no role gate; entries start at `pending_manager` |
-| Approve petty cash | `admin`, `manager`; entries **≥ ₹5,000** need a second approval from `admin`/`accounts` |
+| Approve petty cash | **Expenses:** `admin`/`manager` decide first; entries **≥ ₹5,000** (`app_settings.petty_cash_second_approval_amount`) then need `admin`/`accounts`, unless an `admin` decided at stage 1 (covers both). **Fund requests:** `admin` only approves; the approved request then appears in **Finance > Acc Payables → Vendor Payments → "Petty cash fund requests"**, where `accounts`/`admin` pay it, enter the (required) payment reference and confirm — that credits the person's book and shows the reference on their request. **Nobody decides their own** expense or request (403). Rules: `src/lib/petty-cash-approval.ts` |
 | Manage contracts | `admin`, `manager`, `sales_rep` |
 | Terminate an **active** contract | `admin`, `manager` |
 | **Withdraw** a never-activated contract (draft/sent/viewed/accepted → stored as `terminated`) | `admin`, `manager`, `sales_rep` — not renewal drafts (use Cancel Renewal) |
@@ -223,6 +223,10 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Void billing statements | `admin` only |
 | Withdraw an unverified payment report (Report paid) | the reporter, `admin`, `accounts` — only while it is still unverified; `POST /api/queries/payment-reports/[id]/withdraw`; never for booking reports |
 | Reverse a customer payment recorded in error | `admin` only — `POST /api/billing-statements/[id]/payment/[paymentId]/reverse` (reason ≥10 chars; refused for gateway/Tally-receipted/TDS-filed/deposit-adjustment payments, accounted or period-locked statements, and proposal/invoice/VO-case statements) |
+
+### Petty cash balances (ledger)
+
+A book's `current_balance` is the sum of its `petty_cash_ledger` rows (migration `00740`). **Never write `petty_cash_books.current_balance` from app code.** Approving/rejecting an expense, issuing cash and paying a vendor bill in cash go through the RPCs `pc_approve_entry`, `pc_reject_entry`, `pc_issue_request`, `pc_debit_book` (service role; row-locked, with an expected-status check so two people can't act on the same stage). A trigger writes an immutable ledger row for every balance change, labelled by the RPC (or "adjustment" if something bypassed them). The statement is on My Book / All Books and shows a balance check.
 
 ### Procurement → Payment Flow (strict separation)
 
