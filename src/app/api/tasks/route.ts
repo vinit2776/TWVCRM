@@ -15,6 +15,8 @@ export async function GET(request: NextRequest) {
   const priority = searchParams.get("priority");
   const assigned_to = searchParams.get("assigned_to");
   const lead_id = searchParams.get("lead_id");
+  // Hand-over jobs live on the Leads Home; the Tasks page and a lead's task list show plain tasks unless asked.
+  const kind = searchParams.get("kind");
 
   const offset = (page - 1) * limit;
 
@@ -30,6 +32,7 @@ export async function GET(request: NextRequest) {
   if (priority) query = query.eq("priority", priority);
   if (assigned_to) query = query.eq("assigned_to", assigned_to);
   if (lead_id) query = query.eq("lead_id", lead_id);
+  if (kind !== "all") query = query.eq("kind", "general");
 
   query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
 

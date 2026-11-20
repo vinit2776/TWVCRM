@@ -268,6 +268,7 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     supabase
       .from("tasks")
       .select("id", { count: "exact", head: true })
+      .eq("kind", "general")
       .gte("completed_at", rangeStart)
       .lte("completed_at", rangeEnd),
     supabase
@@ -684,7 +685,8 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
       .from("tasks")
       .select("id, priority, assignee:users!tasks_assigned_to_fkey(full_name)")
       .lt("due_date", date)
-      .neq("status", "done"),
+      .neq("status", "done")
+      .eq("kind", "general"),
     supabase
       .from("vendor_bills")
       .select("invoice_number, total_amount, amount_paid, due_date, payment_status, vendor:procurement_vendors!vendor_bills_vendor_id_fkey(company_name)")
