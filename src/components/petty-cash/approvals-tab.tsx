@@ -7,8 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { Check, X } from "lucide-react";
+import { Paperclip } from "lucide-react";
 import { toast } from "sonner";
+import { AttachmentDialog } from "@/components/petty-cash/attachments";
+import { needsReceiptNudge, PC_RECEIPT_NUDGE_DEFAULT } from "@/lib/petty-cash-attachments";
+import { useFetch } from "@/hooks/use-fetch";
 import { usePettyCashRequests, usePettyCashEntries } from "@/hooks/use-petty-cash";
 import {
   PC_REQUEST_STATUS_LABELS, PC_REQUEST_STATUS_COLORS,
@@ -45,6 +48,12 @@ export function ApprovalsTab({ userRole }: Props) {
   } | null>(null);
   const [actionNote, setActionNote] = useState("");
   const [acting, setActing] = useState(false);
+  const [billsFor, setBillsFor] = useState<{ id: string; entry_number: string } | null>(null);
+  const { data: nudgeAmount } = useFetch<number>("/api/petty-cash/receipt-policy", {
+    initialData: PC_RECEIPT_NUDGE_DEFAULT,
+    select: (json) => Number(json.nudgeAmount) || PC_RECEIPT_NUDGE_DEFAULT,
+  });
+  const canAddBills = userRole === "admin" || userRole === "accounts";
 
   const handleAction = async () => {
     if (!actionDialog) return;
@@ -123,11 +132,11 @@ export function ApprovalsTab({ userRole }: Props) {
                       </div>
                       <div className="flex items-center gap-2">
                         <p className="font-bold mr-2">₹{Number(r.amount_requested).toLocaleString("en-IN")}</p>
-                        <Button size="sm" variant="outline" className="text-green-600" onClick={() => setActionDialog({ type: "approve_request", item: r })}>
-                          <Check className="h-4 w-4" />
+                        <Button size="sm" variant="outline" className="text-green-700 border-green-300" onClick={() => setActionDialog({ type: "approve_request", item: r })}>
+                          Approve
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600" onClick={() => setActionDialog({ type: "reject_request", item: r })}>
-                          <X className="h-4 w-4" />
+                        <Button size="sm" variant="outline" className="text-red-600 border-red-300" onClick={() => setActionDialog({ type: "reject_request", item: r })}>
+                          Reject
                         </Button>
                       </div>
                     </div>
@@ -146,6 +155,9 @@ export function ApprovalsTab({ userRole }: Props) {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Pending Expense Approvals ({allPendingEntries.length})</CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Open &quot;View bills&quot; to see the receipt before you decide. <strong>Approve</strong> deducts the amount from the person&apos;s petty cash balance (₹5,000 or more then goes to Admin/Accounts). <strong>Reject</strong> sends it back to them with your reason.
+            </p>
           </CardHeader>
           <CardContent>
             {loading ? (
@@ -157,6 +169,8 @@ export function ApprovalsTab({ userRole }: Props) {
                 {allPendingEntries.map((e) => {
                   const owner = (e.book as { owner?: { full_name: string } })?.owner;
                   const cat = (e.category as { name: string } | null)?.name;
+                  const nBills = e.attachments?.length ?? 0;
+                  const missing = needsReceiptNudge(Number(e.amount), nBills, nudgeAmount);
                   return (
                     <div key={e.id} className="flex items-center justify-between border rounded-lg p-3">
                       <div>
@@ -171,11 +185,15 @@ export function ApprovalsTab({ userRole }: Props) {
                       </div>
                       <div className="flex items-center gap-2">
                         <p className="font-bold mr-2">₹{Number(e.amount).toLocaleString("en-IN")}</p>
-                        <Button size="sm" variant="outline" className="text-green-600" onClick={() => setActionDialog({ type: "approve_entry", item: e })}>
-                          <Check className="h-4 w-4" />
+                        <Button size="sm" variant="outline" className={missing ? "border-amber-300 text-amber-800 bg-amber-50" : ""}
+                          onClick={() => setBillsFor({ id: e.id, entry_number: e.entry_number })}>
+                          <Paperclip className="h-3.5 w-3.5 mr-1" />{nBills > 0 ? `View bills (${nBills})` : missing ? "No bill attached" : "No bill"}
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600" onClick={() => setActionDialog({ type: "reject_entry", item: e })}>
-                          <X className="h-4 w-4" />
+                        <Button size="sm" variant="outline" className="text-green-700 border-green-300" onClick={() => setActionDialog({ type: "approve_entry", item: e })}>
+                          Approve
+                        </Button>
+                        <Button size="sm" variant="outline" className="text-red-600 border-red-300" onClick={() => setActionDialog({ type: "reject_entry", item: e })}>
+                          Reject
                         </Button>
                       </div>
                     </div>
@@ -202,22 +220,39 @@ export function ApprovalsTab({ userRole }: Props) {
             <div className="space-y-2">
               <Label>Note (optional)</Label>
               <Textarea
-                placeholder={actionDialog?.type?.includes("reject") ? "Reason for rejection..." : "Any comments..."}
+                placeholder={actionDialog?.type?.includes("reject") ? "Tell them why — they will see this" : "Any comments..."}
                 value={actionNote}
                 onChange={(e) => setActionNote(e.target.value)}
               />
             </div>
-            {actionDialog?.type === "approve_request" && (
-              <p className="text-xs text-muted-foreground">
-                Once approved, this request will move to the Accounting menu for the accounts team to process the payment.
-              </p>
-            )}
-            <Button onClick={handleAction} disabled={acting} className="w-full">
-              {acting ? "Processing..." : "Confirm"}
+            <p className="text-xs text-muted-foreground rounded-md bg-muted/50 px-3 py-2">
+              {actionDialog?.type === "approve_request" && "What happens next: the request moves to Accounting, where the accounts team hands over the cash. The balance goes up only when they do."}
+              {actionDialog?.type === "reject_request" && "What happens next: the request is closed and the person sees your note. They can raise a new request."}
+              {actionDialog?.type === "approve_entry" && "What happens next: the amount is deducted from the person's balance. If it is ₹5,000 or more it first goes to Admin/Accounts for a second approval."}
+              {actionDialog?.type === "reject_entry" && "What happens next: the expense goes back to the person with your note, and they can fix it and resubmit. Nothing is deducted."}
+            </p>
+            <Button onClick={handleAction} disabled={acting} variant={actionDialog?.type?.includes("reject") ? "destructive" : "default"} className="w-full">
+              {acting ? "Processing..." : actionDialog?.type === "approve_request" ? "Approve request"
+                : actionDialog?.type === "reject_request" ? "Reject request"
+                : actionDialog?.type === "approve_entry" ? "Approve expense" : "Reject expense"}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {billsFor && (
+        <AttachmentDialog
+          open
+          onOpenChange={(o) => { if (!o) { setBillsFor(null); refetchEntries(); refetchAdminEntries(); } }}
+          title={`Bills for ${billsFor.entry_number}`}
+          description="What the person attached as proof of this expense. Check the amount and what was bought before approving."
+          target={{ entryId: billsFor.id }}
+          canAdd={canAddBills}
+          canRemove={() => canAddBills}
+          addLabel="Add a bill (photo or PDF)"
+          emptyText="No bill was attached. You can still approve if you know the expense is genuine, or reject and ask for a bill."
+        />
+      )}
     </div>
   );
 }
