@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ESCALATION_CYCLE_OPTIONS, buildCycleSchedule } from "@/lib/escalation-cycle";
@@ -40,6 +40,25 @@ export function EscalationCycleField({
     return buildCycleSchedule({ anchorYmd: anchor, endYmd: end, baseRate: monthlyFee, percent, cycleMonths: value });
   }, [value, monthlyFee, percent, startDate, endDate, tenureMonths]);
 
+  // Whole months in the term, when known. A contract of 11 months or more always follows a cycle (the
+  // choice is 11 or 12); "No steps" is only offered for shorter terms, or when a fixed line forbids steps.
+  const termMonths = useMemo(() => {
+    if (startDate && endDate) {
+      const exclusiveEnd = addDaysToYmd(endDate, 1);
+      const [sy, sm, sd] = startDate.split("-").map(Number);
+      const [ey, em, ed] = exclusiveEnd.split("-").map(Number);
+      if (![sy, sm, sd, ey, em, ed].every(Number.isFinite)) return undefined;
+      return (ey - sy) * 12 + (em - sm) - (ed < sd ? 1 : 0);
+    }
+    return tenureMonths;
+  }, [startDate, endDate, tenureMonths]);
+  const cycleRequired = !blockedByFixedLine && termMonths !== undefined && termMonths >= 11;
+
+  // A draft saved before this rule (no cycle) moves onto the default instead of showing nothing selected.
+  useEffect(() => {
+    if (cycleRequired && value === null && !disabled) onChange(11);
+  }, [cycleRequired, value, disabled, onChange]);
+
   const hasDates = !!startDate && !!endDate;
   const label = (i: number) => {
     const r = rows[i];
@@ -53,7 +72,7 @@ export function EscalationCycleField({
     <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-4 space-y-2">
       <Label className="text-sm font-semibold">Escalation cycle</Label>
       <div className="flex flex-wrap gap-2">
-        {[...ESCALATION_CYCLE_OPTIONS, null].map((opt) => {
+        {(cycleRequired ? [...ESCALATION_CYCLE_OPTIONS] : [...ESCALATION_CYCLE_OPTIONS, null]).map((opt) => {
           const selected = value === opt;
           return (
             <button
