@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { FollowUpsView } from "@/components/leads/follow-ups-view";
+import { JobsBox } from "@/components/leads/jobs-box";
+import { useHandoverJobsEnabled } from "@/hooks/use-handover-jobs";
 import { PersonName } from "@/components/shared/person-name";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import type { LeadsView } from "@/lib/leads-views";
@@ -53,6 +55,7 @@ function Strip({ counts, onGoTo }: Pick<Props, "counts" | "onGoTo">) {
  */
 export function LeadsHome({ counts, users, isUnread, isReEnquiry, onOpenLead, onGoTo }: Props) {
   const { user } = useCurrentUser();
+  const handoverOn = useHandoverJobsEnabled();
   const userId = user?.id ?? null;
   const [owner, setOwner] = useState<string | null>(null);
   const ownerId = owner ?? userId;
@@ -89,6 +92,8 @@ export function LeadsHome({ counts, users, isUnread, isReEnquiry, onOpenLead, on
         counts={mine && mine.owner === ownerId ? { ...counts, overdue: mine.overdue, dueToday: mine.today } : { ...counts, overdue: 0, dueToday: 0 }}
         onGoTo={onGoTo}
       />
+
+      {handoverOn && <JobsBox />}
 
       <section className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
