@@ -30,6 +30,8 @@ export function EntriesTab() {
   const [billsFor, setBillsFor] = useState<{ id: string; entry_number: string; status: string } | null>(null);
   const { data: policy } = useFetch<{ nudgeAmount: number; secondApprovalAmount: number }>("/api/petty-cash/receipt-policy", {
     initialData: { nudgeAmount: PC_RECEIPT_NUDGE_DEFAULT, secondApprovalAmount: 5000 },
+    // The route returns the policy itself, not {data: …}, so useFetch's default unwrapping would yield undefined.
+    select: (json) => json as unknown as { nudgeAmount: number; secondApprovalAmount: number },
   });
   const nudgeAmount = policy.nudgeAmount;
 
