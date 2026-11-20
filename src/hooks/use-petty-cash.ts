@@ -7,6 +7,7 @@ import type {
   PettyCashEntry,
   PettyCashCategory,
 } from "@/types";
+import type { PettyCashAnalytics } from "@/lib/petty-cash-analytics";
 
 // ─── Books ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,42 @@ export function usePettyCashEntries(options: UseEntriesOptions = {}) {
       date_to: options.dateTo,
       my: options.my || undefined,
     },
+  });
+}
+
+// ─── Analytics ─────────────────────────────────────────────────────────────────
+
+export interface PettyCashAnalyticsFilters {
+  dateFrom?: string;
+  dateTo?: string;
+  personId?: string;
+  categoryId?: string;
+  locationId?: string;
+}
+
+export interface PettyCashAnalyticsResponse {
+  data: PettyCashAnalytics;
+  options: { people: { id: string; name: string }[]; locations: { id: string; name: string }[] };
+  cashInHand: { total: number; books: number; lowBooks: number } | null;
+  truncated: boolean;
+  scope: "all" | "own";
+}
+
+export function pettyCashAnalyticsParams(f: PettyCashAnalyticsFilters) {
+  return {
+    date_from: f.dateFrom,
+    date_to: f.dateTo,
+    person_id: f.personId,
+    category_id: f.categoryId,
+    location_id: f.locationId,
+  };
+}
+
+export function usePettyCashAnalytics(filters: PettyCashAnalyticsFilters) {
+  return useFetch<PettyCashAnalyticsResponse | null>("/api/petty-cash/analytics", {
+    params: pettyCashAnalyticsParams(filters),
+    initialData: null,
+    select: (json) => json as unknown as PettyCashAnalyticsResponse,
   });
 }
 
