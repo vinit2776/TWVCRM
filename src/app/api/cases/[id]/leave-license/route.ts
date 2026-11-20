@@ -8,6 +8,7 @@ import {
   generateLeaveLicensePdf,
 } from "@/lib/leave-license-generator";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { leaveLicenseCarryOver } from "@/lib/leave-license-carry-over";
 
 /**
  * GET: Get Leave & License agreement details with signed PDF URL
@@ -123,7 +124,20 @@ export async function POST(
     .filter(Boolean)
     .join(", ");
 
+  // A regenerate must not drop what was typed into the previous agreement (nature of business,
+  // witnesses, e-stamp value): the case has no columns for those.
+  const { data: previousAgreement } = await supabase
+    .from("case_agreements")
+    .select("variables")
+    .eq("case_id", caseId)
+    .eq("type", "leave_license")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const carried = leaveLicenseCarryOver(previousAgreement?.variables as Record<string, unknown> | null);
+
   const variables = mergeLeaveLicenseVariables({
+    ...carried,
     agreementNumber: "",
     agreementDate: new Date().toISOString(),
     clientName: caseData.client_name,
@@ -135,8 +149,8 @@ export async function POST(
     clientCinNumber: caseData.client_cin_number,
     clientEmail: caseData.client_email,
     clientPhone: caseData.client_phone,
-    lesseeSignatoryName: caseData.represented_by_name || undefined,
-    lesseeSignatoryDesignation: caseData.represented_by_designation || undefined,
+    lesseeSignatoryName: caseData.represented_by_name || carried.lesseeSignatoryName,
+    lesseeSignatoryDesignation: caseData.represented_by_designation || carried.lesseeSignatoryDesignation,
     lesseeSignatoryIdType: caseData.represented_by_id_type || undefined,
     lesseeSignatoryIdNumber: caseData.represented_by_id_number || undefined,
     locationName: location?.name || "The WorkVilla",
