@@ -50,6 +50,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         start_date: p.start_date,
       },
       message: enquiryMessages(payload).at(-1)?.text ?? null,
+      // Automatic triage was unsure and nobody has decided yet: the call form asks "is it real?" first.
+      needs_review: (p as { triage?: { kind?: string; reviewed?: unknown } }).triage?.kind === "unsure" && !(p as { triage?: { reviewed?: unknown } }).triage?.reviewed,
     },
   });
 }
