@@ -43,11 +43,12 @@ describe("nextStatusOnApprove", () => {
 
 describe("canDecideRequest", () => {
   const r = (created_by = "owner", status = "pending") => ({ created_by, status });
-  it("accounts cannot approve fund requests", () => {
+  it("only an admin can approve fund requests", () => {
+    expect(canDecideRequest("admin", "a", r()).ok).toBe(true);
+    expect(canDecideRequest("manager", "m", r()).ok).toBe(false);
     expect(canDecideRequest("accounts", "x", r()).ok).toBe(false);
   });
-  it("manager and admin can, but not their own", () => {
-    expect(canDecideRequest("manager", "m", r()).ok).toBe(true);
+  it("an admin cannot approve their own request", () => {
     expect(canDecideRequest("admin", "a", r("a")).ok).toBe(false);
   });
   it("refuses a request that is not pending", () => {

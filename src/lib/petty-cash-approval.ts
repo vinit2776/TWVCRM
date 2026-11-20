@@ -53,15 +53,15 @@ export function nextStatusOnApprove(
   return needsSecondApproval(amount, threshold) && role !== "admin" ? "pending_admin" : "approved";
 }
 
-/** Fund requests: manager/admin approve; Accounts only issue the cash. Not your own request. */
+/** Fund requests: only an admin approves; Accounts then pays them from Acc Payables. Not your own request. */
 export function canDecideRequest(role: string, userId: string, req: { created_by: string; status: string }): Decision {
   if (req.created_by === userId) {
     return { ok: false, reason: "You raised this request, so someone else must approve or reject it." };
   }
   if (req.status !== "pending") return { ok: false, reason: "This request is no longer waiting for a decision." };
-  return ["admin", "manager"].includes(role)
+  return role === "admin"
     ? { ok: true }
-    : { ok: false, reason: "Only a manager or admin approves fund requests. Accounts issues the cash after approval." };
+    : { ok: false, reason: "Only an admin approves fund requests. Once approved, Accounts pays it from Acc Payables." };
 }
 
 export interface EntryFlag {

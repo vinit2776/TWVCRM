@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -64,7 +64,7 @@ export function ApprovalsTab({ userRole }: { userRole: string }) {
 function ExpenseInbox({
   inbox, loading, refetch, userRole,
 }: { inbox: InboxResponse | null; loading: boolean; refetch: () => void; userRole: string }) {
-  const items = inbox?.data ?? [];
+  const items = useMemo(() => inbox?.data ?? [], [inbox]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [reasons, setReasons] = useState<string[]>([]);
@@ -321,21 +321,21 @@ function FundRequests({
         body: JSON.stringify({ action: dialog.type, note: note || undefined }),
       });
       if (!res.ok) throw new Error((await res.json()).error || "Action failed");
-      toast.success(dialog.type === "approve" ? "Approved. Accounts will now hand over the cash." : "Request rejected.");
+      toast.success(dialog.type === "approve" ? "Approved. It now appears in Acc Payables for Accounts to pay." : "Request rejected.");
       setDialog(null); setNote(""); refetch();
     } catch (e) { toast.error(e instanceof Error ? e.message : "Action failed"); }
     finally { setActing(false); }
   };
 
-  const canDecideRole = userRole === "admin" || userRole === "manager";
+  const canDecideRole = userRole === "admin";
 
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Fund requests waiting for a decision ({requests.length})</CardTitle>
         <p className="text-xs text-muted-foreground mt-1">
-          Someone is asking for cash to be added to their petty cash book. <strong>Approve</strong> passes it to Accounts, who hand over the cash and add it to the balance. <strong>Reject</strong> closes it with your reason.
-          {!canDecideRole && " A manager or admin approves these; you will issue the cash once it is approved."}
+          Someone is asking for cash to be added to their petty cash book. <strong>Approve</strong> sends it to Acc Payables, where Accounts pay the money, enter the payment reference and add it to the balance. <strong>Reject</strong> closes it with your reason.
+          {!canDecideRole && " Only an admin approves these. After approval, Accounts pays it from Acc Payables."}
         </p>
       </CardHeader>
       <CardContent>
@@ -380,7 +380,7 @@ function FundRequests({
             <DialogTitle>{dialog?.type === "approve" ? "Approve fund request" : "Reject fund request"}</DialogTitle>
             <DialogDescription>
               {dialog?.type === "approve"
-                ? "What happens next: the request goes to Accounting. The person's balance goes up only when Accounts hands over the cash."
+                ? "What happens next: the request appears in Acc Payables (Petty cash fund requests). Accounts pay it and enter the payment reference. The person's balance goes up only when they confirm the payment."
                 : "What happens next: the request is closed and the person sees your reason. They can raise a new one."}
             </DialogDescription>
           </DialogHeader>

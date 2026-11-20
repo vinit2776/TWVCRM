@@ -35,7 +35,7 @@ const approveSchema = z.object({
 const issueSchema = z.object({
   action: z.literal("issue"),
   issuance_method: z.enum(["cash", "upi", "bank_transfer", "cheque"]),
-  issuance_reference: z.string().optional(),
+  issuance_reference: z.string().trim().min(3, "Enter the payment reference (for cash, the voucher number or a short note)"),
   issuance_proof_url: z.string().optional(),
 });
 

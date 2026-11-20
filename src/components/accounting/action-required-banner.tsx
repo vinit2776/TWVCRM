@@ -127,10 +127,10 @@ export function ActionRequiredBanner({ contracts, cashHandovers, gstEntries, onS
     items.push({
       id: `pc-req-${r.id}`,
       type: "pc_issuance",
-      label: "Issue Cash",
+      label: "Pay Petty Cash",
       description: `${r.request_number} — ${book?.owner?.full_name || "Unknown"}: ${r.purpose}`,
       amount: Number(r.amount_requested),
-      tab: "petty-cash",
+      tab: "vendor-payments",
     });
   }
 

@@ -28,13 +28,13 @@ function RequestProgress({ r, onProof }: { r: PettyCashRequest; onProof: () => v
   } else {
     steps.push({
       done: r.status !== "pending",
-      text: r.status === "pending" ? "Waiting for a manager or admin to approve" : `Approved${r.approver?.full_name ? ` by ${r.approver.full_name}` : ""} on ${day(r.approved_at)}`,
+      text: r.status === "pending" ? "Waiting for an admin to approve" : `Approved${r.approver?.full_name ? ` by ${r.approver.full_name}` : ""} on ${day(r.approved_at)}`,
     });
     steps.push({
       done: r.status === "issued",
       text: r.status === "issued"
-        ? `Cash issued${r.issuer?.full_name ? ` by ${r.issuer.full_name}` : ""} on ${day(r.issued_at)}${r.issuance_method ? ` via ${PC_ISSUANCE_METHOD_LABELS[r.issuance_method] ?? r.issuance_method}` : ""}${r.issuance_reference ? ` · reference ${r.issuance_reference}` : ""}. ${formatCurrency(Number(r.amount_requested))} was added to your balance.`
-        : r.status === "approved" ? "Accounts will hand over the cash (Accounting → Petty Cash). Your balance goes up when they do." : "Then Accounts hands over the cash",
+        ? `Paid${r.issuer?.full_name ? ` by ${r.issuer.full_name}` : ""} on ${day(r.issued_at)}${r.issuance_method ? ` via ${PC_ISSUANCE_METHOD_LABELS[r.issuance_method] ?? r.issuance_method}` : ""}${r.issuance_reference ? ` · reference ${r.issuance_reference}` : ""}. ${formatCurrency(Number(r.amount_requested))} is now in your petty cash balance and ready to use.`
+        : r.status === "approved" ? "Accounts will pay it from Acc Payables and enter the payment reference here. Your balance goes up when they confirm." : "Then Accounts pays it and the reference appears here",
     });
   }
   return (
