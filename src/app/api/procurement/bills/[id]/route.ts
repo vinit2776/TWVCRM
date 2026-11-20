@@ -406,20 +406,16 @@ export async function PATCH(
         });
       }
 
-      // Debit the selected petty cash book when paying in cash (overdraft allowed)
+      // Debit the selected petty cash book when paying in cash (overdraft allowed). One locked
+      // step that also writes the book's ledger row, so the statement shows this payment.
       if (parsed.data.payment_mode === "cash" && parsed.data.petty_cash_book_id) {
-        const { data: pcBook } = await supabase
-          .from("petty_cash_books")
-          .select("id, current_balance")
-          .eq("id", parsed.data.petty_cash_book_id)
-          .single();
-        if (pcBook) {
-          const newBalance = Number(pcBook.current_balance) - parsed.data.amount;
-          await supabase
-            .from("petty_cash_books")
-            .update({ current_balance: newBalance })
-            .eq("id", parsed.data.petty_cash_book_id);
-        }
+        const { error: debitErr } = await createAdminClient().rpc("pc_debit_book", {
+          p_book_id: parsed.data.petty_cash_book_id,
+          p_amount: parsed.data.amount,
+          p_user_id: dbUser.id,
+          p_note: `Vendor bill paid in cash${parsed.data.payment_reference ? ` — ref ${parsed.data.payment_reference}` : ""}`,
+        });
+        if (debitErr) console.error("petty cash debit failed for vendor payment", paymentRow?.id, debitErr.message);
       }
 
       updatePayload = {

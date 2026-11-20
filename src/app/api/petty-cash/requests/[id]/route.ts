@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
 import { canDecideRequest } from "@/lib/petty-cash-approval";
@@ -122,30 +122,21 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Request must be approved before issuing" }, { status: 400 });
     }
 
-    const now = new Date().toISOString();
-
-    // Update request to issued
-    const { error: updateErr } = await supabase
-      .from("petty_cash_requests")
-      .update({
-        status: "issued",
-        issued_by: dbUser.id,
-        issued_at: now,
-        issuance_method: parsed.data.issuance_method,
-        issuance_reference: parsed.data.issuance_reference || null,
-        issuance_proof_url: parsed.data.issuance_proof_url || null,
-      })
-      .eq("id", id);
-
-    if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
-
-    // Increase book balance
+    // Status change and balance credit happen in one locked transaction (and write a ledger row).
+    const { data: result, error: issueErr } = await createAdminClient().rpc("pc_issue_request", {
+      p_request_id: id,
+      p_issuer_id: dbUser.id,
+      p_method: parsed.data.issuance_method,
+      p_reference: parsed.data.issuance_reference || null,
+      p_proof_url: parsed.data.issuance_proof_url || null,
+    });
+    if (issueErr) {
+      return issueErr.message.includes("REQUEST_CHANGED")
+        ? NextResponse.json({ error: "This request was already issued. Refresh to see its current state." }, { status: 409 })
+        : NextResponse.json({ error: issueErr.message }, { status: 500 });
+    }
+    const newBalance = Number((result as { balance: number }).balance);
     const book = req.book as { id: string; current_balance: number };
-    const newBalance = Number(book.current_balance) + Number(req.amount_requested);
-    await supabase
-      .from("petty_cash_books")
-      .update({ current_balance: newBalance })
-      .eq("id", req.book_id);
 
     logAudit(supabase, {
       entityType: "pc_request",

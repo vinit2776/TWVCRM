@@ -122,16 +122,17 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const policy = await getPettyCashPolicy(createAdminClient());
   const amount = Number(entry.amount);
 
+  const admin = createAdminClient();
+  // Two people acting on the same stage at once: the database refuses the second one.
+  const changed = () => NextResponse.json({ error: "Someone else just decided this expense. Refresh to see its current state." }, { status: 409 });
+  const failed = (msg: string) => msg.includes("ENTRY_CHANGED") ? changed() : NextResponse.json({ error: msg }, { status: 500 });
+
   if (action === "reject") {
-    await supabase.from("petty_cash_entries").update({ status: "rejected", rejection_note: note || null }).eq("id", id);
-    await supabase.from("petty_cash_approvals").insert({
-      approval_type: "entry",
-      entry_id: id,
-      approver_id: dbUser.id,
-      approval_level: stage === "pending_manager" ? "manager" : "admin",
-      decision: "rejected",
-      note: note || null,
+    const { error } = await admin.rpc("pc_reject_entry", {
+      p_entry_id: id, p_approver_id: dbUser.id, p_expected_status: stage,
+      p_level: stage === "pending_manager" ? "manager" : "admin", p_note: note || null,
     });
+    if (error) return failed(error.message);
     logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: stage, new: "rejected" } } });
     return NextResponse.json({ success: true, status: "rejected" });
   }
@@ -140,21 +141,13 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   // An admin approving a large amount at stage 1 covers both stages, so record it as an admin approval.
   const adminOneStep = stage === "pending_manager" && nextStatus === "approved" && amount >= policy.secondApprovalAmount;
 
-  await supabase.from("petty_cash_entries").update({ status: nextStatus }).eq("id", id);
-  await supabase.from("petty_cash_approvals").insert({
-    approval_type: "entry",
-    entry_id: id,
-    approver_id: dbUser.id,
-    approval_level: stage === "pending_manager" && !adminOneStep ? "manager" : "admin",
-    decision: "approved",
-    note: adminOneStep ? [note, "Admin approved in one step (covers both approval stages)"].filter(Boolean).join(" — ") : note || null,
+  // Status change, approval record and balance deduction happen in one locked transaction.
+  const { error } = await admin.rpc("pc_approve_entry", {
+    p_entry_id: id, p_approver_id: dbUser.id, p_expected_status: stage, p_next_status: nextStatus,
+    p_level: stage === "pending_manager" && !adminOneStep ? "manager" : "admin",
+    p_note: adminOneStep ? [note, "Admin approved in one step (covers both approval stages)"].filter(Boolean).join(" — ") : note || null,
   });
-
-  if (nextStatus === "approved") {
-    const book = entry.book as { id: string; current_balance: number };
-    const newBalance = Number(book.current_balance) - amount;
-    await supabase.from("petty_cash_books").update({ current_balance: newBalance }).eq("id", entry.book_id);
-  }
+  if (error) return failed(error.message);
 
   logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: stage, new: nextStatus } } });
   return NextResponse.json({ success: true, status: nextStatus });
