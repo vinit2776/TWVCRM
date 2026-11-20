@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { Suspense, useState, useMemo, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, SlidersHorizontal, Phone, CalendarDays, BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,16 @@ import { pushTrailEntry } from "@/lib/nav-trail";
 import { LeadsViewTabs } from "@/components/leads/leads-view-tabs";
 import { leadsViewHref, parseLeadsView, type LeadsView } from "@/lib/leads-views";
 
+// useSearchParams needs a Suspense boundary above it or the page cannot be prerendered.
 export default function LeadsPage() {
+  return (
+    <Suspense fallback={null}>
+      <LeadsPageContent />
+    </Suspense>
+  );
+}
+
+function LeadsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   // The view lives in the URL (?view=), so a view can be linked to and the back button returns to it.
