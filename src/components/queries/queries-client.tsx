@@ -20,17 +20,26 @@ import {
  * Module chips filter; the entity type is a label, not a separate page.
  */
 
-type Tab = "awaiting_me" | "mine" | "open" | "overdue" | "resolved";
+type Tab = "awaiting_me" | "waiting" | "mine" | "open" | "overdue" | "resolved";
 
+// Ordered by whose move it is. "Overdue" has no tab of its own: the Overdue
+// stat card opens it, and every overdue thread also carries its own pill.
 const TABS: { key: Tab; label: string }[] = [
-  { key: "awaiting_me", label: "Awaiting you" },
-  { key: "mine", label: "Raised by me" },
+  { key: "awaiting_me", label: "Needs you" },
+  { key: "waiting", label: "Waiting on others" },
+  { key: "mine", label: "I asked" },
   { key: "open", label: "All open" },
-  { key: "overdue", label: "Overdue" },
-  { key: "resolved", label: "Resolved" },
+  { key: "resolved", label: "Closed" },
 ];
 
 const MODULES = Object.keys(QUERY_MODULE_LABELS) as QueryModule[];
+
+function tabCount(tab: Tab, stats: QueryStats | null): number {
+  if (!stats) return 0;
+  if (tab === "awaiting_me") return stats.awaiting_you;
+  if (tab === "waiting") return stats.waiting_others;
+  return 0;
+}
 
 function timeAgo(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -96,6 +105,8 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
   // trailing it by a beat so each keystroke isn't a request.
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  // The Closed tab shows the last 30 days; this lifts that window.
+  const [showOlderClosed, setShowOlderClosed] = useState(false);
   const firstPageRequest = useRef(0);
 
   useEffect(() => {
@@ -119,10 +130,11 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
       if (moduleFilter) params.set("module", moduleFilter);
       if (kindFilter) params.set("kind", kindFilter);
       if (searchTerm) params.set("q", searchTerm);
+      if (showOlderClosed && activeTab === "resolved") params.set("older", "true");
       if (cursor) params.set("cursor", cursor);
       return `/api/queries?${params.toString()}`;
     },
-    [moduleFilter, kindFilter, searchTerm],
+    [moduleFilter, kindFilter, searchTerm, showOlderClosed],
   );
 
   const loadFirstPage = useCallback(
@@ -181,6 +193,8 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
       return;
     }
     deepLinkFallbackDone.current = true;
+    // A linked thread may have closed long ago, past the 30-day window.
+    setShowOlderClosed(true);
     setTab("resolved");
   }, [openQueryId, loading, items, tab]);
 
@@ -193,7 +207,7 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
     void loadFirstPage(tab);
   }, [loadStats, loadFirstPage, tab]);
 
-  const tabLabel = TABS.find((t) => t.key === tab)?.label ?? "this tab";
+  const tabLabel = tab === "overdue" ? "Overdue" : (TABS.find((t) => t.key === tab)?.label ?? "this tab");
 
   // While searching across every module, file results under their module so a
   // hit in Billing isn't lost among Tally Inbox ones. Groups appear in the
@@ -212,8 +226,16 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <StatCard label="Awaiting you" value={stats?.awaiting_you} tone="danger" />
-        <StatCard label="Overdue" value={stats?.overdue} tone="warning" />
+        <StatCard label="Needs you" value={stats?.awaiting_you} tone="danger" />
+        <StatCard
+          label="Overdue"
+          value={stats?.overdue}
+          tone="warning"
+          onClick={() => {
+            setExpandedId(null);
+            setTab("overdue");
+          }}
+        />
         <StatCard label="All open" value={stats?.open} />
         <StatCard label="Resolved this week" value={stats?.resolved_this_week} />
       </div>
@@ -247,6 +269,7 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
             type="button"
             onClick={() => {
               setExpandedId(null);
+              setShowOlderClosed(false);
               setTab(t.key);
             }}
             className={`px-3 py-2 text-sm border-b-2 -mb-px transition-colors whitespace-nowrap ${
@@ -256,6 +279,15 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
             }`}
           >
             {t.label}
+            {tabCount(t.key, stats) > 0 && (
+              <span
+                className={`ml-1.5 rounded-full px-1.5 py-px text-[11px] ${
+                  t.key === "awaiting_me" ? "bg-red-100 text-red-700" : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {tabCount(t.key, stats)}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -308,7 +340,11 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
               )}
             </>
           ) : tab === "awaiting_me" ? (
-            "Nothing waiting on you right now."
+            "Nothing needs you right now."
+          ) : tab === "waiting" ? (
+            "You're not waiting on anyone."
+          ) : tab === "resolved" && !showOlderClosed ? (
+            "Nothing closed in the last 30 days."
           ) : (
             "No queries here."
           )}
@@ -342,6 +378,18 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
               ))}
             </div>
           ))}
+
+          {tab === "resolved" && !searchTerm && !showOlderClosed && (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => setShowOlderClosed(true)}
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                Showing the last 30 days. Show older closed threads
+              </button>
+            </div>
+          )}
 
           {nextCursor && (
             <div className="flex justify-center pt-2">
@@ -473,6 +521,7 @@ function QueryCard({
             ) : (
               <Pill>Question</Pill>
             )}
+            {item.unread && !isResolved && <Pill tone="info">New reply</Pill>}
             {overdue > 0 && <Pill tone="warning">Overdue · {overdue}d</Pill>}
             {!isResolved && <Pill tone="muted">→ {audienceText}</Pill>}
             <span className="font-medium text-sm">
@@ -587,10 +636,12 @@ function Pill({
   tone,
 }: {
   children: React.ReactNode;
-  tone?: "good" | "danger" | "warning" | "muted";
+  tone?: "good" | "danger" | "warning" | "muted" | "info";
 }) {
   const cls =
-    tone === "good"
+    tone === "info"
+      ? "bg-blue-50 border-blue-200 text-blue-700"
+      : tone === "good"
       ? "bg-green-50 border-green-200 text-green-700"
       : tone === "danger"
         ? "bg-red-50 border-red-200 text-red-700"
@@ -620,17 +671,27 @@ function StatCard({
   label,
   value,
   tone,
+  onClick,
 }: {
   label: string;
   value: number | undefined;
   tone?: "danger" | "warning";
+  onClick?: () => void;
 }) {
   const valueClass =
     tone === "danger" ? "text-red-700" : tone === "warning" ? "text-amber-700" : "text-foreground";
-  return (
-    <div className="rounded-lg bg-muted/40 border p-3">
+  const body = (
+    <>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className={`text-2xl font-semibold mt-1 ${valueClass}`}>{value ?? "–"}</div>
-    </div>
+    </>
   );
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className="rounded-lg bg-muted/40 border p-3 text-left hover:bg-muted/70">
+        {body}
+      </button>
+    );
+  }
+  return <div className="rounded-lg bg-muted/40 border p-3">{body}</div>;
 }
