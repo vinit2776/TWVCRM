@@ -114,3 +114,130 @@ export function relativeEnd(days: number): string {
   const ago = -days;
   return `ended ${ago} day${ago === 1 ? "" : "s"} ago`;
 }
+
+// ---------------------------------------------------------------------------
+// Board views beyond the four stages: Active, Renewed, needs-action
+// ---------------------------------------------------------------------------
+
+export const RENEWED_WINDOW_DAYS = 60;
+
+export const RENEWAL_BOARD_TABS = ["coming", "due", "grace", "lapsed", "active", "renewed"] as const;
+export type RenewalBoardTab = (typeof RENEWAL_BOARD_TABS)[number];
+
+export const RENEWAL_BOARD_TAB_LABELS: Record<RenewalBoardTab, string> = {
+  ...RENEWAL_DESK_TAB_LABELS,
+  active: "Active",
+  renewed: "Renewed",
+};
+
+export function renewalBoardTabHint(tab: RenewalBoardTab, graceDays: number): string {
+  if (tab === "active") return "Ends later, nothing to do yet";
+  if (tab === "renewed") return `Last ${RENEWED_WINDOW_DAYS} days`;
+  return renewalDeskTabHint(tab, graceDays);
+}
+
+/**
+ * The board tab of a case: the desk's four stages, plus Active (live, ending
+ * beyond the coming-up window) and Renewed (renewed recently, read from the
+ * case's own renewed_at).
+ */
+export function renewalBoardTab(
+  c: {
+    status: string;
+    end_date: string | null;
+    renewal_grace_ends_at?: string | null;
+    renewed_at?: string | null;
+  },
+  today: string,
+  hasOpenRenewalBill: boolean,
+  graceDays: number = DEFAULT_RENEWAL_GRACE_DAYS,
+): RenewalBoardTab | null {
+  if (c.status === "renewed") {
+    if (!c.renewed_at) return null;
+    const ago = daysUntil(today, istDate(c.renewed_at));
+    return ago >= 0 && ago <= RENEWED_WINDOW_DAYS ? "renewed" : null;
+  }
+  const stage = renewalDeskTab(c, today, hasOpenRenewalBill, graceDays);
+  if (stage) return stage;
+  return c.status === "active" && c.end_date ? "active" : null;
+}
+
+/** The first notice goes out this many days before the end date. */
+export const FIRST_NOTICE_DAYS = 30;
+
+/**
+ * Whether a case needs a person, derived only from what the board already
+ * knows: a first notice is due and none was sent, it is in grace, it lapsed
+ * with no decision recorded, or a postpaid partner has not confirmed.
+ */
+export function needsAction(r: {
+  tab: RenewalBoardTab;
+  days_left: number | null;
+  postpaid: boolean;
+  partner_confirmed: boolean;
+  reminder_count: number;
+  lapse_decision: string | null;
+}): boolean {
+  switch (r.tab) {
+    case "active":
+    case "renewed":
+      return false;
+    case "lapsed":
+      return !r.lapse_decision;
+    case "grace":
+      return true;
+    case "coming":
+    case "due":
+      if (r.postpaid) return !r.partner_confirmed;
+      return r.reminder_count < 1 && (r.tab === "due" || (r.days_left !== null && r.days_left <= FIRST_NOTICE_DAYS));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Notice schedule
+// ---------------------------------------------------------------------------
+
+export interface NoticeScheduleEntry {
+  number: number;
+  label: string;
+  /** The day it falls due (the end date for the final notice). */
+  due_date: string;
+  status: "sent" | "pending";
+  sent_at: string | null;
+  channels: string[];
+  /** Pending and already past its due date. */
+  overdue: boolean;
+}
+
+const NOTICE_PLAN: Array<{ number: number; label: string; daysBefore: number }> = [
+  { number: 1, label: "Reminder 1", daysBefore: 30 },
+  { number: 2, label: "Reminder 2", daysBefore: 21 },
+  { number: 3, label: "Reminder 3", daysBefore: 14 },
+  { number: 4, label: "Reminder 4", daysBefore: 7 },
+  { number: 5, label: "Final notice", daysBefore: 0 },
+];
+
+/** Reminder 1 at 30 days, 2 to 4 at 21, 14 and 7, then the final notice, each sent or pending. */
+export function noticeSchedule(
+  c: { end_date: string | null },
+  reminders: Array<{ reminder_number: number; sent_at: string; email_sent?: boolean; whatsapp_sent?: boolean }>,
+  today: string,
+): NoticeScheduleEntry[] {
+  if (!c.end_date) return [];
+  const end = c.end_date.slice(0, 10);
+  return NOTICE_PLAN.map((p) => {
+    const sent = reminders
+      .filter((r) => r.reminder_number === p.number && (r.email_sent || r.whatsapp_sent))
+      .sort((a, b) => (a.sent_at < b.sent_at ? 1 : -1))[0];
+    const due = addDays(end, -p.daysBefore);
+    return {
+      number: p.number,
+      label: p.label,
+      due_date: due,
+      status: sent ? "sent" : "pending",
+      sent_at: sent?.sent_at ?? null,
+      channels: sent ? [sent.email_sent ? "Email" : null, sent.whatsapp_sent ? "WhatsApp" : null].filter((x): x is string => !!x) : [],
+      overdue: !sent && due < today,
+    };
+  });
+}

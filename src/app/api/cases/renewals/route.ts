@@ -4,14 +4,17 @@ import { getCachedSettings } from "@/lib/app-settings-cache";
 import { renewalRate } from "@/lib/vo-renewal";
 import { renewalRecipients } from "@/lib/renewal-recipients";
 import { partnerRenewalRecord } from "@/lib/vo-renewal-reminders";
+import { latestLapseDecision } from "@/lib/vo-lapse-decision";
 import {
-  RENEWAL_DESK_STATUSES,
+  RENEWED_WINDOW_DAYS,
   RENEWAL_DESK_WINDOW_DAYS,
+  needsAction,
+  noticeSchedule,
+  renewalBoardTab,
   VO_RENEWAL_GRACE_DAYS_SETTING,
   daysUntil,
   graceLastDay,
   parseGraceDays,
-  renewalDeskTab,
 } from "@/lib/vo-renewal-desk";
 
 /**
@@ -32,6 +35,7 @@ export async function GET(request: NextRequest) {
 
   // Calendar date in IST — the business's day, same as the renewal cron.
   const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+  const renewedSince = new Date(Date.parse(today) - RENEWED_WINDOW_DAYS * 86_400_000).toISOString();
   const horizon = new Date(Date.parse(today) + RENEWAL_DESK_WINDOW_DAYS * 86_400_000)
     .toISOString()
     .slice(0, 10);
@@ -41,14 +45,16 @@ export async function GET(request: NextRequest) {
     .select(
       `id, case_number, status, purpose, client_name, client_company_name, client_email, client_phone,
        aggregator_id, bill_to, end_date, tenure_months, rate, renewal_escalation_percentage,
-       renewal_notices_enabled, renewal_grace_ends_at, metadata,
+       renewal_notices_enabled, renewal_grace_ends_at, renewed_at, metadata,
        aggregator:aggregators!cases_aggregator_id_fkey(id, name, billing_method, primary_email, primary_phone),
        location:locations!cases_location_id_fkey(id, name)`
     )
-    .in("status", RENEWAL_DESK_STATUSES as unknown as string[])
-    // Lapsed cases stay on the desk whatever their date; everyone else only
-    // inside the window (past end dates included).
-    .or(`status.eq.lapsed,end_date.lte.${horizon}`)
+    // Lapsed and Active cases whatever their date (Active is the board's
+    // "ends later" tab); renewal-stage cases only inside the window (past end
+    // dates included); Renewed only when renewed recently.
+    .or(
+      `status.in.(lapsed,active),and(status.in.(renewal_due,grace_period),end_date.lte.${horizon}),and(status.eq.renewed,renewed_at.gte.${renewedSince})`,
+    )
     .order("end_date", { ascending: true, nullsFirst: false });
   if (locationId) query = query.eq("location_id", locationId);
 
@@ -72,7 +78,7 @@ export async function GET(request: NextRequest) {
       .order("created_at", { ascending: false }),
     supabase
       .from("vo_renewal_reminders")
-      .select("case_id, sent_at")
+      .select("case_id, reminder_number, sent_at, email_sent, whatsapp_sent")
       .in("case_id", ids)
       .order("sent_at", { ascending: false }),
     supabase
@@ -93,9 +99,14 @@ export async function GET(request: NextRequest) {
     openBill.set(caseId, b as Bill);
   }
 
+  type LogRow = { reminder_number: number; sent_at: string; email_sent: boolean; whatsapp_sent: boolean };
+  const reminderLog = new Map<string, LogRow[]>();
   const reminders = new Map<string, { count: number; last_sent_at: string }>();
   for (const r of remindersRes.data ?? []) {
     const caseId = r.case_id as string;
+    const log = reminderLog.get(caseId) ?? [];
+    log.push(r as unknown as LogRow);
+    reminderLog.set(caseId, log);
     const cur = reminders.get(caseId);
     if (cur) cur.count += 1;
     else reminders.set(caseId, { count: 1, last_sent_at: r.sent_at as string });
@@ -113,8 +124,9 @@ export async function GET(request: NextRequest) {
       status: c.status as string,
       end_date: c.end_date as string | null,
       renewal_grace_ends_at: c.renewal_grace_ends_at as string | null,
+      renewed_at: c.renewed_at as string | null,
     };
-    const tab = renewalDeskTab(term, today, !!bill, graceDays);
+    const tab = renewalBoardTab(term, today, !!bill, graceDays);
     if (!tab) return [];
 
     const aggregator = Array.isArray(c.aggregator) ? c.aggregator[0] : c.aggregator;
@@ -130,6 +142,11 @@ export async function GET(request: NextRequest) {
       aggregator: aggregator ?? null,
     });
 
+    const partnerRecord = isPostpaid ? partnerRenewalRecord(c.metadata) : null;
+    const lapseDecision = latestLapseDecision(c.metadata)?.decision ?? null;
+    const reminderCount = reminders.get(c.id as string)?.count ?? 0;
+    const daysLeft = c.end_date ? daysUntil(c.end_date as string, today) : null;
+
     return [{
       id: c.id,
       case_number: c.case_number,
@@ -140,7 +157,21 @@ export async function GET(request: NextRequest) {
       location_id: location?.id ?? null,
       tab,
       end_date: c.end_date,
-      days_left: c.end_date ? daysUntil(c.end_date as string, today) : null,
+      days_left: daysLeft,
+      needs_action: needsAction({
+        tab,
+        days_left: daysLeft,
+        postpaid: isPostpaid,
+        partner_confirmed: !!partnerRecord,
+        reminder_count: reminderCount,
+        lapse_decision: lapseDecision,
+      }),
+      renewed_at: c.renewed_at ?? null,
+      recipients: {
+        billing: routing.billing,
+        heads_up: routing.headsUp,
+      },
+      notice_schedule: noticeSchedule({ end_date: c.end_date as string | null }, reminderLog.get(c.id as string) ?? [], today),
       grace_last_day: tab === "grace" ? graceLastDay(term, graceDays) : null,
       payer: {
         kind: routing.billing.kind,
@@ -163,11 +194,8 @@ export async function GET(request: NextRequest) {
             created_at: bill.created_at,
           }
         : null,
-      partner_confirmation: isPostpaid
-        ? (() => {
-            const rec = partnerRenewalRecord(c.metadata);
-            return rec ? { term_start: rec.term_start, new_rate: rec.new_rate } : null;
-          })()
+      partner_confirmation: partnerRecord
+        ? { term_start: partnerRecord.term_start, new_rate: partnerRecord.new_rate }
         : null,
       reminders: reminders.get(c.id as string) ?? { count: 0, last_sent_at: null },
       draft_documents: drafts.get(c.id as string) ?? 0,
