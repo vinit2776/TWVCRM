@@ -27,6 +27,8 @@ export function PettyCashIssuance() {
   const [loading, setLoading] = useState(true);
   const { data: policy } = useFetch<{ nudgeAmount: number }>("/api/petty-cash/receipt-policy", {
     initialData: { nudgeAmount: PC_RECEIPT_NUDGE_DEFAULT },
+    // The route returns the policy itself, not {data: …}.
+    select: (json) => json as unknown as { nudgeAmount: number },
   });
   const nudgeAmount = policy.nudgeAmount;
   const [billsFor, setBillsFor] = useState<{ kind: "entry" | "request"; id: string; label: string } | null>(null);
