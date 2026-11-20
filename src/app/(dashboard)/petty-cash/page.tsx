@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Wallet, ArrowUpCircle, ArrowDownCircle, ClipboardCheck, Users, BarChart3 } from "lucide-react";
@@ -12,8 +13,21 @@ import { AllBooksTab } from "@/components/petty-cash/all-books-tab";
 import { AnalyticsTab } from "@/components/petty-cash/analytics-tab";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
+const TAB_VALUES = ["my-book", "requests", "entries", "approvals", "all-books", "analytics"];
+
+// Wrapped in Suspense because reading the URL (?tab=…) opens the tab a notification points to.
 export default function PettyCashPage() {
+  return (
+    <Suspense fallback={null}>
+      <PettyCashContent />
+    </Suspense>
+  );
+}
+
+function PettyCashContent() {
   const { user } = useCurrentUser();
+  const requestedTab = useSearchParams().get("tab");
+  const initialTab = requestedTab && TAB_VALUES.includes(requestedTab) ? requestedTab : "my-book";
   const userRole = user?.role ?? null;
 
   const canApprove = userRole && ["admin", "manager", "accounts"].includes(userRole);
@@ -27,7 +41,7 @@ export default function PettyCashPage() {
         <p className="text-muted-foreground">Manage your petty cash book, requests, and expenses</p>
       </div>
 
-      <Tabs defaultValue="my-book">
+      <Tabs defaultValue={initialTab}>
         <TabsList className="flex-wrap">
           <TabsTrigger value="my-book" className="flex items-center gap-1.5">
             <Wallet className="h-3.5 w-3.5" />My Book

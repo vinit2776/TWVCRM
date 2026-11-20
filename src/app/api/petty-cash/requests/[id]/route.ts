@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
 import { canDecideRequest } from "@/lib/petty-cash-approval";
+import { createNotification } from "@/lib/in-app-notifications";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -107,6 +108,18 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       performedBy: dbUser.id,
       changes: { status: { old: req.status, new: newStatus }, ...(action === "reject" && parsed.data.note ? { rejection_note: { old: null, new: parsed.data.note } } : {}) },
     });
+
+    if (action === "reject") {
+      await createNotification({
+        userId: req.created_by,
+        type: "petty_cash_request_rejected",
+        title: `Fund request ${req.request_number} was rejected`,
+        body: `${(parsed.data.note || "No reason was given").trim().replace(/([^.!?])$/, "$1.")} You can raise a new request.`,
+        url: "/petty-cash?tab=requests",
+        entityType: "pc_request",
+        entityId: id,
+      });
+    }
 
     return NextResponse.json({ success: true, status: newStatus });
   }

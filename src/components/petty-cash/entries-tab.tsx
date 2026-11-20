@@ -102,6 +102,18 @@ export function EntriesTab() {
     }
   };
 
+  const withdraw = async (id: string, entryNumber: string) => {
+    if (!window.confirm(`Withdraw ${entryNumber}? It will be closed and will not go to approval again. If you still need to claim it, log a new expense.`)) return;
+    const res = await fetch(`/api/petty-cash/entries/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "withdraw" }),
+    });
+    if (!res.ok) { toast.error((await res.json()).error || "Could not withdraw"); return; }
+    toast.success(`${entryNumber} withdrawn.`);
+    refetch();
+  };
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between pb-3">
@@ -179,7 +191,10 @@ export function EntriesTab() {
                   {parseFloat(form.amount) >= policy.secondApprovalAmount
                     ? `Your manager reviews it first, then Admin/Accounts (amounts of ₹${policy.secondApprovalAmount.toLocaleString("en-IN")} or more need two approvals; an admin can give both at once). `
                     : "Your manager reviews it. "}
-                  The amount comes off your balance only after it is fully approved. If it is rejected you will see the reason here and can fix and resubmit it.
+                  {editingEntry
+                    ? "After you resubmit, it goes back for approval to the person who rejected it (unless you raised the amount, then it starts again with your manager). "
+                    : "If it is rejected you will be notified with the reason, and can fix and resubmit it or withdraw it. "}
+                  The amount comes off your balance only after it is fully approved.
                 </p>
               </div>
               <Button onClick={handleSubmit} disabled={submitting} className="w-full">
@@ -221,11 +236,17 @@ export function EntriesTab() {
                       </td>
                       <td className="py-2.5 hidden lg:table-cell text-muted-foreground truncate max-w-[200px]">{e.description}</td>
                       <td className="py-2.5">
-                        <Badge variant="secondary" className={PC_ENTRY_STATUS_COLORS[e.status] || ""}>
-                          {PC_ENTRY_STATUS_LABELS[e.status] || e.status}
-                        </Badge>
+                        {e.status === "rejected" && e.withdrawn_at ? (
+                          <Badge variant="secondary" className="bg-gray-100 text-gray-600">Withdrawn</Badge>
+                        ) : (
+                          <Badge variant="secondary" className={PC_ENTRY_STATUS_COLORS[e.status] || ""}>
+                            {PC_ENTRY_STATUS_LABELS[e.status] || e.status}
+                          </Badge>
+                        )}
                         {e.status === "rejected" && e.rejection_note && (
-                          <p className="text-xs text-red-600 mt-0.5 truncate max-w-[160px]" title={e.rejection_note}>{e.rejection_note}</p>
+                          <p className="text-xs text-red-600 mt-1 max-w-[260px] whitespace-normal">
+                            <span className="font-medium">Why:</span> {e.rejection_note}
+                          </p>
                         )}
                       </td>
                       <td className="py-2.5">
@@ -244,15 +265,20 @@ export function EntriesTab() {
                         })()}
                       </td>
                       <td className="py-2.5">
-                        {e.status === "rejected" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-xs h-7"
-                            onClick={() => openEditDialog(e as { id: string; date: string; amount: number; category_id?: string | null; description: string; rejection_note?: string | null })}
-                          >
-                            <Pencil className="h-3 w-3 mr-1" />Edit & Resubmit
-                          </Button>
+                        {e.status === "rejected" && !e.withdrawn_at && (
+                          <div className="flex flex-col gap-1 items-start">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs h-7"
+                              onClick={() => openEditDialog(e as { id: string; date: string; amount: number; category_id?: string | null; description: string; rejection_note?: string | null })}
+                            >
+                              <Pencil className="h-3 w-3 mr-1" />Fix &amp; resubmit
+                            </Button>
+                            <Button size="sm" variant="ghost" className="text-xs h-7 text-muted-foreground" onClick={() => withdraw(e.id, e.entry_number)}>
+                              Withdraw
+                            </Button>
+                          </div>
                         )}
                       </td>
                     </tr>

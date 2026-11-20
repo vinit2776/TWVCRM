@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
-import { canDecideEntry, nextStatusOnApprove, type EntryStage } from "@/lib/petty-cash-approval";
+import { canDecideEntry, nextStatusOnApprove, resubmitStage, type EntryStage } from "@/lib/petty-cash-approval";
+import { createNotification } from "@/lib/in-app-notifications";
 import { getPettyCashPolicy } from "@/lib/petty-cash-policy-server";
 
 type Params = { params: Promise<{ id: string }> };
+
+const endSentence = (t: string) => (/[.!?]$/.test(t.trim()) ? t.trim() : `${t.trim()}.`);
 
 /**
  * GET /api/petty-cash/entries/[id]
@@ -81,17 +84,32 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (entry.status !== "rejected") {
       return NextResponse.json({ error: "Only rejected entries can be resubmitted" }, { status: 400 });
     }
+    if (entry.withdrawn_at) {
+      return NextResponse.json({ error: "You withdrew this expense. Log a new expense instead." }, { status: 400 });
+    }
     if (entry.submitted_by !== dbUser.id) {
       return NextResponse.json({ error: "Only the original submitter can resubmit" }, { status: 403 });
     }
 
     const { date, amount, category_id, description } = resubmit.data;
+
+    // Back to the stage that rejected it (see resubmitStage for when it restarts at the manager).
+    const { data: lastRejection } = await supabase
+      .from("petty_cash_approvals").select("approval_level")
+      .eq("entry_id", id).eq("decision", "rejected")
+      .order("decided_at", { ascending: false }).limit(1).maybeSingle();
+    const policy = await getPettyCashPolicy(createAdminClient());
+    const backTo = resubmitStage({
+      rejectedLevel: (lastRejection?.approval_level as "manager" | "admin" | undefined) ?? null,
+      oldAmount: Number(entry.amount), newAmount: amount, threshold: policy.secondApprovalAmount,
+    });
+
     await supabase.from("petty_cash_entries").update({
       date,
       amount,
       category_id: category_id || null,
       description,
-      status: "pending_manager",
+      status: backTo,
       rejection_note: null,
     }).eq("id", id);
 
@@ -100,10 +118,23 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       entityId: id,
       action: "update",
       performedBy: dbUser.id,
-      changes: { status: { old: "rejected", new: "pending_manager" }, amount: { old: entry.amount, new: amount }, description: { old: entry.description, new: description } },
+      changes: { status: { old: "rejected", new: backTo }, amount: { old: entry.amount, new: amount }, description: { old: entry.description, new: description } },
     });
 
-    return NextResponse.json({ success: true, status: "pending_manager" });
+    return NextResponse.json({ success: true, status: backTo });
+  }
+
+  // Withdraw — the person closes a rejected expense they no longer want to pursue.
+  if (body.action === "withdraw") {
+    if (entry.status !== "rejected" || entry.withdrawn_at) {
+      return NextResponse.json({ error: "Only a rejected expense that is still open can be withdrawn." }, { status: 400 });
+    }
+    if (entry.submitted_by !== dbUser.id) {
+      return NextResponse.json({ error: "Only the person who logged this expense can withdraw it." }, { status: 403 });
+    }
+    await supabase.from("petty_cash_entries").update({ withdrawn_at: new Date().toISOString() }).eq("id", id);
+    logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { withdrawn: { old: false, new: true } } });
+    return NextResponse.json({ success: true });
   }
 
   const parsed = approveSchema.safeParse(body);
@@ -134,6 +165,16 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     });
     if (error) return failed(error.message);
     logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: stage, new: "rejected" } } });
+    // Tell the person now, with the reason, so they do not have to discover it by opening the list.
+    await createNotification({
+      userId: entry.submitted_by,
+      type: "petty_cash_rejected",
+      title: `Expense ${entry.entry_number} was rejected`,
+      body: `${endSentence(note || "No reason was given")} Open it to fix and resubmit, or withdraw it.`,
+      url: "/petty-cash?tab=entries",
+      entityType: "pc_entry",
+      entityId: id,
+    });
     return NextResponse.json({ success: true, status: "rejected" });
   }
 
