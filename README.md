@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TWV CRM
+
+Internal operations platform for **The WorkVilla** coworking space — leads → proposals → contracts → billing → facility management → procurement → accounting.
+
+Built with Next.js 16 (App Router), React 19, TypeScript, Supabase, and Tailwind. Deployed on Vercel (auto-deploys from `origin/main`).
+
+**Production:** https://twv-crm.vercel.app
+
+See [`CLAUDE.md`](./CLAUDE.md) for architecture, business rules, and contribution conventions.
+
+---
+
+## ⚠️ Don't run the dev server from iCloud
+
+This repo is currently in iCloud Drive. Running `npm run dev` from there is
+broken — live-reload never fires (you see stale code) and the first compile can
+hang for minutes. Your code is already backed up on GitHub (every version), so
+the simplest fix is to keep the project in a normal folder.
+
+**Do this once:**
+
+```bash
+bash scripts/setup-local-dev.sh
+```
+
+It copies the project to `~/Projects/twv-crm` (bringing your `.env.local`) and
+installs dependencies. After that, always work there:
+
+```bash
+cd ~/Projects/twv-crm
+npm run dev
+```
+
+That's it — editing, `npm run dev`, and `git` all work normally from
+`~/Projects/twv-crm`. You can delete the iCloud copy once you've confirmed the
+new one runs.
+
+---
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm ci               # install exact dependencies
+cp .env.example .env.local   # then fill in the values (see CLAUDE.md → Environment Variables)
+npm run dev          # start dev server (http://localhost:3000)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Commands
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run dev          # Start dev server (run from ~/Projects/twv-crm, not iCloud — see above)
+npm run build        # Production build — CI runs this on every push to main
+npm run lint         # ESLint — must pass clean (0 errors) before merging
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+npx supabase db push # Apply pending migrations to the live Supabase project
+```
 
-## Learn More
+There are no test suites — verify changes by running the dev server and testing
+in the browser. If the dev server serves stale code, you're almost certainly
+running it from iCloud (see above); otherwise clear the cache with `rm -rf .next`
+and restart.
 
-To learn more about Next.js, take a look at the following resources:
+## Migrations
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+SQL migrations live in `supabase/migrations/`, named `NNNNN_description.sql`
+(sequential 5-digit prefix). A pre-commit hook blocks commits that introduce
+duplicate migration numbers, which would cause `supabase db push` to silently
+skip a migration.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+> **iCloud conflict copies:** editing in iCloud can produce conflict duplicates
+> like `00302_… 2.sql` or `foo 2.ts` that duplicate migration numbers and break
+> `supabase db push`. Working from `~/Projects/twv-crm` (above) avoids them; to
+> find any leftovers: `find . -name '* [0-9].*' -not -path './node_modules/*'`.
