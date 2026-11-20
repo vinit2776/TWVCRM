@@ -214,7 +214,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Record payments (vendor bills) | `accounts`, `admin`; `office_admin` **cash/petty cash only** — **only from Finance > Acc Payables**, and only on an approved bill |
 | Record payments (customer: invoices, deposits, top-ups, ad-hoc) | `admin`, `accounts` only — `PAYMENT_RECORDING_ROLES` in `src/lib/constants.ts`. Everyone else uses **Report paid**, which routes to accounts to verify against the bank. `office_admin` keeps its existing carve-out for settling a pending deposit top-up. Front-desk **booking** payments are separate and unaffected. |
 | Record petty cash (submit an entry) | **Any authenticated user** — no role gate; entries start at `pending_manager` |
-| Approve petty cash | `admin`, `manager`; entries **≥ ₹5,000** need a second approval from `admin`/`accounts` |
+| Approve petty cash | **Expenses:** `admin`/`manager` decide first; entries **≥ ₹5,000** (`app_settings.petty_cash_second_approval_amount`) then need `admin`/`accounts`, unless an `admin` decided at stage 1 (covers both). **Fund requests:** `admin`/`manager` only — `accounts` just issues the cash. **Nobody decides their own** expense or request (403). Rules: `src/lib/petty-cash-approval.ts` |
 | Manage contracts | `admin`, `manager`, `sales_rep` |
 | Terminate an **active** contract | `admin`, `manager` |
 | **Withdraw** a never-activated contract (draft/sent/viewed/accepted → stored as `terminated`) | `admin`, `manager`, `sales_rep` — not renewal drafts (use Cancel Renewal) |

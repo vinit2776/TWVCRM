@@ -28,10 +28,10 @@ export function EntriesTab() {
   const [form, setForm] = useState(emptyForm);
   const [billFiles, setBillFiles] = useState<File[]>([]);
   const [billsFor, setBillsFor] = useState<{ id: string; entry_number: string; status: string } | null>(null);
-  const { data: nudgeAmount } = useFetch<number>("/api/petty-cash/receipt-policy", {
-    initialData: PC_RECEIPT_NUDGE_DEFAULT,
-    select: (json) => Number(json.nudgeAmount) || PC_RECEIPT_NUDGE_DEFAULT,
+  const { data: policy } = useFetch<{ nudgeAmount: number; secondApprovalAmount: number }>("/api/petty-cash/receipt-policy", {
+    initialData: { nudgeAmount: PC_RECEIPT_NUDGE_DEFAULT, secondApprovalAmount: 5000 },
   });
+  const nudgeAmount = policy.nudgeAmount;
 
   const openNewDialog = () => {
     setEditingEntry(null);
@@ -176,8 +176,8 @@ export function EntriesTab() {
               <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground space-y-1">
                 <p><strong>What happens when you press the button below:</strong></p>
                 <p>
-                  {parseFloat(form.amount) >= 5000
-                    ? "Your manager reviews it first, then Admin/Accounts (amounts of ₹5,000 or more need two approvals). "
+                  {parseFloat(form.amount) >= policy.secondApprovalAmount
+                    ? `Your manager reviews it first, then Admin/Accounts (amounts of ₹${policy.secondApprovalAmount.toLocaleString("en-IN")} or more need two approvals; an admin can give both at once). `
                     : "Your manager reviews it. "}
                   The amount comes off your balance only after it is fully approved. If it is rejected you will see the reason here and can fix and resubmit it.
                 </p>

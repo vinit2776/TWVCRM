@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
+import { canDecideEntry, nextStatusOnApprove, type EntryStage } from "@/lib/petty-cash-approval";
+import { getPettyCashPolicy } from "@/lib/petty-cash-policy-server";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -109,105 +111,51 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
   const { action, note } = parsed.data;
 
-  // Determine permission and next status
-  if (entry.status === "pending_manager") {
-    if (!["admin", "manager"].includes(dbUser.role)) {
-      return NextResponse.json({ error: "Only managers/admins can approve at this stage" }, { status: 403 });
-    }
+  if (entry.status !== "pending_manager" && entry.status !== "pending_admin") {
+    return NextResponse.json({ error: `Entry is in '${entry.status}' state and cannot be approved/rejected` }, { status: 400 });
+  }
+  // One place decides who may act: not your own expense, and only the right role for this stage.
+  const decision = canDecideEntry(dbUser.role, dbUser.id, entry);
+  if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
 
-    if (action === "reject") {
-      await supabase.from("petty_cash_entries").update({
-        status: "rejected",
-        rejection_note: note || null,
-      }).eq("id", id);
+  const stage = entry.status as EntryStage;
+  const policy = await getPettyCashPolicy(createAdminClient());
+  const amount = Number(entry.amount);
 
-      await supabase.from("petty_cash_approvals").insert({
-        approval_type: "entry",
-        entry_id: id,
-        approver_id: dbUser.id,
-        approval_level: "manager",
-        decision: "rejected",
-        note: note || null,
-      });
-
-      logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: "pending_manager", new: "rejected" } } });
-
-      return NextResponse.json({ success: true, status: "rejected" });
-    }
-
-    // Approve — check if needs admin approval (≥ ₹5000)
-    const needsAdminApproval = Number(entry.amount) >= 5000;
-    const nextStatus = needsAdminApproval ? "pending_admin" : "approved";
-
-    await supabase.from("petty_cash_entries").update({ status: nextStatus }).eq("id", id);
-
+  if (action === "reject") {
+    await supabase.from("petty_cash_entries").update({ status: "rejected", rejection_note: note || null }).eq("id", id);
     await supabase.from("petty_cash_approvals").insert({
       approval_type: "entry",
       entry_id: id,
       approver_id: dbUser.id,
-      approval_level: "manager",
-      decision: "approved",
+      approval_level: stage === "pending_manager" ? "manager" : "admin",
+      decision: "rejected",
       note: note || null,
     });
-
-    // If fully approved, deduct from book balance
-    if (nextStatus === "approved") {
-      const book = entry.book as { id: string; current_balance: number };
-      const newBalance = Number(book.current_balance) - Number(entry.amount);
-      await supabase.from("petty_cash_books").update({ current_balance: newBalance }).eq("id", entry.book_id);
-    }
-
-    logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: "pending_manager", new: nextStatus } } });
-
-    return NextResponse.json({ success: true, status: nextStatus });
+    logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: stage, new: "rejected" } } });
+    return NextResponse.json({ success: true, status: "rejected" });
   }
 
-  if (entry.status === "pending_admin") {
-    if (!["admin", "accounts"].includes(dbUser.role)) {
-      return NextResponse.json({ error: "Only admin/accounts can approve at this stage" }, { status: 403 });
-    }
+  const nextStatus = nextStatusOnApprove(dbUser.role, stage, amount, policy.secondApprovalAmount);
+  // An admin approving a large amount at stage 1 covers both stages, so record it as an admin approval.
+  const adminOneStep = stage === "pending_manager" && nextStatus === "approved" && amount >= policy.secondApprovalAmount;
 
-    if (action === "reject") {
-      await supabase.from("petty_cash_entries").update({
-        status: "rejected",
-        rejection_note: note || null,
-      }).eq("id", id);
+  await supabase.from("petty_cash_entries").update({ status: nextStatus }).eq("id", id);
+  await supabase.from("petty_cash_approvals").insert({
+    approval_type: "entry",
+    entry_id: id,
+    approver_id: dbUser.id,
+    approval_level: stage === "pending_manager" && !adminOneStep ? "manager" : "admin",
+    decision: "approved",
+    note: adminOneStep ? [note, "Admin approved in one step (covers both approval stages)"].filter(Boolean).join(" — ") : note || null,
+  });
 
-      await supabase.from("petty_cash_approvals").insert({
-        approval_type: "entry",
-        entry_id: id,
-        approver_id: dbUser.id,
-        approval_level: "admin",
-        decision: "rejected",
-        note: note || null,
-      });
-
-      logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: "pending_admin", new: "rejected" } } });
-
-      return NextResponse.json({ success: true, status: "rejected" });
-    }
-
-    // Approve — final approval
-    await supabase.from("petty_cash_entries").update({ status: "approved" }).eq("id", id);
-
-    await supabase.from("petty_cash_approvals").insert({
-      approval_type: "entry",
-      entry_id: id,
-      approver_id: dbUser.id,
-      approval_level: "admin",
-      decision: "approved",
-      note: note || null,
-    });
-
-    // Deduct from book balance
+  if (nextStatus === "approved") {
     const book = entry.book as { id: string; current_balance: number };
-    const newBalance = Number(book.current_balance) - Number(entry.amount);
+    const newBalance = Number(book.current_balance) - amount;
     await supabase.from("petty_cash_books").update({ current_balance: newBalance }).eq("id", entry.book_id);
-
-    logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: "pending_admin", new: "approved" } } });
-
-    return NextResponse.json({ success: true, status: "approved" });
   }
 
-  return NextResponse.json({ error: `Entry is in '${entry.status}' state and cannot be approved/rejected` }, { status: 400 });
+  logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: stage, new: nextStatus } } });
+  return NextResponse.json({ success: true, status: nextStatus });
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
+import { canDecideRequest } from "@/lib/petty-cash-approval";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -68,12 +69,12 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const parsed = approveSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
 
-    if (!["admin", "manager", "accounts"].includes(dbUser.role)) {
-      return NextResponse.json({ error: "Only managers/admins can approve requests" }, { status: 403 });
-    }
     if (req.status !== "pending") {
       return NextResponse.json({ error: "Request is not in pending state" }, { status: 400 });
     }
+    // Managers/admins decide; Accounts only issues the cash. Nobody decides their own request.
+    const decision = canDecideRequest(dbUser.role, dbUser.id, req);
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
 
     const newStatus = action === "approve" ? "approved" : "rejected";
     const now = new Date().toISOString();
