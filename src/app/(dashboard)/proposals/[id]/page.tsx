@@ -1,6 +1,7 @@
 "use client";
 
 import { cleanAddons } from "@/lib/recurring-addons";
+import { termStepRows } from "@/lib/escalation-cycle";
 import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
@@ -99,6 +100,15 @@ export default function ProposalDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const [proposal, setProposal] = useState<Proposal & { lead?: Lead } | null>(null);
+  // Stepped fees inside the term, counted in months (a proposal has no dates yet).
+  const proposalStepRows = proposal?.escalation_cycle_months && proposal.tenure_months
+    ? termStepRows({
+        baseRate: Number(proposal.subtotal),
+        percent: Number(proposal.escalation_percentage ?? 0),
+        cycleMonths: proposal.escalation_cycle_months,
+        tenureMonths: proposal.tenure_months,
+      })
+    : [];
   const [loading, setLoading] = useState(true);
   const [editProposalOpen, setEditProposalOpen] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
@@ -1282,8 +1292,23 @@ export default function ProposalDetailPage({
               </div>
               {proposal.escalation_percentage != null && (
                 <p className="mt-3 text-xs text-muted-foreground">
-                  Escalation on the monthly fee: <span className="font-medium text-foreground">{Number(proposal.escalation_percentage)}%</span> at each renewal.
+                  Escalation on the monthly fee: <span className="font-medium text-foreground">{Number(proposal.escalation_percentage)}%</span>{" "}
+                  {proposalStepRows.length > 0
+                    ? `every ${proposal.escalation_cycle_months} months, each step on the fee then in force.`
+                    : "at each renewal."}
                 </p>
+              )}
+              {proposalStepRows.length > 0 && (
+                <table className="mt-1 text-xs">
+                  <tbody>
+                    {proposalStepRows.map((r) => (
+                      <tr key={r.label}>
+                        <td className="pr-4 py-0.5 text-muted-foreground">{r.label}</td>
+                        <td className="py-0.5 font-medium tabular-nums">{formatCurrency(r.rate)} + GST / month</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
               {cleanAddons(proposal.recurring_addons).length > 0 && (
                 <div className="mt-4 rounded-md border border-amber-200 bg-amber-50/50 p-3 space-y-2">

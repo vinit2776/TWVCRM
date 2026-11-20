@@ -239,6 +239,8 @@ const proposalBaseSchema = z.object({
   recurring_addons: z.array(proposalAddonSchema).max(20).optional(),
   // The agreed annual escalation on the monthly fee; 10 unless negotiated.
   escalation_percentage: z.number().min(0).max(100).optional(),
+  // Months between in-term fee steps (11 or 12); null/absent = escalate at renewal only.
+  escalation_cycle_months: z.union([z.literal(11), z.literal(12)]).nullable().optional(),
   tax_percentage: z.number().min(0).max(100),
   discount_percentage: z.number().min(0).max(100),
   valid_until: z.string().optional(),
@@ -265,6 +267,13 @@ const proposalBaseSchema = z.object({
 export const createProposalSchema = proposalBaseSchema.superRefine((d, ctx) => {
   const error = validateCommitmentTerms(d);
   if (error) ctx.addIssue({ code: "custom", message: error, path: ["lock_in_months"] });
+  if (d.escalation_cycle_months && d.items.some((i) => i.escalates === false)) {
+    ctx.addIssue({
+      code: "custom",
+      message: "An escalation cycle can't be used when a line is marked fixed (for example maintenance). Turn the cycle off, or make every line escalate.",
+      path: ["escalation_cycle_months"],
+    });
+  }
 });
 
 // Cross-field commitment rules are re-checked in PATCH /api/proposals/[id]
@@ -333,6 +342,7 @@ export const createContractSchema = z.object({
   complimentary_services: z.string().optional(),
   security_deposit_months: z.number().min(0).default(3.0),
   escalation_percentage: z.number().min(0).max(100).default(10.0),
+  escalation_cycle_months: z.union([z.literal(11), z.literal(12)]).nullable().optional(),
   notice_period_months: z.number().min(0).default(2.0),
   lock_in_months: z.number().min(1).max(PROPOSAL_MAX_TENURE_MONTHS).optional().nullable(),
   member_signatory_name: z.string().min(1, "Signatory name is required"),

@@ -17,6 +17,9 @@ import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 import { resolveContractCommitment } from "@/lib/contract-commitment";
 import { hasCommitmentTerms } from "@/lib/proposal-terms";
 import { canCompleteOn } from "@/lib/contract-exit";
+import { isEscalationCycle } from "@/lib/escalation-cycle";
+import { syncCyclePhases, CYCLE_FIXED_LINES_ERROR } from "@/lib/escalation-cycle-server";
+import { hasFixedLines } from "@/lib/line-item-escalation";
 import { completeExitOnTerminate, getLiveExit } from "@/lib/contract-exit-server";
 
 export async function GET(
@@ -142,6 +145,13 @@ export async function PATCH(
     allowedFields.po_number = trimmed;
   }
 
+  if (body.escalation_cycle_months !== undefined) {
+    if (body.escalation_cycle_months !== null && !isEscalationCycle(body.escalation_cycle_months)) {
+      return NextResponse.json({ error: "Escalation cycle must be 11 or 12 months, or off" }, { status: 400 });
+    }
+    allowedFields.escalation_cycle_months = body.escalation_cycle_months;
+  }
+
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
   }
@@ -149,6 +159,34 @@ export async function PATCH(
   const { data: oldContract } = await supabase.from("contracts").select("*").eq("id", id).single();
   if (!oldContract) {
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+  }
+
+  // The cycle is part of the agreement the customer signs: it can only be
+  // changed while the contract is still a draft. After that it is locked, like
+  // the stepped fees generated from it.
+  if (
+    "escalation_cycle_months" in allowedFields &&
+    (allowedFields.escalation_cycle_months ?? null) !== (oldContract.escalation_cycle_months ?? null)
+  ) {
+    if (oldContract.status !== "draft") {
+      return NextResponse.json(
+        { error: "The escalation cycle can only be changed while the contract is a draft. It is part of the agreement once sent." },
+        { status: 409 }
+      );
+    }
+    if (allowedFields.escalation_cycle_months && hasFixedLines(oldContract.items)) {
+      return NextResponse.json({ error: CYCLE_FIXED_LINES_ERROR }, { status: 400 });
+    }
+  }
+  // The cycle's steps count from the phase anchor. While it still follows the
+  // start date, moving the start date moves it too (activation does the same).
+  if (
+    oldContract.escalation_cycle_months &&
+    allowedFields.start_date &&
+    allowedFields.start_date !== oldContract.start_date &&
+    oldContract.phase_start_date === oldContract.start_date
+  ) {
+    allowedFields.phase_start_date = allowedFields.start_date;
   }
 
   // Preserve document history when the signed document is swapped through
@@ -614,6 +652,18 @@ export async function PATCH(
       { start: oldContract.start_date as string, end: oldContract.end_date as string },
       { start: data.start_date as string, end: data.end_date as string }
     );
+  }
+
+  // Keep the stepped fees in step with whatever just moved (dates, cycle, or
+  // the activation re-anchor). Failing loudly: a stale schedule bills the wrong fee.
+  if (data?.escalation_cycle_months || oldContract.escalation_cycle_months) {
+    const cycleSync = await syncCyclePhases(createAdminClient(), id, { activating: body.status === "active" });
+    if (!cycleSync.ok) {
+      return NextResponse.json(
+        { error: `Saved, but the escalation schedule could not be updated: ${cycleSync.error}. Save again before sending the agreement.` },
+        { status: 500 }
+      );
+    }
   }
 
   // Close the exit workflow when a live contract is terminated: marks the exit

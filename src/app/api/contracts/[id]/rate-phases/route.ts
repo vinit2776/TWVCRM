@@ -47,8 +47,18 @@ export async function PUT(
 
   // Verify contract exists and get base rate for validation
   const { data: contract } = await admin
-    .from("contracts").select("id, status, subtotal, total_amount, phase_start_date, start_date, end_date").eq("id", id).single();
+    .from("contracts").select("id, status, subtotal, total_amount, phase_start_date, start_date, end_date, escalation_cycle_months").eq("id", id).single();
   if (!contract) return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+
+  // Stepped fees from an escalation cycle are generated from the cycle, the
+  // percentage and the term. Editing them by hand would put the invoices out of
+  // line with the agreement, so change the cycle instead (draft contracts only).
+  if (contract.escalation_cycle_months) {
+    return NextResponse.json(
+      { error: `These rates follow the ${contract.escalation_cycle_months}-month escalation cycle and can't be edited by hand. Change or turn off the cycle on the draft contract instead.` },
+      { status: 409 }
+    );
+  }
 
   const lockedStatuses = ["active", "renewal_in_progress", "renewed", "expired", "terminated"];
   if (lockedStatuses.includes(contract.status)) {

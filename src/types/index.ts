@@ -379,6 +379,8 @@ export interface Proposal {
   recurring_addons?: ProposalAddon[];
   /** Agreed annual escalation on the monthly fee. Absent on older rows (read as 10). */
   escalation_percentage?: number;
+  /** Months between in-term fee steps (11 or 12); null = escalate at renewal only. */
+  escalation_cycle_months?: 11 | 12 | null;
   subtotal: number;
   tax_percentage: number;
   tax_amount: number;
@@ -714,6 +716,8 @@ export interface Contract {
   security_deposit_months?: number;
   /** Escalation applied to THIS term. A negotiation may set it differently for this term only. */
   escalation_percentage?: number;
+  /** Months between in-term fee steps (11 or 12); null = escalate at renewal only. */
+  escalation_cycle_months?: 11 | 12 | null;
   /** Escalation written into the signed base agreement, carried unchanged down a renewal chain. Null on older rows: read it with programmedEscalation(). */
   agreement_escalation_percentage?: number | null;
   /** Whether the daily auto-renew job may prepare and roll this contract into its next term. */

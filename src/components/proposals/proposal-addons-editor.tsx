@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatCurrency } from "@/lib/utils";
 import { addonsMonthlyTotal } from "@/lib/recurring-addons";
+import { EscalationCycleField } from "@/components/contracts/escalation-cycle-field";
 import type { ProposalAddon } from "@/types";
 
 interface Props {
@@ -13,6 +14,11 @@ interface Props {
   onChange: (addons: ProposalAddon[]) => void;
   escalationPercentage: number;
   onEscalationChange: (value: number) => void;
+  escalationCycle: number | null;
+  onEscalationCycleChange: (value: number | null) => void;
+  /** Term in months, once chosen; the preview needs it. */
+  tenureMonths?: number;
+  blockedByFixedLine?: boolean;
   /** Sum of the monthly fee lines above, excluding GST. */
   monthlyFee: number;
   depositMonths: number;
@@ -29,6 +35,10 @@ export function ProposalAddonsEditor({
   onChange,
   escalationPercentage,
   onEscalationChange,
+  escalationCycle,
+  onEscalationCycleChange,
+  tenureMonths,
+  blockedByFixedLine,
   monthlyFee,
   depositMonths,
 }: Props) {
@@ -62,6 +72,15 @@ export function ProposalAddonsEditor({
           never to the add-ons below.
         </p>
       </div>
+
+      <EscalationCycleField
+        value={escalationCycle}
+        onChange={onEscalationCycleChange}
+        percent={Number.isFinite(escalationPercentage) ? escalationPercentage : 0}
+        monthlyFee={monthlyFee}
+        tenureMonths={tenureMonths}
+        blockedByFixedLine={blockedByFixedLine}
+      />
 
       <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-4 space-y-3">
         <div className="flex items-start justify-between gap-3">

@@ -6,6 +6,8 @@ import { normalizeRenewalNote } from "@/lib/renewal-note";
 import { carrySpecialClauseToRenewal } from "@/lib/special-clause/service";
 import { carryElectricityConfigToRenewal } from "@/lib/electricity-renewal";
 import { programmedEscalation } from "@/lib/auto-renewal";
+import { carryItemsAtFee, isEscalationCycle } from "@/lib/escalation-cycle";
+import { lastCycleFee, syncCyclePhases } from "@/lib/escalation-cycle-server";
 import { renewalAddonSeeds, type CarryableAddon } from "@/lib/renewal-addons";
 
 /**
@@ -151,13 +153,22 @@ export async function createRenewalDraft(
   type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string; escalates?: boolean };
   const oldSeats = Number(source.seats || 1);
   const oldItems = (source.items || []) as Item[];
-  const newItems: Item[] = oldItems.map((item) => {
-    // Scale seat-based items proportionally; leave flat-fee items (quantity !== oldSeats) unchanged.
-    const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
-    const newUnitPrice = escalateUnitPrice(item, escalationMultiplier, roundToRupee);
-    const newTotal = newUnitPrice * newQuantity;
-    return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newTotal };
-  });
+
+  // A contract on an escalation cycle has already stepped its fee inside the
+  // term, and the last step is what the customer was paying. The renewal starts
+  // there, with no further step on top (and none is ever lower than it), then
+  // follows the same cycle from its own start. A contract whose term never
+  // reached a step (no more than one cycle long) renews the usual way.
+  const cycleStartFee = await lastCycleFee(admin, source as { id: string; escalation_cycle_months?: number | null });
+
+  const newItems: Item[] = cycleStartFee != null
+    ? carryItemsAtFee(oldItems, oldSeats, seats, cycleStartFee)
+    : oldItems.map((item) => {
+        // Scale seat-based items proportionally; leave flat-fee items (quantity !== oldSeats) unchanged.
+        const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
+        const newUnitPrice = escalateUnitPrice(item, escalationMultiplier, roundToRupee);
+        return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newUnitPrice * newQuantity };
+      });
 
   const newSubtotal = newItems.reduce((sum, i) => sum + i.total, 0);
   const taxPercentage = Number(source.tax_percentage || 18);
@@ -209,6 +220,9 @@ export async function createRenewalDraft(
       // migration 00662 is applied (the column shows up on `source` then), so
       // renewals keep working until it is.
       ...("agreement_escalation_percentage" in source ? { agreement_escalation_percentage: programmedPct } : {}),
+      // The cycle follows the customer into the next term. Written only once
+      // migration 00734 is applied (the column shows up on `source` then).
+      ...("escalation_cycle_months" in source ? { escalation_cycle_months: source.escalation_cycle_months ?? null } : {}),
       // Only written when a note was typed, so a renewal without one never
       // touches the column (keeps renewals working until migration 00609 is applied).
       ...(noteResult.value !== null ? { renewal_agreed_note: noteResult.value } : {}),
@@ -240,6 +254,16 @@ export async function createRenewalDraft(
 
   if (insertErr) {
     return fail(500, insertErr.message);
+  }
+
+  // The renewal's own stepped fees, counted from its own start. Not best-effort:
+  // a draft without them would bill the flat rate for the whole term.
+  if (isEscalationCycle(source.escalation_cycle_months)) {
+    const cycleSync = await syncCyclePhases(admin, newContract.id as string);
+    if (!cycleSync.ok) {
+      await admin.from("contracts").delete().eq("id", newContract.id as string);
+      return fail(500, `The renewal was not created because its escalation schedule could not be written: ${cycleSync.error}`);
+    }
   }
 
   // 7. Mark parent as "renewal_in_progress" — signals that a renewal
