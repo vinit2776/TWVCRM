@@ -4,6 +4,7 @@ import { normalizePhoneFields } from "@/lib/phone";
 import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import { updateLeadSchema } from "@/lib/validations";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
+import { lostReasonMissing } from "@/lib/lead-close-rules";
 
 export async function GET(
   _request: NextRequest,
@@ -87,7 +88,22 @@ export async function PATCH(
   // Fetch current state for audit diff
   const { data: oldLead } = await supabase.from("leads").select("*").eq("id", id).single();
 
+  if (
+    lostReasonMissing({
+      oldStatus: (oldLead as { status?: string } | null)?.status,
+      oldLostReason: (oldLead as { lost_reason?: string | null } | null)?.lost_reason,
+      newStatus: result.data.status,
+      newLostReason: result.data.lost_reason,
+    })
+  ) {
+    return NextResponse.json({ error: "Say why the lead is lost" }, { status: 400 });
+  }
+
   const updateData: Record<string, unknown> = normalizePhoneFields({ ...result.data });
+  // Reopening a junk lead drops its junk reason.
+  if ((oldLead as { status?: string } | null)?.status === "junk" && result.data.status && result.data.status !== "junk") {
+    updateData.junk_reason = null;
+  }
 
   // Handle status transitions
   if (result.data.status === "won" && !body.converted_at) {

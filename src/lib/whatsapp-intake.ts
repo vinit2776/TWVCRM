@@ -459,6 +459,7 @@ async function createLead(
       description: input.messageBody.slice(0, 1000) || null,
       source: "whatsapp",
       status,
+      ...(status === "junk" ? { junk_reason: "spam_or_test" } : {}),
       rating: "none",
       score: 0,
       tags: ["whatsapp-form"],

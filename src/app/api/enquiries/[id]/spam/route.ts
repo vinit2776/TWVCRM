@@ -62,7 +62,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (count === 1) {
       await admin
         .from("leads")
-        .update({ status: spam ? "junk" : "new" })
+        .update(spam ? { status: "junk", junk_reason: "spam_or_test" } : { status: "new", junk_reason: null })
         .eq("id", old.lead_id)
         .eq("status", spam ? "new" : "junk");
     }
