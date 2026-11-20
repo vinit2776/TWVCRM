@@ -3155,6 +3155,7 @@ export interface PettyCashEntry {
   description: string;
   receipt_url?: string;
   po_id?: string;
+  location_id?: string | null;
   status: PcEntryStatus;
   rejection_note?: string;
   submitted_by: string;

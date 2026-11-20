@@ -1,8 +1,14 @@
-export type TimelinePreset = "this_week" | "this_month" | "this_year";
+export type TimelinePreset = "this_week" | "this_month" | "last_month" | "this_year";
+
+// Local calendar date. toISOString() converts to UTC first, which in IST turns local
+// midnight into the previous day and made "This Month" start on the 31st of last month.
+function ymd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 export function getDateRange(preset: TimelinePreset): { dateFrom: string; dateTo: string } {
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  const today = ymd(now);
 
   switch (preset) {
     case "this_week": {
@@ -10,15 +16,19 @@ export function getDateRange(preset: TimelinePreset): { dateFrom: string; dateTo
       const diff = day === 0 ? 6 : day - 1; // Monday = start of week
       const monday = new Date(now);
       monday.setDate(now.getDate() - diff);
-      return { dateFrom: monday.toISOString().slice(0, 10), dateTo: today };
+      return { dateFrom: ymd(monday), dateTo: today };
     }
     case "this_month": {
-      const first = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { dateFrom: first.toISOString().slice(0, 10), dateTo: today };
+      return { dateFrom: ymd(new Date(now.getFullYear(), now.getMonth(), 1)), dateTo: today };
+    }
+    case "last_month": {
+      return {
+        dateFrom: ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+        dateTo: ymd(new Date(now.getFullYear(), now.getMonth(), 0)), // day 0 = last day of previous month
+      };
     }
     case "this_year": {
-      const jan1 = new Date(now.getFullYear(), 0, 1);
-      return { dateFrom: jan1.toISOString().slice(0, 10), dateTo: today };
+      return { dateFrom: ymd(new Date(now.getFullYear(), 0, 1)), dateTo: today };
     }
   }
 }
