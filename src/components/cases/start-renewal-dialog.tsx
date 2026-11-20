@@ -28,6 +28,10 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { VO_PURPOSE_LABELS } from "@/lib/constants";
+import { BlockerList, RenewalTermHint } from "@/components/cases/renewal-guidance";
+import { startRenewalAfter, startRenewalBlockers } from "@/lib/vo-renewal-guidance";
+import { reportGuidance } from "@/lib/guidance-progress-client";
+import { progressKeyFor } from "@/lib/vo-renewal-learning";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   RENEWAL_DURATIONS,
@@ -172,6 +176,14 @@ export function StartRenewalDialog({
           : setup.blocked ?? lockedReason ?? (setup.currentFee > 0 ? null : "This case has no fee on record. Set its rate first.");
   const customInvalid = mode === "custom" && (!(Number(customPct) > 0) || reason.trim().length < 10);
   const canSubmit = !!offer && !cannotStartReason && !customInvalid && endConfirmed && !submitting;
+  const blockers = startRenewalBlockers({
+    ready: !!offer,
+    cannotStart: !!cannotStartReason,
+    mode,
+    customPct,
+    reason,
+    endConfirmed,
+  });
 
   const handleStart = async () => {
     if (!offer || !setup) return;
@@ -193,16 +205,21 @@ export function StartRenewalDialog({
         }),
       });
       const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Could not start the renewal"); return; }
+      if (!res.ok) { reportGuidance(progressKeyFor("start"), "blocked"); toast.error(json.error || "Could not start the renewal"); return; }
       const r = json.data as Result;
       setResult(r);
-      if ((sendEmail && !r.emailSent) || (sendWhatsApp && !r.whatsAppSent)) {
-        toast.warning("Renewal bill raised, but a message could not be delivered. Share the link below.");
-      } else {
-        toast.success("Renewal started");
-      }
+      const after = startRenewalAfter({
+        termStart: r.termStart,
+        email: { ticked: sendEmail, sent: r.emailSent },
+        whatsApp: { ticked: sendWhatsApp, sent: r.whatsAppSent },
+        hasLink: !!r.paymentLink,
+      });
+      if (after.kind === "warning") toast.warning(after.message);
+      else toast.success(after.message);
+      reportGuidance(progressKeyFor("start"), "completed");
       onStarted();
     } catch {
+      reportGuidance(progressKeyFor("start"), "blocked");
       toast.error("Could not start the renewal");
     } finally {
       setSubmitting(false);
@@ -308,7 +325,7 @@ export function StartRenewalDialog({
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Escalation</Label>
+                <Label className="text-xs"><RenewalTermHint term="escalation" /></Label>
                 <Select value={mode} onValueChange={(v) => setMode(v as RenewalEscalationMode)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -451,6 +468,8 @@ export function StartRenewalDialog({
               )}
             </div>
 
+            <div id="start-renewal-blockers"><BlockerList reasons={blockers} /></div>
+
             <label className="flex items-start gap-2 rounded-md border p-3">
               <Checkbox checked={endConfirmed} onCheckedChange={(v) => setEndConfirmed(v === true)} className="mt-0.5" />
               <span>
@@ -466,7 +485,7 @@ export function StartRenewalDialog({
           ) : (
             <>
               <Button variant="outline" onClick={onClose}>Cancel</Button>
-              <Button onClick={handleStart} disabled={!canSubmit}>
+              <Button onClick={handleStart} disabled={!canSubmit} aria-describedby={blockers.length ? "start-renewal-blockers" : undefined}>
                 {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {sendEmail || sendWhatsApp ? "Start renewal and send" : "Start renewal"}
               </Button>

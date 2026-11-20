@@ -596,6 +596,18 @@ export const ROUTE_GUIDES: RouteEntry[] = [
       idleMs: 15_000,
     },
   },
+  // Must come before the case-detail pattern below, which also matches /cases/renewals.
+  {
+    pattern: "/cases/renewals",
+    guide: {
+      key: "cases-renewals",
+      flowName: "VO renewals",
+      step: 1,
+      totalSteps: 1,
+      hint: "Each row names the next step and who has to do it. Use Needs me to see only the cases that are yours, and open a case to start its renewal.",
+      idleMs: 12_000,
+    },
+  },
   {
     pattern: /^\/cases\/[^/]+$/,
     guide: {

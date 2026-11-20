@@ -14,6 +14,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { BlockerList, RenewalTermHint } from "@/components/cases/renewal-guidance";
+import { partnerConfirmAfter, partnerConfirmBlockers } from "@/lib/vo-renewal-guidance";
+import { reportGuidance } from "@/lib/guidance-progress-client";
+import { progressKeyFor } from "@/lib/vo-renewal-learning";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -111,6 +115,16 @@ export function PartnerRenewalDialog({
   const startsNow = !!offer && !!today && today >= offer.term.start;
   const canSubmit = !!offer && !noPartner && !noFee && !customInvalid && endConfirmed && note.trim().length >= 10 && !submitting;
 
+  const blockers = partnerConfirmBlockers({
+    ready: !!offer,
+    cannotConfirm: noPartner || noFee,
+    mode,
+    customPct,
+    reason,
+    endConfirmed,
+    noteLength: note.trim().length,
+  });
+
   const handleConfirm = async () => {
     if (!offer || !setup) return;
     setSubmitting(true);
@@ -130,13 +144,15 @@ export function PartnerRenewalDialog({
         }),
       });
       const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Could not record the confirmation"); return; }
-      if (json.data.rolled) toast.success("Renewed — the new term is now its own case");
+      if (!res.ok) { reportGuidance(progressKeyFor("partner"), "blocked"); toast.error(json.error || "Could not record the confirmation"); return; }
+      reportGuidance(progressKeyFor("partner"), "completed");
+      if (json.data.rolled) toast.success(partnerConfirmAfter({ rolled: true, termStart: offer.term.start }));
       else if (json.data.warning) toast.warning(json.data.warning);
-      else toast.success(`Confirmed — the case rolls into its new term on ${formatDate(offer.term.start)}`);
+      else toast.success(partnerConfirmAfter({ rolled: false, termStart: offer.term.start }));
       onDone();
       onClose();
     } catch {
+      reportGuidance(progressKeyFor("partner"), "blocked");
       toast.error("Could not record the confirmation");
     } finally {
       setSubmitting(false);
@@ -190,7 +206,7 @@ export function PartnerRenewalDialog({
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Escalation on the monthly fee</Label>
+                <Label className="text-xs"><RenewalTermHint term="escalation" /> on the monthly fee</Label>
                 <Select value={mode} onValueChange={(v) => setMode(v as RenewalEscalationMode)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -239,6 +255,8 @@ export function PartnerRenewalDialog({
                 <strong>{formatDate(offer.term.end)}</strong>.
               </span>
             </label>
+
+            <BlockerList reasons={blockers} />
 
             {startsNow && (
               <p className="text-xs text-amber-700">
