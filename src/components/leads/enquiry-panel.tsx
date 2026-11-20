@@ -19,7 +19,10 @@ export function EnquiryPanel({ enquiryId, onNavigate }: { enquiryId: string | nu
   const [dirty, setDirty] = useState(false);
   // The ids as they were when this enquiry was opened, so saving one does not shuffle the order under the person.
   const [order, setOrder] = useState<string[]>([]);
-  if (enquiryId && !order.includes(enquiryId)) setOrder(openIds.includes(enquiryId) ? openIds : [enquiryId, ...openIds]);
+  // Fixed when the panel opens. After a refresh the open enquiries may still be loading, so an order of
+  // just this one enquiry is filled in once they arrive.
+  const loadedLater = order.length === 1 && openIds.length > 1 && openIds.includes(enquiryId ?? "");
+  if (enquiryId && (!order.includes(enquiryId) || loadedLater)) setOrder(openIds.includes(enquiryId) ? openIds : [enquiryId, ...openIds]);
   if (!enquiryId && order.length > 0) setOrder([]);
   const { prev, next, position } = panelNeighbours(order, enquiryId ?? "");
 
