@@ -29,6 +29,13 @@ describe("buildLeadsNav", () => {
     }
   });
 
+  it("adds Home first when the person can work leads, and marks it current on the Home view", () => {
+    const nav = buildLeadsNav({ view: "home", pinnedOnly: false, statusFilter: "" }, counts, { showHome: true });
+    expect(nav.daily.map((i) => i.label)).toEqual(["Home", "New enquiries", "Follow-ups", "Tours"]);
+    expect(all(nav).filter((i) => i.active).map((i) => i.key)).toEqual(["home"]);
+    expect(buildLeadsNav(state, counts).daily.map((i) => i.key)).not.toContain("home");
+  });
+
   it("a status filter other than junk is still All leads", () => {
     const active = all(buildLeadsNav({ ...state, statusFilter: "new" }, counts)).filter((i) => i.active);
     expect(active.map((i) => i.key)).toEqual(["all"]);

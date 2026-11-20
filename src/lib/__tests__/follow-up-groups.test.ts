@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { followUpGroup, groupFollowUps, soonestPerLead } from "../follow-up-groups";
+import { followUpGroup, followUpWindow, groupFollowUps, soonestPerLead } from "../follow-up-groups";
 
 // Thu 5 Nov 2026, 12:00 IST
 const NOW = new Date("2026-11-05T06:30:00Z");
@@ -54,7 +54,7 @@ describe("groupFollowUps", () => {
 
   it("counts every group and lists a lead under only one", () => {
     const g = groupFollowUps(nextDue, leads, NOW);
-    expect(g.counts).toEqual({ overdue: 2, today: 1, tomorrow: 0, week: 0, later: 0, none: 3 });
+    expect(g.counts).toEqual({ overdue: 2, today: 1, tomorrow: 0, week: 0, later: 0, none: 3, next7: 0, month: 0 });
   });
 
   it("runs Overdue longest overdue first", () => {
@@ -63,5 +63,26 @@ describe("groupFollowUps", () => {
 
   it("lists leads with no next step newest first", () => {
     expect(groupFollowUps(nextDue, leads, NOW).ids.none).toEqual(["f", "e", "d"]);
+  });
+});
+
+describe("followUpWindow", () => {
+  it("covers tomorrow to a week away as next7, then eight to thirty days as month", () => {
+    expect(followUpWindow(at("2026-11-05"), NOW)).toBeNull();
+    expect(followUpWindow(at("2026-11-06"), NOW)).toBe("next7");
+    expect(followUpWindow(at("2026-11-12"), NOW)).toBe("next7");
+    expect(followUpWindow(at("2026-11-13"), NOW)).toBe("month");
+    expect(followUpWindow(at("2026-12-05"), NOW)).toBe("month");
+    expect(followUpWindow(at("2026-12-06"), NOW)).toBeNull();
+    expect(followUpWindow(at("2026-11-01"), NOW)).toBeNull();
+  });
+
+  it("lists a lead in its window without taking it out of its pill", () => {
+    const nextDue = new Map([["a", at("2026-11-09")], ["b", at("2026-11-20")]]);
+    const g = groupFollowUps(nextDue, [], NOW);
+    expect(g.ids.next7).toEqual(["a"]);
+    expect(g.ids.month).toEqual(["b"]);
+    expect(g.ids.week).toEqual(["a"]);
+    expect(g.ids.later).toEqual(["b"]);
   });
 });

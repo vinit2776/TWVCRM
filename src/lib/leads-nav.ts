@@ -45,9 +45,10 @@ export interface LeadsNav {
  * screen is not built yet are left out rather than shown dead; each later phase adds its entry here.
  * A menu's own badge is the sum of its entries' counts, so work waiting inside it stays visible.
  */
-export function buildLeadsNav(state: LeadsNavState, counts: LeadsNavCounts): LeadsNav {
+export function buildLeadsNav(state: LeadsNavState, counts: LeadsNavCounts, options: { showHome?: boolean } = {}): LeadsNav {
   const onAll = state.view === "all";
   const daily: LeadsNavItem[] = [
+    ...(options.showHome ? [{ key: "home", label: "Home", count: 0, tone: "", target: { kind: "view", view: "home" } as LeadsNavTarget, active: state.view === "home" }] : []),
     { key: "enquiries", label: "New enquiries", count: counts.enquiries, tone: "bg-emerald-500 text-white", target: { kind: "view", view: "enquiries" }, active: state.view === "enquiries" },
     { key: "followups", label: "Follow-ups", count: counts.followups, tone: "bg-red-500 text-white", target: { kind: "view", view: "followups" }, active: state.view === "followups" },
     { key: "tours", label: "Tours", count: counts.tours, tone: "bg-violet-600 text-white", target: { kind: "view", view: "tours" }, active: state.view === "tours" },
