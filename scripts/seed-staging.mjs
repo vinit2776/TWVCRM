@@ -56,7 +56,8 @@ const supa = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: 
 
 async function upsertAdminUser() {
   const email = "admin@staging.theworkvilla.test";
-  const password = "StagingAdmin!2026";
+  // Same shared password as scripts/seed-staging-users.mjs — keep the two in sync so there is one answer to "what is the staging login?".
+  const password = "Staging#Login2026";
 
   const { data: existing } = await supa.auth.admin.listUsers();
   let authUser = existing?.users?.find((u) => u.email === email);
@@ -72,7 +73,9 @@ async function upsertAdminUser() {
     authUser = data.user;
     console.log(`Created auth user ${email}`);
   } else {
-    console.log(`Auth user ${email} already exists`);
+    const { error } = await supa.auth.admin.updateUserById(authUser.id, { password, email_confirm: true, ban_duration: "none" });
+    if (error) throw error;
+    console.log(`Reset password for ${email}`);
   }
 
   // The on_auth_user_created trigger auto-inserts a public.users row on
