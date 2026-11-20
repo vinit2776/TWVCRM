@@ -27,7 +27,7 @@ export function EntriesTab() {
   const emptyForm = { date: new Date().toISOString().slice(0, 10), amount: "", category_id: "", description: "" };
   const [form, setForm] = useState(emptyForm);
   const [billFiles, setBillFiles] = useState<File[]>([]);
-  const [billsFor, setBillsFor] = useState<{ id: string; entry_number: string; status: string } | null>(null);
+  const [billsFor, setBillsFor] = useState<{ id: string; entry_number: string; status: string; withdrawn: boolean } | null>(null);
   const { data: policy } = useFetch<{ nudgeAmount: number; secondApprovalAmount: number }>("/api/petty-cash/receipt-policy", {
     initialData: { nudgeAmount: PC_RECEIPT_NUDGE_DEFAULT, secondApprovalAmount: 5000 },
     // The route returns the policy itself, not {data: …}, so useFetch's default unwrapping would yield undefined.
@@ -102,6 +102,18 @@ export function EntriesTab() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const withdraw = async (id: string, entryNumber: string) => {
+    if (!window.confirm(`Withdraw ${entryNumber}? It will be closed and will not go to approval again. If you still need to claim it, log a new expense.`)) return;
+    const res = await fetch(`/api/petty-cash/entries/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "withdraw" }),
+    });
+    if (!res.ok) { toast.error((await res.json()).error || "Could not withdraw"); return; }
+    toast.success(`${entryNumber} withdrawn.`);
+    refetch();
   };
 
   return (
@@ -181,7 +193,10 @@ export function EntriesTab() {
                   {parseFloat(form.amount) >= policy.secondApprovalAmount
                     ? `Your manager reviews it first, then Admin/Accounts (amounts of ₹${policy.secondApprovalAmount.toLocaleString("en-IN")} or more need two approvals; an admin can give both at once). `
                     : "Your manager reviews it. "}
-                  The amount comes off your balance only after it is fully approved. If it is rejected you will see the reason here and can fix and resubmit it.
+                  {editingEntry
+                    ? "After you resubmit, it goes back for approval to the person who rejected it (unless you raised the amount, then it starts again with your manager). "
+                    : "If it is rejected you will be notified with the reason, and can fix and resubmit it or withdraw it. "}
+                  The amount comes off your balance only after it is fully approved.
                 </p>
               </div>
               <Button onClick={handleSubmit} disabled={submitting} className="w-full">
@@ -223,22 +238,28 @@ export function EntriesTab() {
                       </td>
                       <td className="py-2.5 hidden lg:table-cell text-muted-foreground truncate max-w-[200px]">{e.description}</td>
                       <td className="py-2.5">
-                        <Badge variant="secondary" className={PC_ENTRY_STATUS_COLORS[e.status] || ""}>
-                          {PC_ENTRY_STATUS_LABELS[e.status] || e.status}
-                        </Badge>
+                        {e.status === "rejected" && e.withdrawn_at ? (
+                          <Badge variant="secondary" className="bg-gray-100 text-gray-600">Withdrawn</Badge>
+                        ) : (
+                          <Badge variant="secondary" className={PC_ENTRY_STATUS_COLORS[e.status] || ""}>
+                            {PC_ENTRY_STATUS_LABELS[e.status] || e.status}
+                          </Badge>
+                        )}
                         {e.status === "rejected" && e.rejection_note && (
-                          <p className="text-xs text-red-600 mt-0.5 truncate max-w-[160px]" title={e.rejection_note}>{e.rejection_note}</p>
+                          <p className="text-xs text-red-600 mt-1 max-w-[260px] whitespace-normal">
+                            <span className="font-medium">Why:</span> {e.rejection_note}
+                          </p>
                         )}
                       </td>
                       <td className="py-2.5">
                         {(() => {
                           const n = e.attachments?.length ?? 0;
                           const missing = needsReceiptNudge(Number(e.amount), n, nudgeAmount);
-                          const canAdd = e.status !== "approved";
+                          const canAdd = e.status !== "approved" && !e.withdrawn_at;
                           return (
                             <Button size="sm" variant="outline"
                               className={`text-xs h-7 ${missing ? "border-amber-300 text-amber-800 bg-amber-50" : ""}`}
-                              onClick={() => setBillsFor({ id: e.id, entry_number: e.entry_number, status: e.status })}>
+                              onClick={() => setBillsFor({ id: e.id, entry_number: e.entry_number, status: e.status, withdrawn: !!e.withdrawn_at })}>
                               <Paperclip className="h-3 w-3 mr-1" />
                               {n > 0 ? `View bills (${n})` : missing ? "No bill — add one" : canAdd ? "Add a bill" : "No bill"}
                             </Button>
@@ -246,15 +267,20 @@ export function EntriesTab() {
                         })()}
                       </td>
                       <td className="py-2.5">
-                        {e.status === "rejected" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-xs h-7"
-                            onClick={() => openEditDialog(e as { id: string; date: string; amount: number; category_id?: string | null; description: string; rejection_note?: string | null })}
-                          >
-                            <Pencil className="h-3 w-3 mr-1" />Edit & Resubmit
-                          </Button>
+                        {e.status === "rejected" && !e.withdrawn_at && (
+                          <div className="flex flex-col gap-1 items-start">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs h-7"
+                              onClick={() => openEditDialog(e as { id: string; date: string; amount: number; category_id?: string | null; description: string; rejection_note?: string | null })}
+                            >
+                              <Pencil className="h-3 w-3 mr-1" />Fix &amp; resubmit
+                            </Button>
+                            <Button size="sm" variant="ghost" className="text-xs h-7 text-muted-foreground" onClick={() => withdraw(e.id, e.entry_number)}>
+                              Withdraw
+                            </Button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -281,12 +307,14 @@ export function EntriesTab() {
           open
           onOpenChange={(o) => { if (!o) { setBillsFor(null); refetch(); } }}
           title={`Bills for ${billsFor.entry_number}`}
-          description={billsFor.status === "approved"
+          description={billsFor.withdrawn
+            ? "You withdrew this expense, so it is closed. Files can no longer be added or removed."
+            : billsFor.status === "approved"
             ? "This expense is approved. Only Accounts can add or remove files now."
             : "Photos or PDFs of the bill or payment proof. Your approver sees these when deciding."}
           target={{ entryId: billsFor.id }}
-          canAdd={billsFor.status !== "approved"}
-          canRemove={() => billsFor.status !== "approved"}
+          canAdd={billsFor.status !== "approved" && !billsFor.withdrawn}
+          canRemove={() => billsFor.status !== "approved" && !billsFor.withdrawn}
           addLabel="Add a bill (photo or PDF)"
           emptyText="No bill has been added to this expense yet."
         />

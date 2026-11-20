@@ -113,3 +113,21 @@ export const PC_REJECT_REASONS = [
 export function buildRejectNote(reasons: string[], detail: string): string {
   return [...reasons, detail.trim()].filter(Boolean).join(". ");
 }
+
+/**
+ * Where a resubmitted expense goes. It returns to the stage that rejected it, so a second-stage
+ * rejection is not sent back through the manager, but only if it is still the same or a smaller
+ * amount and still needs the second stage. Any increase (or an amount now below the second-approval
+ * line) restarts at the manager, because the earlier approval was for something different.
+ */
+export function resubmitStage(i: {
+  rejectedLevel: "manager" | "admin" | null;
+  oldAmount: number;
+  newAmount: number;
+  threshold: number;
+}): EntryStage {
+  if (i.rejectedLevel === "admin" && i.newAmount <= i.oldAmount && needsSecondApproval(i.newAmount, i.threshold)) {
+    return "pending_admin";
+  }
+  return "pending_manager";
+}

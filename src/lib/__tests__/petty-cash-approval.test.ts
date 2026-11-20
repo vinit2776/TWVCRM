@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildRejectNote, canDecideEntry, canDecideRequest, computeEntryFlags, isCleanForBulk, nextStatusOnApprove,
+  buildRejectNote, resubmitStage, canDecideEntry, canDecideRequest, computeEntryFlags, isCleanForBulk, nextStatusOnApprove,
   type FlagInput,
 } from "../petty-cash-approval";
 
@@ -88,5 +88,23 @@ describe("buildRejectNote", () => {
   it("joins reasons and detail", () => {
     expect(buildRejectNote(["Bill is missing", "Wrong category"], " please fix ")).toBe("Bill is missing. Wrong category. please fix");
     expect(buildRejectNote([], "")).toBe("");
+  });
+});
+
+describe("resubmitStage", () => {
+  const base = { oldAmount: 6000, newAmount: 6000, threshold: 5000 };
+  it("a first-stage rejection restarts at the manager", () => {
+    expect(resubmitStage({ ...base, rejectedLevel: "manager" })).toBe("pending_manager");
+  });
+  it("a second-stage rejection returns to the second stage when the amount is not higher", () => {
+    expect(resubmitStage({ ...base, rejectedLevel: "admin" })).toBe("pending_admin");
+    expect(resubmitStage({ ...base, rejectedLevel: "admin", newAmount: 5500 })).toBe("pending_admin");
+  });
+  it("restarts at the manager if the amount went up or no longer needs a second approval", () => {
+    expect(resubmitStage({ ...base, rejectedLevel: "admin", newAmount: 7000 })).toBe("pending_manager");
+    expect(resubmitStage({ ...base, rejectedLevel: "admin", newAmount: 4000 })).toBe("pending_manager");
+  });
+  it("defaults to the manager when the rejecting stage is unknown", () => {
+    expect(resubmitStage({ ...base, rejectedLevel: null })).toBe("pending_manager");
   });
 });
