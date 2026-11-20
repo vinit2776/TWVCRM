@@ -43,6 +43,7 @@ import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import type { TourGroup } from "@/lib/tours";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import { LeadsViewTabs } from "@/components/leads/leads-view-tabs";
+import { EnquiryPanel } from "@/components/leads/enquiry-panel";
 import { LeadsHome } from "@/components/leads/leads-home";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { LeadsNavV2 } from "@/components/leads/leads-nav-v2";
@@ -191,6 +192,16 @@ function LeadsPageContent() {
   const handleSearch = () => {
     setSearch(searchInput);
     setPage(1);
+  };
+
+  // ?enquiry=<id> opens the check panel (new navigation only); closing or moving on rewrites the address.
+  const enquiryId = homeV2 ? searchParams.get("enquiry") : null;
+  const setPanelEnquiry = (id: string | null) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (id) params.set("enquiry", id);
+    else params.delete("enquiry");
+    const qs = params.toString();
+    router.replace(qs ? `/leads?${qs}` : "/leads", { scroll: false });
   };
 
   const switchTab = (next: LeadsView) => {
@@ -522,6 +533,8 @@ function LeadsPageContent() {
 
         </>
       )}
+
+      <EnquiryPanel enquiryId={enquiryId} onNavigate={setPanelEnquiry} />
 
       {/* Import Leads Dialog */}
       <ImportLeadsDialog

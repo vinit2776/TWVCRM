@@ -1,6 +1,8 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useLeadsHomeV2 } from "@/hooks/use-leads-home-v2";
+import { checkPanelHref } from "@/lib/enquiry-panel";
 import { Check, UserCheck, X, RefreshCw, Ban, Phone } from "lucide-react";
 import {
   DropdownMenu,
@@ -66,6 +68,8 @@ interface Props {
 
 export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
+  const panelOn = useLeadsHomeV2();
   const { claim, unclaim, resolve, markNotALead } = useEnquiryNotifications();
 
   const u = urgency(item);
@@ -256,7 +260,8 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
           <button
             onClick={() => {
               onNavigate?.();
-              router.push(`/leads/contact-back/${item.enquiryId}`);
+              // With the new navigation the call form opens as a panel over the Leads list.
+              router.push(panelOn ? checkPanelHref(item.enquiryId, pathname, window.location.search) : `/leads/contact-back/${item.enquiryId}`);
             }}
             className="inline-flex items-center gap-1 rounded-md border border-primary/40 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/5 transition-colors"
           >
