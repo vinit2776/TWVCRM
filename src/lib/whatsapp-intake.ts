@@ -571,14 +571,17 @@ async function alertStaff(
     <p>Message: ${esc(a.body.slice(0, 500))}</p>
     <p><a href="${url}">View in CRM →</a></p></div>`;
 
+  // A known lead messaging again is a conversation someone is already handling: push only, no
+  // team-wide email or sales WhatsApp. A first contact and anything needing review still send both.
+  const quiet = a.isReEnquiry && !a.needsReview;
   await Promise.allSettled([
-    resend.emails.send({ from: EMAIL_FROM, to: recipients, subject: title, html }),
+    ...(quiet ? [] : [resend.emails.send({ from: EMAIL_FROM, to: recipients, subject: title, html })]),
     sendPushToAll({
       title,
       body: `${a.isReEnquiry ? "Messaged again" : "New message"} on WhatsApp${a.reference ? ` · ${a.reference}` : ""}`,
       url,
       tag: `wa-enquiry-${a.leadId}`,
     }),
-    ...phones.map((p) => messaging.internalNewLead(p, a.displayName, "—", "WhatsApp", a.leadId)),
+    ...(quiet ? [] : phones).map((p) => messaging.internalNewLead(p, a.displayName, "—", "WhatsApp", a.leadId)),
   ]);
 }
