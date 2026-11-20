@@ -61,8 +61,8 @@ export function BillEditDialog({ bill, open, onOpenChange, onSaved, poValue = nu
     const seq = ++extractSeq.current;
     if (!f) { setInvoiceCheck({ status: "idle" }); return; }
     setInvoiceCheck({ status: "loading" });
-    requestInvoiceExtraction(f).then((extracted) => {
-      if (seq === extractSeq.current) setInvoiceCheck(extracted ? { status: "ok", extracted } : { status: "unavailable" });
+    requestInvoiceExtraction(f).then((result) => {
+      if (seq === extractSeq.current) setInvoiceCheck(result.ok ? { status: "ok", extracted: result.extracted } : { status: "unavailable", reason: result.reason });
     });
   };
 
