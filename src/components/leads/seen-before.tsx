@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, History } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { PROPOSAL_STATUS_LABELS, CONTRACT_STATUS_LABELS, LEAD_STATUS_LABELS } from "@/lib/constants";
+import { PROPOSAL_STATUS_LABELS, CONTRACT_STATUS_LABELS, LEAD_STATUS_LABELS, isContractOperational } from "@/lib/constants";
 import { summariseSeenBefore, type SeenBeforeData } from "@/lib/seen-before";
 
 /**
@@ -36,7 +36,7 @@ export function SeenBefore({ leadId, enquiryId }: { leadId: string; enquiryId: s
         <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            <b>This is a current customer</b> ({data.contracts.filter((c) => c.status === "active" || c.status === "renewal_in_progress").map((c) => c.contract_number).filter(Boolean).join(", ") || "active contract"}). Check whether they need support or a change to their plan before treating this as a new sales enquiry.
+            <b>This is a current customer</b> ({data.contracts.filter((c) => isContractOperational({ status: c.status, end_date: c.end_date })).map((c) => c.contract_number).filter(Boolean).join(", ") || "active contract"}). Check whether they need support or a change to their plan before treating this as a new sales enquiry.
           </span>
         </div>
       )}
