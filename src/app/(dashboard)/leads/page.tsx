@@ -42,6 +42,9 @@ import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import type { TourGroup } from "@/lib/tours";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import { LeadsViewTabs } from "@/components/leads/leads-view-tabs";
+import { LeadsNavV2 } from "@/components/leads/leads-nav-v2";
+import { buildLeadsNav, type LeadsNavItem } from "@/lib/leads-nav";
+import { useLeadsHomeV2 } from "@/hooks/use-leads-home-v2";
 import { leadsViewHref, parseLeadsView, type LeadsView } from "@/lib/leads-views";
 
 // useSearchParams needs a Suspense boundary above it or the page cannot be prerendered.
@@ -63,14 +66,18 @@ function LeadsPageContent() {
   const page = pageState.view === tab ? pageState.page : 1;
   const setPage = (next: number) => setPageState({ view: tab, page: next });
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  // A link such as /leads?status=junk or ?pinned=1 opens the list already filtered.
+  const [statusFilter, setStatusFilter] = useState<string>(() => {
+    const s = searchParams.get("status");
+    return s && (LEAD_STATUSES as readonly string[]).includes(s) ? s : "";
+  });
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [assignedToFilter, setAssignedToFilter] = useState<string>("");
   const [importOpen, setImportOpen] = useState(false);
   const [showDisabled, setShowDisabled] = useState(false);
-  const [pinnedOnly, setPinnedOnly] = useState(false);
+  const [pinnedOnly, setPinnedOnly] = useState(() => searchParams.get("pinned") === "1");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [followupSummary, setFollowupSummary] = useState<FollowupSummary | null>(null);
   // Tours waiting for someone to say what happened, for the tab's badge.
@@ -182,6 +189,35 @@ function LeadsPageContent() {
     router.push(leadsViewHref(next));
   };
 
+  // The new navigation (behind leads_home_v2_enabled). Buckets are All leads under a filter, so they
+  // set the filter and put it in the address; the other entries clear it so a view never inherits one.
+  const homeV2 = useLeadsHomeV2();
+  const nav = buildLeadsNav(
+    { view: tab, pinnedOnly, statusFilter },
+    {
+      enquiries: activeCount,
+      followups: followupSummary ? followupSummary.overdue + followupSummary.due_today : 0,
+      tours: tourCounts?.needs_update ?? 0,
+      replies: replyCounts?.mine ?? 0,
+    },
+  );
+  const openNavItem = (item: LeadsNavItem) => {
+    const t = item.target;
+    if (t.kind === "link") {
+      router.push(t.href);
+      return;
+    }
+    if (t.kind === "bucket") {
+      setPinnedOnly(t.bucket === "pinned");
+      setStatusFilter(t.bucket === "junk" ? "junk" : "");
+      router.push(t.bucket === "pinned" ? "/leads?pinned=1" : t.bucket === "junk" ? "/leads?status=junk" : "/leads");
+      return;
+    }
+    setPinnedOnly(false);
+    setStatusFilter("");
+    switchTab(t.view);
+  };
+
   // The follow-ups tab lists only leads with an overdue/due-today follow-up, but still
   // within whatever filters are applied — clear them so nothing hides the leads that need action.
   const handleReviewOverdue = () => {
@@ -233,23 +269,25 @@ function LeadsPageContent() {
       </div>
 
       {/* ── View tabs: new enquiries stay discoverable instead of competing with the follow-up backlog ── */}
-      <LeadsViewTabs
-        active={tab}
-        onSelect={switchTab}
-        tabs={[
-          { key: "enquiries", label: "New", count: activeCount, tone: "bg-emerald-500 text-white" },
-          { key: "replies", label: "Replies", count: replyCounts?.mine ?? 0, tone: "bg-blue-600 text-white" },
-          {
-            key: "followups",
-            label: "Follow-ups",
-            count: followupSummary ? followupSummary.overdue + followupSummary.due_today : 0,
-            tone: "bg-red-500 text-white",
-          },
-          { key: "tours", label: "Tours", count: tourCounts?.needs_update ?? 0, tone: "bg-violet-600 text-white" },
-          { key: "all", label: "All leads", count: 0, tone: "" },
-          { key: "whatsapp", label: "WhatsApp log", count: 0, tone: "" },
-        ]}
-      />
+      {homeV2 ? <LeadsNavV2 nav={nav} onSelect={openNavItem} /> : (
+        <LeadsViewTabs
+          active={tab}
+          onSelect={switchTab}
+          tabs={[
+            { key: "enquiries", label: "New", count: activeCount, tone: "bg-emerald-500 text-white" },
+            { key: "replies", label: "Replies", count: replyCounts?.mine ?? 0, tone: "bg-blue-600 text-white" },
+            {
+              key: "followups",
+              label: "Follow-ups",
+              count: followupSummary ? followupSummary.overdue + followupSummary.due_today : 0,
+              tone: "bg-red-500 text-white",
+            },
+            { key: "tours", label: "Tours", count: tourCounts?.needs_update ?? 0, tone: "bg-violet-600 text-white" },
+            { key: "all", label: "All leads", count: 0, tone: "" },
+            { key: "whatsapp", label: "WhatsApp log", count: 0, tone: "" },
+          ]}
+        />
+      )}
 
       {tab === "enquiries" && <EnquiryTracker />}
 
