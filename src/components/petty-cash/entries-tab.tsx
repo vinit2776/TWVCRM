@@ -27,7 +27,7 @@ export function EntriesTab() {
   const emptyForm = { date: new Date().toISOString().slice(0, 10), amount: "", category_id: "", description: "" };
   const [form, setForm] = useState(emptyForm);
   const [billFiles, setBillFiles] = useState<File[]>([]);
-  const [billsFor, setBillsFor] = useState<{ id: string; entry_number: string; status: string } | null>(null);
+  const [billsFor, setBillsFor] = useState<{ id: string; entry_number: string; status: string; withdrawn: boolean } | null>(null);
   const { data: policy } = useFetch<{ nudgeAmount: number; secondApprovalAmount: number }>("/api/petty-cash/receipt-policy", {
     initialData: { nudgeAmount: PC_RECEIPT_NUDGE_DEFAULT, secondApprovalAmount: 5000 },
     // The route returns the policy itself, not {data: …}, so useFetch's default unwrapping would yield undefined.
@@ -255,11 +255,11 @@ export function EntriesTab() {
                         {(() => {
                           const n = e.attachments?.length ?? 0;
                           const missing = needsReceiptNudge(Number(e.amount), n, nudgeAmount);
-                          const canAdd = e.status !== "approved";
+                          const canAdd = e.status !== "approved" && !e.withdrawn_at;
                           return (
                             <Button size="sm" variant="outline"
                               className={`text-xs h-7 ${missing ? "border-amber-300 text-amber-800 bg-amber-50" : ""}`}
-                              onClick={() => setBillsFor({ id: e.id, entry_number: e.entry_number, status: e.status })}>
+                              onClick={() => setBillsFor({ id: e.id, entry_number: e.entry_number, status: e.status, withdrawn: !!e.withdrawn_at })}>
                               <Paperclip className="h-3 w-3 mr-1" />
                               {n > 0 ? `View bills (${n})` : missing ? "No bill — add one" : canAdd ? "Add a bill" : "No bill"}
                             </Button>
@@ -307,12 +307,14 @@ export function EntriesTab() {
           open
           onOpenChange={(o) => { if (!o) { setBillsFor(null); refetch(); } }}
           title={`Bills for ${billsFor.entry_number}`}
-          description={billsFor.status === "approved"
+          description={billsFor.withdrawn
+            ? "You withdrew this expense, so it is closed. Files can no longer be added or removed."
+            : billsFor.status === "approved"
             ? "This expense is approved. Only Accounts can add or remove files now."
             : "Photos or PDFs of the bill or payment proof. Your approver sees these when deciding."}
           target={{ entryId: billsFor.id }}
-          canAdd={billsFor.status !== "approved"}
-          canRemove={() => billsFor.status !== "approved"}
+          canAdd={billsFor.status !== "approved" && !billsFor.withdrawn}
+          canRemove={() => billsFor.status !== "approved" && !billsFor.withdrawn}
           addLabel="Add a bill (photo or PDF)"
           emptyText="No bill has been added to this expense yet."
         />

@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CheckCircle2, AlertCircle, Paperclip } from "lucide-react";
 import { toast } from "sonner";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { AttachmentDialog } from "@/components/petty-cash/attachments";
 import { needsReceiptNudge, PC_RECEIPT_NUDGE_DEFAULT } from "@/lib/petty-cash-attachments";
 import { useFetch } from "@/hooks/use-fetch";
@@ -22,6 +23,7 @@ import type { PettyCashRequest, PettyCashEntry, PaginatedResponse } from "@/type
 type PendingItem = { kind: "entry_approval"; data: PettyCashEntry };
 
 export function PettyCashIssuance() {
+  const { user } = useCurrentUser();
   const [pendingAdminEntries, setPendingAdminEntries] = useState<PettyCashEntry[]>([]);
   const [recentlyIssued, setRecentlyIssued] = useState<PettyCashRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -146,12 +148,18 @@ export function PettyCashIssuance() {
                           onClick={() => setBillsFor({ kind: "entry", id: e.id, label: e.entry_number })}>
                           <Paperclip className="h-3.5 w-3.5 mr-1" />{(e.attachments?.length ?? 0) > 0 ? `View bills (${e.attachments?.length})` : "No bill attached"}
                         </Button>
-                        <Button size="sm" variant="outline" className="text-green-700 border-green-300" onClick={() => setEntryAction({ entry: e, action: "approve" })}>
-                          Approve
-                        </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 border-red-300" onClick={() => setEntryAction({ entry: e, action: "reject" })}>
-                          Reject
-                        </Button>
+                        {user?.id && e.submitted_by === user.id ? (
+                          <p className="text-xs text-muted-foreground max-w-[200px] text-right">You logged this expense, so someone else must approve or reject it.</p>
+                        ) : (
+                          <>
+                            <Button size="sm" variant="outline" className="text-green-700 border-green-300" onClick={() => setEntryAction({ entry: e, action: "approve" })}>
+                              Approve
+                            </Button>
+                            <Button size="sm" variant="outline" className="text-red-600 border-red-300" onClick={() => setEntryAction({ entry: e, action: "reject" })}>
+                              Reject
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
