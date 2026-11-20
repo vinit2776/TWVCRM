@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import { PersonName } from "@/components/shared/person-name";
@@ -53,22 +53,42 @@ function Strip({ counts, onGoTo }: Pick<Props, "counts" | "onGoTo">) {
  */
 export function LeadsHome({ counts, users, isUnread, isReEnquiry, onOpenLead, onGoTo }: Props) {
   const { user } = useCurrentUser();
+  const userId = user?.id ?? null;
   const [owner, setOwner] = useState<string | null>(null);
-  if (!user?.id) {
+  const ownerId = owner ?? userId;
+  // Overdue and due-today for whoever's work is shown, so the strip agrees with the lists below it.
+  const [mine, setMine] = useState<{ owner: string; overdue: number; today: number } | null>(null);
+  useEffect(() => {
+    if (!ownerId) return;
+    let cancelled = false;
+    fetch(`/api/leads/follow-ups?group=overdue&limit=1&assigned_to=${ownerId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json?.counts) setMine({ owner: ownerId, overdue: json.counts.overdue, today: json.counts.today });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [ownerId]);
+
+  if (!user || !userId || !ownerId) {
     return (
       <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" /> Loading your work…
       </div>
     );
   }
-  const ownerId = owner ?? user.id;
   const canLookAtOthers = user.role === "admin" || user.role === "manager";
   const ownerName = users.find((u) => u.id === ownerId)?.full_name ?? user.full_name;
   const filters = { search: "", status: "", sources: [], locationId: null, assignedTo: ownerId, pinned: false };
 
   return (
     <div className="space-y-6">
-      <Strip counts={counts} onGoTo={onGoTo} />
+      <Strip
+        counts={mine && mine.owner === ownerId ? { ...counts, overdue: mine.overdue, dueToday: mine.today } : { ...counts, overdue: 0, dueToday: 0 }}
+        onGoTo={onGoTo}
+      />
 
       <section className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -82,9 +102,9 @@ export function LeadsHome({ counts, users, isUnread, isReEnquiry, onOpenLead, on
               className="h-9 rounded-md border bg-background px-2 text-sm"
               aria-label="Whose work to show"
             >
-              <option value={user.id}>You</option>
+              <option value={userId}>You</option>
               {users
-                .filter((u) => u.id !== user.id)
+                .filter((u) => u.id !== userId)
                 .map((u) => (
                   <option key={u.id} value={u.id}>
                     {u.full_name}
