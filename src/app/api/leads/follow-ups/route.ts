@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { phoneMatchClauses } from "@/lib/phone-search";
 import { istDayKey } from "@/lib/lead-days";
-import { FOLLOW_UP_GROUPS, groupFollowUps, soonestPerLead, type FollowUpGroup } from "@/lib/follow-up-groups";
+import { ALL_FOLLOW_UP_GROUPS, groupFollowUps, soonestPerLead, type FollowUpGroup } from "@/lib/follow-up-groups";
 
 const MAX_PENDING = 10000;
 const MAX_OPEN_LEADS = 8000;
 const CLOSED_STATUSES = "(won,lost,junk)";
 
-// GET /api/leads/follow-ups?group=overdue|today|tomorrow|week|later|none&page=1&limit=50
+// GET /api/leads/follow-ups?group=overdue|today|tomorrow|week|later|none|next7|month&page=1&limit=50
 //   &search=&status=&source=a,b&location_id=&assigned_to=&pinned=true
 // The Leads → Follow-ups tab: a count for every pill, and the ids of the chosen group in the order
 // it shows them, with each lead's due time and a count per date for the headers. The rows
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const group = (searchParams.get("group") ?? "overdue") as FollowUpGroup;
-  if (!FOLLOW_UP_GROUPS.includes(group)) return NextResponse.json({ error: "Unknown group" }, { status: 400 });
+  if (!ALL_FOLLOW_UP_GROUPS.includes(group)) return NextResponse.json({ error: "Unknown group" }, { status: 400 });
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "50", 10) || 50));
 

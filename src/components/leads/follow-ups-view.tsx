@@ -33,6 +33,8 @@ const PILLS: Record<FollowUpGroup, { label: string; tone: string; count: string 
   week: { label: "This week", tone: "border-emerald-200 text-emerald-700", count: "bg-emerald-600 text-white" },
   later: { label: "Later", tone: "border-slate-200 text-slate-600", count: "bg-slate-600 text-white" },
   none: { label: "No next step", tone: "border-dashed border-amber-600 bg-amber-50 text-amber-700", count: "bg-amber-600 text-white" },
+  next7: { label: "This week", tone: "border-emerald-200 text-emerald-700", count: "bg-emerald-600 text-white" },
+  month: { label: "This month", tone: "border-slate-200 text-slate-600", count: "bg-slate-600 text-white" },
 };
 
 const PAGE_SIZE = 50;
@@ -51,6 +53,8 @@ const HEADER_TONE: Record<FollowUpGroup, string> = {
   week: "text-emerald-700",
   later: "text-slate-600",
   none: "text-amber-700",
+  next7: "text-emerald-700",
+  month: "text-slate-600",
 };
 
 export function FollowUpsView({
@@ -59,14 +63,19 @@ export function FollowUpsView({
   isUnread,
   isReEnquiry,
   onOpenLead,
+  groups = FOLLOW_UP_GROUPS,
+  initialGroup = "overdue",
 }: {
   filters: FollowUpFilters;
   users: { id: string; full_name: string; role: string }[];
   isUnread: (lead: Lead) => boolean;
   isReEnquiry: (lead: Lead) => boolean;
   onOpenLead: (lead: Lead) => void;
+  /** Which pills to offer; the Leads Home offers a few of them. */
+  groups?: FollowUpGroup[];
+  initialGroup?: FollowUpGroup;
 }) {
-  const [group, setGroup] = useState<FollowUpGroup>("overdue");
+  const [group, setGroup] = useState<FollowUpGroup>(initialGroup);
   const [data, setData] = useState<FollowUpsResponse | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [due, setDue] = useState<Record<string, string>>({});
@@ -153,7 +162,7 @@ export function FollowUpsView({
   return (
     <div className="space-y-3">
       <div className="sticky top-0 z-10 flex flex-wrap gap-2 border-b bg-background py-3">
-        {FOLLOW_UP_GROUPS.map((g) => {
+        {groups.map((g) => {
           const p = PILLS[g];
           const on = group === g;
           return (
