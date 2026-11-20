@@ -17,6 +17,7 @@ interface EnquiryData extends ContactBackSource {
   received_at: string;
   resolved_at: string | null;
   message: string | null;
+  needs_review?: boolean;
 }
 
 /**
@@ -63,6 +64,7 @@ export function ContactBackContent({
       leadId: enquiry.lead_id,
       prefill: contactBackPrefill(enquiry, locations),
       hints: contactBackHints(enquiry),
+      needsReview: !!enquiry.needs_review,
     };
   }, [enquiry, locations, locationsLoading]);
 
