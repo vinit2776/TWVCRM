@@ -15,6 +15,11 @@ export function lineEscalates(item: Pick<EscalatableLine, "escalates">): boolean
   return item.escalates !== false;
 }
 
+/** True when any line must stay fixed (e.g. maintenance), which a combined stepped fee cannot honour. */
+export function hasFixedLines(items: Array<Pick<EscalatableLine, "escalates">> | null | undefined): boolean {
+  return (items ?? []).some((i) => !lineEscalates(i));
+}
+
 export function escalateUnitPrice(
   item: EscalatableLine,
   multiplier: number,

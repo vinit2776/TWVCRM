@@ -5,6 +5,7 @@
  * The addendum references the original agreement and captures the
  * negotiated renewal terms (escalation, tenure, seats, etc.)
  */
+import { lastCycleFee } from "@/lib/escalation-cycle-server";
 import jsPDF from "jspdf";
 import autoTable, { type RowInput } from "jspdf-autotable";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -47,6 +48,8 @@ export interface AddendumData {
   renewal_rate_phases?: { phase_order: number; duration_months: number; monthly_rate: number; end_date?: string | null }[];
   /** Phase-clock anchor for renewal_rate_phases — the renewal's own phase_start_date (falls back to renewal_start_date). */
   renewal_phase_start_date?: string;
+  /** Months between the renewal's own fee steps, when it is on an escalation cycle. */
+  renewal_escalation_cycle_months?: number | null;
   /** Recurring add-ons on the renewal (never escalated). Absent or empty: the addendum reads as it always has. */
   renewal_addons?: AddendumAddon[];
 
@@ -55,6 +58,12 @@ export interface AddendumData {
   parent_start_date: string;
   parent_end_date: string;
   parent_subtotal: number;
+  /**
+   * The last stepped fee of a parent that stepped inside its term (escalation cycle).
+   * The renewal starts there with no further step, so the text says that rather
+   * than "escalated by X%" from the parent's base fee. Absent for every other parent.
+   */
+  parent_final_fee?: number | null;
   parent_seats: number;
   parent_tenure_months: number;
   parent_agreement_date?: string;
@@ -241,13 +250,21 @@ export function generateAddendumPdf(data: AddendumData): jsPDF {
     // renewal term's own phase schedule ends is for the next renewal/addendum
     // to define, not a "flat" continuation stated here.
     const lines = boundaries.map((b) => `${formatDateRange(b.start, b.end)}: INR ${formatCurrency(b.rate).replace("Rs. ", "")} + GST per month`);
+    const intro = data.parent_final_fee != null
+      ? `The monthly service fee in force on the last day of the previous term was INR ${formatCurrency(data.parent_final_fee).replace("Rs. ", "")} + GST. The renewal term starts at that fee with no further escalation at renewal, and the fee then escalates every ${data.renewal_escalation_cycle_months ?? 11} months as set out below:`
+      : "The Parties agree that the monthly service fee for this renewal term shall follow the tiered schedule below:";
     ctx.addWrappedText(
-      `The Parties agree that the monthly service fee for this renewal term shall follow the tiered schedule below:\n${lines.join("\n")}`,
+      `${intro}\n${lines.join("\n")}`,
       ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5
     );
   } else if (data.renewal_escalation_waived) {
     ctx.addWrappedText(
       `The Parties agree that the escalation has been waived for this renewal period. The monthly service fee shall remain at INR ${formatCurrency(data.renewal_subtotal).replace("Rs. ", "")} (Rupees ${numberToWords(Math.round(data.renewal_subtotal))} Only), the same as the previous term.`,
+      ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5
+    );
+  } else if (data.parent_final_fee != null) {
+    ctx.addWrappedText(
+      `The monthly service fee in force on the last day of the previous term was INR ${formatCurrency(data.parent_final_fee).replace("Rs. ", "")} + GST. The Parties agree that the renewal term starts at INR ${formatCurrency(data.renewal_subtotal).replace("Rs. ", "")} (Rupees ${numberToWords(Math.round(data.renewal_subtotal))} Only) w.e.f. ${formatDate(data.renewal_start_date)}, with no further escalation at renewal.`,
       ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5
     );
   } else {
@@ -560,7 +577,7 @@ export async function buildAddendumPdfBuffer(
 
   const { data: parentData, error: parentError } = await supabase
     .from("contracts")
-    .select("id, contract_number, start_date, end_date, subtotal, seats, tenure_months, agreement_date, items")
+    .select("*")
     .eq("id", contract.parent_contract_id)
     .single();
 
@@ -615,12 +632,14 @@ export async function buildAddendumPdfBuffer(
     renewal_items: (contract.items || []) as AddendumData["renewal_items"],
     renewal_rate_phases: (contract.rate_phases || []) as AddendumData["renewal_rate_phases"],
     renewal_phase_start_date: contract.phase_start_date || contract.start_date,
+    renewal_escalation_cycle_months: contract.escalation_cycle_months ?? null,
     renewal_addons: renewalAddonRows,
 
     parent_contract_number: parentData.contract_number,
     parent_start_date: parentData.start_date,
     parent_end_date: parentData.end_date,
     parent_subtotal: Number(parentData.subtotal),
+    parent_final_fee: await lastCycleFee(supabase, parentData),
     parent_seats: parentData.seats || 1,
     parent_tenure_months: parentData.tenure_months || 12,
     parent_agreement_date: parentData.agreement_date,

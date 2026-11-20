@@ -4,11 +4,13 @@ import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { updateProposalSchema } from "@/lib/validations";
 import { PROPOSAL_EDITABLE_STATUSES } from "@/lib/constants";
 import { validateCommitmentTerms } from "@/lib/proposal-terms";
+import { CYCLE_FIXED_LINES_ERROR } from "@/lib/escalation-cycle-server";
 
 const CONTENT_FIELDS = [
   "items",
   "recurring_addons",
   "escalation_percentage",
+  "escalation_cycle_months",
   "tax_percentage",
   "discount_percentage",
   "title",
@@ -140,6 +142,15 @@ export async function PATCH(
     });
     if (commitmentError) {
       return NextResponse.json({ error: commitmentError }, { status: 400 });
+    }
+
+    // The cycle steps one combined fee, so it can't sit beside a line that must stay fixed.
+    const mergedCycle = result.data.escalation_cycle_months !== undefined
+      ? result.data.escalation_cycle_months
+      : oldProposal.escalation_cycle_months;
+    const mergedItems = (result.data.items ?? oldProposal.items ?? []) as Array<{ escalates?: boolean }>;
+    if (mergedCycle && mergedItems.some((i) => i.escalates === false)) {
+      return NextResponse.json({ error: CYCLE_FIXED_LINES_ERROR }, { status: 400 });
     }
 
     const { service_quotas, ...contentUpdates } = result.data;

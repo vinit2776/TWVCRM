@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
+import { DEFAULT_ESCALATION_CYCLE_MONTHS } from "@/lib/escalation-cycle";
 import { ProposalAddonsEditor } from "@/components/proposals/proposal-addons-editor";
 import { cleanAddons } from "@/lib/recurring-addons";
 import { Loader2, Lock } from "lucide-react";
@@ -83,6 +84,8 @@ export function ProposalForm({
   const [escalationSplit, setEscalationSplit] = useState(false);
   const [addons, setAddons] = useState<ProposalAddon[]>([]);
   const [escalationPercentage, setEscalationPercentage] = useState(DEFAULT_ESCALATION_PERCENTAGE);
+  // In-term fee steps. New proposals start at 11 months; an older proposal keeps what it was sent with.
+  const [escalationCycle, setEscalationCycle] = useState<number | null>(DEFAULT_ESCALATION_CYCLE_MONTHS);
   const [taxPercentage, setTaxPercentage] = useState(18);
   const [discountPercentage, setDiscountPercentage] = useState(0);
   const [validUntil, setValidUntil] = useState("");
@@ -153,6 +156,7 @@ export function ProposalForm({
       setEscalationSplit((initialProposal.items ?? []).some((i) => i.escalates !== undefined));
       setAddons((initialProposal.recurring_addons ?? []).map((a) => ({ description: a.description, amount: Number(a.amount) })));
       setEscalationPercentage(Number(initialProposal.escalation_percentage ?? DEFAULT_ESCALATION_PERCENTAGE));
+      setEscalationCycle(initialProposal.escalation_cycle_months ?? null);
       setTaxPercentage(initialProposal.tax_percentage ?? 18);
       setDiscountPercentage(initialProposal.discount_percentage ?? 0);
       setValidUntil(initialProposal.valid_until ? initialProposal.valid_until.slice(0, 10) : "");
@@ -238,6 +242,8 @@ export function ProposalForm({
   }, [open, proposalId, initialProposal, catalogLoaded]);
 
   // Compute subtotal for deposit auto-calculation
+  // A cycle steps one combined fee, so it can't sit beside a line marked fixed.
+  const fixedLineBlocksCycle = escalationSplit && items.some((i) => i.escalates === false);
   const computedSubtotal = items
     .filter((item) => item.description.trim())
     .reduce((sum, item) => sum + Math.max(1, item.quantity) * item.unit_price, 0);
@@ -259,6 +265,7 @@ export function ProposalForm({
     setEscalationSplit(false);
     setAddons([]);
     setEscalationPercentage(DEFAULT_ESCALATION_PERCENTAGE);
+    setEscalationCycle(DEFAULT_ESCALATION_CYCLE_MONTHS);
     setTaxPercentage(18);
     setDiscountPercentage(0);
     setValidUntil("");
@@ -384,6 +391,7 @@ export function ProposalForm({
       })),
       recurring_addons: cleanAddons(addons),
       escalation_percentage: escalationPercentage,
+      escalation_cycle_months: fixedLineBlocksCycle ? null : escalationCycle,
       tax_percentage: taxPercentage,
       discount_percentage: discountPercentage,
       valid_until: validUntil || undefined,
@@ -487,6 +495,10 @@ export function ProposalForm({
             onChange={setAddons}
             escalationPercentage={escalationPercentage}
             onEscalationChange={setEscalationPercentage}
+            escalationCycle={escalationCycle}
+            onEscalationCycleChange={setEscalationCycle}
+            tenureMonths={tenureMonths ?? undefined}
+            blockedByFixedLine={fixedLineBlocksCycle}
             monthlyFee={computedSubtotal}
             depositMonths={depositMonths}
           />

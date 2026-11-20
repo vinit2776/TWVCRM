@@ -89,8 +89,10 @@ export function followTermDates(addon: AddonDates, from: TermDates, to: TermDate
  * The sentence a customer-facing document prints about escalation, or null
  * when the document carries no figure (proposals saved before it was captured).
  */
-export function escalationNote(percent: number | null | undefined, hasAddons: boolean): string | null {
+export function escalationNote(percent: number | null | undefined, hasAddons: boolean, cycleMonths?: number | null): string | null {
   if (percent == null || !Number.isFinite(Number(percent))) return null;
-  const base = `Escalation of ${Number(percent)}% applies to the monthly fee at each renewal.`;
+  const base = cycleMonths
+    ? `Escalation of ${Number(percent)}% applies to the monthly fee every ${cycleMonths} months from the start date, each step on the fee then in force.`
+    : `Escalation of ${Number(percent)}% applies to the monthly fee at each renewal.`;
   return hasAddons ? `${base} Recurring add-ons are not subject to escalation.` : base;
 }

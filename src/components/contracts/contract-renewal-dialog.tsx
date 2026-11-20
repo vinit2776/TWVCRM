@@ -45,6 +45,7 @@ import { BILLING_CYCLE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { escalateUnitPrice } from "@/lib/line-item-escalation";
+import { carryItemsAtFee } from "@/lib/escalation-cycle";
 import { defaultCarryIds, type CarryableAddon } from "@/lib/renewal-addons";
 import type { Contract } from "@/types";
 
@@ -100,7 +101,14 @@ export function ContractRenewalDialog({
   // Round to nearest Rupee
   const roundToRupee = (n: number) => Math.round(n);
 
-  const currentSubtotal = Number(contract.subtotal);
+  // A contract that stepped inside its term renews from its last stepped fee, with no
+  // extra step on top; the escalation % then drives the renewal's own steps.
+  const steppedFee = useMemo(() => {
+    if (!contract.escalation_cycle_months) return null;
+    const phases = (contract.rate_phases ?? []).slice().sort((a, b) => a.phase_order - b.phase_order);
+    return phases.length > 1 ? Number(phases[phases.length - 1].monthly_rate) : null;
+  }, [contract.escalation_cycle_months, contract.rate_phases]);
+  const currentSubtotal = steppedFee ?? Number(contract.subtotal);
   const multiplier = 1 + escalationPct / 100;
 
   // Preview: compute escalated subtotal per-item then sum (matches API logic)
@@ -108,12 +116,18 @@ export function ContractRenewalDialog({
   const previewSubtotal = useMemo(() => {
     const items = (contract.items || []) as Item[];
     const oldSeats = contract.seats || 1;
+    if (steppedFee != null) {
+      return carryItemsAtFee(
+        items.map((i) => ({ ...i, total: i.unit_price * i.quantity })),
+        oldSeats, seats, steppedFee,
+      ).reduce((sum, i) => sum + i.total, 0);
+    }
     return items.reduce((sum, item) => {
       const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
       const newPrice = escalateUnitPrice(item, multiplier, roundToRupee);
       return sum + newPrice * newQuantity;
     }, 0);
-  }, [contract.items, multiplier, seats, contract.seats]);
+  }, [contract.items, multiplier, seats, contract.seats, steppedFee]);
 
   const taxPct = Number(contract.tax_percentage || 18);
   const discountPct = Number(contract.discount_percentage || 0);
@@ -268,6 +282,7 @@ export function ContractRenewalDialog({
                 />
                 <p className="text-[10px] text-muted-foreground">
                   Agreement: {parentEscPct}%. A different rate applies to this term only.
+                  {steppedFee != null && ` The renewal starts at the last stepped fee, with no further step at renewal; this % drives its own steps every ${contract.escalation_cycle_months} months.`}
                 </p>
               </div>
               <div className="text-center pb-2">

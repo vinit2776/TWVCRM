@@ -91,6 +91,7 @@ import {
   canWithdrawContract,
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
+import { computePhaseBoundaries } from "@/lib/rate-phase-dates";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import { JourneyPanel } from "@/components/journey/journey-panel";
 import {
@@ -1842,6 +1843,7 @@ export default function ContractDetailPage({
             phaseStartDate={contract.phase_start_date || contract.start_date}
             canEdit={
               ["admin", "manager", "sales_rep"].includes(userRole ?? "") &&
+              !contract.escalation_cycle_months &&
               !(CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)
             }
             onPhasesUpdated={() => fetchContract(false)}
@@ -2044,11 +2046,27 @@ export default function ContractDetailPage({
               <CardTitle className="text-base flex flex-wrap items-center gap-2">
                 Monthly billable
                 <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-800">
-                  escalates {Number(contract.escalation_percentage ?? 10)}% on renewal
+                  {contract.escalation_cycle_months && (contract.rate_phases?.length ?? 0) > 1
+                    ? `escalates ${Number(contract.escalation_percentage ?? 10)}% every ${contract.escalation_cycle_months} months`
+                    : `escalates ${Number(contract.escalation_percentage ?? 10)}% on renewal`}
                 </span>
               </CardTitle>
             </CardHeader>
             <CardContent>
+              {contract.escalation_cycle_months && (contract.rate_phases?.length ?? 0) > 1 && (() => {
+                const steps = (contract.rate_phases ?? [])
+                  .slice()
+                  .sort((a, b) => a.phase_order - b.phase_order);
+                const boundaries = computePhaseBoundaries(contract.phase_start_date || contract.start_date, steps);
+                const today = new Date().toISOString().slice(0, 10);
+                const next = boundaries.find((b) => b.start > today);
+                return (
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    The fee steps every {contract.escalation_cycle_months} months on the schedule below (set in the agreement, so it can&apos;t be edited by hand).
+                    {next ? ` Next step: ${formatCurrency(next.rate)} + GST from ${formatDate(next.start)}.` : " No further steps in this term."}
+                  </p>
+                );
+              })()}
               <div className="rounded-md border overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>

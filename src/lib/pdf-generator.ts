@@ -10,6 +10,7 @@ import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates"
 import { drawCompanyStamp } from "@/lib/company-stamp";
 import { composeProposalTerms } from "@/lib/proposal-terms";
 import { programmedEscalation } from "@/lib/auto-renewal";
+import { isEscalationCycle, termStepRows } from "@/lib/escalation-cycle";
 import { sanitizeForPdf } from "@/lib/pdf-text";
 import { buildScheduleLines, formatScheduleRow, readAgreementTerms } from "@/lib/agreement-terms";
 
@@ -79,6 +80,8 @@ interface PDFOptions {
   serviceQuotas?: { name: string; unit_label: string; monthly_quota: number; overage_rate: number }[];
   recurringAddons?: ProposalAddon[]; // Monthly add-ons, shown apart from the fee lines (proposals only)
   escalationPercentage?: number | null; // Agreed escalation on the monthly fee (proposals only)
+  escalationCycleMonths?: number | null; // Months between in-term fee steps (proposals only)
+  tenureMonths?: number | null; // Term, so the proposal can show the stepped fees (proposals only)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -557,7 +560,18 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // The agreed escalation, and that add-ons sit outside it.
   const addons = cleanAddons(options.recurringAddons);
-  const escalationText = options.showServicesIncluded ? escalationNote(options.escalationPercentage, addons.length > 0) : null;
+  // A cycle only reads as one when the term is long enough to step at least once.
+  const stepRows = options.showServicesIncluded && options.escalationCycleMonths && options.tenureMonths
+    ? termStepRows({
+        baseRate: Number(options.subtotal ?? 0),
+        percent: Number(options.escalationPercentage ?? 0),
+        cycleMonths: options.escalationCycleMonths,
+        tenureMonths: options.tenureMonths,
+      })
+    : [];
+  const escalationText = options.showServicesIncluded
+    ? escalationNote(options.escalationPercentage, addons.length > 0, stepRows.length > 0 ? options.escalationCycleMonths : null)
+    : null;
   if (escalationText) {
     ensureSpace(14);
     doc.setFontSize(8.5);
@@ -566,6 +580,17 @@ function generatePDF(options: PDFOptions): jsPDF {
     const note = doc.splitTextToSize(escalationText, pageWidth - 28);
     doc.text(note, 14, y);
     y += note.length * 4 + 4;
+  }
+  if (stepRows.length > 0) {
+    ensureSpace(8 + stepRows.length * 5);
+    doc.setFontSize(8.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(60, 60, 60);
+    for (const r of stepRows) {
+      doc.text(`${r.label}: ${formatCurrencyPDF(r.rate)} + GST per month`, 18, y);
+      y += 5;
+    }
+    y += 3;
   }
 
   // ── Totals Section ──
@@ -969,6 +994,8 @@ export function generateProposalPDF(
     showServicesIncluded: true,
     recurringAddons: proposal.recurring_addons,
     escalationPercentage: proposal.escalation_percentage,
+    escalationCycleMonths: proposal.escalation_cycle_months ?? null,
+    tenureMonths: proposal.tenure_months ?? null,
     amenityIcons: proposal.location?.proposal_amenity_icons ?? undefined,
     serviceQuotas: allQuotas.length > 0 ? allQuotas : undefined,
   });
@@ -1326,7 +1353,11 @@ export function generateMembershipAgreementPDF(
   // Recurring add-ons are listed apart from the fee (item 8A) and sit outside the escalation.
   const listedAddons = agreementAddons(contract.recurring_addons);
   const hasAddons = listedAddons.length > 0;
-  const escalationWording = escalationClauses(escalation, contract.tenure_months, hasAddons);
+  // The fee steps inside the term only when the cycle actually produced two or more stepped fees (item 8).
+  const cycleMonths = isEscalationCycle(contract.escalation_cycle_months) && (contract.rate_phases?.length ?? 0) > 1
+    ? contract.escalation_cycle_months
+    : null;
+  const escalationWording = escalationClauses(escalation, contract.tenure_months, hasAddons, cycleMonths);
   const noticePeriod = contract.notice_period_months || 2;
   // Fallback for contracts predating the lock_in_months column (migration 00222):
   // lock-in was previously implied as tenure minus notice period.
@@ -1508,7 +1539,8 @@ export function generateMembershipAgreementPDF(
       "9 A.M. to 9 P.M from Monday to Saturday except public/national holidays.\n" +
       "Support staff available between 9am to 6pm Monday to Saturday, except public/national holidays."],
     ["13", "Interest Free Refundable\nSecurity Deposit (IFRSD)",
-      `${securityDepositMonths}.0 times of Monthly Membership Fees.\n\n` +
+      `${securityDepositMonths}.0 times of Monthly Membership Fees` +
+      (cycleMonths ? `, being the fee at the Commencement Date (${formatCurrencyPDF(monthlyFee)}). It is not revised by the escalations during the Initial Term.` : ".") + `\n\n` +
       `Member will not be allowed to the use of the Work Spaces unless IFRSD has been fully paid.\n\n` +
       `The Company will return the IFRSD or any balance thereof within 30 days from effective date of termination after deduction of dues/outstanding including but not limited to the damage to the Premises/Work Spaces and other costs due to the Company. However, Member shall not be entitled to adjust or seek adjustment of such dues to the Company from the IFRSD during or post termination of the Membership Agreement.`],
     ["14", "Payment Due Upon Signing",

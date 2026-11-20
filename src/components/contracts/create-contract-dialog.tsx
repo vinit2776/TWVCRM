@@ -29,6 +29,8 @@ import { SpaceAllocationSelector } from "@/components/spaces/space-allocation-se
 import type { Proposal, Lead } from "@/types";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useProposalCommitmentLock } from "@/components/contracts/use-proposal-commitment-lock";
+import { EscalationCycleField } from "@/components/contracts/escalation-cycle-field";
+import { hasFixedLines } from "@/lib/line-item-escalation";
 import { ProposalCommitmentPanel } from "@/components/contracts/proposal-commitment-panel";
 import { SpecialClauseComposer, type VettedClause } from "@/components/contracts/special-clause-composer";
 import { canApproveSpecialClause, canAuthorSpecialClause } from "@/lib/special-clause/gate";
@@ -86,6 +88,8 @@ export function CreateContractDialog({
   const [noticePeriodMonths, setNoticePeriodMonths] = useState<number>(2);
   const [securityDepositMonths, setSecurityDepositMonths] = useState<number>(3.0);
   const [escalationPercentage, setEscalationPercentage] = useState<number>(10.0);
+  // Months between in-term fee steps; null = escalate at renewal only.
+  const [escalationCycle, setEscalationCycle] = useState<number | null>(null);
 
   // Signatory
   const [signatoryName, setSignatoryName] = useState("");
@@ -186,6 +190,7 @@ export function CreateContractDialog({
       if (selectedProposal.escalation_percentage != null) {
         setEscalationPercentage(Number(selectedProposal.escalation_percentage));
       }
+      setEscalationCycle(selectedProposal.escalation_cycle_months ?? null);
       // Prefill security deposit months from proposal
       if (selectedProposal.security_deposit_months) {
         setSecurityDepositMonths(selectedProposal.security_deposit_months);
@@ -331,6 +336,7 @@ export function CreateContractDialog({
     setNoticePeriodMonths(2);
     setSecurityDepositMonths(3.0);
     setEscalationPercentage(10.0);
+    setEscalationCycle(null);
     setSignatoryName("");
     setSignatoryDesignation("");
     setSignatoryPan("");
@@ -434,6 +440,7 @@ export function CreateContractDialog({
       complimentary_services: complimentaryServices.trim() || undefined,
       security_deposit_months: securityDepositMonths,
       escalation_percentage: escalationPercentage,
+      escalation_cycle_months: escalationCycle,
       notice_period_months: noticePeriodMonths,
       lock_in_months: lockInMonths,
       commitment_override_reason: commitmentLock.overrideReasonForRequest,
@@ -910,6 +917,16 @@ export function CreateContractDialog({
                 />
               </div>
             </div>
+
+            <EscalationCycleField
+              value={escalationCycle}
+              onChange={setEscalationCycle}
+              percent={escalationPercentage}
+              monthlyFee={monthlyFee}
+              startDate={startDate}
+              endDate={endDate}
+              blockedByFixedLine={hasFixedLines(selectedProposal?.items as Array<{ escalates?: boolean }> | undefined)}
+            />
 
             {/* Calculated summary */}
             {monthlyFee > 0 && startDate && (

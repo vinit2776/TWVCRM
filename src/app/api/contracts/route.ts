@@ -9,6 +9,8 @@ import { getProrataPaidDate } from "@/lib/proposals";
 import { firstBillingAnchor } from "@/lib/billing-months";
 import { commitmentEndDate, resolveContractCommitment } from "@/lib/contract-commitment";
 import { seedContractAddons } from "@/lib/recurring-addons";
+import { syncCyclePhases, CYCLE_FIXED_LINES_ERROR } from "@/lib/escalation-cycle-server";
+import { hasFixedLines } from "@/lib/line-item-escalation";
 import type { ProposalAddon } from "@/types";
 
 export async function GET(request: NextRequest) {
@@ -224,6 +226,15 @@ export async function POST(request: NextRequest) {
   // so June and July were never billed).
   const nextBillingDateYmd = firstBillingAnchor(resolvedStartDateStr);
 
+  // In-term fee steps: what the proposal offered unless the form changed it.
+  // A cycle steps one combined fee, so it can't sit beside a fixed line.
+  const escalationCycle = d.escalation_cycle_months !== undefined
+    ? d.escalation_cycle_months
+    : (proposal.escalation_cycle_months ?? null);
+  if (escalationCycle && hasFixedLines(items as Array<{ escalates?: boolean }>)) {
+    return NextResponse.json({ error: CYCLE_FIXED_LINES_ERROR }, { status: 400 });
+  }
+
   const { data, error } = await supabase
     .from("contracts")
     .insert({
@@ -261,6 +272,7 @@ export async function POST(request: NextRequest) {
       complimentary_services: d.complimentary_services,
       security_deposit_months: d.security_deposit_months,
       escalation_percentage: d.escalation_percentage,
+      escalation_cycle_months: escalationCycle,
       notice_period_months: commitment.values.notice_period_months,
       lock_in_months: commitment.values.lock_in_months,
       ...(commitment.overridden && {
@@ -279,6 +291,21 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Write the stepped fees (contract_rate_phases) that billing and the agreement read.
+  if (data && escalationCycle) {
+    const admin = createAdminClient();
+    const cycleSync = await syncCyclePhases(admin, data.id as string);
+    if (!cycleSync.ok) {
+      // A draft without its stepped fees would bill the flat rate: take it back
+      // out rather than leave it to be sent.
+      await admin.from("contracts").delete().eq("id", data.id as string);
+      return NextResponse.json(
+        { error: `The contract was not created because its escalation schedule could not be written: ${cycleSync.error}` },
+        { status: 500 }
+      );
+    }
+  }
 
   if (data && dbUser?.id) {
     logAudit(supabase, {

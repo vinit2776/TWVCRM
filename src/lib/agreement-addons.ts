@@ -46,8 +46,22 @@ export interface EscalationClauses {
 /** Item 18 prints a whole percent as "10.0" (as it always has) and a negotiated half percent as "12.5". */
 const autoRenewalPercent = (n: number) => (Number.isInteger(n) ? `${n}.0` : `${n}`);
 
-export function escalationClauses(escalation: number, tenureMonths: number, hasAddons: boolean): EscalationClauses {
+/**
+ * `cycleMonths`: set only when the contract's fee actually steps inside the term
+ * (an escalation cycle with at least two stepped fees in schedule item 8). The
+ * dates and fees of each step are in item 8, so the clauses point there rather than
+ * repeat them, and say what the auto-renewal starts from.
+ */
+export function escalationClauses(escalation: number, tenureMonths: number, hasAddons: boolean, cycleMonths?: number | null): EscalationClauses {
   const pct = autoRenewalPercent(escalation);
+  if (cycleMonths) {
+    const addonNote = hasAddons ? " Recurring Add-ons listed in item 8A are not subject to escalation." : "";
+    return {
+      autoRenewal: `In case Notice for Termination (as defined below) is not served before the expiry of the Initial Term, the Membership Agreement will be auto-renewed for another Term, having the same Lock-in Period, at the Monthly Membership Fees in force on the last day of the Initial Term (the last fee shown in item 8), with escalation thereafter every ${cycleMonths} months at ${pct} %.${addonNote}`,
+      escalation: `${escalation} % on Monthly Membership Fees on completion of every ${cycleMonths} months commencing from the Commencement Date, each escalation applying to the fee then in force. The fee for each period, with its dates, is set out in item 8.${addonNote}`,
+    };
+  }
+  
   if (!hasAddons) {
     return {
       autoRenewal: `In case Notice for Termination (as defined below) is not served before the expiry of the Initial Term, the Membership Agreement will be auto-renewed for another Term, having the same Lock-in Period with escalation on Monthly Membership Fees & all other charges at ${pct} %.`,

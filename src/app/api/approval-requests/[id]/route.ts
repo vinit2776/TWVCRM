@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { carryItemsAtFee } from "@/lib/escalation-cycle";
+import { lastCycleFee, syncCyclePhases } from "@/lib/escalation-cycle-server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createUnifiVoucher, getUnifiHotspotSsid, siteConfigFromLocation, buildVoucherNote } from "@/lib/unifi";
@@ -351,15 +353,25 @@ export async function PATCH(
         // Fetch the contract and its parent to restore parent prices
         const { data: contract } = await admin
           .from("contracts")
-          .select("*, parent:contracts!contracts_parent_contract_id_fkey(id, items, subtotal)")
+          .select("*, parent:contracts!contracts_parent_contract_id_fkey(id, items, subtotal, seats, escalation_cycle_months)")
           .eq("id", contractId)
           .single();
 
         if (contract?.parent) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const parent = contract.parent as any;
-          const parentItems = (Array.isArray(parent) ? parent[0]?.items : parent.items) || [];
-          const parentSubtotal = Number(Array.isArray(parent) ? parent[0]?.subtotal : parent.subtotal) || 0;
+          const parentRow = Array.isArray(parent) ? parent[0] : parent;
+          // A contract that stepped inside its term renews from its last stepped
+          // fee, so a waiver keeps that fee (the renewal's own steps go flat).
+          const carriedFee = await lastCycleFee(admin, parentRow);
+          const parentItemsRaw = (parentRow?.items || []) as Array<{ quantity: number; unit_price: number; total: number }>;
+          const renewalSeats = Number(contract.seats || 1);
+          const parentItems = carriedFee != null
+            ? carryItemsAtFee(parentItemsRaw, Number(parentRow?.seats || 1), renewalSeats, carriedFee)
+            : parentItemsRaw;
+          const parentSubtotal = carriedFee != null
+            ? parentItems.reduce((sum, i) => sum + i.total, 0)
+            : Number(parentRow?.subtotal) || 0;
 
           const taxPercentage = Number(contract.tax_percentage || 18);
           const discountPercentage = Number(contract.discount_percentage || 0);
@@ -379,8 +391,10 @@ export async function PATCH(
               escalation_waived: true,
               escalation_waiver_reason: meta.reason || approvalReq.reason,
               escalation_waived_by: approvalReq.requested_by,
+              ...(carriedFee != null ? { escalation_percentage: 0 } : {}),
             })
             .eq("id", contractId);
+          if (contract.escalation_cycle_months) await syncCyclePhases(admin, contractId);
         }
       }
 
@@ -402,7 +416,7 @@ export async function PATCH(
         // Fetch contract with parent items to recalculate
         const { data: contract } = await admin
           .from("contracts")
-          .select("*, parent:contracts!contracts_parent_contract_id_fkey(id, items, subtotal)")
+          .select("*, parent:contracts!contracts_parent_contract_id_fkey(id, items, subtotal, seats, escalation_cycle_months)")
           .eq("id", contractId)
           .single();
 
@@ -410,15 +424,20 @@ export async function PATCH(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const parent = contract.parent as any;
           type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
-          const parentItems = ((Array.isArray(parent) ? parent[0]?.items : parent.items) || []) as Item[];
+          const parentRow = Array.isArray(parent) ? parent[0] : parent;
+          const parentItems = ((parentRow?.items || []) as Item[]);
           const multiplier = 1 + defaultPct / 100;
           const roundToRupee = (n: number) => Math.round(n);
 
-          const newItems: Item[] = parentItems.map((item) => {
-            const newUnitPrice = roundToRupee(item.unit_price * multiplier);
-            const newTotal = newUnitPrice * item.quantity;
-            return { ...item, unit_price: newUnitPrice, total: newTotal };
-          });
+          // Stepped parent: back to its last stepped fee, with no extra step on top.
+          const carriedFee = await lastCycleFee(admin, parentRow);
+          const newItems: Item[] = carriedFee != null
+            ? carryItemsAtFee(parentItems, Number(parentRow?.seats || 1), Number(contract.seats || 1), carriedFee)
+            : parentItems.map((item) => {
+                const newUnitPrice = roundToRupee(item.unit_price * multiplier);
+                const newTotal = newUnitPrice * item.quantity;
+                return { ...item, unit_price: newUnitPrice, total: newTotal };
+              });
 
           const newSubtotal = newItems.reduce((sum, i) => sum + i.total, 0);
           const taxPercentage = Number(contract.tax_percentage || 18);
@@ -442,6 +461,7 @@ export async function PATCH(
               escalation_waived_by: null,
             })
             .eq("id", contractId);
+          if (contract.escalation_cycle_months) await syncCyclePhases(admin, contractId);
         }
       }
     }

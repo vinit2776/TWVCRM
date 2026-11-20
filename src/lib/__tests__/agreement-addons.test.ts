@@ -77,3 +77,26 @@ describe("escalationClauses", () => {
     expect(c.autoRenewal).toContain("item 8A");
   });
 });
+
+describe("escalationClauses with an escalation cycle", () => {
+  it("says the fee steps every N months and points at item 8", () => {
+    const c = escalationClauses(10, 24, false, 11);
+    expect(c.escalation).toContain("10 % on Monthly Membership Fees on completion of every 11 months");
+    expect(c.escalation).toContain("set out in item 8");
+    expect(c.escalation).not.toContain("after expiry of");
+  });
+  it("auto-renews from the last stepped fee, not a fresh escalation", () => {
+    const c = escalationClauses(10, 24, false, 11);
+    expect(c.autoRenewal).toContain("in force on the last day of the Initial Term");
+    expect(c.autoRenewal).toContain("every 11 months at 10.0 %");
+  });
+  it("keeps add-ons outside the escalation", () => {
+    const c = escalationClauses(10, 24, true, 12);
+    expect(c.escalation).toContain("Recurring Add-ons listed in item 8A are not subject to escalation.");
+    expect(c.autoRenewal).toContain("item 8A");
+  });
+  it("reads exactly as before with no cycle", () => {
+    expect(escalationClauses(10, 24, false, null)).toEqual(escalationClauses(10, 24, false));
+    expect(escalationClauses(10, 24, false).escalation).toContain("after expiry of 24.0 months");
+  });
+});

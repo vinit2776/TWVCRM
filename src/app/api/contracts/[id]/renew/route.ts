@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { carryItemsAtFee } from "@/lib/escalation-cycle";
+import { lastCycleFee, syncCyclePhases } from "@/lib/escalation-cycle-server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -231,6 +233,14 @@ export async function PATCH(
       return NextResponse.json({ error: updateErr.message }, { status: 500 });
     }
 
+    // The renewal's stepped fees follow its start, term and fee.
+    if (contract.escalation_cycle_months) {
+      const cycleSync = await syncCyclePhases(admin, id);
+      if (!cycleSync.ok) {
+        return NextResponse.json({ error: `Saved, but the escalation schedule could not be updated: ${cycleSync.error}. Save again before sending the agreement.` }, { status: 500 });
+      }
+    }
+
     logAudit(admin, {
       entityType: "contract",
       entityId: id,
@@ -337,11 +347,16 @@ export async function PATCH(
     const renewalSeatsWaive = Number(contract.seats || 1);
 
     // Adjust parent item quantities to match renewal seat count
-    const adjustedItems = parentItems.map((item: Item) => {
-      const newQuantity = item.quantity === parentSeatsWaive ? renewalSeatsWaive : item.quantity;
-      const newTotal = Math.round(item.unit_price * newQuantity * 100) / 100;
-      return { ...item, quantity: newQuantity, total: newTotal };
-    });
+    // A contract that stepped inside its term renews from its last stepped fee;
+    // waiving escalation then means the renewal's own steps stay flat.
+    const carriedFee = await lastCycleFee(admin, parent as { id: string; escalation_cycle_months?: number | null });
+    const adjustedItems = carriedFee != null
+      ? carryItemsAtFee(parentItems, parentSeatsWaive, renewalSeatsWaive, carriedFee)
+      : parentItems.map((item: Item) => {
+          const newQuantity = item.quantity === parentSeatsWaive ? renewalSeatsWaive : item.quantity;
+          const newTotal = Math.round(item.unit_price * newQuantity * 100) / 100;
+          return { ...item, quantity: newQuantity, total: newTotal };
+        });
     const adjustedSubtotal = adjustedItems.reduce((sum: number, i: Item) => sum + i.total, 0);
 
     const taxPercentage = Number(contract.tax_percentage || 18);
@@ -370,8 +385,16 @@ export async function PATCH(
         escalation_waiver_reason: body.waiver_reason.trim(),
         escalation_waived_by: dbUser.id,
         deposit_shortfall: depositShortfall,
+        ...(carriedFee != null ? { escalation_percentage: 0 } : {}),
       })
       .eq("id", id);
+
+    if (contract.escalation_cycle_months) {
+      const cycleSync = await syncCyclePhases(admin, id);
+      if (!cycleSync.ok) {
+        return NextResponse.json({ error: `Saved, but the escalation schedule could not be updated: ${cycleSync.error}.` }, { status: 500 });
+      }
+    }
 
     logAudit(admin, {
       entityType: "contract",
@@ -397,12 +420,16 @@ export async function PATCH(
     const escalationPct = Number(contract.escalation_percentage || 10);
     const multiplier = 1 + escalationPct / 100;
 
-    const newItems: Item[] = parentItems.map((item: Item) => {
-      const newQuantity = item.quantity === parentSeatsRestore ? renewalSeatsRestore : item.quantity;
-      const newUnitPrice = escalateUnitPrice(item, multiplier, (n) => Math.round(n * 100) / 100);
-      const newTotal = Math.round(newUnitPrice * newQuantity * 100) / 100;
-      return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newTotal };
-    });
+    // Stepped contract: the renewal starts at the last stepped fee, with no extra step.
+    const carriedFeeRestore = await lastCycleFee(admin, parent as { id: string; escalation_cycle_months?: number | null });
+    const newItems: Item[] = carriedFeeRestore != null
+      ? carryItemsAtFee(parentItems, parentSeatsRestore, renewalSeatsRestore, carriedFeeRestore)
+      : parentItems.map((item: Item) => {
+          const newQuantity = item.quantity === parentSeatsRestore ? renewalSeatsRestore : item.quantity;
+          const newUnitPrice = escalateUnitPrice(item, multiplier, (n) => Math.round(n * 100) / 100);
+          const newTotal = Math.round(newUnitPrice * newQuantity * 100) / 100;
+          return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newTotal };
+        });
 
     const newSubtotal = newItems.reduce((sum, i) => sum + i.total, 0);
     const taxPercentage = Number(contract.tax_percentage || 18);
@@ -430,8 +457,16 @@ export async function PATCH(
         escalation_waiver_reason: null,
         escalation_waived_by: null,
         deposit_shortfall: depositShortfall,
+        ...(carriedFeeRestore != null ? { escalation_percentage: programmedEscalation(parent) } : {}),
       })
       .eq("id", id);
+
+    if (contract.escalation_cycle_months) {
+      const cycleSync = await syncCyclePhases(admin, id);
+      if (!cycleSync.ok) {
+        return NextResponse.json({ error: `Saved, but the escalation schedule could not be updated: ${cycleSync.error}.` }, { status: 500 });
+      }
+    }
 
     logAudit(admin, {
       entityType: "contract",
