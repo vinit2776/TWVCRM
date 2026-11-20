@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { FollowUpDateTimeInput } from "@/components/shared/followup-datetime-input";
 import { useLocations } from "@/hooks/use-locations";
-import { WORKSPACE_TYPES, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
+import { LEAD_EXTRAS, LEAD_EXTRA_LABELS, WORKSPACE_TYPES, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import type { ContactBackHints, ContactBackPrefill } from "@/lib/contact-back";
 import { assessValue, formatValue, VALUE_TIER_LABELS } from "@/lib/lead-value";
@@ -67,6 +67,8 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
   const [quoted, setQuoted] = useState("");
   const [budget, setBudget] = useState(pre?.budget ?? "");
   const [requests, setRequests] = useState("");
+  const [tenure, setTenure] = useState("");
+  const [extras, setExtras] = useState<string[]>([]);
   const [phone, setPhone] = useState(pre?.phone ?? "");
   const [email, setEmail] = useState(pre?.email ?? "");
   const [name, setName] = useState(pre?.name ?? "");
@@ -152,6 +154,8 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
           workspace_types: types,
           seats,
           start_date: startDate || undefined,
+          tenure_months: num(tenure),
+          extras: extras.length > 0 ? extras : undefined,
           quoted_per_seat: num(quoted),
           budget_per_seat: num(budget),
           requests: requests.trim() || undefined,
@@ -255,6 +259,10 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
             Start date (optional)
             <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-44" />
           </label>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            For how many months (optional)
+            <Input type="number" inputMode="numeric" min={1} max={60} value={tenure} onChange={(e) => setTenure(e.target.value)} className="w-24" />
+          </label>
         </div>
       </Step>
 
@@ -272,6 +280,18 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
       </Step>
 
       <Step n={5} title="Anything else they asked for?" hint="optional">
+        <div className="mb-2 flex flex-wrap gap-2">
+          {LEAD_EXTRAS.map((x) => (
+            <button
+              key={x}
+              type="button"
+              className={chip(extras.includes(x))}
+              onClick={() => setExtras((cur) => (cur.includes(x) ? cur.filter((e) => e !== x) : [...cur, x]))}
+            >
+              {LEAD_EXTRA_LABELS[x]}
+            </button>
+          ))}
+        </div>
         <Textarea rows={2} value={requests} onChange={(e) => setRequests(e.target.value)} placeholder="e.g. near a metro, wants a tour this week, needs parking" />
       </Step>
 
