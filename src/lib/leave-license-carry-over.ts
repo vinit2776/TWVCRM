@@ -1,44 +1,36 @@
 /**
- * Fields on a Leave & License agreement that exist only as manual edits: the case row has no
- * column for them, so a regenerate that rebuilds the variables from the case alone would wipe
- * them. Everything the case does hold (rate, tenure, address, dates) still comes from the case,
- * so a regenerate keeps picking up case changes.
+ * A regenerated Leave & License agreement keeps everything that was typed into the previous one.
+ * The case row has no columns for some of those fields (nature of business, witnesses, e-stamp
+ * value), and rebuilding from the case alone wiped them.
+ *
+ * Signature, stamp and seal are never stored in the variables: they are drawn onto the PDF at
+ * signing, so a regenerated draft starts unsigned without any handling here.
  */
-export interface LeaveLicenseCarryOver {
-  natureOfBusiness?: string;
-  witness1Name?: string;
-  witness1AadhaarLast4?: string;
-  witness1Mobile?: string;
-  witness2Name?: string;
-  witness2AadhaarLast4?: string;
-  witness2Mobile?: string;
-  estampValue?: number;
-  lesseeSignatoryName?: string;
-  lesseeSignatoryDesignation?: string;
-}
 
-// What mergeLeaveLicenseVariables prints when nothing was entered: not a user edit.
-const PLACEHOLDERS = new Set(["", "To be provided", "Authorized Signatory"]);
+// Set by the system on every generation or reset, never typed by a person.
+const SYSTEM_KEYS = new Set([
+  "agreement_number",
+  "agreement_date",
+  "special_clause_text",
+  "address_reset_at",
+  "address_reset_reason",
+]);
 
-function text(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return PLACEHOLDERS.has(trimmed) ? undefined : trimmed;
-}
+// Refreshed from the case when the case address moved on since this agreement was generated.
+const ADDRESS_KEYS = ["client_address", "location_name", "location_address", "property_address"];
 
-export function leaveLicenseCarryOver(previous: Record<string, unknown> | null | undefined): LeaveLicenseCarryOver {
-  if (!previous) return {};
-  const estamp = Number(previous.estamp_value);
-  return {
-    natureOfBusiness: text(previous.nature_of_business),
-    witness1Name: text(previous.witness_1_name),
-    witness1AadhaarLast4: text(previous.witness_1_aadhaar_last4),
-    witness1Mobile: text(previous.witness_1_mobile),
-    witness2Name: text(previous.witness_2_name),
-    witness2AadhaarLast4: text(previous.witness_2_aadhaar_last4),
-    witness2Mobile: text(previous.witness_2_mobile),
-    estampValue: Number.isFinite(estamp) && estamp > 0 ? estamp : undefined,
-    lesseeSignatoryName: text(previous.lessee_signatory_name),
-    lesseeSignatoryDesignation: text(previous.lessee_signatory_designation),
-  };
+export function carryOverLeaveLicenseVariables<T extends object>(
+  fresh: T,
+  previous: Record<string, unknown> | null | undefined,
+): T {
+  if (!previous) return fresh;
+  const addressMoved = Boolean(previous.address_reset_at);
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(previous)) {
+    if (SYSTEM_KEYS.has(key)) continue;
+    if (addressMoved && ADDRESS_KEYS.includes(key)) continue;
+    if (value === undefined || value === null) continue;
+    kept[key] = value;
+  }
+  return { ...fresh, ...kept } as T;
 }

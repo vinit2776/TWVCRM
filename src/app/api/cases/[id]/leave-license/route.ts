@@ -8,7 +8,7 @@ import {
   generateLeaveLicensePdf,
 } from "@/lib/leave-license-generator";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
-import { leaveLicenseCarryOver } from "@/lib/leave-license-carry-over";
+import { carryOverLeaveLicenseVariables } from "@/lib/leave-license-carry-over";
 
 /**
  * GET: Get Leave & License agreement details with signed PDF URL
@@ -124,8 +124,8 @@ export async function POST(
     .filter(Boolean)
     .join(", ");
 
-  // A regenerate must not drop what was typed into the previous agreement (nature of business,
-  // witnesses, e-stamp value): the case has no columns for those.
+  // A regenerate keeps everything typed into the previous agreement; the case has no columns
+  // for some of it (nature of business, witnesses, e-stamp value).
   const { data: previousAgreement } = await supabase
     .from("case_agreements")
     .select("variables")
@@ -134,10 +134,8 @@ export async function POST(
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  const carried = leaveLicenseCarryOver(previousAgreement?.variables as Record<string, unknown> | null);
 
-  const variables = mergeLeaveLicenseVariables({
-    ...carried,
+  const freshVariables = mergeLeaveLicenseVariables({
     agreementNumber: "",
     agreementDate: new Date().toISOString(),
     clientName: caseData.client_name,
@@ -149,8 +147,8 @@ export async function POST(
     clientCinNumber: caseData.client_cin_number,
     clientEmail: caseData.client_email,
     clientPhone: caseData.client_phone,
-    lesseeSignatoryName: caseData.represented_by_name || carried.lesseeSignatoryName,
-    lesseeSignatoryDesignation: caseData.represented_by_designation || carried.lesseeSignatoryDesignation,
+    lesseeSignatoryName: caseData.represented_by_name || undefined,
+    lesseeSignatoryDesignation: caseData.represented_by_designation || undefined,
     lesseeSignatoryIdType: caseData.represented_by_id_type || undefined,
     lesseeSignatoryIdNumber: caseData.represented_by_id_number || undefined,
     locationName: location?.name || "The WorkVilla",
@@ -162,6 +160,10 @@ export async function POST(
     securityDeposit: caseData.security_deposit || 0,
     renewalEscalationPercentage: caseData.renewal_escalation_percentage ?? 0,
   });
+  const variables = carryOverLeaveLicenseVariables(
+    freshVariables,
+    previousAgreement?.variables as Record<string, unknown> | null,
+  );
 
   // Generate PDF
   // The case's approved special clause (if any) prints in every agreement generated for it.
