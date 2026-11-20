@@ -50,6 +50,16 @@ export interface Stage {
   perpetualEveryDays?: number;
 }
 
+export interface CcPools {
+  accounts: string[];
+  managerAndAdmin: string[];
+  adminOnly: string[];
+  salesAndCoordinator: string[];
+}
+
+/** Index of the "Checking in" reminder (day 21): sales and coordinators are copied from here on. */
+export const SALES_CC_FROM_STAGE = 4;
+
 export const STAGES: Stage[] = [
   {
     day: 0, toneLabel: "Friendly reminder",
@@ -256,7 +266,7 @@ export interface ReminderSendInput {
   /** UUID of the user who clicked "Send Reminder Now"; null for cron. */
   triggeredByUserId?: string | null;
   /** Pre-fetched CC pools (saves the cron from re-querying per statement). */
-  ccPools: { accounts: string[]; managerAndAdmin: string[]; adminOnly: string[] };
+  ccPools: CcPools;
 }
 
 export interface ReminderSendResult {
@@ -334,6 +344,7 @@ export async function sendOneReminder(
   if (stage.ccAccounts) cc.push(...ccPools.accounts);
   if (stage.ccManagerAndAdmin) cc.push(...ccPools.managerAndAdmin);
   if (stageIdx >= 4) cc.push(...ccPools.adminOnly);
+  if (stageIdx >= SALES_CC_FROM_STAGE) cc.push(...ccPools.salesAndCoordinator);
   const uniqCc = Array.from(new Set(cc.filter((e) => e && e !== lead?.email)));
 
   // What the customer actually holds. Once a GST invoice has been issued the
@@ -548,7 +559,7 @@ export interface ConsolidatedReminderInput {
   appUrl: string;
   triggeredBy: "cron" | "manual";
   triggeredByUserId?: string | null;
-  ccPools: { accounts: string[]; managerAndAdmin: string[]; adminOnly: string[] };
+  ccPools: CcPools;
 }
 
 /**
@@ -627,6 +638,7 @@ export async function sendConsolidatedReminder(
   if (stage.ccAccounts) cc.push(...ccPools.accounts);
   if (stage.ccManagerAndAdmin) cc.push(...ccPools.managerAndAdmin);
   if (stageIdx >= 4) cc.push(...ccPools.adminOnly);
+  if (stageIdx >= SALES_CC_FROM_STAGE) cc.push(...ccPools.salesAndCoordinator);
   const uniqCc = Array.from(new Set(cc.filter((e) => e && e !== lead?.email)));
 
   let emailSent = false;
@@ -730,17 +742,16 @@ export async function sendConsolidatedReminder(
 /**
  * Fetch the CC pools once for the run. Shared between cron + manual endpoint.
  */
-export async function fetchCcPools(admin: SupabaseClient): Promise<{
-  accounts: string[]; managerAndAdmin: string[]; adminOnly: string[];
-}> {
+export async function fetchCcPools(admin: SupabaseClient): Promise<CcPools> {
   const { data: staff } = await admin.from("users")
     .select("email, role")
-    .in("role", ["admin", "manager", "accounts"])
+    .in("role", ["admin", "manager", "accounts", "sales_rep", "coordinator"])
     .eq("is_active", true);
   const all = (staff || []) as { email: string; role: string }[];
   return {
     accounts: all.filter((u) => u.role === "accounts").map((u) => u.email).filter(Boolean),
     managerAndAdmin: all.filter((u) => ["admin", "manager"].includes(u.role)).map((u) => u.email).filter(Boolean),
     adminOnly: all.filter((u) => u.role === "admin").map((u) => u.email).filter(Boolean),
+    salesAndCoordinator: all.filter((u) => ["sales_rep", "coordinator"].includes(u.role)).map((u) => u.email).filter(Boolean),
   };
 }

@@ -5,6 +5,7 @@ import { pingCronHealth } from "@/lib/cron-ping";
 import {
   STAGES, pickStageIndex, daysOverdueFromDueDate,
   sendConsolidatedReminder, fetchCcPools, hasReachedCustomer, byLeastRecentlyReminded,
+  type CcPools,
 } from "@/lib/payment-reminder";
 import {
   groupForConsolidatedReminder, reminderLeadKey, type ReminderCandidate,
@@ -268,7 +269,7 @@ export async function GET(request: NextRequest) {
 interface OtherPassOpts {
   dry: boolean;
   force: boolean;
-  ccPools: { accounts: string[]; managerAndAdmin: string[]; adminOnly: string[] };
+  ccPools: CcPools;
   startedAt: number;
 }
 
