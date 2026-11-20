@@ -100,7 +100,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (liveEnquiries === 0) {
       const { data: junked } = await admin
         .from("leads")
-        .update({ status: "junk" })
+        .update({ status: "junk", junk_reason: label === "vendor" ? "vendor_or_pitch" : "other" })
         .eq("id", enquiry.lead_id)
         .eq("status", "new")
         .select("id");
@@ -158,7 +158,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   }
 
   if (lead_junked && enquiry.lead_id) {
-    await admin.from("leads").update({ status: "new" }).eq("id", enquiry.lead_id).eq("status", "junk");
+    await admin.from("leads").update({ status: "new", junk_reason: null }).eq("id", enquiry.lead_id).eq("status", "junk");
   }
   if (enquiry.lead_id) {
     logAudit(supabase, {
