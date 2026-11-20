@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { BlockerList } from "@/components/cases/renewal-guidance";
+import { lapseDecisionAfter, lapseDecisionBlockers } from "@/lib/vo-renewal-guidance";
 import { FileText, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -112,6 +114,14 @@ export function CaseLapsePanel({
   const reasonOk = reason.trim().length >= LAPSE_REASON_MIN_LENGTH;
   const untilOk = choice !== "more_time" || (!!until && until > state.today && until <= state.latest_grace_date);
 
+  const blockers = lapseDecisionBlockers({
+    decision: choice,
+    reasonLength: reason.trim().length,
+    until,
+    today: state.today,
+    latestGraceDate: state.latest_grace_date,
+  });
+
   const available = (d: LapseDecision) => {
     if (d === "more_time" && state.extensions_left === 0) return false;
     if (d !== "discontinue" && state.documents_sent) return false;
@@ -130,7 +140,7 @@ export function CaseLapsePanel({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to record the decision");
-      toast.success("Decision recorded");
+      toast.success(lapseDecisionAfter(choice, choice === "more_time" ? until : undefined));
       setChoice(null);
       setReason("");
       setUntil("");
@@ -262,6 +272,7 @@ export function CaseLapsePanel({
                       At least {LAPSE_REASON_MIN_LENGTH} characters. Saved to the case and the audit trail.
                     </p>
                   </div>
+                  <BlockerList reasons={blockers} />
                   <div className="flex gap-2">
                     <Button onClick={submit} disabled={saving || !reasonOk || !untilOk}>
                       {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
