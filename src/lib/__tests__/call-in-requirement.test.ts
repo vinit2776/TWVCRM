@@ -28,6 +28,19 @@ describe("describeCallInRequirement", () => {
   });
 });
 
+describe("describeCallInRequirement tenure and extras", () => {
+  it("writes how long they want it and what else they asked for", () => {
+    const text = describeCallInRequirement({
+      locations: ["HSR Layout"],
+      types: ["hot_desk"],
+      seats: 2,
+      tenureMonths: 1,
+      extras: ["parking", "access_24x7"],
+    });
+    expect(text).toBe("Looking at: HSR Layout\nWants: Hot Desk · 2 seats for 1 month\nAlso: Parking, 24x7 access");
+  });
+});
+
 describe("callInLeadName", () => {
   it("splits a given name", () => {
     expect(callInLeadName({ name: "Ravi Kumar Shah" })).toEqual({ first_name: "Ravi", last_name: "Kumar Shah" });

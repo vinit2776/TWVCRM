@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
-import { WORKSPACE_TYPES } from "@/lib/constants";
+import { WORKSPACE_TYPES, LEAD_EXTRAS } from "@/lib/constants";
 import { describeCallInRequirement, callInLeadName } from "@/lib/call-in-requirement";
 import { istLocalToUtcIso } from "@/lib/utils";
 
@@ -14,6 +14,8 @@ const bodySchema = z
     other_location: z.string().trim().max(120).optional(),
     workspace_types: z.array(z.enum(WORKSPACE_TYPES)).min(1, "Pick what they are looking for"),
     seats: z.number().int().min(1, "How many seats?"),
+    tenure_months: z.number().int().min(1).max(60).optional(),
+    extras: z.array(z.enum(LEAD_EXTRAS)).optional(),
     start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     quoted_per_seat: z.number().min(0).optional(),
     budget_per_seat: z.number().min(0).optional(),
@@ -72,6 +74,7 @@ export async function POST(request: NextRequest) {
   if (b.location_ids.length > 0 && listedNames.length === 0 && !b.other_location) {
     return NextResponse.json({ error: "Those locations were not found" }, { status: 400 });
   }
+  const listedLocationIds = b.location_ids.filter((id) => nameById.has(id));
   const locationNames = b.other_location ? [...listedNames, `Other: ${b.other_location}`] : listedNames;
   // The lead's own location is the first listed centre; an "Other" only caller has none.
   const primaryLocationId = listedNames.length > 0 ? b.location_ids[0] : null;
@@ -103,6 +106,7 @@ export async function POST(request: NextRequest) {
         workspace_type: b.workspace_types[0],
         seat_capacity: b.seats,
         budget_per_seat: b.budget_per_seat ?? null,
+        ...requirementColumns(b, listedLocationIds),
         created_by: me.id,
         assigned_to: me.id,
         ...(b.pin ? { pinned_at: new Date().toISOString(), pinned_by: me.id } : {}),
@@ -134,6 +138,8 @@ export async function POST(request: NextRequest) {
         startDate: b.start_date,
         quotedPerSeat: b.quoted_per_seat,
         budgetPerSeat: b.budget_per_seat,
+        tenureMonths: b.tenure_months,
+        extras: b.extras,
         requests: b.requests,
       }),
       call_outcome: "connected",
@@ -160,6 +166,21 @@ export async function POST(request: NextRequest) {
 }
 
 type Body = z.infer<typeof bodySchema>;
+
+// The requirement as stored on the lead: lists keep every choice (first = the single-value column),
+// and the optional fields are written only when the caller gave them, so a contact-back never blanks
+// what an earlier call recorded.
+function requirementColumns(b: Body, locationIds: string[]): Record<string, unknown> {
+  return {
+    workspace_types: b.workspace_types,
+    location_ids: locationIds,
+    ...(b.other_location ? { other_area: b.other_location } : {}),
+    ...(b.start_date ? { start_date: b.start_date } : {}),
+    ...(b.quoted_per_seat != null ? { quoted_per_seat: b.quoted_per_seat } : {}),
+    ...(b.tenure_months != null ? { tenure_months: b.tenure_months } : {}),
+    ...(b.extras && b.extras.length > 0 ? { extras: b.extras } : {}),
+  };
+}
 
 // Contacting back a public-form enquiry. The enquiry must be this lead's own and still open. The lead
 // takes the details confirmed on the phone (only what was filled in) and, if nobody handles it yet,
@@ -199,6 +220,7 @@ async function applyContactBack(
     seat_capacity: b.seats,
   };
   if (b.budget_per_seat != null) patch.budget_per_seat = b.budget_per_seat;
+  Object.assign(patch, requirementColumns(b, b.location_ids));
   if (b.name?.trim()) Object.assign(patch, callInLeadName({ name: b.name }));
   if (b.company?.trim()) patch.company = b.company.trim();
   if (b.email?.trim()) patch.email = b.email.trim();

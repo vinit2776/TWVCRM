@@ -1,4 +1,4 @@
-import { WORKSPACE_TYPE_LABELS } from "@/lib/constants";
+import { LEAD_EXTRA_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 
 export interface CallInRequirement {
   /** Names of the centres they asked about, in the order the caller preferred them. */
@@ -12,6 +12,10 @@ export interface CallInRequirement {
   quotedPerSeat?: number | null;
   /** What they said they can spend, per seat per month. */
   budgetPerSeat?: number | null;
+  /** How long they want it for, in months. */
+  tenureMonths?: number | null;
+  /** Parking, 24x7 access and the like. */
+  extras?: string[];
   requests?: string | null;
 }
 
@@ -25,7 +29,8 @@ const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 export function describeCallInRequirement(r: CallInRequirement): string {
   const lines: string[] = [];
   lines.push(`Looking at: ${r.locations.join(", ")}`);
-  lines.push(`Wants: ${r.types.map((t) => WORKSPACE_TYPE_LABELS[t] ?? t).join(", ")} · ${r.seats} seat${r.seats === 1 ? "" : "s"}${r.startDate ? ` from ${r.startDate}` : ""}`);
+  lines.push(`Wants: ${r.types.map((t) => WORKSPACE_TYPE_LABELS[t] ?? t).join(", ")} · ${r.seats} seat${r.seats === 1 ? "" : "s"}${r.startDate ? ` from ${r.startDate}` : ""}${r.tenureMonths ? ` for ${r.tenureMonths} month${r.tenureMonths === 1 ? "" : "s"}` : ""}`);
+  if (r.extras && r.extras.length > 0) lines.push(`Also: ${r.extras.map((x) => LEAD_EXTRA_LABELS[x] ?? x).join(", ")}`);
   const price: string[] = [];
   if (r.quotedPerSeat) price.push(`Quoted ${money(r.quotedPerSeat)}/seat/month`);
   if (r.budgetPerSeat) price.push(`Budget ${money(r.budgetPerSeat)}/seat/month`);

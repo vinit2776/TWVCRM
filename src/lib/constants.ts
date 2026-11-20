@@ -169,6 +169,17 @@ export const WORKSPACE_TYPE_LABELS: Record<string, string> = {
   enterprise: "Enterprise",
 };
 
+/** Things a caller asks for beyond the desk itself; kept on the lead so a proposal can price them. */
+export const LEAD_EXTRAS = ["parking", "access_24x7", "gst_invoice", "meeting_room_hours", "pantry"] as const;
+
+export const LEAD_EXTRA_LABELS: Record<string, string> = {
+  parking: "Parking",
+  access_24x7: "24x7 access",
+  gst_invoice: "GST invoice",
+  meeting_room_hours: "Meeting room hours",
+  pantry: "Pantry",
+};
+
 export const ACTIVITY_TYPES = ["call", "meeting", "note", "email", "tour"] as const;
 
 export const ACTIVITY_TYPE_LABELS: Record<string, string> = {

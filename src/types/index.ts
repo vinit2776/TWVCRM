@@ -157,6 +157,14 @@ export interface Lead {
   location?: Location;
   working_hours?: string;
   budget_per_seat?: number;
+  // The whole requirement from a call-in; location_id / workspace_type hold the first of these.
+  tenure_months?: number | null;
+  start_date?: string | null;
+  quoted_per_seat?: number | null;
+  other_area?: string | null;
+  workspace_types?: WorkspaceType[];
+  location_ids?: string[];
+  extras?: string[];
   pan_number?: string;
   gst_number?: string;
   entity_type?: string | null;
