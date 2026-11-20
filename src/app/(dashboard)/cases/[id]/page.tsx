@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CaseReprice } from "@/components/cases/case-reprice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -371,6 +372,16 @@ export default function CaseDetailPage({
                       <span>{caseData.security_deposit ? formatCurrency(caseData.security_deposit) : "None"}</span>
                     </div>
                   </div>
+                  <CaseReprice
+                    caseId={id}
+                    status={caseData.status}
+                    purpose={caseData.purpose}
+                    isAggregator={!!caseData.aggregator_id}
+                    hasLiveInvoice={!!caseData.billing_statement}
+                    agreementStatuses={[caseData.agreement?.status, caseData.ll_agreement?.status].flatMap((x) => (x ? [String(x)] : []))}
+                    canEdit={["admin", "manager", "sales_rep"].includes(user?.role ?? "")}
+                    onChanged={refetch}
+                  />
                 </CardContent>
               </Card>
 

@@ -1183,7 +1183,7 @@ export default function ProposalDetailPage({
         </Card>
       )}
 
-      {isVoKind && <VoPricingPanel proposalId={proposal.id} canRequest={["admin", "manager", "sales_rep"].includes(currentUser?.role ?? "")} onChanged={fetchProposal} />}
+      {isVoKind && <VoPricingPanel proposalId={proposal.id} status={proposal.status} canRequest={["admin", "manager", "sales_rep"].includes(currentUser?.role ?? "")} onChanged={fetchProposal} />}
       {isVoKind && <VoTermsPanel proposalId={proposal.id} />}
       {isVoKind && proposal.status === "accepted" && (() => {
         const signer = signerForDisplay(proposal);

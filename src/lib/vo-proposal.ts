@@ -161,3 +161,31 @@ export function voReissueBlockedReason(p: { kind?: string | null; status: string
   if (moneyCollected(p)) return "Money has already been collected on this proposal. Talk to accounts first.";
   return null;
 }
+
+// ---- Re-price (draft only) ----------------------------------------------------
+
+/** Why a VO proposal cannot be re-priced in place, or null. Only an unsent draft can; later states use Reissue. */
+export function voRepriceBlockedReason(p: { kind?: string | null; status: string } & VoPaymentFacts): string | null {
+  if (!isVoProposal(p)) return "Only Virtual Office proposals can be re-priced here.";
+  if (p.status !== "draft") {
+    return p.status === "superseded"
+      ? "This proposal has already been replaced by a newer version."
+      : `A ${p.status.replace("_", " ")} proposal cannot be re-priced. Use Reissue to send a new version.`;
+  }
+  if (moneyCollected(p)) return "Money has already been collected on this proposal. Talk to accounts first.";
+  return null;
+}
+
+/** The single VO line and totals for a rate and term (rate is annual above 12 months). Tax and discount are kept as set. */
+export function voRepricedTotals(rate: number, termMonths: number, taxPercentage: number, discountPercentage: number) {
+  const fee = termFee(rate, termMonths);
+  const taxAmount = fee * (taxPercentage / 100);
+  const discountAmount = fee * (discountPercentage / 100);
+  return {
+    items: [{ description: `Virtual Office, ${termMonths} months`, quantity: 1, unit: "term", unit_price: fee, total: fee }],
+    subtotal: fee,
+    taxAmount,
+    discountAmount,
+    total: fee + taxAmount - discountAmount,
+  };
+}

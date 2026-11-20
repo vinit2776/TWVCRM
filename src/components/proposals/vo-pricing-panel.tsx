@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
 import { PRICE_CLASS_LABELS, type PriceClass } from "@/lib/vo-pricing";
 
@@ -35,10 +36,13 @@ const CLASS_COLORS: Record<PriceClass, string> = {
 };
 
 /** Guide, floor and win trend for a VO proposal (read-only for reps) and its below-floor approval state. */
-export function VoPricingPanel({ proposalId, canRequest, onChanged }: { proposalId: string; canRequest: boolean; onChanged?: () => void }) {
+export function VoPricingPanel({ proposalId, canRequest, status, onChanged }: { proposalId: string; canRequest: boolean; status?: string; onChanged?: () => void }) {
   const [data, setData] = useState<PricingData | null>(null);
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
+  const [repricing, setRepricing] = useState(false);
+  const [newRate, setNewRate] = useState("");
+  const [floorReason, setFloorReason] = useState("");
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/proposals/${proposalId}/vo-pricing`);
@@ -65,6 +69,33 @@ export function VoPricingPanel({ proposalId, canRequest, onChanged }: { proposal
     if (!res.ok) return toast.error((await res.json().catch(() => ({}))).error ?? "Could not request approval");
     toast.success("Approval requested");
     setReason("");
+    await load();
+    onChanged?.();
+  }
+
+  // Re-price is for an unsent draft only; a sent proposal is replaced with Reissue instead.
+  const canReprice = canRequest && status === "draft";
+  const rateNum = newRate.trim() === "" ? p.guide : Number(newRate);
+  const rateValid = Number.isFinite(rateNum) && rateNum > 0;
+  const belowFloor = rateValid && p.floor !== null && rateNum < p.floor;
+
+  async function reprice() {
+    setSaving(true);
+    const res = await fetch(`/api/proposals/${proposalId}/reprice`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        term_months: p.termMonths,
+        quoted_price: rateNum,
+        ...(belowFloor ? { below_floor_reason: floorReason } : {}),
+      }),
+    });
+    setSaving(false);
+    if (!res.ok) return toast.error((await res.json().catch(() => ({}))).error ?? "Could not re-price");
+    toast.success("Proposal re-priced against the current rate card");
+    setRepricing(false);
+    setNewRate("");
+    setFloorReason("");
     await load();
     onChanged?.();
   }
@@ -114,6 +145,28 @@ export function VoPricingPanel({ proposalId, canRequest, onChanged }: { proposal
           <div className="space-y-2">
             <Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this quote below the floor?" rows={2} />
             <Button size="sm" onClick={requestApproval} disabled={saving || reason.trim().length < 5}>Request approval</Button>
+          </div>
+        )}
+        {canReprice && (
+          <div className="space-y-2 rounded-md border p-3">
+            {!repricing ? (
+              <Button size="sm" variant="outline" onClick={() => setRepricing(true)}>Re-price against current card</Button>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Rate {multiYear ? "per year" : "for the term"}. Leave blank to use today&apos;s guide ({formatCurrency(p.guide)}).
+                  The draft&apos;s price is replaced; nothing is sent to the customer.
+                </p>
+                <Input type="number" min={0} value={newRate} onChange={(e) => setNewRate(e.target.value)} placeholder={String(p.guide)} className="max-w-xs" />
+                {belowFloor && (
+                  <Textarea value={floorReason} onChange={(e) => setFloorReason(e.target.value)} placeholder="Why is this quote below the floor?" rows={2} />
+                )}
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={reprice} disabled={saving || !rateValid || (belowFloor && floorReason.trim().length < 5)}>Apply new price</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setRepricing(false)} disabled={saving}>Cancel</Button>
+                </div>
+              </>
+            )}
           </div>
         )}
         <p className="text-xs text-muted-foreground">Guide prices are guidance, not a cap. Only a price below the floor needs approval.</p>
