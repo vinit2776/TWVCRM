@@ -3165,6 +3165,7 @@ export interface PettyCashEntry {
   category?: PettyCashCategory;
   submitter?: Pick<User, "id" | "full_name" | "email">;
   purchase_order?: { id: string; po_number: string };
+  attachments?: { id: string }[];
 }
 
 export interface PettyCashApproval {

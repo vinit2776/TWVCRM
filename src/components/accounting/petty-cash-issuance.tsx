@@ -9,8 +9,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Banknote, CheckCircle2, AlertCircle, Check, X } from "lucide-react";
+import { Banknote, CheckCircle2, AlertCircle, Paperclip } from "lucide-react";
 import { toast } from "sonner";
+import { AttachmentPicker, AttachmentDialog, uploadAttachments } from "@/components/petty-cash/attachments";
+import { needsReceiptNudge, PC_RECEIPT_NUDGE_DEFAULT } from "@/lib/petty-cash-attachments";
+import { useFetch } from "@/hooks/use-fetch";
 import {
   PC_REQUEST_STATUS_LABELS, PC_REQUEST_STATUS_COLORS,
   PC_ENTRY_STATUS_LABELS, PC_ENTRY_STATUS_COLORS,
@@ -61,6 +64,12 @@ export function PettyCashIssuance() {
   const [issueTarget, setIssueTarget] = useState<PettyCashRequest | null>(null);
   const [issuanceMethod, setIssuanceMethod] = useState("");
   const [issuanceRef, setIssuanceRef] = useState("");
+  const [proofFiles, setProofFiles] = useState<File[]>([]);
+  const [billsFor, setBillsFor] = useState<{ kind: "entry" | "request"; id: string; label: string } | null>(null);
+  const { data: nudgeAmount } = useFetch<number>("/api/petty-cash/receipt-policy", {
+    initialData: PC_RECEIPT_NUDGE_DEFAULT,
+    select: (json) => Number(json.nudgeAmount) || PC_RECEIPT_NUDGE_DEFAULT,
+  });
 
   // Entry approval dialog
   const [entryAction, setEntryAction] = useState<{ entry: PettyCashEntry; action: "approve" | "reject" } | null>(null);
@@ -88,7 +97,11 @@ export function PettyCashIssuance() {
         const err = await res.json();
         throw new Error(err.error || "Failed to issue");
       }
-      toast.success(`Cash issued to ${getRequestOwner(issueTarget)}`);
+      let failed = 0;
+      if (proofFiles.length) failed = await uploadAttachments(proofFiles, { requestId: issueTarget.id }, "payment_proof");
+      if (failed) toast.warning(`Cash issued to ${getRequestOwner(issueTarget)}, but ${failed} proof file${failed > 1 ? "s" : ""} did not upload. Open "Proof" on the issued request to add it again.`);
+      else toast.success(`Cash issued to ${getRequestOwner(issueTarget)}`);
+      setProofFiles([]);
       setIssueTarget(null);
       setIssuanceMethod("");
       setIssuanceRef("");
@@ -173,7 +186,7 @@ export function PettyCashIssuance() {
                       </div>
                       <div className="flex items-center gap-3">
                         <p className="text-lg font-bold">₹{Number(r.amount_requested).toLocaleString("en-IN")}</p>
-                        <Button size="sm" onClick={() => setIssueTarget(r)}>Issue</Button>
+                        <Button size="sm" onClick={() => { setProofFiles([]); setIssueTarget(r); }}>Issue cash…</Button>
                       </div>
                     </div>
                   );
@@ -197,11 +210,16 @@ export function PettyCashIssuance() {
                       </div>
                       <div className="flex items-center gap-2">
                         <p className="font-bold mr-1">₹{Number(e.amount).toLocaleString("en-IN")}</p>
-                        <Button size="sm" variant="outline" className="text-green-600" onClick={() => setEntryAction({ entry: e, action: "approve" })}>
-                          <Check className="h-4 w-4" />
+                        <Button size="sm" variant="outline"
+                          className={needsReceiptNudge(Number(e.amount), e.attachments?.length ?? 0, nudgeAmount) ? "border-amber-300 text-amber-800 bg-amber-50" : ""}
+                          onClick={() => setBillsFor({ kind: "entry", id: e.id, label: e.entry_number })}>
+                          <Paperclip className="h-3.5 w-3.5 mr-1" />{(e.attachments?.length ?? 0) > 0 ? `View bills (${e.attachments?.length})` : "No bill attached"}
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600" onClick={() => setEntryAction({ entry: e, action: "reject" })}>
-                          <X className="h-4 w-4" />
+                        <Button size="sm" variant="outline" className="text-green-700 border-green-300" onClick={() => setEntryAction({ entry: e, action: "approve" })}>
+                          Approve
+                        </Button>
+                        <Button size="sm" variant="outline" className="text-red-600 border-red-300" onClick={() => setEntryAction({ entry: e, action: "reject" })}>
+                          Reject
                         </Button>
                       </div>
                     </div>
@@ -233,6 +251,7 @@ export function PettyCashIssuance() {
                     <th className="pb-2 font-medium text-muted-foreground hidden md:table-cell">Method</th>
                     <th className="pb-2 font-medium text-muted-foreground hidden md:table-cell">Issued By</th>
                     <th className="pb-2 font-medium text-muted-foreground">Status</th>
+                    <th className="pb-2 font-medium text-muted-foreground">Proof</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -251,6 +270,12 @@ export function PettyCashIssuance() {
                         <Badge variant="secondary" className={`text-xs ${PC_REQUEST_STATUS_COLORS[r.status]}`}>
                           {PC_REQUEST_STATUS_LABELS[r.status]}
                         </Badge>
+                      </td>
+                      <td className="py-2">
+                        <Button size="sm" variant="outline" className="text-xs h-7"
+                          onClick={() => setBillsFor({ kind: "request", id: r.id, label: r.request_number })}>
+                          <Paperclip className="h-3 w-3 mr-1" />View / add proof
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -293,8 +318,17 @@ export function PettyCashIssuance() {
                   onChange={(e) => setIssuanceRef(e.target.value)}
                 />
               </div>
+              <AttachmentPicker
+                files={proofFiles}
+                onChange={setProofFiles}
+                label="Proof of payment"
+                help="For example a UPI or bank screenshot, or a photo of the signed cash voucher. It is kept with this request for the record."
+              />
+              <p className="text-xs text-muted-foreground rounded-md bg-muted/50 px-3 py-2">
+                What happens when you confirm: {issueTarget && `₹${Number(issueTarget.amount_requested).toLocaleString("en-IN")} is added to ${getRequestOwner(issueTarget)}'s petty cash balance (now ₹${getRequestBalance(issueTarget).toLocaleString("en-IN")}). Only confirm after you have actually handed over or sent the money.`}
+              </p>
               <Button onClick={handleIssue} disabled={acting || !issuanceMethod} className="w-full">
-                {acting ? "Processing..." : "Confirm Issuance"}
+                {acting ? "Processing..." : "I have paid this — add to balance"}
               </Button>
             </div>
           )}
@@ -309,6 +343,11 @@ export function PettyCashIssuance() {
               {entryAction?.action === "approve" ? "Approve Expense" : "Reject Expense"}
             </DialogTitle>
           </DialogHeader>
+          <p className="text-xs text-muted-foreground rounded-md bg-muted/50 px-3 py-2">
+            {entryAction?.action === "approve"
+              ? "What happens next: this is the final approval. The amount is deducted from the person's balance."
+              : "What happens next: the expense goes back to the person with your note. Nothing is deducted."}
+          </p>
           <div className="space-y-4 mt-2">
             <div className="space-y-2">
               <Label>Note (optional)</Label>
@@ -319,11 +358,28 @@ export function PettyCashIssuance() {
               />
             </div>
             <Button onClick={handleEntryAction} disabled={acting} className="w-full">
-              {acting ? "Processing..." : "Confirm"}
+              {acting ? "Processing..." : entryAction?.action === "approve" ? "Approve expense" : "Reject expense"}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {billsFor && (
+        <AttachmentDialog
+          open
+          onOpenChange={(o) => { if (!o) { setBillsFor(null); fetchData(); } }}
+          title={billsFor.kind === "entry" ? `Bills for ${billsFor.label}` : `Proof of payment for ${billsFor.label}`}
+          description={billsFor.kind === "entry"
+            ? "What the person attached as proof of this expense."
+            : "Screenshots or vouchers showing the cash was handed over."}
+          target={billsFor.kind === "entry" ? { entryId: billsFor.id } : { requestId: billsFor.id }}
+          kind={billsFor.kind === "entry" ? "receipt" : "payment_proof"}
+          canAdd
+          canRemove={() => true}
+          addLabel={billsFor.kind === "entry" ? "Add a bill (photo or PDF)" : "Add proof (photo or PDF)"}
+          emptyText={billsFor.kind === "entry" ? "No bill was attached to this expense." : "No proof of payment has been attached yet."}
+        />
+      )}
     </div>
   );
 }
