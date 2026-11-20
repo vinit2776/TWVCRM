@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { applyDraftWatermark } from "@/lib/draft-watermark";
 import { resolveWatermark } from "@/lib/agreement-watermark-server";
 import { logAudit } from "@/lib/audit";
+import { evaluateDraftSendGate } from "@/lib/vo-draft-gate";
 
 /**
  * GET /api/cases/[id]/leave-license/pdf
@@ -93,6 +94,22 @@ export async function GET(
     agreement: row,
     requestedClean,
   });
+
+  // ?purpose=handout marks a download meant to leave the building. Viewing a
+  // draft internally is never blocked. Clean copies are behind payment already.
+  if (decision.applyWatermark && request.nextUrl.searchParams.get("purpose") === "handout") {
+    const { data: dbUser } = await supabase
+      .from("users").select("role").eq("auth_id", user.id).single();
+    const draftGate = await evaluateDraftSendGate({
+      admin: adminSupabase,
+      caseId,
+      role: dbUser?.role,
+      agreementStatus: row.status,
+    });
+    if (!draftGate.allowed) {
+      return NextResponse.json({ error: draftGate.reason }, { status: 403 });
+    }
+  }
 
   const original = new Uint8Array(await file.arrayBuffer());
   const draft = decision.applyWatermark;

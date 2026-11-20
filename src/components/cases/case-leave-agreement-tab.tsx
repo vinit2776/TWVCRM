@@ -294,7 +294,31 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
     settled: boolean;
     reason: string;
     aggregatorName: string | null;
+    paymentOverride?: { active: boolean; reason?: string; at?: string | null };
   } | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overrideSaving, setOverrideSaving] = useState(false);
+
+  const submitOverride = async (action: "set" | "clear") => {
+    setOverrideSaving(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/payment-override`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "set" ? { action, reason: overrideReason } : { action }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(body.error || "Could not update the override");
+        return;
+      }
+      toast.success(action === "set" ? "Payment gate overridden" : "Override cleared");
+      setOverrideReason("");
+      await loadWatermarkPolicy();
+    } finally {
+      setOverrideSaving(false);
+    }
+  };
 
   const loadWatermarkPolicy = useCallback(async () => {
     const res = await fetch(`/api/cases/${caseId}/leave-license/watermark-policy`);
@@ -311,6 +335,8 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
 
   /** Suffix for the PDF routes; the server still re-decides. */
   const watermarkQuery = watermarkOn ? "" : "?watermark=0";
+  /** Downloads leave the building, so they are marked as hand-outs for the draft gate. */
+  const handoutQuery = `${watermarkQuery ? `${watermarkQuery}&` : "?"}purpose=handout`;
 
   // ── Send to customer ───────────────────────────────────────────────────
   const [sendOpen, setSendOpen] = useState(false);
@@ -449,7 +475,7 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
 
     setViewing(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license/pdf${watermarkQuery}`);
+      const res = await fetch(`/api/cases/${caseId}/leave-license/pdf${handoutQuery}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         toast.error(body.error || "PDF not found — regenerate the agreement first");
@@ -845,6 +871,55 @@ export function CaseLeaveAgreementTab({ caseId, clauseGate: clauseGateFromCase, 
               </div>
             </div>
           )}
+
+          {agreement.status !== "executed" && (
+            <p className="text-xs text-muted-foreground">
+              Draft, not for signing. Signing, stamp and seal, and the clean copy stay locked until payment in full.
+            </p>
+          )}
+
+          {watermarkPolicy?.paymentOverride?.active && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              Sent under admin override: {watermarkPolicy.paymentOverride.reason}
+              {userRole === "admin" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-2"
+                  disabled={overrideSaving}
+                  onClick={() => submitOverride("clear")}
+                >
+                  Clear override
+                </Button>
+              )}
+            </div>
+          )}
+
+          {userRole === "admin" &&
+            agreement.status !== "executed" &&
+            watermarkPolicy &&
+            !watermarkPolicy.paymentOverride?.active &&
+            watermarkPolicy.route !== "postpaid" && (
+              <div className="space-y-2 rounded-md border p-3">
+                <Label htmlFor="override-reason" className="text-sm font-medium">
+                  Admin: override the payment gate
+                </Label>
+                <Input
+                  id="override-reason"
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  placeholder="Reason (at least 10 characters), recorded in the audit trail"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={overrideSaving || overrideReason.trim().length < 10}
+                  onClick={() => submitOverride("set")}
+                >
+                  Override payment gate
+                </Button>
+              </div>
+            )}
 
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-2 pt-2 border-t">
