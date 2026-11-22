@@ -67,6 +67,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/cron/space-match",
+      "schedule": "30 2 * * *"
+    },
+    {
       "path": "/api/cron/rent-gap-alert",
       "schedule": "30 4 * * *"
     },

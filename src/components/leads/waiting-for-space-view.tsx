@@ -19,6 +19,7 @@ interface WaitingRow {
   parkedBy: string | null;
   daysWaiting: number;
   parkedAt: string;
+  matchedNote: string | null;
 }
 
 /**
@@ -72,6 +73,7 @@ export function WaitingForSpaceView({ onCount }: { onCount?: (n: number) => void
                   <span className="text-xs text-muted-foreground">waiting {r.daysWaiting} day{r.daysWaiting === 1 ? "" : "s"}{r.parkedBy ? ` · kept on file by ${r.parkedBy}` : ""}</span>
                   {r.state === "space_available" && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800">Space available</span>}
                 </div>
+                {r.state === "space_available" && r.matchedNote && <div className="text-sm font-medium text-emerald-700">{r.matchedNote}. Open the lead and take it out of Waiting to make an offer.</div>}
                 <div className="text-sm text-muted-foreground">{PARK_REASON_LABELS[r.reason as ParkReason] ?? r.reason}{r.note ? ` · ${r.note}` : ""}{r.lookAgainOn ? ` · look again on ${formatDate(r.lookAgainOn)}` : ""}</div>
               </li>
             ))}
