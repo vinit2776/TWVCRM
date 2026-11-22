@@ -2,6 +2,7 @@ import { leadStaleState, latestInstant, NON_EVENT_SUBJECTS } from "@/lib/lead-st
 import { isLastContactActivity } from "@/lib/lead-last-contact";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { pinState, type PinState } from "@/lib/pin-age";
 import { normalizePhoneFields, normalizeStoredPhone } from "@/lib/phone";
 import { phoneMatchClauses } from "@/lib/phone-search";
 import { createLeadSchema } from "@/lib/validations";
@@ -124,6 +125,8 @@ export async function GET(request: NextRequest) {
     created_at: string;
     archived_at?: string | null;
     pinned_at?: string | null;
+    pinned_by?: string | null;
+    _pin?: (PinState & { pinnedBy: string | null }) | null;
     _stale?: unknown;
     _last_contact?: { subject: string; at: string; note: string | null } | null;
     _enquiry?: EnquiryGlance | null;
@@ -389,6 +392,22 @@ export async function GET(request: NextRequest) {
         hasFutureFollowUp: !!(l._followup?.upcoming || l._followup?.due_today),
       });
       if (stale.state !== "active") l._stale = stale;
+    }
+
+    // How long a pin has stood and whether it has gone quiet; admin and manager also see who pinned it.
+    const pinned = leads.filter((l) => l.pinned_at);
+    if (pinned.length > 0) {
+      const { data: meRow } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+      const seesWho = meRow?.role === "admin" || meRow?.role === "manager";
+      const pinnerIds = [...new Set(pinned.map((l) => l.pinned_by).filter((x): x is string => !!x))];
+      const names = new Map<string, string>();
+      if (seesWho && pinnerIds.length > 0) {
+        const { data: people } = await supabase.from("users").select("id, full_name").in("id", pinnerIds);
+        for (const p of (people ?? []) as { id: string; full_name: string }[]) names.set(p.id, p.full_name);
+      }
+      for (const l of pinned) {
+        l._pin = { ...pinState(l.pinned_at as string, lastActivity.get(l.id)), pinnedBy: seesWho && l.pinned_by ? (names.get(l.pinned_by) ?? null) : null };
+      }
     }
   }
 
