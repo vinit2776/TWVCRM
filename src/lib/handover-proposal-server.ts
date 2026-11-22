@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { logAudit } from "@/lib/audit";
-import { createNotification } from "@/lib/in-app-notifications";
+import { finishHandoverJobs, type FinishableJob } from "@/lib/handover-finish-server";
 
 /**
  * A "send a proposal" job finishes by itself when its proposal goes out to the customer. The job is
@@ -22,45 +21,13 @@ export async function completeHandoverTasksForProposal(
     .neq("status", "done");
   if (!jobs || jobs.length === 0) return 0;
 
-  const now = new Date().toISOString();
-  let finished = 0;
-  for (const job of jobs) {
-    const { error } = await admin
-      .from("tasks")
-      .update({
-        status: "done",
-        completed_at: now,
-        completion_note: `Proposal${proposalNumber ? ` ${proposalNumber}` : ""} sent to the customer`,
-      })
-      .eq("id", job.id)
-      .neq("status", "done");
-    if (error) {
-      console.error("[handover] could not finish the send-proposal job:", error.message);
-      continue;
-    }
-    finished += 1;
-    if (actorId) {
-      logAudit(admin, {
-        entityType: "task",
-        entityId: job.id as string,
-        action: "update",
-        performedBy: actorId,
-        changes: { status: { old: "todo", new: "done" } },
-      });
-    }
-    if (job.handed_over_by && job.handed_over_by !== actorId) {
-      await createNotification({
-        userId: job.handed_over_by as string,
-        type: "handover_job",
-        title: job.title as string,
-        body: `The proposal was sent${proposalNumber ? ` (${proposalNumber})` : ""}`,
-        url: "/leads?view=home",
-        entityType: "task",
-        entityId: job.id as string,
-      }).catch(() => {});
-    }
-  }
-  return finished;
+  return finishHandoverJobs(
+    admin,
+    jobs as FinishableJob[],
+    actorId,
+    `Proposal${proposalNumber ? ` ${proposalNumber}` : ""} sent to the customer`,
+    `The proposal was sent${proposalNumber ? ` (${proposalNumber})` : ""}`,
+  );
 }
 
 /**

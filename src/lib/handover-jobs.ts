@@ -50,3 +50,10 @@ export function canEditJob(task: JobLike, userId: string | null, role: string | 
   if (!isJob(task)) return true;
   return !!userId && (task.handed_over_by === userId || role === "admin");
 }
+
+/** Which hand-over job an activity on the lead finishes: a call finishes "call back", a tour "book a tour". */
+export function jobKindForActivity(activityType: string): JobKind | null {
+  if (activityType === "call") return "call_back";
+  if (activityType === "tour") return "book_tour";
+  return null;
+}
