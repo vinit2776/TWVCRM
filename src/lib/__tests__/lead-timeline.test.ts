@@ -4,6 +4,7 @@ import {
   enquiryEvent,
   proposalEvents,
   contractEvents,
+  handoverJobEvents,
   paymentEvent,
   sortTimeline,
   nextStep,
@@ -79,5 +80,40 @@ describe("sortTimeline and nextStep", () => {
     ]);
     expect(step?.notes).toBe("soon");
     expect(nextStep([])).toBeNull();
+  });
+});
+
+describe("handoverJobEvents", () => {
+  const job = {
+    id: "j1",
+    kind: "call_back",
+    title: "Call back Priya",
+    status: "todo",
+    created_at: "2026-11-20T10:00:00Z",
+    brief: { discussed: "Wants a corner cabin" },
+    giver: { full_name: "Asha" },
+    assignee: { full_name: "Ravi" },
+  };
+
+  it("a new job shows who handed what to whom, with the note", () => {
+    const [e, ...rest] = handoverJobEvents(job);
+    expect(rest).toHaveLength(0);
+    expect(e.title).toBe("Call back handed to Ravi");
+    expect(e.actor).toBe("Asha");
+    expect(e.detail).toBe("Wants a corner cabin");
+    expect(e.group).toBe("system");
+  });
+
+  it("a finished job adds a done event by the assignee with the completion note", () => {
+    const events = handoverJobEvents({ ...job, status: "done", completed_at: "2026-11-21T09:00:00Z", completion_note: "Call logged: Spoke" });
+    expect(events.map((x) => x.title)).toEqual(["Call back handed to Ravi", "Call back done"]);
+    expect(events[1]).toMatchObject({ actor: "Ravi", detail: "Call logged: Spoke", at: "2026-11-21T09:00:00Z" });
+  });
+
+  it("a free-text job uses its own title, and a proposal job links to the proposal", () => {
+    const [e] = handoverJobEvents({ ...job, kind: "other", title: "Check parking", proposal_id: null });
+    expect(e.title).toBe("Check parking handed to Ravi");
+    const [p] = handoverJobEvents({ ...job, kind: "send_proposal", proposal_id: "p9" });
+    expect(p.links).toEqual([{ label: "Proposal", href: "/proposals/p9" }]);
   });
 });

@@ -182,6 +182,63 @@ export function paymentEvent(p: PaymentRow, statementNumber: string, formatMoney
   };
 }
 
+export interface HandoverJobRow {
+  id: string;
+  kind: string;
+  title: string;
+  status: string;
+  created_at: string;
+  completed_at?: string | null;
+  completion_note?: string | null;
+  proposal_id?: string | null;
+  brief?: { discussed?: string | null; proposal_kind?: string | null } | null;
+  giver?: { full_name?: string | null } | null;
+  assignee?: { full_name?: string | null } | null;
+}
+
+const JOB_LABELS: Record<string, string> = {
+  call_back: "Call back",
+  book_tour: "Book a tour",
+  send_proposal: "Send a proposal",
+  other: "Job",
+};
+
+/**
+ * A job handed over to a colleague, and when it was finished. A job someone takes back is deleted, so
+ * it leaves no event here (the audit log keeps it). They sit under System, beside "Reassigned".
+ */
+export function handoverJobEvents(j: HandoverJobRow): TimelineEvent[] {
+  const label = j.kind === "other" && j.title ? j.title : JOB_LABELS[j.kind] ?? "Job";
+  const to = j.assignee?.full_name ?? "someone";
+  const note = j.brief?.discussed?.trim();
+  const links = j.proposal_id ? [{ label: "Proposal", href: `/proposals/${j.proposal_id}` }] : [];
+  const events: TimelineEvent[] = [
+    {
+      id: `job-${j.id}-handed`,
+      at: j.created_at,
+      group: "system",
+      title: `${label} handed to ${to}`,
+      detail: note || null,
+      actor: j.giver?.full_name ?? null,
+      actorKind: "team",
+      links,
+    },
+  ];
+  if (j.status === "done" && j.completed_at) {
+    events.push({
+      id: `job-${j.id}-done`,
+      at: j.completed_at,
+      group: "system",
+      title: `${label} done`,
+      detail: j.completion_note?.trim() || null,
+      actor: j.assignee?.full_name ?? null,
+      actorKind: "team",
+      links,
+    });
+  }
+  return events;
+}
+
 /** Newest first; events with the same instant keep a stable order. */
 export function sortTimeline(events: TimelineEvent[]): TimelineEvent[] {
   return [...events].sort((a, b) => {
