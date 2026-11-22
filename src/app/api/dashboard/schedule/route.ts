@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/server";
+import { getDashboardAuth } from "@/lib/dashboard-auth";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -21,16 +22,10 @@ function toIstHHmm(iso: string): string {
  * where kind is 'booking' | 'meeting' | 'tour' | 'follow_up'.
  */
 export async function GET(request: NextRequest) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user, dbUser } = await getDashboardAuth();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const adminSupabase = await createAdminClient();
-  const { data: dbUser } = await adminSupabase
-    .from("users")
-    .select("id, role")
-    .eq("auth_id", user.id)
-    .single();
 
   if (!dbUser) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 

@@ -6,6 +6,7 @@ import { ClipboardCheck, ShieldAlert, FileText, Package, Zap, ChevronRight } fro
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { PendingActionItem } from "@/app/api/dashboard/pending-actions/route";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 const MODULE_ICONS: Record<string, React.ReactNode> = {
   "Deposit Waiver": <ShieldAlert className="h-4 w-4 text-amber-600" />,
@@ -35,7 +36,7 @@ export function PendingActionsWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/pending-actions")
+    dashboardFetch("/api/dashboard/pending-actions")
       .then((r) => r.json())
       .then((json) => setItems(json.data || []))
       .catch(() => {})
