@@ -2867,6 +2867,19 @@ export const USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS = 60;
  * lead's existing lost reason (reports keep one vocabulary), except Junk, which is a status of its
  * own and hides the lead from the pipeline.
  */
+/** Why a lead was marked junk (leads.junk_reason). */
+export const JUNK_REASONS = ["job_seeker", "vendor_or_pitch", "spam_or_test", "wrong_number", "duplicate", "other"] as const;
+export type JunkReason = (typeof JUNK_REASONS)[number];
+
+export const JUNK_REASON_LABELS: Record<JunkReason, string> = {
+  job_seeker: "Job seeker",
+  vendor_or_pitch: "Vendor or sales pitch",
+  spam_or_test: "Spam or test",
+  wrong_number: "Wrong number",
+  duplicate: "Duplicate",
+  other: "Other",
+};
+
 export const NOT_INTERESTED_REASONS = ["junk", "price", "location", "space", "other"] as const;
 export type NotInterestedReason = (typeof NOT_INTERESTED_REASONS)[number];
 

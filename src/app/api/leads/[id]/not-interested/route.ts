@@ -6,6 +6,7 @@ import { COORDINATOR_ROLE } from "@/lib/restricted-roles";
 import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import {
   NOT_INTERESTED_REASONS,
+  JUNK_REASONS,
   NOT_INTERESTED_REASON_LABELS,
   NOT_INTERESTED_TO_LOST_REASON,
   LEAD_HANDLER_ROLES,
@@ -14,6 +15,8 @@ import {
 const bodySchema = z.object({
   reason: z.enum(NOT_INTERESTED_REASONS),
   note: z.string().trim().max(1000).optional(),
+  /** Only read when reason is junk; a caller that does not say is recorded as "other". */
+  junk_reason: z.enum(JUNK_REASONS).optional(),
 });
 
 // POST /api/leads/[id]/not-interested
@@ -37,7 +40,7 @@ export async function POST(
   if (!parsed.success) {
     return NextResponse.json({ error: "Validation failed", details: parsed.error.issues }, { status: 400 });
   }
-  const { reason, note } = parsed.data;
+  const { reason, note, junk_reason } = parsed.data;
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   const { data: oldLead } = await supabase.from("leads").select("*").eq("id", id).single();
@@ -61,7 +64,7 @@ export async function POST(
   const label = NOT_INTERESTED_REASON_LABELS[reason];
   const update: Record<string, unknown> =
     reason === "junk"
-      ? { status: "junk" }
+      ? { status: "junk", junk_reason: junk_reason ?? "other" }
       : { status: "lost", lost_reason: NOT_INTERESTED_TO_LOST_REASON[reason], lost_at: now };
 
   const { data, error } = await supabase
