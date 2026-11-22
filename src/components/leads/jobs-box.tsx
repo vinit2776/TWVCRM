@@ -116,7 +116,14 @@ export function JobsBox() {
                       <Button size="sm" className="h-9" onClick={() => finish(j)}>Done</Button>
                     </>
                   ) : (
-                    <Button size="sm" className="h-9" onClick={() => (setNoteFor(j.id), setNote(""))}>Mark done</Button>
+                    <>
+                      {(j.kind === "call_back" || j.kind === "book_tour") && (
+                        <span className="self-center text-xs text-muted-foreground">
+                          {j.kind === "call_back" ? "finishes when you log a call" : "finishes when you book the tour"}
+                        </span>
+                      )}
+                      <Button size="sm" className="h-9" variant={j.kind === "call_back" || j.kind === "book_tour" ? "outline" : "default"} onClick={() => (setNoteFor(j.id), setNote(""))}>Mark done</Button>
+                    </>
                   )}
                 </>,
               ),

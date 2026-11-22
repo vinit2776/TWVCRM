@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canCompleteJob, canEditJob, defaultJobTitle } from "../handover-jobs";
+import { canCompleteJob, canEditJob, defaultJobTitle, jobKindForActivity } from "../handover-jobs";
 
 const job = { kind: "send_proposal", assigned_to: "priya", handed_over_by: "vignesh" };
 const plain = { kind: "general", assigned_to: "priya", handed_over_by: null };
@@ -31,5 +31,15 @@ describe("defaultJobTitle", () => {
   it("names the job after the customer", () => {
     expect(defaultJobTitle("send_proposal", "Ravi Shah")).toBe("Send a proposal to Ravi Shah");
     expect(defaultJobTitle("call_back", " ")).toBe("Call back the customer");
+  });
+});
+
+describe("jobKindForActivity", () => {
+  it("a call finishes call back jobs and a tour finishes book a tour jobs", () => {
+    expect(jobKindForActivity("call")).toBe("call_back");
+    expect(jobKindForActivity("tour")).toBe("book_tour");
+  });
+  it("notes, emails and meetings finish nothing", () => {
+    for (const t of ["note", "email", "meeting", ""]) expect(jobKindForActivity(t)).toBeNull();
   });
 });

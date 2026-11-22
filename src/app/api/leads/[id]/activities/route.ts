@@ -6,6 +6,7 @@ import { logAudit } from "@/lib/audit";
 import { createReminderEvent } from "@/lib/google-calendar";
 import { istLocalToUtcIso } from "@/lib/utils";
 import { followUpClosedRows } from "@/lib/follow-up-closed-note";
+import { completeHandoverJobsForActivity } from "@/lib/handover-finish-server";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -102,6 +103,17 @@ export async function POST(
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // A call or tour logged by the person a hand-over job was given to finishes that job.
+  if (dbUser?.id) {
+    await completeHandoverJobsForActivity(await createAdminClient(), {
+      leadId: id,
+      userId: dbUser.id,
+      activityType: result.data.type,
+      callOutcome: result.data.call_outcome,
+      activityCreatedAt: data.created_at,
+    }).catch((e) => console.error("[handover] finish failed:", e));
   }
 
   // A contact logged from the list or the lead page deals with what was already pending: close the
