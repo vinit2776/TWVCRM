@@ -66,8 +66,8 @@ export async function GET(request: NextRequest) {
     const monthWon = monthLeads.filter((l) => l.status === "won").length;
     const monthRate = monthTotal > 0 ? Math.round((monthWon / monthTotal) * 100) : 0;
 
-    let tasksDueTodayQ = supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done");
-    let tasksOverdueQ = supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done");
+    let tasksDueTodayQ = supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done").eq("kind", "general");
+    let tasksOverdueQ = supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done").eq("kind", "general");
     let activitiesQ = supabase.from("activities").select("*, creator:users!activities_created_by_fkey(full_name), lead:leads!activities_lead_id_fkey(first_name, last_name)").order("created_at", { ascending: false }).limit(10);
     let notesQ = supabase.from("activities").select("id, lead_id, subject, created_at, lead:leads!activities_lead_id_fkey(first_name, last_name)").eq("type", "note").order("created_at", { ascending: false }).limit(20);
     let followUpsQ = supabase.from("activities").select("*", { count: "exact", head: true }).eq("is_follow_up_done", false).not("follow_up_date", "is", null);
@@ -147,8 +147,8 @@ export async function GET(request: NextRequest) {
     const hasLeads = locationLeadIds.length > 0;
 
     // Now fire tasks / activities / notes / followups in parallel using the fetched lead IDs
-    let tasksDueTodayQ = supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done");
-    let tasksOverdueQ = supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done");
+    let tasksDueTodayQ = supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done").eq("kind", "general");
+    let tasksOverdueQ = supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done").eq("kind", "general");
     let activitiesQ = supabase.from("activities").select("*, creator:users!activities_created_by_fkey(full_name), lead:leads!activities_lead_id_fkey(first_name, last_name)").order("created_at", { ascending: false }).limit(10);
     let notesQ = supabase.from("activities").select("id, lead_id, subject, created_at, lead:leads!activities_lead_id_fkey(first_name, last_name)").eq("type", "note").order("created_at", { ascending: false }).limit(20);
     let followUpsQ = supabase.from("activities").select("*", { count: "exact", head: true }).eq("is_follow_up_done", false).not("follow_up_date", "is", null);
@@ -232,8 +232,8 @@ export async function GET(request: NextRequest) {
     supabase.from("leads").select("*", { count: "exact", head: true }).gte("created_at", CONVERSION_CUTOFF),
     supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").gte("created_at", CONVERSION_CUTOFF),
     supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost").gte("created_at", CONVERSION_CUTOFF),
-    supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done"),
-    supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done"),
+    supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done").eq("kind", "general"),
+    supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done").eq("kind", "general"),
     supabase.from("activities")
       .select("*, creator:users!activities_created_by_fkey(full_name), lead:leads!activities_lead_id_fkey(first_name, last_name)")
       .order("created_at", { ascending: false })

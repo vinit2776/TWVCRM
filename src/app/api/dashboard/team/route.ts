@@ -62,6 +62,7 @@ export async function GET() {
     .select("assigned_to")
     .in("assigned_to", userIds)
     .eq("status", "done")
+    .eq("kind", "general")
     .gte("updated_at", weekStart.toISOString())
     .lte("updated_at", weekEnd.toISOString());
 
