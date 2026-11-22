@@ -7,6 +7,7 @@ import { JobsBox } from "@/components/leads/jobs-box";
 import { OverdueReviewCard } from "@/components/leads/overdue-review-card";
 import { ArrivalsCard } from "@/components/tours/arrivals-card";
 import { QuietPinsCard } from "@/components/leads/quiet-pins-card";
+import { KeptInformedCard } from "@/components/leads/kept-informed-card";
 import { useHandoverJobsEnabled } from "@/hooks/use-handover-jobs";
 import { PersonName } from "@/components/shared/person-name";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -98,6 +99,7 @@ export function LeadsHome({ counts, users, isUnread, isReEnquiry, onOpenLead, on
 
       <ArrivalsCard />
 
+      <KeptInformedCard />
       <QuietPinsCard />
 
       <OverdueReviewCard ownerId={ownerId} />
