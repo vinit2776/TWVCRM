@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { LEAD_HANDLER_ROLES } from "@/lib/constants";
 import { istLocalToUtcIso } from "@/lib/utils";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
 import { TOUR_OUTCOME_LABELS, tourOutcomeSubject } from "@/lib/tours";
 import { datePart, timePart } from "@/lib/next-step-chip";
+import { canWorkTour } from "@/lib/tour-reports";
+import { createNotification } from "@/lib/in-app-notifications";
 
 const bodySchema = z.discriminatedUnion("action", [
   z.object({
@@ -17,12 +19,20 @@ const bodySchema = z.discriminatedUnion("action", [
   // A naive "yyyy-MM-ddTHH:mm" IST wall-clock string, like every other date input here.
   z.object({ action: z.literal("reschedule"), meeting_start_at: z.string().min(16) }),
   z.object({ action: z.literal("set_host"), tour_host_id: z.string().uuid().nullable() }),
+  // A colleague tagged to join the customer on the visit.
+  z.object({ action: z.literal("set_accompanier"), accompanier_id: z.string().uuid().nullable() }),
+  // The host marks the customer as arrived.
+  z.object({ action: z.literal("arrived") }),
 ]);
+
+/** A floor incharge can only say the customer arrived or did not come; the rest stays with the handlers. */
+const FLOOR_ACTIONS = ["arrived", "outcome"];
 
 const HOUR_MS = 60 * 60 * 1000;
 
 // PATCH /api/tours/[id]
-// Record what happened at a tour, move it, or change who hosts it. Recording an outcome closes the
+// Record what happened at a tour, move it, change who hosts or accompanies it, or mark the customer
+// as arrived. A floor incharge may mark arrival or a no-show on tours at their own centre. Recording an outcome closes the
 // tour's own follow-up and writes a plain line on the lead's timeline; "came" moves the lead to
 // Tour Completed. The next step (or closing the lead) is a separate call, so a tour is never left
 // with an outcome and a lead is never silently left with nothing to do: the Leads list shows
@@ -34,8 +44,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data: me } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!me || !(LEAD_HANDLER_ROLES as readonly string[]).includes(me.role)) {
-    return NextResponse.json({ error: "Only admin, manager and sales roles can update a tour" }, { status: 403 });
+  if (!me || !([...LEAD_HANDLER_ROLES, "floor_manager"] as readonly string[]).includes(me.role)) {
+    return NextResponse.json({ error: "Only admin, manager, sales and floor roles can update a tour" }, { status: 403 });
   }
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => ({})));
@@ -46,15 +56,51 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const { data: tour } = await supabase
     .from("activities")
-    .select("id, type, lead_id, description, meeting_start_at, meeting_end_at, tour_outcome")
+    .select("id, type, lead_id, description, meeting_start_at, meeting_end_at, tour_outcome, tour_host_id, accompanier_id, created_by, arrived_at, lead:leads!activities_lead_id_fkey(assigned_to, location_id)")
     .eq("id", id)
     .single();
   if (!tour || tour.type !== "tour") return NextResponse.json({ error: "Tour not found" }, { status: 404 });
+
+  const lead = (tour as unknown as { lead: { assigned_to: string | null; location_id: string | null } | null }).lead;
+  let inchargeIds: string[] = [];
+  if (me.role === "floor_manager" && lead?.location_id) {
+    const { data: loc } = await createAdminClient().from("locations").select("incharge_user_id_1, incharge_user_id_2").eq("id", lead.location_id).maybeSingle();
+    inchargeIds = [loc?.incharge_user_id_1, loc?.incharge_user_id_2].filter((x): x is string => !!x);
+  }
+  const people = { hostId: tour.tour_host_id, accompanierId: tour.accompanier_id, createdBy: tour.created_by, leadOwnerId: lead?.assigned_to ?? null, inchargeIds };
+  if (!canWorkTour(me.role, me.id, people)) return NextResponse.json({ error: "This tour is not at your centre" }, { status: 403 });
+  if (me.role === "floor_manager" && (!FLOOR_ACTIONS.includes(body.action) || (body.action === "outcome" && body.outcome !== "no_show"))) {
+    return NextResponse.json({ error: "A floor incharge can mark a customer arrived or a no-show" }, { status: 403 });
+  }
   if (tour.tour_outcome && body.action !== "set_host") {
     return NextResponse.json({ error: "This tour already has an outcome" }, { status: 409 });
   }
 
   const now = new Date().toISOString();
+
+  if (body.action === "arrived") {
+    // Compare-and-set: the first press wins and a later one changes nothing.
+    const { data: marked, error } = await supabase.from("activities").update({ arrived_at: now, updated_at: now }).eq("id", id).is("arrived_at", null).select("id");
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (marked && marked.length > 0) {
+      logAudit(supabase, { entityType: "lead", entityId: tour.lead_id, action: "update", performedBy: me.id, changes: { tour_arrived_at: { old: null, new: now } } });
+      // The person who booked it and the one accompanying hear that the customer is here.
+      for (const uid of new Set([tour.created_by, tour.accompanier_id].filter((x): x is string => !!x && x !== me.id))) {
+        await createNotification({ userId: uid, type: "tour_arrived", title: "Customer has arrived for the tour", body: "The host has marked the customer as arrived.", url: `/leads/${tour.lead_id}`, entityType: "lead", entityId: tour.lead_id }).catch(() => {});
+      }
+    }
+    return NextResponse.json({ ok: true, already: !(marked && marked.length > 0) });
+  }
+
+  if (body.action === "set_accompanier") {
+    const { error } = await supabase.from("activities").update({ accompanier_id: body.accompanier_id, updated_at: now }).eq("id", id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (body.accompanier_id && body.accompanier_id !== me.id) {
+      await createNotification({ userId: body.accompanier_id, type: "tour_accompany", title: "You are tagged to accompany a tour", body: "Open the lead for when and where.", url: `/leads/${tour.lead_id}`, entityType: "lead", entityId: tour.lead_id }).catch(() => {});
+    }
+    logAudit(supabase, { entityType: "lead", entityId: tour.lead_id, action: "update", performedBy: me.id, changes: { tour_accompanier: { old: tour.accompanier_id, new: body.accompanier_id } } });
+    return NextResponse.json({ ok: true });
+  }
 
   if (body.action === "set_host") {
     const { error } = await supabase.from("activities").update({ tour_host_id: body.tour_host_id, updated_at: now }).eq("id", id);

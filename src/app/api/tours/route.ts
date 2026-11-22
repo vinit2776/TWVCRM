@@ -37,8 +37,11 @@ type TourRow = {
   tour_outcome: TourOutcome | null;
   tour_outcome_at: string | null;
   tour_host_id: string | null;
+  accompanier_id: string | null;
+  arrived_at: string | null;
   created_by: string | null;
   host: { full_name: string } | null;
+  accompanier: { full_name: string } | null;
   creator: { full_name: string } | null;
   lead: LeadJoin;
 };
@@ -52,8 +55,14 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data: me } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!me || !(LEAD_HANDLER_ROLES as readonly string[]).includes(me.role)) {
-    return NextResponse.json({ error: "Tours are for admin, manager and sales roles" }, { status: 403 });
+  if (!me || !([...LEAD_HANDLER_ROLES, "floor_manager"] as readonly string[]).includes(me.role)) {
+    return NextResponse.json({ error: "Tours are for admin, manager, sales and floor roles" }, { status: 403 });
+  }
+  // A floor incharge sees the tours at the centres they are in charge of, or that they host or accompany.
+  let myCentreIds: string[] = [];
+  if (me.role === "floor_manager") {
+    const { data: centres } = await createAdminClient().from("locations").select("id").or(`incharge_user_id_1.eq.${me.id},incharge_user_id_2.eq.${me.id}`);
+    myCentreIds = (centres ?? []).map((c) => c.id as string);
   }
 
   const { searchParams } = new URL(request.url);
@@ -84,7 +93,7 @@ export async function GET(request: NextRequest) {
   const { data, error } = await supabase
     .from("activities")
     .select(
-      "id, lead_id, meeting_start_at, meeting_end_at, meeting_location, description, tour_outcome, tour_outcome_at, tour_host_id, created_by, host:users!activities_tour_host_id_fkey(full_name), creator:users!activities_created_by_fkey(full_name), lead:leads!activities_lead_id_fkey!inner(id, lead_number, first_name, last_name, company, phone, mobile, status, archived_at, assigned_to, workspace_type, seat_capacity, lost_reason, location_id, location:locations!leads_location_id_fkey(name))"
+      "id, lead_id, meeting_start_at, meeting_end_at, meeting_location, description, tour_outcome, tour_outcome_at, tour_host_id, accompanier_id, arrived_at, created_by, host:users!activities_tour_host_id_fkey(full_name), accompanier:users!activities_accompanier_id_fkey(full_name), creator:users!activities_created_by_fkey(full_name), lead:leads!activities_lead_id_fkey!inner(id, lead_number, first_name, last_name, company, phone, mobile, status, archived_at, assigned_to, workspace_type, seat_capacity, lost_reason, location_id, location:locations!leads_location_id_fkey(name))"
     )
     .eq("type", "tour")
     .not("meeting_start_at", "is", null)
@@ -102,6 +111,10 @@ export async function GET(request: NextRequest) {
     if (me.role === "sales_rep") {
       const mine = row.lead.assigned_to === me.id || row.lead.assigned_to === null || row.created_by === me.id || row.tour_host_id === me.id;
       if (!mine) continue;
+    }
+    if (me.role === "floor_manager") {
+      const here = (row.lead.location_id !== null && myCentreIds.includes(row.lead.location_id)) || row.tour_host_id === me.id || row.accompanier_id === me.id;
+      if (!here) continue;
     }
     const bucket = tourBucket(
       { start: row.meeting_start_at, end: row.meeting_end_at, outcome: row.tour_outcome, cutoff },
@@ -175,6 +188,9 @@ export async function GET(request: NextRequest) {
     location: row.meeting_location || row.lead.location?.name || null,
     hostId: row.tour_host_id,
     hostName: row.host?.full_name ?? null,
+    accompanierId: row.accompanier_id,
+    accompanierName: row.accompanier?.full_name ?? null,
+    arrivedAt: row.arrived_at,
     bookedBy: row.creator?.full_name ?? null,
     outcome: row.tour_outcome,
     outcomeAt: row.tour_outcome_at,
