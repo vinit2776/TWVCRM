@@ -12,6 +12,8 @@ export interface LeadsNavCounts {
   followups: number;
   tours: number;
   replies: number;
+  /** Enquiries waiting for space; shown only when the entry is switched on. */
+  waiting?: number;
 }
 
 export type LeadsNavTarget =
@@ -45,7 +47,7 @@ export interface LeadsNav {
  * screen is not built yet are left out rather than shown dead; each later phase adds its entry here.
  * A menu's own badge is the sum of its entries' counts, so work waiting inside it stays visible.
  */
-export function buildLeadsNav(state: LeadsNavState, counts: LeadsNavCounts, options: { showHome?: boolean } = {}): LeadsNav {
+export function buildLeadsNav(state: LeadsNavState, counts: LeadsNavCounts, options: { showHome?: boolean; showWaiting?: boolean } = {}): LeadsNav {
   const onAll = state.view === "all";
   const daily: LeadsNavItem[] = [
     ...(options.showHome ? [{ key: "home", label: "Home", count: 0, tone: "", target: { kind: "view", view: "home" } as LeadsNavTarget, active: state.view === "home" }] : []),
@@ -60,6 +62,7 @@ export function buildLeadsNav(state: LeadsNavState, counts: LeadsNavCounts, opti
       items: [
         { key: "pinned", label: "Pinned", count: 0, tone: "", target: { kind: "bucket", bucket: "pinned" }, active: onAll && state.pinnedOnly },
         { key: "replies", label: "Waiting on a reply", count: counts.replies, tone: "bg-blue-600 text-white", target: { kind: "view", view: "replies" }, active: state.view === "replies" },
+        ...(options.showWaiting ? [{ key: "waiting", label: "Waiting for space", count: counts.waiting ?? 0, tone: "bg-amber-500 text-white", target: { kind: "view", view: "waiting" } as LeadsNavTarget, active: state.view === "waiting" }] : []),
         { key: "all", label: "All leads", count: 0, tone: "", target: { kind: "bucket", bucket: "all" }, active: onAll && !state.pinnedOnly && state.statusFilter !== "junk" },
         { key: "junk", label: "Junk", count: 0, tone: "", target: { kind: "bucket", bucket: "junk" }, active: onAll && !state.pinnedOnly && state.statusFilter === "junk" },
       ],

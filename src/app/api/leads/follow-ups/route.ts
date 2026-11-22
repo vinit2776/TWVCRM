@@ -49,12 +49,15 @@ export async function GET(request: NextRequest) {
     .eq("is_follow_up_done", false)
     .not("follow_up_date", "is", null)
     .is("leads.archived_at", null)
+    // Waiting for space has no follow-up on purpose: it comes back when a person takes it out.
+    .is("leads.parked_at", null)
     .not("leads.status", "in", CLOSED_STATUSES);
   // And every open lead, for the ones with nothing pending.
   let openQuery = supabase
     .from("leads")
     .select("id, created_at")
     .is("archived_at", null)
+    .is("parked_at", null)
     .not("status", "in", CLOSED_STATUSES);
 
   if (status) {

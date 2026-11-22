@@ -213,6 +213,8 @@ export interface Lead {
   archived_at?: string | null;
   /** Set while the lead is pinned: highlighted in the list and shown on every calendar day. */
   pinned_at?: string | null;
+  /** Set while the enquiry is waiting for space we cannot offer yet. */
+  parked_at?: string | null;
   /** Set by the Leads list when the lead has gone quiet (see src/lib/lead-stale.ts). */
   _stale?: { state: "warning"; daysLeft: number } | { state: "stale"; daysQuiet: number };
   /** Set by the Leads list: the last call, tour, meeting or email, for the "Last:" line. */

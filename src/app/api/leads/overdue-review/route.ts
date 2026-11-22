@@ -41,6 +41,7 @@ async function loadPile(supabase: SupabaseUser): Promise<{ pile: PileRow[]; note
     .eq("is_follow_up_done", false)
     .not("follow_up_date", "is", null)
     .is("leads.archived_at", null)
+    .is("leads.parked_at", null)
     .not("leads.status", "in", CLOSED_STATUSES)
     .limit(MAX_PENDING);
   if (error) {

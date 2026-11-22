@@ -382,7 +382,8 @@ export async function GET(request: NextRequest) {
       const stale = leadStaleState({
         status: l.status,
         archivedAt: l.archived_at,
-        pinnedAt: l.pinned_at,
+        // A parked lead is waiting on purpose, like a pinned one, so it never reads as going quiet.
+        pinnedAt: l.pinned_at ?? (l as { parked_at?: string | null }).parked_at,
         lastEventAt:
           latestInstant([l.created_at, lastActivity.get(l.id), l._enquiry?.received_at]) ?? l.created_at,
         hasFutureFollowUp: !!(l._followup?.upcoming || l._followup?.due_today),

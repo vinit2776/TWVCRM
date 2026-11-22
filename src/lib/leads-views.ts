@@ -1,5 +1,5 @@
 /** The views of the Leads page. The URL's `?view=` picks one; no value means All leads. */
-export const LEADS_VIEWS = ["home", "enquiries", "replies", "followups", "tours", "all", "whatsapp"] as const;
+export const LEADS_VIEWS = ["home", "enquiries", "replies", "followups", "tours", "all", "whatsapp", "waiting"] as const;
 export type LeadsView = (typeof LEADS_VIEWS)[number];
 
 export const DEFAULT_LEADS_VIEW: LeadsView = "all";
