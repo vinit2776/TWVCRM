@@ -1,5 +1,6 @@
 "use client";
 
+import { useLeadsHomeV2 } from "@/hooks/use-leads-home-v2";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCheck, MessageCircle } from "lucide-react";
@@ -45,6 +46,7 @@ function waitingFor(since: string): string {
  * customer writes again.
  */
 export function WhatsAppRepliesView({ onCounts }: { onCounts?: (counts: { mine: number; all: number }) => void }) {
+  const v2 = useLeadsHomeV2();
   const router = useRouter();
   const [scope, setScope] = useState<"mine" | "all">("mine");
   const [rows, setRows] = useState<ReplyRow[]>([]);
@@ -135,8 +137,8 @@ export function WhatsAppRepliesView({ onCounts }: { onCounts?: (counts: { mine: 
                 key={r.id}
                 role={canOpen ? "link" : undefined}
                 tabIndex={canOpen ? 0 : undefined}
-                onClick={canOpen ? () => router.push(`/leads/${r.lead_id}`) : undefined}
-                onKeyDown={canOpen ? (e) => e.key === "Enter" && router.push(`/leads/${r.lead_id}`) : undefined}
+                onClick={canOpen ? () => router.push(v2 ? `/leads/${r.lead_id}/activity` : `/leads/${r.lead_id}`) : undefined}
+                onKeyDown={canOpen ? (e) => e.key === "Enter" && router.push(v2 ? `/leads/${r.lead_id}/activity` : `/leads/${r.lead_id}`) : undefined}
                 className={`grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4 ${canOpen ? "cursor-pointer hover:bg-muted/30" : ""}`}
               >
                 <div className="min-w-0 space-y-0.5">
