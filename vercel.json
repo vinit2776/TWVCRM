@@ -191,6 +191,10 @@
       "schedule": "17 * * * *"
     },
     {
+      "path": "/api/cron/wifi-investigation-purge",
+      "schedule": "0 22 * * *"
+    },
+    {
       "path": "/api/cron/customer-value",
       "schedule": "30 21 * * *"
     },
