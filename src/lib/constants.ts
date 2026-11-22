@@ -169,6 +169,17 @@ export const WORKSPACE_TYPE_LABELS: Record<string, string> = {
   enterprise: "Enterprise",
 };
 
+/** Things a caller asks for beyond the desk itself; kept on the lead so a proposal can price them. */
+export const LEAD_EXTRAS = ["parking", "access_24x7", "gst_invoice", "meeting_room_hours", "pantry"] as const;
+
+export const LEAD_EXTRA_LABELS: Record<string, string> = {
+  parking: "Parking",
+  access_24x7: "24x7 access",
+  gst_invoice: "GST invoice",
+  meeting_room_hours: "Meeting room hours",
+  pantry: "Pantry",
+};
+
 export const ACTIVITY_TYPES = ["call", "meeting", "note", "email", "tour"] as const;
 
 export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
@@ -2856,6 +2867,19 @@ export const USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS = 60;
  * lead's existing lost reason (reports keep one vocabulary), except Junk, which is a status of its
  * own and hides the lead from the pipeline.
  */
+/** Why a lead was marked junk (leads.junk_reason). */
+export const JUNK_REASONS = ["job_seeker", "vendor_or_pitch", "spam_or_test", "wrong_number", "duplicate", "other"] as const;
+export type JunkReason = (typeof JUNK_REASONS)[number];
+
+export const JUNK_REASON_LABELS: Record<JunkReason, string> = {
+  job_seeker: "Job seeker",
+  vendor_or_pitch: "Vendor or sales pitch",
+  spam_or_test: "Spam or test",
+  wrong_number: "Wrong number",
+  duplicate: "Duplicate",
+  other: "Other",
+};
+
 export const NOT_INTERESTED_REASONS = ["junk", "price", "location", "space", "other"] as const;
 export type NotInterestedReason = (typeof NOT_INTERESTED_REASONS)[number];
 

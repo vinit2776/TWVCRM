@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
+import { canDecideRequest } from "@/lib/petty-cash-approval";
+import { createNotification } from "@/lib/in-app-notifications";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -34,7 +36,7 @@ const approveSchema = z.object({
 const issueSchema = z.object({
   action: z.literal("issue"),
   issuance_method: z.enum(["cash", "upi", "bank_transfer", "cheque"]),
-  issuance_reference: z.string().optional(),
+  issuance_reference: z.string().trim().min(3, "Enter the payment reference (for cash, the voucher number or a short note)"),
   issuance_proof_url: z.string().optional(),
 });
 
@@ -68,12 +70,12 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const parsed = approveSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
 
-    if (!["admin", "manager", "accounts"].includes(dbUser.role)) {
-      return NextResponse.json({ error: "Only managers/admins can approve requests" }, { status: 403 });
-    }
     if (req.status !== "pending") {
       return NextResponse.json({ error: "Request is not in pending state" }, { status: 400 });
     }
+    // Managers/admins decide; Accounts only issues the cash. Nobody decides their own request.
+    const decision = canDecideRequest(dbUser.role, dbUser.id, req);
+    if (!decision.ok) return NextResponse.json({ error: decision.reason }, { status: 403 });
 
     const newStatus = action === "approve" ? "approved" : "rejected";
     const now = new Date().toISOString();
@@ -107,6 +109,18 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       changes: { status: { old: req.status, new: newStatus }, ...(action === "reject" && parsed.data.note ? { rejection_note: { old: null, new: parsed.data.note } } : {}) },
     });
 
+    if (action === "reject") {
+      await createNotification({
+        userId: req.created_by,
+        type: "petty_cash_request_rejected",
+        title: `Fund request ${req.request_number} was rejected`,
+        body: `${(parsed.data.note || "No reason was given").trim().replace(/([^.!?])$/, "$1.")} You can raise a new request.`,
+        url: "/petty-cash?tab=requests",
+        entityType: "pc_request",
+        entityId: id,
+      });
+    }
+
     return NextResponse.json({ success: true, status: newStatus });
   }
 
@@ -121,30 +135,21 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Request must be approved before issuing" }, { status: 400 });
     }
 
-    const now = new Date().toISOString();
-
-    // Update request to issued
-    const { error: updateErr } = await supabase
-      .from("petty_cash_requests")
-      .update({
-        status: "issued",
-        issued_by: dbUser.id,
-        issued_at: now,
-        issuance_method: parsed.data.issuance_method,
-        issuance_reference: parsed.data.issuance_reference || null,
-        issuance_proof_url: parsed.data.issuance_proof_url || null,
-      })
-      .eq("id", id);
-
-    if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
-
-    // Increase book balance
+    // Status change and balance credit happen in one locked transaction (and write a ledger row).
+    const { data: result, error: issueErr } = await createAdminClient().rpc("pc_issue_request", {
+      p_request_id: id,
+      p_issuer_id: dbUser.id,
+      p_method: parsed.data.issuance_method,
+      p_reference: parsed.data.issuance_reference || null,
+      p_proof_url: parsed.data.issuance_proof_url || null,
+    });
+    if (issueErr) {
+      return issueErr.message.includes("REQUEST_CHANGED")
+        ? NextResponse.json({ error: "This request was already issued. Refresh to see its current state." }, { status: 409 })
+        : NextResponse.json({ error: issueErr.message }, { status: 500 });
+    }
+    const newBalance = Number((result as { balance: number }).balance);
     const book = req.book as { id: string; current_balance: number };
-    const newBalance = Number(book.current_balance) + Number(req.amount_requested);
-    await supabase
-      .from("petty_cash_books")
-      .update({ current_balance: newBalance })
-      .eq("id", req.book_id);
 
     logAudit(supabase, {
       entityType: "pc_request",

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { LedgerStatement } from "@/components/petty-cash/ledger-statement";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, ChevronRight } from "lucide-react";
 import { usePettyCashBooks, usePettyCashEntries, usePettyCashRequests } from "@/hooks/use-petty-cash";
@@ -153,6 +154,8 @@ function BookDetailView({
           <p className="text-sm text-muted-foreground">{book.owner?.email} &middot; {book.owner?.role}</p>
         </div>
       </div>
+
+      <LedgerStatement bookId={book.id} title={`Statement — ${book.owner?.full_name || "this book"}`} />
 
       {/* Timeline presets */}
       <div className="flex gap-2">

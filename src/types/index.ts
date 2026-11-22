@@ -157,6 +157,14 @@ export interface Lead {
   location?: Location;
   working_hours?: string;
   budget_per_seat?: number;
+  // The whole requirement from a call-in; location_id / workspace_type hold the first of these.
+  tenure_months?: number | null;
+  start_date?: string | null;
+  quoted_per_seat?: number | null;
+  other_area?: string | null;
+  workspace_types?: WorkspaceType[];
+  location_ids?: string[];
+  extras?: string[];
   pan_number?: string;
   gst_number?: string;
   entity_type?: string | null;
@@ -3155,6 +3163,7 @@ export interface PettyCashEntry {
   description: string;
   receipt_url?: string;
   po_id?: string;
+  location_id?: string | null;
   status: PcEntryStatus;
   rejection_note?: string;
   submitted_by: string;
@@ -3165,6 +3174,8 @@ export interface PettyCashEntry {
   category?: PettyCashCategory;
   submitter?: Pick<User, "id" | "full_name" | "email">;
   purchase_order?: { id: string; po_number: string };
+  attachments?: { id: string }[];
+  withdrawn_at?: string | null;
 }
 
 export interface PettyCashApproval {

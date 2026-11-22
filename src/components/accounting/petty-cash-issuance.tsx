@@ -4,13 +4,15 @@ import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Banknote, CheckCircle2, AlertCircle, Check, X } from "lucide-react";
+import { CheckCircle2, AlertCircle, Paperclip } from "lucide-react";
 import { toast } from "sonner";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { AttachmentDialog } from "@/components/petty-cash/attachments";
+import { needsReceiptNudge, PC_RECEIPT_NUDGE_DEFAULT } from "@/lib/petty-cash-attachments";
+import { useFetch } from "@/hooks/use-fetch";
 import {
   PC_REQUEST_STATUS_LABELS, PC_REQUEST_STATUS_COLORS,
   PC_ENTRY_STATUS_LABELS, PC_ENTRY_STATUS_COLORS,
@@ -18,28 +20,30 @@ import {
 } from "@/lib/constants";
 import type { PettyCashRequest, PettyCashEntry, PaginatedResponse } from "@/types";
 
-type PendingItem =
-  | { kind: "request_issuance"; data: PettyCashRequest }
-  | { kind: "entry_approval"; data: PettyCashEntry };
+type PendingItem = { kind: "entry_approval"; data: PettyCashEntry };
 
 export function PettyCashIssuance() {
-  const [awaitingIssuance, setAwaitingIssuance] = useState<PettyCashRequest[]>([]);
+  const { user } = useCurrentUser();
   const [pendingAdminEntries, setPendingAdminEntries] = useState<PettyCashEntry[]>([]);
   const [recentlyIssued, setRecentlyIssued] = useState<PettyCashRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const { data: policy } = useFetch<{ nudgeAmount: number }>("/api/petty-cash/receipt-policy", {
+    initialData: { nudgeAmount: PC_RECEIPT_NUDGE_DEFAULT },
+    // The route returns the policy itself, not {data: …}.
+    select: (json) => json as unknown as { nudgeAmount: number },
+  });
+  const nudgeAmount = policy.nudgeAmount;
+  const [billsFor, setBillsFor] = useState<{ kind: "entry" | "request"; id: string; label: string } | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [awaitingRes, adminEntriesRes, issuedRes] = await Promise.all([
-        fetch("/api/petty-cash/requests?status=approved&limit=50"),
+      const [adminEntriesRes, issuedRes] = await Promise.all([
         fetch("/api/petty-cash/entries?status=pending_admin&limit=50"),
         fetch("/api/petty-cash/requests?status=issued&limit=10"),
       ]);
-      const awaitingJson: PaginatedResponse<PettyCashRequest> = await awaitingRes.json();
       const adminEntriesJson: PaginatedResponse<PettyCashEntry> = await adminEntriesRes.json();
       const issuedJson: PaginatedResponse<PettyCashRequest> = await issuedRes.json();
-      setAwaitingIssuance(awaitingJson.data || []);
       setPendingAdminEntries(adminEntriesJson.data || []);
       setRecentlyIssued(issuedJson.data || []);
     } catch {
@@ -53,52 +57,14 @@ export function PettyCashIssuance() {
 
   // Build unified pending list
   const pendingItems: PendingItem[] = [
-    ...awaitingIssuance.map((r) => ({ kind: "request_issuance" as const, data: r })),
     ...pendingAdminEntries.map((e) => ({ kind: "entry_approval" as const, data: e })),
   ];
-
-  // Issue dialog
-  const [issueTarget, setIssueTarget] = useState<PettyCashRequest | null>(null);
-  const [issuanceMethod, setIssuanceMethod] = useState("");
-  const [issuanceRef, setIssuanceRef] = useState("");
 
   // Entry approval dialog
   const [entryAction, setEntryAction] = useState<{ entry: PettyCashEntry; action: "approve" | "reject" } | null>(null);
   const [actionNote, setActionNote] = useState("");
 
   const [acting, setActing] = useState(false);
-
-  const handleIssue = async () => {
-    if (!issueTarget || !issuanceMethod) {
-      toast.error("Select an issuance method");
-      return;
-    }
-    setActing(true);
-    try {
-      const res = await fetch(`/api/petty-cash/requests/${issueTarget.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "issue",
-          issuance_method: issuanceMethod,
-          issuance_reference: issuanceRef || undefined,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to issue");
-      }
-      toast.success(`Cash issued to ${getRequestOwner(issueTarget)}`);
-      setIssueTarget(null);
-      setIssuanceMethod("");
-      setIssuanceRef("");
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to issue");
-    } finally {
-      setActing(false);
-    }
-  };
 
   const handleEntryAction = async () => {
     if (!entryAction) return;
@@ -129,11 +95,6 @@ export function PettyCashIssuance() {
     return book?.owner?.full_name || r.requester?.full_name || "Unknown";
   }
 
-  function getRequestBalance(r: PettyCashRequest): number {
-    const book = r.book as { current_balance?: number } | undefined;
-    return Number(book?.current_balance || 0);
-  }
-
   function getEntryOwner(e: PettyCashEntry): string {
     const book = e.book as { owner?: { full_name: string } } | undefined;
     return book?.owner?.full_name || e.submitter?.full_name || "Unknown";
@@ -145,6 +106,9 @@ export function PettyCashIssuance() {
 
   return (
     <div className="space-y-6">
+      <p className="rounded-md bg-blue-50 text-blue-800 text-sm px-3 py-2">
+        Approved petty cash <strong>fund requests</strong> are now paid from <a className="underline font-medium" href="/accounting?tab=vendor-payments">Vendor Payments</a> (top of the page, &quot;Petty cash fund requests&quot;). This tab is for second approvals of large expenses and for recent payments.
+      </p>
       {/* Unified Pending Items */}
       <Card>
         <CardHeader className="pb-3">
@@ -159,25 +123,7 @@ export function PettyCashIssuance() {
           ) : (
             <div className="space-y-3">
               {pendingItems.map((item) => {
-                if (item.kind === "request_issuance") {
-                  const r = item.data;
-                  return (
-                    <div key={`req-${r.id}`} className="flex items-center justify-between border rounded-lg p-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200">Issue Cash</Badge>
-                          <p className="font-medium">{r.request_number} — {getRequestOwner(r)}</p>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-0.5">{r.purpose}</p>
-                        <p className="text-xs text-muted-foreground">Balance: ₹{getRequestBalance(r).toLocaleString("en-IN")} · Requested: {new Date(r.created_at).toLocaleDateString("en-IN")}</p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <p className="text-lg font-bold">₹{Number(r.amount_requested).toLocaleString("en-IN")}</p>
-                        <Button size="sm" onClick={() => setIssueTarget(r)}>Issue</Button>
-                      </div>
-                    </div>
-                  );
-                } else {
+                {
                   const e = item.data;
                   const cat = (e.category as { name: string } | null)?.name;
                   return (
@@ -197,12 +143,23 @@ export function PettyCashIssuance() {
                       </div>
                       <div className="flex items-center gap-2">
                         <p className="font-bold mr-1">₹{Number(e.amount).toLocaleString("en-IN")}</p>
-                        <Button size="sm" variant="outline" className="text-green-600" onClick={() => setEntryAction({ entry: e, action: "approve" })}>
-                          <Check className="h-4 w-4" />
+                        <Button size="sm" variant="outline"
+                          className={needsReceiptNudge(Number(e.amount), e.attachments?.length ?? 0, nudgeAmount) ? "border-amber-300 text-amber-800 bg-amber-50" : ""}
+                          onClick={() => setBillsFor({ kind: "entry", id: e.id, label: e.entry_number })}>
+                          <Paperclip className="h-3.5 w-3.5 mr-1" />{(e.attachments?.length ?? 0) > 0 ? `View bills (${e.attachments?.length})` : "No bill attached"}
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600" onClick={() => setEntryAction({ entry: e, action: "reject" })}>
-                          <X className="h-4 w-4" />
-                        </Button>
+                        {user?.id && e.submitted_by === user.id ? (
+                          <p className="text-xs text-muted-foreground max-w-[200px] text-right">You logged this expense, so someone else must approve or reject it.</p>
+                        ) : (
+                          <>
+                            <Button size="sm" variant="outline" className="text-green-700 border-green-300" onClick={() => setEntryAction({ entry: e, action: "approve" })}>
+                              Approve
+                            </Button>
+                            <Button size="sm" variant="outline" className="text-red-600 border-red-300" onClick={() => setEntryAction({ entry: e, action: "reject" })}>
+                              Reject
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
@@ -233,6 +190,7 @@ export function PettyCashIssuance() {
                     <th className="pb-2 font-medium text-muted-foreground hidden md:table-cell">Method</th>
                     <th className="pb-2 font-medium text-muted-foreground hidden md:table-cell">Issued By</th>
                     <th className="pb-2 font-medium text-muted-foreground">Status</th>
+                    <th className="pb-2 font-medium text-muted-foreground">Proof</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -252,6 +210,12 @@ export function PettyCashIssuance() {
                           {PC_REQUEST_STATUS_LABELS[r.status]}
                         </Badge>
                       </td>
+                      <td className="py-2">
+                        <Button size="sm" variant="outline" className="text-xs h-7"
+                          onClick={() => setBillsFor({ kind: "request", id: r.id, label: r.request_number })}>
+                          <Paperclip className="h-3 w-3 mr-1" />View / add proof
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -261,46 +225,6 @@ export function PettyCashIssuance() {
         </Card>
       )}
 
-      {/* Issue Cash Dialog */}
-      <Dialog open={!!issueTarget} onOpenChange={(open) => !open && setIssueTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Issue Cash — {issueTarget?.request_number}</DialogTitle>
-          </DialogHeader>
-          {issueTarget && (
-            <div className="space-y-4 mt-2">
-              <div className="rounded-lg bg-muted/50 p-3 text-sm">
-                <p><strong>Person:</strong> {getRequestOwner(issueTarget)}</p>
-                <p><strong>Amount:</strong> ₹{Number(issueTarget.amount_requested).toLocaleString("en-IN")}</p>
-                <p><strong>Purpose:</strong> {issueTarget.purpose}</p>
-              </div>
-              <div className="space-y-2">
-                <Label>Issuance Method</Label>
-                <Select value={issuanceMethod} onValueChange={setIssuanceMethod}>
-                  <SelectTrigger><SelectValue placeholder="Select method" /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(PC_ISSUANCE_METHOD_LABELS).map(([k, v]) => (
-                      <SelectItem key={k} value={k}>{v}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Reference (optional)</Label>
-                <Input
-                  placeholder="Transaction ID, cheque number, etc."
-                  value={issuanceRef}
-                  onChange={(e) => setIssuanceRef(e.target.value)}
-                />
-              </div>
-              <Button onClick={handleIssue} disabled={acting || !issuanceMethod} className="w-full">
-                {acting ? "Processing..." : "Confirm Issuance"}
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
       {/* Entry Approval Dialog */}
       <Dialog open={!!entryAction} onOpenChange={(open) => !open && setEntryAction(null)}>
         <DialogContent>
@@ -309,6 +233,11 @@ export function PettyCashIssuance() {
               {entryAction?.action === "approve" ? "Approve Expense" : "Reject Expense"}
             </DialogTitle>
           </DialogHeader>
+          <p className="text-xs text-muted-foreground rounded-md bg-muted/50 px-3 py-2">
+            {entryAction?.action === "approve"
+              ? "What happens next: this is the final approval. The amount is deducted from the person's balance."
+              : "What happens next: the expense goes back to the person with your note. Nothing is deducted."}
+          </p>
           <div className="space-y-4 mt-2">
             <div className="space-y-2">
               <Label>Note (optional)</Label>
@@ -319,11 +248,28 @@ export function PettyCashIssuance() {
               />
             </div>
             <Button onClick={handleEntryAction} disabled={acting} className="w-full">
-              {acting ? "Processing..." : "Confirm"}
+              {acting ? "Processing..." : entryAction?.action === "approve" ? "Approve expense" : "Reject expense"}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {billsFor && (
+        <AttachmentDialog
+          open
+          onOpenChange={(o) => { if (!o) { setBillsFor(null); fetchData(); } }}
+          title={billsFor.kind === "entry" ? `Bills for ${billsFor.label}` : `Proof of payment for ${billsFor.label}`}
+          description={billsFor.kind === "entry"
+            ? "What the person attached as proof of this expense."
+            : "Screenshots or vouchers showing the cash was handed over."}
+          target={billsFor.kind === "entry" ? { entryId: billsFor.id } : { requestId: billsFor.id }}
+          kind={billsFor.kind === "entry" ? "receipt" : "payment_proof"}
+          canAdd
+          canRemove={() => true}
+          addLabel={billsFor.kind === "entry" ? "Add a bill (photo or PDF)" : "Add proof (photo or PDF)"}
+          emptyText={billsFor.kind === "entry" ? "No bill was attached to this expense." : "No proof of payment has been attached yet."}
+        />
+      )}
     </div>
   );
 }

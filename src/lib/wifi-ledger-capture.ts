@@ -206,25 +206,28 @@ export interface LocationWifiSummary {
   error_kind?: "console" | "write" | "internal";
 }
 
-interface LocationRow {
+export interface LocationRow {
   id: string;
   unifi_console_id: string | null;
   unifi_site_id: string | null;
   wifi_voucher_mode: string | null;
 }
 
-export async function captureAllWifi(
-  supabase: SupabaseClient,
-  { now = new Date(), budgetMs = 50_000 }: { now?: Date; budgetMs?: number } = {}
-): Promise<{ locations: LocationWifiSummary[]; skipped: number }> {
+/** Centers the UniFi captures run for. Same test as the AP-health cron for "this center is UniFi managed". */
+export async function unifiManagedLocations(supabase: SupabaseClient): Promise<LocationRow[]> {
   const { data, error } = await supabase
     .from("locations")
     .select("id, unifi_console_id, unifi_site_id, wifi_voucher_mode")
     .not("unifi_site_id", "is", null);
   if (error) throw new Error(`location read failed: ${error.message}`);
+  return ((data ?? []) as LocationRow[]).filter((l) => l.wifi_voucher_mode === "unifi_api" || Boolean(l.unifi_console_id));
+}
 
-  // Same test as the AP-health cron for "this center is UniFi managed".
-  const targets = ((data ?? []) as LocationRow[]).filter((l) => l.wifi_voucher_mode === "unifi_api" || Boolean(l.unifi_console_id));
+export async function captureAllWifi(
+  supabase: SupabaseClient,
+  { now = new Date(), budgetMs = 50_000 }: { now?: Date; budgetMs?: number } = {}
+): Promise<{ locations: LocationWifiSummary[]; skipped: number }> {
+  const targets = await unifiManagedLocations(supabase);
 
   const started = Date.now();
   const locations: LocationWifiSummary[] = [];

@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("petty_cash_entries")
     .select(
-      `*, book:petty_cash_books!petty_cash_entries_book_id_fkey(id, user_id, current_balance, owner:users!petty_cash_books_user_id_fkey(id, full_name, email)), category:petty_cash_categories!petty_cash_entries_category_id_fkey(id, name), submitter:users!petty_cash_entries_submitted_by_fkey(id, full_name, email), purchase_order:purchase_orders!petty_cash_entries_po_id_fkey(id, po_number)`,
+      `*, book:petty_cash_books!petty_cash_entries_book_id_fkey(id, user_id, current_balance, owner:users!petty_cash_books_user_id_fkey(id, full_name, email)), category:petty_cash_categories!petty_cash_entries_category_id_fkey(id, name), submitter:users!petty_cash_entries_submitted_by_fkey(id, full_name, email), purchase_order:purchase_orders!petty_cash_entries_po_id_fkey(id, po_number), attachments:petty_cash_attachments!petty_cash_attachments_entry_id_fkey(id)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
@@ -131,6 +131,13 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Tag the expense with the submitter's location when they have exactly one primary
+  // location (analytics by centre). Ambiguous people stay untagged rather than guessed.
+  const { data: primaryLocs } = await supabase
+    .from("user_locations").select("location_id")
+    .eq("user_id", dbUser.id).eq("responsibility", "primary");
+  const locationId = primaryLocs?.length === 1 ? primaryLocs[0].location_id : null;
+
   // Generate entry number
   const { count } = await supabase
     .from("petty_cash_entries").select("id", { count: "exact", head: true });
@@ -147,6 +154,7 @@ export async function POST(request: NextRequest) {
       description: parsed.data.description,
       receipt_url: parsed.data.receipt_url || null,
       po_id: parsed.data.po_id || null,
+      location_id: locationId,
       status: "pending_manager",
       submitted_by: dbUser.id,
     })

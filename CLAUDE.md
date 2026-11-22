@@ -197,6 +197,7 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 | Hourly at :07 | `/api/cron/energy-ledger-capture` | Extend each OneGrid-enabled location's energy ledger (`location_energy_readings`) from its last stored row; feeds the Usage baseline |
 | Hourly at :14 | `/api/cron/energy-alerts` | Judges each enabled energy alert rule's new 15-minute slots against the usual for that slot (median of the last 30 same-kind days, from `location_energy_readings`) and records/emails staff when a deviation lasts. Episodes, not slots, are notified: one email on open, then only on a worsening step or a 2h/6h/24h reminder, with a daily cap per rule. Runs just after the :07 ledger capture. Emails only when `app_settings.energy_alerts_cron_mode` is `live` AND the rule is Live; default `dry_run` records decisions as `test` and contacts nobody. Staff only; `?dry=1` writes nothing. See `docs/energy-alerts.md` |
 | Hourly at :17 | `/api/cron/wifi-ledger-capture` | Copy each UniFi center's Wi-Fi usage (per device and site total) into `wifi_client_hourly` / `wifi_site_hourly` (console keeps ~7 days) and `wifi_client_daily` / `wifi_site_daily` (~90 days) before it ages out; read-only against UniFi, sends nothing |
+| Daily 03:30 IST | `/api/cron/wifi-investigation-purge` | Delete Wi-Fi session, closed device-assignment and public-IP records older than 12 months (`wifi_session_log`, `wifi_device_assignments`, `center_public_ip_history`; migration 00744). Never touches `wifi_investigation_log`. Runs whether or not capture is on; sends nothing. Capture itself rides the hourly `wifi-ledger-capture` run and is off until `app_settings.wifi_investigation_enabled` is `true`; see `docs/plans/wifi-device-history-and-lookup.md` |
 | Daily 03:00 IST | `/api/cron/customer-value` | Recompute every customer's monthly Value figures and today's score into `customer_value_monthly` / `customer_value_scores` (writes only those two tables; sends nothing) |
 | Daily 03:15 IST | `/api/cron/customer-value-margin` | Shadow margin after variable costs per customer-month into `customer_value_margin`, from the stored monthly figures and the cost rates in force; shown beside the score, never changes it (writes only that table; sends nothing) |
 
@@ -214,7 +215,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Record payments (vendor bills) | `accounts`, `admin`; `office_admin` **cash/petty cash only** — **only from Finance > Acc Payables**, and only on an approved bill |
 | Record payments (customer: invoices, deposits, top-ups, ad-hoc) | `admin`, `accounts` only — `PAYMENT_RECORDING_ROLES` in `src/lib/constants.ts`. Everyone else uses **Report paid**, which routes to accounts to verify against the bank. `office_admin` keeps its existing carve-out for settling a pending deposit top-up. Front-desk **booking** payments are separate and unaffected. |
 | Record petty cash (submit an entry) | **Any authenticated user** — no role gate; entries start at `pending_manager` |
-| Approve petty cash | `admin`, `manager`; entries **≥ ₹5,000** need a second approval from `admin`/`accounts` |
+| Approve petty cash | **Expenses:** `admin`/`manager` decide first; entries **≥ ₹5,000** (`app_settings.petty_cash_second_approval_amount`) then need `admin`/`accounts`, unless an `admin` decided at stage 1 (covers both). **Fund requests:** `admin` only approves; the approved request then appears in **Finance > Acc Payables → Vendor Payments → "Petty cash fund requests"**, where `accounts`/`admin` pay it, enter the (required) payment reference and confirm — that credits the person's book and shows the reference on their request. **Nobody decides their own** expense or request (403). Rules: `src/lib/petty-cash-approval.ts` |
 | Manage contracts | `admin`, `manager`, `sales_rep` |
 | Terminate an **active** contract | `admin`, `manager` |
 | **Withdraw** a never-activated contract (draft/sent/viewed/accepted → stored as `terminated`) | `admin`, `manager`, `sales_rep` — not renewal drafts (use Cancel Renewal) |
@@ -223,6 +224,10 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Void billing statements | `admin` only |
 | Withdraw an unverified payment report (Report paid) | the reporter, `admin`, `accounts` — only while it is still unverified; `POST /api/queries/payment-reports/[id]/withdraw`; never for booking reports |
 | Reverse a customer payment recorded in error | `admin` only — `POST /api/billing-statements/[id]/payment/[paymentId]/reverse` (reason ≥10 chars; refused for gateway/Tally-receipted/TDS-filed/deposit-adjustment payments, accounted or period-locked statements, and proposal/invoice/VO-case statements) |
+
+### Petty cash balances (ledger)
+
+A book's `current_balance` is the sum of its `petty_cash_ledger` rows (migration `00740`). **Never write `petty_cash_books.current_balance` from app code.** Approving/rejecting an expense, issuing cash and paying a vendor bill in cash go through the RPCs `pc_approve_entry`, `pc_reject_entry`, `pc_issue_request`, `pc_debit_book` (service role; row-locked, with an expected-status check so two people can't act on the same stage). A trigger writes an immutable ledger row for every balance change, labelled by the RPC (or "adjustment" if something bypassed them). The statement is on My Book / All Books and shows a balance check.
 
 ### Procurement → Payment Flow (strict separation)
 

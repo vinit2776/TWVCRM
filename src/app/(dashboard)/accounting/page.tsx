@@ -9,6 +9,7 @@ import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PettyCashIssuance } from "@/components/accounting/petty-cash-issuance";
+import { PettyCashRequestsPanel } from "@/components/accounting/petty-cash-requests-panel";
 import TdsPayablePage from "./tds/page";
 import {
   Calculator,
@@ -640,7 +641,7 @@ export default function AccountingPage() {
           {
             number: 6,
             title: "Petty cash",
-            description: "For small cash expenses (not vendor bills), use the Petty Cash tab to issue or record a disbursement.",
+            description: "Approved petty cash fund requests appear at the top of Vendor Payments. Pay them, enter the payment reference and confirm. The Petty Cash tab is for second approvals of large expenses.",
           },
         ]}
         tip="If a vendor's email is missing, a banner will prompt you to add it before recording payment — confirmations can't be sent without it."
@@ -677,6 +678,7 @@ export default function AccountingPage() {
 
         {/* ── Vendor Payments ──────────────────────────────────────────── */}
         <TabsContent value="vendor-payments" className="mt-4">
+          <PettyCashRequestsPanel role={currentUserRole} />
           <ExitSettlementsPanel />
           <DepositRefundsPanel role={currentUserRole} />
           {billsLoading ? (

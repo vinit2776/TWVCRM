@@ -29,7 +29,7 @@ const admin = () => {
 const input = (over: Partial<ReceivableReminderInput> = {}): ReceivableReminderInput => ({
   kind: "deposit", id: "p1", reference: "PROP-1", partyName: "Acme", email: "a@example.com", phone: null,
   amount: 120000, dueDate: "2026-10-24", daysOverdue: 3, stageIdx: 1, payLinkUrl: "https://rzp.io/l/x",
-  triggeredBy: "cron", ccPools: { accounts: [], managerAndAdmin: [], adminOnly: [] }, ...over,
+  triggeredBy: "cron", ccPools: { accounts: [], managerAndAdmin: [], adminOnly: [], salesAndCoordinator: [] }, ...over,
 });
 
 describe("sendReceivableReminder attachments", () => {

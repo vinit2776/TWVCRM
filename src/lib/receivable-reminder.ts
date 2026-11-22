@@ -21,7 +21,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
-import { STAGES, fmtINR, fmtDate, pickStageIndex, resolveIntro } from "@/lib/payment-reminder";
+import { STAGES, SALES_CC_FROM_STAGE, type CcPools, fmtINR, fmtDate, pickStageIndex, resolveIntro } from "@/lib/payment-reminder";
 import { ladderMaxStageFor, type ReceivableKind } from "@/lib/receivables";
 import { fetchReceivableAttachment } from "@/lib/reminder-receivable-attachment";
 import { ensureReceivableLink, insertReminderHistory, LINK_UNAVAILABLE_NOTE } from "@/lib/payment-link-guard";
@@ -72,7 +72,7 @@ export interface ReceivableReminderInput {
   appUrl?: string;
   triggeredBy: "cron" | "manual";
   triggeredByUserId?: string | null;
-  ccPools: { accounts: string[]; managerAndAdmin: string[]; adminOnly: string[] };
+  ccPools: CcPools;
 }
 
 export interface ReceivableReminderResult {
@@ -285,6 +285,7 @@ export async function sendReceivableReminder(
   if (stage.ccAccounts) cc.push(...ccPools.accounts);
   if (!isSoft && stage.ccManagerAndAdmin) cc.push(...ccPools.managerAndAdmin);
   if (!isSoft && stageIdx >= 4) cc.push(...ccPools.adminOnly);
+  if (!isSoft && stageIdx >= SALES_CC_FROM_STAGE) cc.push(...ccPools.salesAndCoordinator);
   const uniqCc = Array.from(new Set(cc.filter((e) => e && e !== email)));
 
   const logSend = async (channel: "email" | "whatsapp", ok: boolean, recipient: string | null) => {
