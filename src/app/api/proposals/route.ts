@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { linkProposalToHandoverJob } from "@/lib/handover-proposal-server";
 import { createProposalSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
@@ -196,6 +197,11 @@ export async function POST(request: NextRequest) {
     } catch (err) {
       console.error("[proposals] Failed to insert proposal_service_quotas:", err);
     }
+  }
+
+  // Made from a hand-over job's button: tie it to the job so sending it finishes the job.
+  if (data && dbUser?.id && typeof body.handover_job_id === "string") {
+    await linkProposalToHandoverJob(createAdminClient(), body.handover_job_id, data.id, data.lead_id ?? null, dbUser.id);
   }
 
   // Auto-advance lead status → proposal_sent

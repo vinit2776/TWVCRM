@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
+import { completeHandoverTasksForProposal } from "@/lib/handover-proposal-server";
 
 // Allow larger request bodies for PDF attachments (default is 4.5MB)
 export const maxDuration = 30; // seconds
@@ -285,6 +286,8 @@ export async function POST(
     const sentUpdate: Record<string, unknown> = { status: "sent", sent_at: new Date().toISOString() };
     if (pdfStoragePath) sentUpdate.pdf_storage_path = pdfStoragePath;
     await supabase.from("proposals").update(sentUpdate).eq("id", id);
+    // A "send a proposal" job handed over for this proposal finishes now that it has gone out.
+    await completeHandoverTasksForProposal(createAdminClient(), id, sender?.id ?? null, proposal.proposal_number).catch((e) => console.error("[handover] finish failed:", e));
 
     // Log email activity
     if (proposal.lead_id && sender?.id) {
