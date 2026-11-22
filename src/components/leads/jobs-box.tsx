@@ -74,7 +74,7 @@ export function JobsBox() {
     <li key={j.id} className="space-y-1 border-t py-2.5 first:border-t-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <b>{JOB_KIND_LABELS[j.kind as JobKind] ?? j.kind}</b> · <Link href={`/leads/${j.lead?.id}/activity`} className="text-primary hover:underline">{leadName(j)}</Link>
+          <b>{j.kind === "other" && j.title ? j.title : (JOB_KIND_LABELS[j.kind as JobKind] ?? j.kind)}</b> · <Link href={`/leads/${j.lead?.id}/activity`} className="text-primary hover:underline">{leadName(j)}</Link>
           {j.due_date && <span className="text-muted-foreground"> · by {formatDate(j.due_date)}</span>}
         </div>
         <div className="flex flex-wrap gap-2">{actions}</div>
