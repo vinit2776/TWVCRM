@@ -52,7 +52,19 @@ export interface ContactBack {
  * customer submitted, with "Form said" beside each step so the caller corrects rather than retypes.
  * Saving logs the call on the enquiry's lead, claims the enquiry and sets the next step.
  */
-export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?: () => void; contactBack?: ContactBack }) {
+export function CallInLeadForm({
+  onUseFullForm,
+  contactBack,
+  onDone,
+  onDirtyChange,
+}: {
+  onUseFullForm?: () => void;
+  contactBack?: ContactBack;
+  /** Inside the check panel: called after a save or a close instead of leaving for the lead's page. */
+  onDone?: (result: { leadId: string | null }) => void;
+  /** Called with true once anything is typed or picked, and false after a save. */
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const router = useRouter();
   const { locations } = useLocations();
   const pre = contactBack?.prefill;
@@ -178,6 +190,11 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
       const { lead_id, created } = json.data as { lead_id: string; created: boolean };
       if (json.warning) toast.warning(json.warning);
       else toast.success(contactBack ? "Call logged and the enquiry is yours" : created ? "Lead saved and the next step is set" : "Call logged on the existing lead");
+      onDirtyChange?.(false);
+      if (onDone) {
+        onDone({ leadId: lead_id });
+        return;
+      }
       pushTrailEntry({ href: `/leads/${lead_id}/activity`, label: name.trim() || existing?.name || "Inbound call" });
       router.push(`/leads/${lead_id}/activity`);
     } finally {
@@ -200,6 +217,11 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
         return;
       }
       toast.success(outcome === "not_interested" ? "Closed as not interested" : "Closed as no response");
+      onDirtyChange?.(false);
+      if (onDone) {
+        onDone({ leadId: contactBack.leadId });
+        return;
+      }
       router.push("/leads");
     } finally {
       setSaving(false);
@@ -207,7 +229,15 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
   };
 
   return (
-    <div className="space-y-5 rounded-lg border p-4 sm:p-6">
+    <div
+      className="space-y-5 rounded-lg border p-4 sm:p-6"
+      onInputCapture={() => onDirtyChange?.(true)}
+      onClickCapture={(e) => {
+        // A chip or the Other toggle is a change too; the buttons that leave the form are not.
+        const btn = (e.target as HTMLElement).closest("button");
+        if (btn && btn.textContent && !/Save|Cancel|Not interested|No response|full lead form/.test(btn.textContent)) onDirtyChange?.(true);
+      }}
+    >
       <div
         className={`flex flex-wrap items-center gap-2 rounded-md px-3 py-2 text-sm ${
           value.tier === "high" ? "bg-emerald-50 text-emerald-900" : value.tier === "worth_a_call" ? "bg-amber-50 text-amber-900" : "bg-muted text-muted-foreground"
@@ -358,7 +388,7 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
           </button>
         )}
         <div className="flex gap-2">
-          <Button type="button" variant="outline" onClick={() => router.back()}>Cancel</Button>
+          <Button type="button" variant="outline" onClick={() => (onDone ? onDone({ leadId: null }) : router.back())}>Cancel</Button>
           <Button type="button" disabled={!canSave || saving} onClick={save}>
             {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
             {contactBack ? "Save & claim" : existing ? "Log call on that lead" : "Save lead"}
