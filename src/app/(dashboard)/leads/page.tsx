@@ -48,6 +48,7 @@ import { LeadsHome } from "@/components/leads/leads-home";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { LeadsNavV2 } from "@/components/leads/leads-nav-v2";
 import { WaitingForSpaceView } from "@/components/leads/waiting-for-space-view";
+import { ChannelsView } from "@/components/leads/channels-view";
 import { useSpaceWaitingEnabled } from "@/hooks/use-space-waiting";
 import { buildLeadsNav, type LeadsNavItem } from "@/lib/leads-nav";
 import { useLeadsHomeV2 } from "@/hooks/use-leads-home-v2";
@@ -231,7 +232,7 @@ function LeadsPageContent() {
       replies: replyCounts?.mine ?? 0,
       waiting: waitingCount,
     },
-    { showHome, showWaiting: waitingOn },
+    { showHome, showWaiting: waitingOn, showChannels: me?.role === "admin" || me?.role === "manager" },
   );
   const openNavItem = (item: LeadsNavItem) => {
     const t = item.target;
@@ -351,7 +352,9 @@ function LeadsPageContent() {
 
       {tab === "waiting" && <WaitingForSpaceView onCount={setWaitingCount} />}
 
-      {tab !== "home" && tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && tab !== "waiting" && (
+      {tab === "channels" && <ChannelsView />}
+
+      {tab !== "home" && tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && tab !== "waiting" && tab !== "channels" && (
         <>
       {tab === "all" && <OverdueFollowupBanner summary={followupSummary} onReview={handleReviewOverdue} />}
 
