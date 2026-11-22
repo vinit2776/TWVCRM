@@ -273,9 +273,12 @@ function LeadsPageContent() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Leads</h1>
-          <p className="text-sm text-muted-foreground">
-            {pagination.total} total leads
-          </p>
+          {/* Home and Follow-ups load no rows here (they fetch their own), so a total would read 0. */}
+          {tab !== "home" && tab !== "followups" && (
+            <p className="text-sm text-muted-foreground">
+              {pagination.total} total leads
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setImportOpen(true)}>

@@ -87,7 +87,7 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
 
   function goToLead() {
     onNavigate?.();
-    router.push(`/leads/${item.leadId}`);
+    router.push(panelOn ? `/leads/${item.leadId}/activity` : `/leads/${item.leadId}`);
   }
 
   return (

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLeadsHomeV2 } from "@/hooks/use-leads-home-v2";
 import { useState } from "react";
 import Link from "next/link";
 import { Ban, ChevronRight, MoreHorizontal, UserCheck } from "lucide-react";
@@ -38,6 +39,7 @@ const RESOLVE_OUTCOMES: { value: ResolutionOutcome; label: string; dot: string }
 /** One enquiry as a single line: who, what they said, one main button and a menu. Clicking the
  *  row opens the conversation and every action underneath. */
 export function EnquiryLogRow({ row, readOnly, onChanged }: { row: EnquiryItem; readOnly: boolean; onChanged: () => void }) {
+  const v2 = useLeadsHomeV2();
   const { claim, resolve } = useEnquiryNotifications();
   const [open, setOpen] = useState(false);
   const isSpam = row.resolutionOutcome === "spam";
@@ -87,7 +89,7 @@ export function EnquiryLogRow({ row, readOnly, onChanged }: { row: EnquiryItem; 
             {readOnly ? (
               <span className="text-sm font-medium">{row.name}</span>
             ) : (
-              <Link href={`/leads/${row.leadId}`} className="text-sm font-medium hover:underline">
+              <Link href={v2 ? `/leads/${row.leadId}/activity` : `/leads/${row.leadId}`} className="text-sm font-medium hover:underline">
                 {row.name}
               </Link>
             )}

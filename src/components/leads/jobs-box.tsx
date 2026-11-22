@@ -70,14 +70,29 @@ export function JobsBox() {
     load();
   };
 
+  // A job whose lead was deleted has nothing to open or finish: only the person who handed it over
+  // (or an admin) can clear it, so that is all it offers.
+  const orphanActions = (j: JobRow) => (
+    <>
+      <span className="self-center text-xs text-muted-foreground">The lead was removed, so there is nothing left to do.</span>
+      {(j.giver?.id === user.id || user.role === "admin") && (
+        <Button size="sm" variant="ghost" className="h-9 text-muted-foreground" onClick={() => takeBack(j)}>Remove</Button>
+      )}
+    </>
+  );
   const row = (j: JobRow, actions: React.ReactNode) => (
     <li key={j.id} className="space-y-1 border-t py-2.5 first:border-t-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <b>{j.kind === "other" && j.title ? j.title : (JOB_KIND_LABELS[j.kind as JobKind] ?? j.kind)}</b> · <Link href={`/leads/${j.lead?.id}/activity`} className="text-primary hover:underline">{leadName(j)}</Link>
+          <b>{j.kind === "other" && j.title ? j.title : (JOB_KIND_LABELS[j.kind as JobKind] ?? j.kind)}</b> ·{" "}
+          {j.lead?.id ? (
+            <Link href={`/leads/${j.lead.id}/activity`} className="text-primary hover:underline">{leadName(j)}</Link>
+          ) : (
+            <span className="text-muted-foreground">Lead removed</span>
+          )}
           {j.due_date && <span className="text-muted-foreground"> · by {formatDate(j.due_date)}</span>}
         </div>
-        <div className="flex flex-wrap gap-2">{actions}</div>
+        <div className="flex flex-wrap gap-2">{j.lead?.id || j.status === "done" ? actions : orphanActions(j)}</div>
       </div>
       <Brief job={j} />
     </li>

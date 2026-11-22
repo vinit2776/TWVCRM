@@ -181,6 +181,17 @@ export async function DELETE(
   // Capture before delete for audit
   const { data: oldLead } = await supabase.from("leads").select("*").eq("id", id).single();
 
+  // A task keeps its row when its lead goes (the link is set to null), which would leave a hand-over
+  // job on Home with no lead behind it. Open hand-over jobs go with the lead; plain tasks stay.
+  const admin = await createAdminClient();
+  const { data: removedJobs } = await admin
+    .from("tasks")
+    .delete()
+    .eq("lead_id", id)
+    .neq("kind", "general")
+    .neq("status", "done")
+    .select("id");
+
   const { error } = await supabase.from("leads").delete().eq("id", id);
 
   if (error) {
@@ -193,7 +204,7 @@ export async function DELETE(
       entityId: id,
       action: "delete",
       performedBy: dbUser.id,
-      changes: { record: { old: oldLead, new: null } },
+      changes: { record: { old: oldLead, new: null }, ...(removedJobs?.length ? { open_hand_over_jobs_removed: { old: removedJobs.length, new: 0 } } : {}) },
     });
   }
 
