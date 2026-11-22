@@ -22,6 +22,7 @@ export interface ContactBackSource {
     seat_capacity?: number | null;
     budget_per_seat?: number | null;
     location_id?: string | null;
+    status?: string | null;
   } | null;
 }
 

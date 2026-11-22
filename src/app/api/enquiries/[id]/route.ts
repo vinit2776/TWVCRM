@@ -23,7 +23,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     .select(
       "id, reference, lead_id, source, is_re_enquiry, payload, received_at, claimed_at, resolved_at, resolution_outcome, " +
         "claimer:users!lead_enquiries_claimed_by_fkey(full_name), " +
-        "lead:leads!lead_enquiries_lead_id_fkey(first_name, last_name, mobile, email, company, workspace_type, seat_capacity, budget_per_seat, location_id)",
+        "lead:leads!lead_enquiries_lead_id_fkey(first_name, last_name, mobile, email, company, workspace_type, seat_capacity, budget_per_seat, location_id, status)",
     )
     .eq("id", id)
     .single();

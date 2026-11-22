@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { CallInLeadForm } from "@/components/leads/call-in-lead-form";
 import { SeenBefore } from "@/components/leads/seen-before";
+import { HandOverButton } from "@/components/leads/hand-over-button";
 import { useLocations } from "@/hooks/use-locations";
 import { contactBackHints, contactBackPrefill, type ContactBackSource } from "@/lib/contact-back";
 import { ENQUIRY_SOURCE_LABEL } from "@/lib/enquiries";
@@ -102,6 +103,7 @@ export function ContactBackContent({
               {enquiry.reference} · received {formatSmartDate(enquiry.received_at)} · {ENQUIRY_SOURCE_LABEL[enquiry.source] ?? enquiry.source}
             </span>
           </div>
+          {!["won", "lost", "junk"].includes(enquiry.lead?.status ?? "") && <HandOverButton leadId={enquiry.lead_id} leadName={name} />}
         </div>
         {enquiry.message && <p className="mt-2 text-sm text-muted-foreground">“{enquiry.message}”</p>}
       </div>
