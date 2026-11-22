@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { channelFunnel, channelVerdict, proratedSpend, reachedBy, trustLines, TOO_FEW_TO_JUDGE, type ChannelLead } from "../channels-report";
+import { channelFunnel, channelVerdict, proratedSpend, reachedBy, sourceLabel, trustLines, TOO_FEW_TO_JUDGE, type ChannelLead } from "../channels-report";
 
 const lead = (over: Partial<ChannelLead> = {}): ChannelLead => ({ source: "meta_ads", createdAt: "2026-11-01T06:00:00Z", status: "new", firstTouchAt: null, reached: false, hasTour: false, hasProposal: false, won: false, ...over });
 const many = (n: number, over: Partial<ChannelLead> = {}) => Array.from({ length: n }, () => lead(over));
@@ -69,12 +69,21 @@ describe("reachedBy", () => {
   });
 });
 
+describe("sourceLabel", () => {
+  it("uses the known label, or makes the raw one readable", () => {
+    expect(sourceLabel("meta_ads", { meta_ads: "Meta Ads" })).toBe("Meta Ads");
+    expect(sourceLabel("online_form", {})).toBe("Online form");
+    expect(sourceLabel("other", {})).toBe("Other");
+    expect(sourceLabel("", {})).toBe("Unknown");
+  });
+});
+
 describe("trustLines", () => {
   const facts = { tooFewChannels: 0, totalChannels: 5, untracedDeals: 0, tracedDeals: 4, untouched: 2, enquiries: 100, adChannelsWithoutSpend: [] };
   it("reads all good when nothing is off", () => expect(trustLines(facts).every((l) => l.tone === "good")).toBe(true));
   it("warns about untraced deals, small channels, untouched enquiries and missing spend", () => {
     const lines = trustLines({ ...facts, untracedDeals: 3, tooFewChannels: 2, untouched: 40, adChannelsWithoutSpend: ["Meta Ads"] });
     expect(lines.filter((l) => l.tone === "warn")).toHaveLength(4);
-    expect(lines[0].detail).toContain("3 of 7");
+    expect(lines[0].detail).toContain("3 contracts activated");
   });
 });

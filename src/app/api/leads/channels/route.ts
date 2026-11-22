@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { LEAD_SOURCE_LABELS } from "@/lib/constants";
 import { istDayKey } from "@/lib/lead-days";
 import { NON_EVENT_SUBJECTS } from "@/lib/lead-stale";
-import { channelFunnel, reachedBy, trustLines, TOO_FEW_TO_JUDGE, type ChannelLead, type Promotion, type TrustFacts } from "@/lib/channels-report";
+import { channelFunnel, reachedBy, sourceLabel, trustLines, TOO_FEW_TO_JUDGE, type ChannelLead, type Promotion, type TrustFacts } from "@/lib/channels-report";
 
 const MAX_LEADS = 5000;
 const CHUNK = 150;
@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
     tracedDeals: traced,
     untouched: channelLeads.filter((l) => !l.firstTouchAt).length,
     enquiries: channelLeads.length,
-    adChannelsWithoutSpend: rows.filter((r) => AD_SOURCES.includes(r.source) && r.enquiries >= TOO_FEW_TO_JUDGE && r.spend === 0).map((r) => LEAD_SOURCE_LABELS[r.source] ?? r.source),
+    adChannelsWithoutSpend: rows.filter((r) => AD_SOURCES.includes(r.source) && r.enquiries >= TOO_FEW_TO_JUDGE && r.spend === 0).map((r) => sourceLabel(r.source, LEAD_SOURCE_LABELS)),
   };
 
   return NextResponse.json({
@@ -121,7 +121,7 @@ export async function GET(request: NextRequest) {
       junk: channelLeads.filter((l) => l.status === "junk").length,
       won: channelLeads.filter((l) => l.won).length,
     },
-    rows: rows.map((r) => ({ ...r, label: LEAD_SOURCE_LABELS[r.source] ?? r.source })),
+    rows: rows.map((r) => ({ ...r, label: sourceLabel(r.source, LEAD_SOURCE_LABELS) })),
     trust: trustLines(facts),
   });
 }

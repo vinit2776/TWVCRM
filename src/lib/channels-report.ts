@@ -130,6 +130,13 @@ export function channelFunnel(leads: ChannelLead[], promotions: Promotion[], fro
     .sort((a, b) => b.enquiries - a.enquiries || a.source.localeCompare(b.source));
 }
 
+/** A readable name for a source the labels do not know: "online_form" reads "Online form". */
+export function sourceLabel(source: string, known: Record<string, string>): string {
+  if (known[source]) return known[source];
+  const words = source.replace(/_/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "Unknown";
+}
+
 /** A call that was not "no answer" counts as reaching them; so does anything else a person logged. */
 export function reachedBy(activity: { type: string; callOutcome?: string | null; subject?: string | null }): boolean {
   if ((NON_EVENT_SUBJECTS as readonly string[]).includes(activity.subject ?? "")) return false;
@@ -162,11 +169,10 @@ const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
 /** The caveats to read before trusting the table, in plain words. */
 export function trustLines(t: TrustFacts): TrustLine[] {
   const lines: TrustLine[] = [];
-  const deals = t.tracedDeals + t.untracedDeals;
   lines.push(
     t.untracedDeals === 0
-      ? { label: "Every new customer is traced to a channel", detail: `${t.tracedDeals} contract${t.tracedDeals === 1 ? "" : "s"} activated in the period, all linked to a lead.`, tone: "good" }
-      : { label: "Some customers cannot be traced to a channel", detail: `${t.untracedDeals} of ${deals} contracts activated in the period have no lead on them, so no channel gets the credit.`, tone: "warn" },
+      ? { label: "Every new customer is traced to a channel", detail: `${t.tracedDeals} lead${t.tracedDeals === 1 ? "" : "s"} became customers in the period, and no contract was activated without a lead on it.`, tone: "good" }
+      : { label: "Some customers cannot be traced to a channel", detail: `${t.untracedDeals} contract${t.untracedDeals === 1 ? "" : "s"} activated in the period ${t.untracedDeals === 1 ? "has" : "have"} no lead on ${t.untracedDeals === 1 ? "it" : "them"}, so no channel gets the credit (${t.tracedDeals} did).`, tone: "warn" },
   );
   lines.push(
     t.tooFewChannels === 0
