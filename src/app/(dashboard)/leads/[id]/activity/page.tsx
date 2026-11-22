@@ -9,6 +9,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
 import { HandOverButton } from "@/components/leads/hand-over-button";
 import { ParkControl } from "@/components/leads/park-control";
+import { KeepInformed } from "@/components/leads/keep-informed";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
 import { NextStepChip, NoNextStepChip } from "@/components/leads/next-step-chip";
@@ -130,6 +131,7 @@ export default function LeadActivityPage() {
               <LeadPinButton lead={lead} onChanged={changed} withLabel />
               {!closed && <HandOverButton leadId={id} leadName={name} onDone={changed} />}
               <ParkControl leadId={id} parkedAt={lead.parked_at} closed={closed} onChanged={changed} />
+              <KeepInformed leadId={id} closed={closed} />
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <span>{LEAD_SOURCE_LABELS[lead.source] ?? lead.source}</span>
