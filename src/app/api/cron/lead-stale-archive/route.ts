@@ -55,6 +55,8 @@ async function handler(request: NextRequest) {
     .select("id, lead_number, status, created_at")
     .is("archived_at", null)
     .is("pinned_at", null)
+    // Waiting for space is on purpose: nothing happens until space opens, so it never goes stale.
+    .is("parked_at", null)
     .not("status", "in", `(${STALE_EXEMPT_STATUSES.join(",")})`)
     .lte("created_at", cutoff)
     .order("created_at", { ascending: true })
@@ -99,6 +101,7 @@ async function handler(request: NextRequest) {
       .in("id", batch.map((l) => l.id))
       .is("archived_at", null)
       .is("pinned_at", null)
+      .is("parked_at", null)
       .select("id");
     if (updateError) {
       console.error("[lead-stale-archive] archive failed", updateError.code, updateError.message);

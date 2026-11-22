@@ -47,6 +47,8 @@ import { EnquiryPanel } from "@/components/leads/enquiry-panel";
 import { LeadsHome } from "@/components/leads/leads-home";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { LeadsNavV2 } from "@/components/leads/leads-nav-v2";
+import { WaitingForSpaceView } from "@/components/leads/waiting-for-space-view";
+import { useSpaceWaitingEnabled } from "@/hooks/use-space-waiting";
 import { buildLeadsNav, type LeadsNavItem } from "@/lib/leads-nav";
 import { useLeadsHomeV2 } from "@/hooks/use-leads-home-v2";
 import { leadsViewHref, parseLeadsView, type LeadsView } from "@/lib/leads-views";
@@ -91,6 +93,16 @@ function LeadsPageContent() {
   const [followupSummary, setFollowupSummary] = useState<FollowupSummary | null>(null);
   // Tours waiting for someone to say what happened, for the tab's badge.
   const [tourCounts, setTourCounts] = useState<Record<TourGroup, number> | null>(null);
+  const waitingOn = useSpaceWaitingEnabled();
+  const [waitingCount, setWaitingCount] = useState(0);
+  // The count on the Waiting for space entry, kept fresh while another tab is open.
+  useEffect(() => {
+    if (!waitingOn) return;
+    fetch("/api/leads/waiting-for-space")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setWaitingCount(j.total as number))
+      .catch(() => {});
+  }, [waitingOn]);
 
   // WhatsApp conversations waiting for a reply, for the Replies tab's badge.
   const [replyCounts, setReplyCounts] = useState<{ mine: number; all: number } | null>(null);
@@ -217,8 +229,9 @@ function LeadsPageContent() {
       followups: followupSummary ? followupSummary.overdue + followupSummary.due_today : 0,
       tours: tourCounts?.needs_update ?? 0,
       replies: replyCounts?.mine ?? 0,
+      waiting: waitingCount,
     },
-    { showHome },
+    { showHome, showWaiting: waitingOn },
   );
   const openNavItem = (item: LeadsNavItem) => {
     const t = item.target;
@@ -336,7 +349,9 @@ function LeadsPageContent() {
 
       {tab === "whatsapp" && <InboundWhatsAppLog />}
 
-      {tab !== "home" && tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && (
+      {tab === "waiting" && <WaitingForSpaceView onCount={setWaitingCount} />}
+
+      {tab !== "home" && tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && tab !== "waiting" && (
         <>
       {tab === "all" && <OverdueFollowupBanner summary={followupSummary} onReview={handleReviewOverdue} />}
 

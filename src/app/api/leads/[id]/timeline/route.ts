@@ -39,7 +39,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const [leadRes, activitiesRes, enquiriesRes, proposalsRes, contractsRes] = await Promise.all([
-    supabase.from("leads").select("status, created_at, archived_at, pinned_at").eq("id", id).single(),
+    supabase.from("leads").select("status, created_at, archived_at, pinned_at, parked_at").eq("id", id).single(),
     supabase
       .from("activities")
       .select(
@@ -134,7 +134,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     ? leadStaleState({
         status: lead.status,
         archivedAt: lead.archived_at,
-        pinnedAt: lead.pinned_at,
+        pinnedAt: lead.pinned_at ?? lead.parked_at,
         lastEventAt:
           latestInstant([
             lead.created_at,
