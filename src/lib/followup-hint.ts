@@ -59,6 +59,20 @@ function readTime(text: string): number | null {
 }
 
 /**
+ * The first "1 Dec"-style date in the note that is about when to call, not when the customer starts.
+ * "Wants 2 desks from 1 Dec" is a move-in date: reading it as the call-back would book the follow-up
+ * a week late.
+ */
+const START_WORDS = /\b(from|starting|starts?|since|move[sd]? in|moving in|joining|joins?)\s*(on\s+)?$/;
+function followUpDate(text: string): RegExpMatchArray | null {
+  const re = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_WORDS})\\b`, "g");
+  for (const m of text.matchAll(re)) {
+    if (!START_WORDS.test(text.slice(0, m.index ?? 0))) return m;
+  }
+  return null;
+}
+
+/**
  * A follow-up time suggested by the note, or null when the note names no date. `now` is injected so
  * tests are deterministic. The suggestion is always in the future.
  */
@@ -69,7 +83,7 @@ export function suggestFollowUp(note: string, now: Date = new Date()): string | 
   let day: { y: number; m: number; d: number } | null = null;
 
   const inN = text.match(/\bin (\d{1,2}) (day|week)s?\b/);
-  const dated = text.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_WORDS})\\b`));
+  const dated = followUpDate(text);
 
   if (/\btoday\b/.test(text)) day = addDays(today, 0);
   else if (/\b(tomorrow|tmrw|tmr)\b/.test(text)) day = addDays(today, 1);
@@ -91,7 +105,10 @@ export function suggestFollowUp(note: string, now: Date = new Date()): string | 
   }
   if (!day) return null;
 
-  const value = toValue(day.y, day.m, day.d, time ?? DEFAULT_MIN);
+  // "Today" with no time named means the next slot, not a morning default that has already gone.
+  const isToday = day.y === today.y && day.m === today.m && day.d === today.d;
+  const fallback = isToday ? Math.ceil((today.minutes + 1) / 30) * 30 : DEFAULT_MIN;
+  const value = toValue(day.y, day.m, day.d, time ?? fallback);
   const when = new Date(`${value}:00+05:30`);
   return when.getTime() > now.getTime() ? value : null;
 }
@@ -102,4 +119,18 @@ export function followUpInDays(days: number, now: Date = new Date()): string {
   const day = addDays(p, days);
   // Round up so "48 hours from now" never lands earlier than asked.
   return toValue(day.y, day.m, day.d, Math.ceil(p.minutes / 30) * 30);
+}
+
+/**
+ * The Tomorrow / In 3 days / Next week chips: `days` from now at the same time of day, but a call
+ * is never booked for late evening or the small hours. Outside the 9am-8pm slots it falls to the
+ * morning default instead of being squeezed to 8pm.
+ */
+export function quickFollowUp(days: number, now: Date = new Date()): string {
+  const p = istParts(now);
+  if (p.minutes < FIRST_SLOT_MIN || p.minutes >= LAST_SLOT_MIN) {
+    const day = addDays(p, days);
+    return toValue(day.y, day.m, day.d, DEFAULT_MIN);
+  }
+  return followUpInDays(days, now);
 }

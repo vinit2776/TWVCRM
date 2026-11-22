@@ -211,6 +211,8 @@ export interface Lead {
   tags: string[];
   assigned_to?: string;
   assigned_user?: User;
+  /** Name of whoever has taken this lead's open enquiry while no one handles the lead itself. */
+  enquiry_taken_by?: string | null;
   created_by?: string;
   created_at: string;
   updated_at: string;
