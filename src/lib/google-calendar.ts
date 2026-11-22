@@ -139,3 +139,48 @@ export async function rescheduleReminderEvent(params: RescheduleReminderEventPar
     return createReminderEvent(params);
   }
 }
+
+/**
+ * Creates or updates a tour entry on one person's own calendar. With an existing event id it patches
+ * that event (and falls back to creating one if it is gone); without, it creates one. No attendees,
+ * so Google emails nobody. Returns the event id to remember, or null if skipped or failed. Never throws.
+ */
+export async function upsertTourEvent(params: {
+  ownerEmail: string;
+  eventId: string | null;
+  body: Record<string, unknown>;
+}): Promise<string | null> {
+  if (!isWorkspaceEmail(params.ownerEmail)) return null;
+  let cal: ReturnType<typeof getCalendarClient>;
+  try {
+    cal = getCalendarClient(params.ownerEmail);
+  } catch (err) {
+    console.error("[google-calendar] not configured:", err instanceof Error ? err.message : err);
+    return null;
+  }
+  try {
+    if (params.eventId) {
+      const { data } = await cal.events.patch({ calendarId: "primary", eventId: params.eventId, requestBody: params.body });
+      return data.id ?? params.eventId;
+    }
+  } catch (err) {
+    console.error("[google-calendar] tour event patch failed, creating a new one:", err instanceof Error ? err.message : err);
+  }
+  try {
+    const { data } = await cal.events.insert({ calendarId: "primary", requestBody: params.body });
+    return data.id ?? null;
+  } catch (err) {
+    console.error("[google-calendar] tour event insert failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/** Removes a tour entry from one person's calendar. Quiet if it is already gone. Never throws. */
+export async function deleteTourEvent(params: { ownerEmail: string; eventId: string }): Promise<void> {
+  if (!isWorkspaceEmail(params.ownerEmail)) return;
+  try {
+    await getCalendarClient(params.ownerEmail).events.delete({ calendarId: "primary", eventId: params.eventId });
+  } catch (err) {
+    console.error("[google-calendar] tour event delete failed:", err instanceof Error ? err.message : err);
+  }
+}
