@@ -59,6 +59,10 @@ interface ProposalFormProps {
    */
   revise?: boolean;
   onRevised?: (revision: { id: string; proposal_number: string }) => void;
+  /** Create mode, opened from a hand-over job: ties the new proposal to the job so sending it finishes the job. */
+  handoverJobId?: string;
+  /** Create mode: a starting title (the job's note of what to send). Nothing else is prefilled. */
+  startingTitle?: string;
 }
 
 export function ProposalForm({
@@ -71,6 +75,8 @@ export function ProposalForm({
   initialProposal,
   revise = false,
   onRevised,
+  handoverJobId,
+  startingTitle,
 }: ProposalFormProps) {
   const isEditMode = Boolean(proposalId && initialProposal);
   const [title, setTitle] = useState("");
@@ -258,6 +264,11 @@ export function ProposalForm({
     }
   }, [open, depositMonths, depositAmount, depositOverridden, effectiveDepositAmount]);
 
+  // Opened from a hand-over job: start the title from the job's note, only on a fresh create form.
+  useEffect(() => {
+    if (open && !initialProposal && startingTitle) setTitle((t) => t || startingTitle);
+  }, [open, initialProposal, startingTitle]);
+
   const resetForm = () => {
     setTitle("");
     setDescription("");
@@ -409,6 +420,7 @@ export function ProposalForm({
       tenure_months: tenureMonths,
       lock_in_months: lockInMonths,
       notice_period_months: noticePeriodMonths,
+      ...(!isEditMode && handoverJobId ? { handover_job_id: handoverJobId } : {}),
     };
 
     const url = revise ? `/api/proposals/${proposalId}/revise` : isEditMode ? `/api/proposals/${proposalId}` : "/api/proposals";

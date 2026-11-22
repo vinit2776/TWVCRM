@@ -104,7 +104,12 @@ export function JobsBox() {
                   )}
                   {openLead(j)}
                   {j.kind === "send_proposal" ? (
-                    <span className="self-center text-xs text-muted-foreground">finishes when the proposal is sent</span>
+                    <>
+                      <span className="self-center text-xs text-muted-foreground">finishes when the proposal is sent</span>
+                      <Button size="sm" className="h-9" asChild>
+                        <a href={`/leads/${j.lead?.id}?tab=proposals&newProposal=1&job=${j.id}`} target="_blank" rel="noopener noreferrer">Make the proposal</a>
+                      </Button>
+                    </>
                   ) : noteFor === j.id ? (
                     <>
                       <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder={j.kind === "other" ? "What did you do?" : "Note (optional)"} className="h-9 w-56" />

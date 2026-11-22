@@ -2,7 +2,7 @@
 
 import { canCancelInvoice as canCancelInvoiceRole } from "@/lib/invoice-cancel";
 import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban, Loader2, Pencil, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -118,6 +118,22 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   const [invoices, setInvoices] = useState<(ProformaInvoice & { lead?: Lead })[]>([]);
   const [loading, setLoading] = useState(true);
   const [proposalFormOpen, setProposalFormOpen] = useState(false);
+  // Opened from a hand-over job's button (?newProposal=1&job=<id>): the new proposal form opens by itself
+  // once, with the job's note as the title, and the new proposal is tied to the job.
+  const searchParams = useSearchParams();
+  const jobId = searchParams.get("job") ?? undefined;
+  const [jobTitle, setJobTitle] = useState<string | undefined>();
+  const [autoOpened, setAutoOpened] = useState(false);
+  useEffect(() => {
+    if (autoOpened || searchParams.get("newProposal") !== "1") return;
+    setAutoOpened(true);
+    setProposalFormOpen(true);
+    if (!jobId) return;
+    fetch("/api/leads/jobs")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setJobTitle((j?.data as { id: string; brief?: { proposal_kind?: string | null } | null }[] | undefined)?.find((t) => t.id === jobId)?.brief?.proposal_kind || undefined))
+      .catch(() => {});
+  }, [autoOpened, searchParams, jobId]);
   const [editingProposal, setEditingProposal] = useState<(Proposal & { lead?: Lead }) | null>(null);
   const [invoiceFormOpen, setInvoiceFormOpen] = useState(false);
   const [viewInvoice, setViewInvoice] = useState<(ProformaInvoice & { lead?: Lead }) | null>(null);
@@ -682,6 +698,8 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
         onSuccess={handleSuccess}
         proposalId={editingProposal?.id}
         initialProposal={editingProposal ?? undefined}
+        handoverJobId={jobId}
+        startingTitle={jobTitle}
       />
       <InvoiceForm
         leadId={leadId}

@@ -5,6 +5,7 @@ import { updateProposalSchema } from "@/lib/validations";
 import { PROPOSAL_EDITABLE_STATUSES } from "@/lib/constants";
 import { validateCommitmentTerms } from "@/lib/proposal-terms";
 import { CYCLE_FIXED_LINES_ERROR } from "@/lib/escalation-cycle-server";
+import { completeHandoverTasksForProposal } from "@/lib/handover-proposal-server";
 
 const CONTENT_FIELDS = [
   "items",
@@ -205,6 +206,11 @@ export async function PATCH(
       performedBy: dbUser.id,
       changes: diffChanges(oldProposal as Record<string, unknown>, allowedFields),
     });
+  }
+
+  // Marked sent by hand: only a real change to "sent" finishes a hand-over job for this proposal.
+  if (allowedFields.status === "sent" && oldProposal.status !== "sent") {
+    await completeHandoverTasksForProposal(createAdminClient(), id, dbUser?.id ?? null, oldProposal.proposal_number).catch((e) => console.error("[handover] finish failed:", e));
   }
 
   return NextResponse.json({ data });
