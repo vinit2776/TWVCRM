@@ -53,3 +53,13 @@ export function reportProblem(r: ReportInput): string | null {
 export function photoPathOk(tourId: string, path: string): boolean {
   return path.startsWith(`tour-reports/${tourId}/`) && !path.includes("..");
 }
+
+export type ArrivalState = "upcoming" | "here" | "reported" | "no_show";
+
+/** Where a tour stands on the day: not yet, the customer is here (report due), reported, or did not come. */
+export function arrivalState(t: { outcome: string | null; arrivedAt: string | null; hasReport: boolean }): ArrivalState {
+  if (t.hasReport) return "reported";
+  if (t.outcome === "no_show" || t.outcome === "cancelled") return "no_show";
+  if (t.arrivedAt) return "here";
+  return "upcoming";
+}

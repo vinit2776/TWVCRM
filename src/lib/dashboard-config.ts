@@ -31,6 +31,7 @@ export type WidgetId =
   | "member_health"
   | "lead_funnel"
   | "schedule"
+  | "arrivals"
   // New (Tier 3: strategic)
   | "source_roi"
   | "aggregator_performance"
@@ -79,6 +80,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   member_health:          { id: "member_health",          title: "Member Health" },
   lead_funnel:            { id: "lead_funnel",            title: "Lead Funnel" },
   schedule:               { id: "schedule",               title: "Today's Schedule" },
+  arrivals:               { id: "arrivals",               title: "Arrivals today" },
   source_roi:             { id: "source_roi",             title: "Source ROI" },
   aggregator_performance: { id: "aggregator_performance", title: "Aggregator Performance" },
   procurement_spend:      { id: "procurement_spend",      title: "Procurement Spend" },
@@ -115,6 +117,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "quick_charge",
     "kpi_stats",
     "mtd_bookings",
+    "arrivals",
     "schedule",
     "renewal_pipeline",
     "occupancy",
@@ -132,6 +135,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "live_enquiries",
     "next_steps",
     "quick_charge",
+    "arrivals",
     "schedule",
     "lead_funnel",
     "kpi_stats",
@@ -143,6 +147,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "quick_charge",
     "live_enquiries",
     "next_steps",
+    "arrivals",
     "schedule",
     "booking_summary",
     "mtd_bookings",

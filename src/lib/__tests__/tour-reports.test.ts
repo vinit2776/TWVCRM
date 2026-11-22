@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canWorkTour, photoPathOk, reportProblem } from "../tour-reports";
+import { arrivalState, canWorkTour, photoPathOk, reportProblem } from "../tour-reports";
 
 const people = { hostId: "h", accompanierId: "a", createdBy: "c", leadOwnerId: "o", inchargeIds: ["i1", "i2"] };
 
@@ -36,5 +36,14 @@ describe("photoPathOk", () => {
     expect(photoPathOk("t1", "tour-reports/t2/a.jpg")).toBe(false);
     expect(photoPathOk("t1", "tour-reports/t1/../t2/a.jpg")).toBe(false);
     expect(photoPathOk("t1", "facility/a.jpg")).toBe(false);
+  });
+});
+
+describe("arrivalState", () => {
+  it("follows the tour through the day", () => {
+    expect(arrivalState({ outcome: null, arrivedAt: null, hasReport: false })).toBe("upcoming");
+    expect(arrivalState({ outcome: null, arrivedAt: "2026-11-21T05:34:00Z", hasReport: false })).toBe("here");
+    expect(arrivalState({ outcome: "came", arrivedAt: "2026-11-21T05:34:00Z", hasReport: true })).toBe("reported");
+    expect(arrivalState({ outcome: "no_show", arrivedAt: null, hasReport: false })).toBe("no_show");
   });
 });
