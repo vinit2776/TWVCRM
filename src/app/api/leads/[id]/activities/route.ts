@@ -7,6 +7,7 @@ import { createReminderEvent } from "@/lib/google-calendar";
 import { istLocalToUtcIso } from "@/lib/utils";
 import { followUpClosedRows } from "@/lib/follow-up-closed-note";
 import { completeHandoverJobsForActivity } from "@/lib/handover-finish-server";
+import { syncTourCalendar } from "@/lib/tour-calendar-server";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -104,6 +105,9 @@ export async function POST(
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  // A tour with a host goes on the host's calendar (and the accompanier's, once tagged).
+  if (result.data.type === "tour") await syncTourCalendar(await createAdminClient(), data.id);
 
   // A call or tour logged by the person a hand-over job was given to finishes that job.
   if (dbUser?.id) {

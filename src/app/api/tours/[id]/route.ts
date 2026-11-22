@@ -8,6 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { TOUR_OUTCOME_LABELS, tourOutcomeSubject } from "@/lib/tours";
 import { datePart, timePart } from "@/lib/next-step-chip";
 import { canWorkTour } from "@/lib/tour-reports";
+import { syncTourCalendar } from "@/lib/tour-calendar-server";
 import { createNotification } from "@/lib/in-app-notifications";
 
 const bodySchema = z.discriminatedUnion("action", [
@@ -99,12 +100,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       await createNotification({ userId: body.accompanier_id, type: "tour_accompany", title: "You are tagged to accompany a tour", body: "Open the lead for when and where.", url: `/leads/${tour.lead_id}`, entityType: "lead", entityId: tour.lead_id }).catch(() => {});
     }
     logAudit(supabase, { entityType: "lead", entityId: tour.lead_id, action: "update", performedBy: me.id, changes: { tour_accompanier: { old: tour.accompanier_id, new: body.accompanier_id } } });
+    await syncTourCalendar(createAdminClient(), id);
     return NextResponse.json({ ok: true });
   }
 
   if (body.action === "set_host") {
     const { error } = await supabase.from("activities").update({ tour_host_id: body.tour_host_id, updated_at: now }).eq("id", id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await syncTourCalendar(createAdminClient(), id);
     return NextResponse.json({ ok: true });
   }
 
@@ -144,6 +147,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       performedBy: me.id,
       changes: { tour_start: { old: tour.meeting_start_at, new: startIso } },
     });
+    await syncTourCalendar(createAdminClient(), id);
     return NextResponse.json({ ok: true });
   }
 
@@ -213,5 +217,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     performedBy: me.id,
     changes: { tour_outcome: { old: null, new: body.outcome } },
   });
+  // A tour that was missed or cancelled comes off the calendars.
+  if (body.outcome !== "came") await syncTourCalendar(createAdminClient(), id);
   return NextResponse.json({ ok: true });
 }
