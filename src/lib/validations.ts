@@ -204,6 +204,8 @@ export const createTaskSchema = z.object({
   assigned_to: z.string().uuid().optional(),
   due_date: z.string().optional(),
   tags: z.array(z.string()),
+  /** What the person who finished a hand-over job wants the giver to know. */
+  completion_note: z.string().trim().max(1000).optional(),
 });
 
 export const updateTaskSchema = createTaskSchema.partial();

@@ -7,6 +7,7 @@ import { ExternalLink, Mail, MapPin, Phone } from "lucide-react";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
+import { HandOverButton } from "@/components/leads/hand-over-button";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
 import { NextStepChip, NoNextStepChip } from "@/components/leads/next-step-chip";
@@ -126,6 +127,7 @@ export default function LeadActivityPage() {
               {lead.company && <span className="text-muted-foreground">· {lead.company}</span>}
               <StatusBadge type="lead_status" value={lead.status} />
               <LeadPinButton lead={lead} onChanged={changed} withLabel />
+              {!closed && <HandOverButton leadId={id} leadName={name} onDone={changed} />}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <span>{LEAD_SOURCE_LABELS[lead.source] ?? lead.source}</span>
