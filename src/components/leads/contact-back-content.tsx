@@ -103,7 +103,7 @@ export function ContactBackContent({
               {enquiry.reference} · received {formatSmartDate(enquiry.received_at)} · {ENQUIRY_SOURCE_LABEL[enquiry.source] ?? enquiry.source}
             </span>
           </div>
-          <HandOverButton leadId={enquiry.lead_id} leadName={name} />
+          {!["won", "lost", "junk"].includes(enquiry.lead?.status ?? "") && <HandOverButton leadId={enquiry.lead_id} leadName={name} />}
         </div>
         {enquiry.message && <p className="mt-2 text-sm text-muted-foreground">“{enquiry.message}”</p>}
       </div>
