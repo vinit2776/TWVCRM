@@ -8,6 +8,7 @@ import {
   activityEvent,
   contractEvents,
   enquiryEvent,
+  handoverJobEvents,
   nextStep,
   paymentEvent,
   proposalEvents,
@@ -16,6 +17,7 @@ import {
   type ActivityRow,
   type EnquiryRow,
   type ProposalRow,
+  type HandoverJobRow,
   type ContractRow,
   type StatementRow,
   type PaymentRow,
@@ -62,6 +64,17 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
   }
 
+  // Jobs handed over on this lead. Left out, not an error, where hand-over jobs do not exist yet
+  // (the columns come with a later migration), so the timeline never breaks on them.
+  const jobsRes = await supabase
+    .from("tasks")
+    .select(
+      "id, kind, title, status, created_at, completed_at, completion_note, proposal_id, brief, giver:users!tasks_handed_over_by_fkey(full_name), assignee:users!tasks_assigned_to_fkey(full_name)",
+    )
+    .eq("lead_id", id)
+    .neq("kind", "general");
+  const jobs = (jobsRes.error ? [] : (jobsRes.data ?? [])) as unknown as HandoverJobRow[];
+
   const activities = (activitiesRes.data ?? []) as unknown as (ActivityRow & { is_follow_up_done?: boolean })[];
   const contracts = (contractsRes.data ?? []) as ContractRow[];
 
@@ -94,6 +107,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       proposalEvents(p, p.creator?.full_name ?? null)
     ),
     ...contracts.flatMap(contractEvents),
+    ...jobs.flatMap(handoverJobEvents),
     ...statements.map((s) => statementEvent(s, formatCurrency)),
     ...payments.map((p) => paymentEvent(p, statementNumber.get(p.billing_statement_id) ?? "invoice", formatCurrency)),
   ];
