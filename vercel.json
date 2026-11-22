@@ -71,6 +71,10 @@
       "schedule": "30 2 * * *"
     },
     {
+      "path": "/api/cron/space-review",
+      "schedule": "45 3 * * *"
+    },
+    {
       "path": "/api/cron/rent-gap-alert",
       "schedule": "30 4 * * *"
     },
