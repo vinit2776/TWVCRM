@@ -56,7 +56,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const { data: tour } = await supabase
     .from("activities")
-    .select("id, type, lead_id, description, meeting_start_at, meeting_end_at, tour_outcome, tour_host_id, accompanier_id, created_by, arrived_at, lead:leads!activities_lead_id_fkey(first_name, assigned_to, location_id)")
+    .select("id, type, lead_id, description, meeting_start_at, meeting_end_at, tour_outcome, tour_host_id, accompanier_id, created_by, arrived_at, lead:leads!activities_lead_id_fkey(first_name, last_name, assigned_to, location_id)")
     .eq("id", id)
     .single();
   if (!tour || tour.type !== "tour") return NextResponse.json({ error: "Tour not found" }, { status: 404 });
@@ -184,7 +184,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const admin = createAdminClient();
     const { data: flag } = await admin.from("app_settings").select("value").eq("key", "handover_jobs_enabled").maybeSingle();
     if (flag?.value === "true") {
-      const leadName = `${(lead as { first_name?: string } | null)?.first_name ?? ""}`.trim() || "the customer";
+      const l = lead as { first_name?: string; last_name?: string | null } | null;
+      const leadName = `${l?.first_name ?? ""} ${l?.last_name === "-" ? "" : (l?.last_name ?? "")}`.trim() || "the customer";
       await admin.from("tasks").insert({
         title: `Re-book or close: ${leadName}`,
         description: note || null,
