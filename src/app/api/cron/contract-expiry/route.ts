@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
+import { runSpaceMatch } from "@/lib/space-match-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
 import { revokeUnifiIssuances } from "@/lib/contract-lifecycle";
@@ -99,6 +100,9 @@ async function handler(request: NextRequest) {
 
   if (releaseErr) {
     console.error("[contract-expiry] space allocation release failed:", releaseErr);
+  } else {
+    // Seats just freed: see whether anyone waiting for space now fits. Never throws.
+    await runSpaceMatch(admin);
   }
 
   // ── Voucher revocation for expired contracts ──────────────────────────────

@@ -19,7 +19,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("parked_enquiries")
     .select(
-      "id, lead_id, other_area, workspace_type, seats_needed, reason, note, look_again_on, state, parked_at, " +
+      "id, lead_id, other_area, workspace_type, seats_needed, reason, note, look_again_on, state, parked_at, matched_note, " +
         "location:locations!parked_enquiries_location_id_fkey(name), parker:users!parked_enquiries_parked_by_fkey(full_name), " +
         "lead:leads!parked_enquiries_lead_id_fkey(first_name, last_name, company, assigned_to)",
     )
@@ -32,7 +32,7 @@ export async function GET() {
   }
   type Row = {
     id: string; lead_id: string; other_area: string | null; workspace_type: string | null; seats_needed: number | null; reason: string;
-    note: string | null; look_again_on: string | null; state: string; parked_at: string;
+    note: string | null; look_again_on: string | null; state: string; parked_at: string; matched_note: string | null;
     location: { name: string } | null; parker: { full_name: string } | null;
     lead: { first_name: string; last_name: string | null; company: string | null; assigned_to: string | null } | null;
   };
@@ -49,6 +49,7 @@ export async function GET() {
     parkedBy: r.parker?.full_name ?? null,
     daysWaiting: daysWaiting(r.parked_at),
     parkedAt: r.parked_at,
+    matchedNote: r.matched_note,
   }));
   return NextResponse.json({ enabled: true, total: rows.length, rows });
 }
