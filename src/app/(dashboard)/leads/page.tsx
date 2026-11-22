@@ -22,6 +22,7 @@ import {
   LEAD_STATUS_LABELS,
   LEAD_SOURCES,
   LEAD_SOURCE_LABELS,
+  LEAD_HANDLER_ROLES,
 } from "@/lib/constants";
 import dynamic from "next/dynamic";
 const ImportLeadsDialog = dynamic(
@@ -42,6 +43,8 @@ import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import type { TourGroup } from "@/lib/tours";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import { LeadsViewTabs } from "@/components/leads/leads-view-tabs";
+import { LeadsHome } from "@/components/leads/leads-home";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { LeadsNavV2 } from "@/components/leads/leads-nav-v2";
 import { buildLeadsNav, type LeadsNavItem } from "@/lib/leads-nav";
 import { useLeadsHomeV2 } from "@/hooks/use-leads-home-v2";
@@ -60,7 +63,12 @@ function LeadsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   // The view lives in the URL (?view=), so a view can be linked to and the back button returns to it.
-  const tab = parseLeadsView(searchParams.get("view"));
+  const homeV2 = useLeadsHomeV2();
+  const { user: me } = useCurrentUser();
+  // Home is part of the new navigation, for the roles that work leads; without either it is All leads.
+  const showHome = homeV2 && !!me?.role && (LEAD_HANDLER_ROLES as readonly string[]).includes(me.role);
+  const requestedView = parseLeadsView(searchParams.get("view"));
+  const tab = requestedView === "home" && !showHome ? "all" : requestedView;
   // The page number belongs to the view it was set in; another view starts again at page 1.
   const [pageState, setPageState] = useState<{ view: LeadsView; page: number }>({ view: tab, page: 1 });
   const page = pageState.view === tab ? pageState.page : 1;
@@ -145,7 +153,7 @@ function LeadsPageContent() {
     include_archived: showDisabled,
     pinned: pinnedOnly,
     // The Follow-ups tab loads its own rows (FollowUpsView), so this asks for none: view=ids with no ids.
-    view: tab === "followups" ? "ids" : "all",
+    view: tab === "followups" || tab === "home" ? "ids" : "all",
   });
 
   // Whole-day counts for the day headers, for the days this page spans, under the same filters.
@@ -191,7 +199,6 @@ function LeadsPageContent() {
 
   // The new navigation (behind leads_home_v2_enabled). Buckets are All leads under a filter, so they
   // set the filter and put it in the address; the other entries clear it so a view never inherits one.
-  const homeV2 = useLeadsHomeV2();
   const nav = buildLeadsNav(
     { view: tab, pinnedOnly, statusFilter },
     {
@@ -200,6 +207,7 @@ function LeadsPageContent() {
       tours: tourCounts?.needs_update ?? 0,
       replies: replyCounts?.mine ?? 0,
     },
+    { showHome },
   );
   const openNavItem = (item: LeadsNavItem) => {
     const t = item.target;
@@ -289,6 +297,26 @@ function LeadsPageContent() {
         />
       )}
 
+      {tab === "home" && (
+        <LeadsHome
+          counts={{
+            overdue: followupSummary?.overdue ?? 0,
+            dueToday: followupSummary?.due_today ?? 0,
+            enquiries: activeCount,
+            tours: tourCounts?.needs_update ?? 0,
+            replies: replyCounts?.mine ?? 0,
+          }}
+          users={users}
+          isUnread={isUnreadFormLead}
+          isReEnquiry={(lead) => reEnquiryLeadIds.has(lead.id)}
+          onOpenLead={(lead) => {
+            pushTrailEntry({ href: `/leads/${lead.id}/activity`, label: `${lead.first_name} ${lead.last_name}` });
+            router.push(`/leads/${lead.id}/activity`);
+          }}
+          onGoTo={switchTab}
+        />
+      )}
+
       {tab === "enquiries" && <EnquiryTracker />}
 
       {tab === "tours" && <ToursView onCounts={setTourCounts} />}
@@ -297,7 +325,7 @@ function LeadsPageContent() {
 
       {tab === "whatsapp" && <InboundWhatsAppLog />}
 
-      {tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && (
+      {tab !== "home" && tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && (
         <>
       {tab === "all" && <OverdueFollowupBanner summary={followupSummary} onReview={handleReviewOverdue} />}
 
