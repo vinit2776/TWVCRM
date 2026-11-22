@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
+import { voExpiryFrom } from "@/lib/vo-proposal";
 
 // Allow larger request bodies for PDF attachments (default is 4.5MB)
 export const maxDuration = 30; // seconds
@@ -74,7 +75,12 @@ export async function POST(
       .select("security_deposit_months, deposit_waiver_verified_at")
       .eq("id", id)
       .single();
-    if (waiverCheck && Number(waiverCheck.security_deposit_months || 0) === 0 && !waiverCheck.deposit_waiver_verified_at) {
+    // Separate query: before migration 00683 `kind` does not exist, and adding it to
+    // the select above would make the whole gate silently skip for everyone.
+    // Virtual Office proposals carry zero deposit by design, so need no OTP waiver.
+    const { data: kindRow } = await supabase.from("proposals").select("kind").eq("id", id).single();
+    const isVoKind = kindRow?.kind === "virtual_office";
+    if (!isVoKind && waiverCheck && Number(waiverCheck.security_deposit_months || 0) === 0 && !waiverCheck.deposit_waiver_verified_at) {
       return NextResponse.json(
         { error: "This proposal has zero security deposit and requires admin OTP approval before it can be sent. Please request and verify the OTP first." },
         { status: 403 }
@@ -284,6 +290,9 @@ export async function POST(
     // Update proposal status to "sent" and store the PDF path for tracking redirect
     const sentUpdate: Record<string, unknown> = { status: "sent", sent_at: new Date().toISOString() };
     if (pdfStoragePath) sentUpdate.pdf_storage_path = pdfStoragePath;
+    // Virtual Office proposals lapse 7 days after each send. `kind` is undefined
+    // until migration 00683, so this is a no-op for standard proposals and before it.
+    if (proposal.kind === "virtual_office") sentUpdate.expires_at = voExpiryFrom(sentUpdate.sent_at as string).toISOString();
     await supabase.from("proposals").update(sentUpdate).eq("id", id);
 
     // Log email activity

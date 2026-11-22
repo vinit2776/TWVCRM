@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createProposalSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
+import { voCreateSchema } from "@/lib/vo-proposal";
+import { voProposalColumnsPresent, VO_PROPOSAL_NOT_READY } from "@/lib/vo-proposal-server";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -147,8 +149,24 @@ export async function POST(request: NextRequest) {
   const { count } = await supabase.from("proposals").select("*", { count: "exact", head: true });
   const proposalNumber = `PROP-${String((count || 0) + 1).padStart(4, "0")}`;
 
-  const depositMonths = result.data.security_deposit_months || 0;
-  const depositAmount = result.data.security_deposit_amount ?? (depositMonths * subtotal);
+  // Virtual Office kind: zero deposit, validated term, columns must exist.
+  // Standard proposals (no `kind` in the body) take none of these branches.
+  let voFields: Record<string, unknown> = {};
+  if (body?.kind === "virtual_office") {
+    if (!(await voProposalColumnsPresent())) return NextResponse.json({ error: VO_PROPOSAL_NOT_READY }, { status: 503 });
+    const vo = voCreateSchema.safeParse(body);
+    if (!vo.success) return NextResponse.json({ error: vo.error.issues.map(i => i.message).join("; ") }, { status: 400 });
+    voFields = {
+      kind: "virtual_office",
+      vo_term_months: vo.data.vo_term_months,
+      vo_guide_price: vo.data.vo_guide_price ?? null,
+      vo_quoted_price: vo.data.vo_quoted_price,
+    };
+  }
+  const isVo = voFields.kind === "virtual_office";
+
+  const depositMonths = isVo ? 0 : (result.data.security_deposit_months || 0);
+  const depositAmount = isVo ? 0 : (result.data.security_deposit_amount ?? (depositMonths * subtotal));
   const depositPaymentStatus = depositMonths > 0 ? "pending" : "not_required";
 
   const { service_quotas, ...proposalFields } = result.data;
@@ -157,6 +175,7 @@ export async function POST(request: NextRequest) {
     .from("proposals")
     .insert({
       ...proposalFields,
+      ...voFields,
       proposal_number: proposalNumber,
       status: "draft",
       subtotal,
