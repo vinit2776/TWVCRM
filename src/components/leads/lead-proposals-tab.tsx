@@ -129,9 +129,9 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     setAutoOpened(true);
     setProposalFormOpen(true);
     if (!jobId) return;
-    fetch(`/api/tasks/${jobId}`)
+    fetch("/api/leads/jobs")
       .then((r) => (r.ok ? r.json() : null))
-      .then((j) => setJobTitle(j?.data?.brief?.proposal_kind || undefined))
+      .then((j) => setJobTitle((j?.data as { id: string; brief?: { proposal_kind?: string | null } | null }[] | undefined)?.find((t) => t.id === jobId)?.brief?.proposal_kind || undefined))
       .catch(() => {});
   }, [autoOpened, searchParams, jobId]);
   const [editingProposal, setEditingProposal] = useState<(Proposal & { lead?: Lead }) | null>(null);
