@@ -67,6 +67,7 @@ export function LeadHandlerChip({
   }
 
   if (!handler) {
+    const takenBy = lead.enquiry_taken_by ?? null;
     return (
       <button
         type="button"
@@ -75,10 +76,14 @@ export function LeadHandlerChip({
           e.stopPropagation();
           void run(undefined, "You're now handling this lead");
         }}
-        className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60"
+        className={
+          takenBy
+            ? "inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+            : "inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60"
+        }
       >
         <UserRound className="h-3 w-3" />
-        Unassigned · Claim
+        {takenBy ? `${takenBy} is on the enquiry · Claim lead` : "Unassigned · Claim"}
       </button>
     );
   }

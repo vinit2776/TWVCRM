@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { suggestFollowUp, followUpInDays } from "../followup-hint";
+import { suggestFollowUp, followUpInDays, quickFollowUp } from "../followup-hint";
 
 // Wednesday 4 Nov 2026, 10:12 IST
 const NOW = new Date("2026-11-04T10:12:00+05:30");
@@ -52,5 +52,37 @@ describe("followUpInDays", () => {
   it("pulls an out-of-hours time into the working slots", () => {
     expect(followUpInDays(2, new Date("2026-11-04T22:40:00+05:30"))).toBe("2026-11-06T20:00");
     expect(followUpInDays(2, new Date("2026-11-04T06:05:00+05:30"))).toBe("2026-11-06T09:00");
+  });
+});
+
+describe("a customer's start date is not the call-back date", () => {
+  it("ignores a date after 'from' / 'starting'", () => {
+    expect(suggestFollowUp("wants 2 desks from 1 Dec at OMR", NOW)).toBeNull();
+    expect(suggestFollowUp("starting 15 jan, 4 seats", NOW)).toBeNull();
+  });
+  it("still reads a later date that is about the call", () => {
+    expect(suggestFollowUp("wants 2 desks from 1 Dec. call me on 6 Nov", NOW)).toBe("2026-11-06T11:00");
+  });
+  it("lets a stated call-back word win over a start date", () => {
+    expect(suggestFollowUp("from 1 Dec at OMR, will send pricing tomorrow", NOW)).toBe("2026-11-05T11:00");
+  });
+});
+
+describe("today with no time named", () => {
+  it("means the next slot, not a morning that has gone", () => {
+    expect(suggestFollowUp("will send pricing today", new Date("2026-11-04T14:10:00+05:30"))).toBe("2026-11-04T14:30");
+  });
+  it("is null once the day's slots are over", () => {
+    expect(suggestFollowUp("send today", new Date("2026-11-04T21:00:00+05:30"))).toBeNull();
+  });
+});
+
+describe("quickFollowUp", () => {
+  it("keeps the time of day while it is inside the slots", () => {
+    expect(quickFollowUp(1, new Date("2026-11-04T14:10:00+05:30"))).toBe("2026-11-05T14:30");
+  });
+  it("falls to the morning default late at night or before 9am", () => {
+    expect(quickFollowUp(1, new Date("2026-11-04T23:07:00+05:30"))).toBe("2026-11-05T11:00");
+    expect(quickFollowUp(3, new Date("2026-11-04T06:00:00+05:30"))).toBe("2026-11-07T11:00");
   });
 });

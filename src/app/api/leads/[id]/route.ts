@@ -32,6 +32,23 @@ export async function GET(
   // Ensure tags is always an array (DB default is '{}' but could be null)
   if (data) data.tags = data.tags ?? [];
 
+  // A lead nobody handles can still have an enquiry someone has taken ("X is on it" in the enquiry
+  // list). Say so here too, so the two screens do not look like they disagree.
+  if (data && !data.assigned_to) {
+    const { data: taken } = await supabase
+      .from("lead_enquiries")
+      .select("claimer:users!lead_enquiries_claimed_by_fkey(full_name)")
+      .eq("lead_id", id)
+      .not("claimed_by", "is", null)
+      .is("resolved_at", null)
+      .order("claimed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const claimer = taken?.claimer as { full_name?: string } | { full_name?: string }[] | null | undefined;
+    const name = Array.isArray(claimer) ? claimer[0]?.full_name : claimer?.full_name;
+    (data as Record<string, unknown>).enquiry_taken_by = name ?? null;
+  }
+
   // Compute followup flags (same logic as the list endpoint)
   if (data) {
     const today = new Date().toISOString().slice(0, 10);

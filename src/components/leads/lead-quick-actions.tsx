@@ -14,7 +14,7 @@ import {
   LEAD_HANDLER_ROLES,
   type NotInterestedReason,
 } from "@/lib/constants";
-import { followUpInDays, suggestFollowUp } from "@/lib/followup-hint";
+import { quickFollowUp, suggestFollowUp } from "@/lib/followup-hint";
 import type { Lead } from "@/types";
 
 type Panel = "spoke" | "no_answer" | "tour" | "quote" | "not_interested";
@@ -103,7 +103,7 @@ export function LeadQuickActions({
     setTourHost("");
     setOutcome("");
     followUpTouched.current = false;
-    setFollowUp(p === "no_answer" ? followUpInDays(2) : p === "quote" ? followUpInDays(3) : "");
+    setFollowUp(p === "no_answer" ? quickFollowUp(2) : p === "quote" ? quickFollowUp(3) : "");
     if (p === "no_answer") setFollowUpNote("Call back");
     if (p === "quote") setFollowUpNote("Chase the quote");
   };
@@ -134,10 +134,10 @@ export function LeadQuickActions({
             type="button"
             onClick={() => {
               followUpTouched.current = true;
-              setFollowUp(followUpInDays(days));
+              setFollowUp(quickFollowUp(days));
             }}
             className={`rounded-full border px-3 py-1 text-sm ${
-              followUp === followUpInDays(days) ? "border-primary bg-primary/10 font-medium text-primary" : "hover:bg-muted"
+              followUp === quickFollowUp(days) ? "border-primary bg-primary/10 font-medium text-primary" : "hover:bg-muted"
             }`}
           >
             {text}
@@ -239,7 +239,7 @@ export function LeadQuickActions({
                     const picked = (Object.keys(OUTCOME_LABELS) as Outcome[]).find((k) => OUTCOME_LABELS[k] === label) as Outcome;
                     setOutcome(picked);
                     if (picked === "waiting" && !followUpTouched.current) {
-                      setFollowUp(followUpInDays(7));
+                      setFollowUp(quickFollowUp(7));
                       setFollowUpNote((n) => n || "Check back");
                     }
                   },
