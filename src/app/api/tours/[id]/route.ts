@@ -56,7 +56,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const { data: tour } = await supabase
     .from("activities")
-    .select("id, type, lead_id, description, meeting_start_at, meeting_end_at, tour_outcome, tour_host_id, accompanier_id, created_by, arrived_at, lead:leads!activities_lead_id_fkey(assigned_to, location_id)")
+    .select("id, type, lead_id, description, meeting_start_at, meeting_end_at, tour_outcome, tour_host_id, accompanier_id, created_by, arrived_at, lead:leads!activities_lead_id_fkey(first_name, last_name, assigned_to, location_id)")
     .eq("id", id)
     .single();
   if (!tour || tour.type !== "tour") return NextResponse.json({ error: "Tour not found" }, { status: 404 });
@@ -178,6 +178,30 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     description: note || null,
     created_by: me.id,
   });
+
+  // A customer who did not come: the person who booked the tour gets a "Re-book or close" job.
+  if (body.outcome === "no_show" && tour.created_by && tour.created_by !== me.id) {
+    const admin = createAdminClient();
+    const { data: flag } = await admin.from("app_settings").select("value").eq("key", "handover_jobs_enabled").maybeSingle();
+    if (flag?.value === "true") {
+      const l = lead as { first_name?: string; last_name?: string | null } | null;
+      const leadName = `${l?.first_name ?? ""} ${l?.last_name === "-" ? "" : (l?.last_name ?? "")}`.trim() || "the customer";
+      await admin.from("tasks").insert({
+        title: `Re-book or close: ${leadName}`,
+        description: note || null,
+        status: "todo",
+        priority: "medium",
+        lead_id: tour.lead_id,
+        assigned_to: tour.created_by,
+        tags: [] as string[],
+        kind: "other",
+        brief: { discussed: "The customer did not come to the tour. Re-book it, or close the lead.", proposal_kind: null },
+        created_by: me.id,
+        handed_over_by: me.id,
+      });
+    }
+    await createNotification({ userId: tour.created_by, type: "tour_no_show", title: "Customer did not come to the tour", body: "Re-book it or close the lead.", url: `/leads/${tour.lead_id}`, entityType: "lead", entityId: tour.lead_id }).catch(() => {});
+  }
 
   // Only a tour that was held moves the lead on. A no-show or cancellation leaves it where it is.
   if (body.outcome === "came") await autoUpdateLeadStatus(supabase, tour.lead_id, "tour", { meetingEndAt: now });

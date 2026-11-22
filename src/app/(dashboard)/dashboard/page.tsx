@@ -30,6 +30,7 @@ import { SlaRiskWidget } from "@/components/dashboard/widgets/sla-risk-widget";
 import { MemberHealthWidget } from "@/components/dashboard/widgets/member-health-widget";
 import { LeadFunnelWidget } from "@/components/dashboard/widgets/lead-funnel-widget";
 import { ScheduleWidget } from "@/components/dashboard/widgets/schedule-widget";
+import { ArrivalsCard } from "@/components/tours/arrivals-card";
 import { SourceRoiWidget } from "@/components/dashboard/widgets/source-roi-widget";
 import { AggregatorPerformanceWidget } from "@/components/dashboard/widgets/aggregator-performance-widget";
 import { ProcurementSpendWidget } from "@/components/dashboard/widgets/procurement-spend-widget";
@@ -234,6 +235,8 @@ export default function DashboardPage() {
         return <MemberHealthWidget key="member_health" />;
       case "lead_funnel":
         return <LeadFunnelWidget key="lead_funnel" locationFilter={locationFilter} />;
+      case "arrivals":
+        return <ArrivalsCard key="arrivals" />;
       case "schedule":
         return <ScheduleWidget key="schedule" locationFilter={locationFilter} />;
       case "source_roi":

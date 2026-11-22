@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import { JobsBox } from "@/components/leads/jobs-box";
 import { OverdueReviewCard } from "@/components/leads/overdue-review-card";
+import { ArrivalsCard } from "@/components/tours/arrivals-card";
 import { useHandoverJobsEnabled } from "@/hooks/use-handover-jobs";
 import { PersonName } from "@/components/shared/person-name";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -93,6 +94,8 @@ export function LeadsHome({ counts, users, isUnread, isReEnquiry, onOpenLead, on
         counts={mine && mine.owner === ownerId ? { ...counts, overdue: mine.overdue, dueToday: mine.today } : { ...counts, overdue: 0, dueToday: 0 }}
         onGoTo={onGoTo}
       />
+
+      <ArrivalsCard />
 
       <OverdueReviewCard ownerId={ownerId} />
 
