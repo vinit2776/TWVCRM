@@ -9,6 +9,7 @@ import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatSmartDate } from "@/lib/utils";
+import { pinLabel } from "@/lib/pin-age";
 import type { Lead } from "@/types";
 
 /** A lead in these statuses has nothing left to do, so a missing next step is not a problem. */
@@ -107,6 +108,14 @@ export function LeadListRow({
               {lead._stale.state === "stale"
                 ? "Stale"
                 : `Stale in ${lead._stale.daysLeft} day${lead._stale.daysLeft === 1 ? "" : "s"}`}
+            </span>
+          )}
+          {lead._pin && (
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${lead._pin.quiet ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800"}`}
+              title={lead._pin.quiet ? "Nobody has done anything on this pinned lead for a fortnight. Unpin it, or do the next thing." : "How long this lead has been pinned."}
+            >
+              {pinLabel(lead._pin).text}{lead._pin.pinnedBy ? ` · by ${lead._pin.pinnedBy}` : ""}
             </span>
           )}
           <LeadPinButton lead={lead} onChanged={onChanged} />
