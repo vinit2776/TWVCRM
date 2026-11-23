@@ -7,8 +7,10 @@ import {
   sameAssignment,
   sessionStartMs,
   sessionWindows,
+  shareBudget,
+  withoutNotePrefix,
 } from "@/lib/wifi-investigation-capture";
-import type { WifiDevice } from "@/lib/customer-value/wifi-devices";
+import { resolveDevices, type WifiDevice } from "@/lib/customer-value/wifi-devices";
 
 const LOC = "loc-1";
 const T0 = 1_760_000_000; // unix seconds
@@ -137,5 +139,51 @@ describe("session windows", () => {
 
   it("caps one run so a long outage is caught up over several", () => {
     expect(sessionWindows(NOW.getTime() - 200 * DAY, NOW.getTime())).toHaveLength(31);
+  });
+});
+
+describe("voucher note prefix", () => {
+  const contracts = [{ id: "c1", contract_number: "TWV-C-0123" }];
+  const issuances = [{ contract_id: "c1", seat_number: 1, revoked_at: null, member_name: null }];
+
+  it("is why prefixed seat vouchers matched nothing: the shared resolver reads the bare note", () => {
+    const guests = [{ mac: "aa:bb:cc:dd:ee:01", name: "PGD | TWV-C-0123_seat1" }];
+    expect(resolveDevices({ contracts, guests, issuances, adhocLinks: [], labels: [] })).toEqual([]);
+  });
+
+  it("matches the seat once the prefix is dropped, and still matches older notes without one", () => {
+    const guests = [
+      { mac: "aa:bb:cc:dd:ee:01", name: "PGD | TWV-C-0123_seat1" },
+      { mac: "aa:bb:cc:dd:ee:02", name: "TWV-C-0123_seat1" },
+    ];
+    const bare = withoutNotePrefix(guests, []);
+    const devices = resolveDevices({ contracts, guests: bare.guests, issuances, adhocLinks: bare.links, labels: [] });
+    expect(devices.map((d) => [d.mac, d.seat, d.contractId])).toEqual([
+      ["aa:bb:cc:dd:ee:01", 1, "c1"],
+      ["aa:bb:cc:dd:ee:02", 1, "c1"],
+    ]);
+  });
+
+  it("drops the prefix from ad-hoc links too, so a prefixed guest still matches its link", () => {
+    const bare = withoutNotePrefix([{ mac: "aa:bb:cc:dd:ee:03", name: "PGD | contract_TWV-C-0123" }], [{ note: "PGD | contract_TWV-C-0123", contract_id: "c1" }]);
+    const devices = resolveDevices({ contracts, guests: bare.guests, issuances, adhocLinks: bare.links, labels: [] });
+    expect(devices.map((d) => [d.mac, d.how])).toEqual([["aa:bb:cc:dd:ee:03", ["adhoc"]]]);
+  });
+
+  it("leaves guests with no note alone", () => {
+    expect(withoutNotePrefix([{ mac: "aa:bb:cc:dd:ee:04" }], []).guests).toEqual([{ mac: "aa:bb:cc:dd:ee:04", name: undefined, code: undefined }]);
+  });
+});
+
+describe("shareBudget", () => {
+  it("gives each remaining center an equal share of what is left", () => {
+    expect(shareBudget(45_000, 2)).toBe(22_500);
+    expect(shareBudget(30_000, 1)).toBe(30_000);
+  });
+
+  it("gives nothing when time or centers have run out", () => {
+    expect(shareBudget(0, 2)).toBe(0);
+    expect(shareBudget(-5, 2)).toBe(0);
+    expect(shareBudget(10_000, 0)).toBe(0);
   });
 });

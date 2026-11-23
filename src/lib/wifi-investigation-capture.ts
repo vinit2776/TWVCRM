@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { siteConfigFromLocation, unifiRequest, type SiteConfig } from "@/lib/unifi";
+import { siteConfigFromLocation, stripVoucherNotePrefix, unifiRequest, type SiteConfig } from "@/lib/unifi";
 import { getCachedSetting } from "@/lib/app-settings-cache";
 import {
   resolveDevices,
@@ -185,6 +185,23 @@ export function sessionStartMs(newestAssoc: string | null, now: Date): number {
   return Math.max(floor, new Date(newestAssoc).getTime() - OVERLAP_HOURS * 3_600_000);
 }
 
+/**
+ * Voucher notes lead with the center's code ("PGD | TWV-C-0123_seat1"); the shared device
+ * resolver reads the seat out of the bare note, so the prefix is dropped from both sides
+ * of its comparisons (the console's guest records and our ad-hoc links).
+ */
+export function withoutNotePrefix(guests: GuestRecord[], links: AdhocLink[]): { guests: GuestRecord[]; links: AdhocLink[] } {
+  return {
+    guests: guests.map((g) => ({ ...g, name: g.name ? stripVoucherNotePrefix(g.name) : g.name, code: g.code ? stripVoucherNotePrefix(g.code) : g.code })),
+    links: links.map((l) => ({ ...l, note: stripVoucherNotePrefix(l.note) })),
+  };
+}
+
+/** Each center gets an equal share of what is left, so the first one cannot use the whole run. */
+export function shareBudget(remainingMs: number, centersLeft: number): number {
+  return centersLeft > 0 ? Math.max(0, Math.floor(remainingMs / centersLeft)) : 0;
+}
+
 async function upsertChunks<T extends object>(supabase: SupabaseClient, table: string, rows: T[], onConflict: string): Promise<void> {
   for (let i = 0; i < rows.length; i += WRITE_CHUNK) {
     const { error } = await supabase.from(table).upsert(rows.slice(i, i + WRITE_CHUNK), { onConflict });
@@ -192,7 +209,13 @@ async function upsertChunks<T extends object>(supabase: SupabaseClient, table: s
   }
 }
 
-async function captureSessions(supabase: SupabaseClient, locationId: string, cfg: SiteConfig, now: Date): Promise<number> {
+export interface SessionCapture {
+  stored: number;
+  /** True when every day up to now was read; false when the run stopped on its time share or the per-run cap. */
+  complete: boolean;
+}
+
+async function captureSessions(supabase: SupabaseClient, locationId: string, cfg: SiteConfig, now: Date, deadline: number): Promise<SessionCapture> {
   const { data: last, error } = await supabase
     .from("wifi_session_log")
     .select("assoc_time")
@@ -202,14 +225,18 @@ async function captureSessions(supabase: SupabaseClient, locationId: string, cfg
     .maybeSingle();
   if (error) throw new Error(`session log read failed: ${error.message}`);
 
+  const windows = sessionWindows(sessionStartMs((last?.assoc_time as string | undefined) ?? null, now), now.getTime());
+  const nowSeconds = Math.floor(now.getTime() / 1000);
   let stored = 0;
-  for (const w of sessionWindows(sessionStartMs((last?.assoc_time as string | undefined) ?? null, now), now.getTime())) {
+  for (const w of windows) {
+    // Stored windows are kept: the next run starts from the newest stored session, so a stop here only delays the rest.
+    if (Date.now() > deadline) return { stored, complete: false };
     const raw = await unifiRequest<unknown>(`/stat/session?type=all&start=${w.start}&end=${w.end}`, {}, cfg);
     const rows = parseSessionRows(locationId, raw);
     await upsertChunks(supabase, "wifi_session_log", rows, "location_id,mac,assoc_time");
     stored += rows.length;
   }
-  return stored;
+  return { stored, complete: windows.length > 0 && windows[windows.length - 1].end >= nowSeconds };
 }
 
 async function loadChunked<T>(ids: string[], load: (batch: string[]) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
@@ -222,11 +249,11 @@ async function loadChunked<T>(ids: string[], load: (batch: string[]) => PromiseL
   return out;
 }
 
-async function captureAssignments(supabase: SupabaseClient, locationId: string, cfg: SiteConfig, now: Date): Promise<number> {
+async function captureAssignments(supabase: SupabaseClient, locationId: string, cfg: SiteConfig, now: Date): Promise<{ changed: number; matched: number }> {
   const { data: contractRows, error: cErr } = await supabase.from("contracts").select("id, contract_number").eq("location_id", locationId);
   if (cErr) throw new Error(`read failed: ${cErr.message}`);
   const contracts = (contractRows ?? []) as Array<{ id: string; contract_number: string }>;
-  if (contracts.length === 0) return 0;
+  if (contracts.length === 0) return { changed: 0, matched: 0 };
   const contractIds = contracts.map((c) => c.id);
 
   const guestStart = Math.floor(now.getTime() / 1000) - GUEST_LOOKBACK_DAYS * 86_400;
@@ -241,11 +268,12 @@ async function captureAssignments(supabase: SupabaseClient, locationId: string, 
   if (labelRes.error) throw new Error(`read failed: ${labelRes.error.message}`);
   if (openRes.error) throw new Error(`read failed: ${openRes.error.message}`);
 
+  const bare = withoutNotePrefix(Array.isArray(guests) ? guests : [], adhocLinks);
   const devices = resolveDevices({
     contracts,
-    guests: Array.isArray(guests) ? guests : [],
+    guests: bare.guests,
     issuances: issuanceRows.map((i) => ({ contract_id: i.contract_id, seat_number: i.seat_number, revoked_at: i.revoked_at, member_name: null })),
-    adhocLinks,
+    adhocLinks: bare.links,
     labels: (labelRes.data ?? []) as LabelRow[],
   });
   const wanted = buildAssignments(devices, issuanceRows);
@@ -270,7 +298,7 @@ async function captureAssignments(supabase: SupabaseClient, locationId: string, 
     if (error) throw new Error(`wifi_reassign_device write failed: ${error.message}`);
     changed++;
   }
-  return changed;
+  return { changed, matched: wanted.size };
 }
 
 async function capturePublicIp(supabase: SupabaseClient, locationId: string, cfg: SiteConfig, now: Date): Promise<boolean> {
@@ -284,18 +312,28 @@ async function capturePublicIp(supabase: SupabaseClient, locationId: string, cfg
 export interface InvestigationLocationSummary {
   location_id: string;
   sessions: number | null;
+  /** True when sessions are read up to now; false while a back-fill is still being caught up over several runs. */
+  sessions_complete: boolean | null;
   assignments_changed: number | null;
+  /** Devices the console listed that matched a seat voucher, ad-hoc voucher or linked label this run. */
+  devices_matched: number | null;
   public_ip_recorded: boolean | null;
   /** Plain classification only: never the console's own text. */
   failed_parts: Array<"sessions" | "assignments" | "public_ip">;
 }
 
-/** Each part runs on its own, so a console that refuses one call still lets the others be stored. */
+/**
+ * Each part runs on its own, so a console that refuses one call still lets the others be
+ * stored. The cheap parts go first and the session read, which may be a long back-fill,
+ * last and only until `deadline`.
+ */
 export async function captureLocationInvestigation(
   supabase: SupabaseClient,
-  { locationId, cfg, now = new Date() }: { locationId: string; cfg: SiteConfig; now?: Date }
+  { locationId, cfg, now = new Date(), deadline = Date.now() + 20_000 }: { locationId: string; cfg: SiteConfig; now?: Date; deadline?: number }
 ): Promise<InvestigationLocationSummary> {
-  const summary: InvestigationLocationSummary = { location_id: locationId, sessions: null, assignments_changed: null, public_ip_recorded: null, failed_parts: [] };
+  const summary: InvestigationLocationSummary = {
+    location_id: locationId, sessions: null, sessions_complete: null, assignments_changed: null, devices_matched: null, public_ip_recorded: null, failed_parts: [],
+  };
   const run = async <T>(part: InvestigationLocationSummary["failed_parts"][number], fn: () => Promise<T>): Promise<T | null> => {
     try {
       return await fn();
@@ -305,25 +343,30 @@ export async function captureLocationInvestigation(
       return null;
     }
   };
-  summary.sessions = await run("sessions", () => captureSessions(supabase, locationId, cfg, now));
-  summary.assignments_changed = await run("assignments", () => captureAssignments(supabase, locationId, cfg, now));
   summary.public_ip_recorded = await run("public_ip", () => capturePublicIp(supabase, locationId, cfg, now));
+  const assignments = await run("assignments", () => captureAssignments(supabase, locationId, cfg, now));
+  summary.assignments_changed = assignments?.changed ?? null;
+  summary.devices_matched = assignments?.matched ?? null;
+  const sessions = await run("sessions", () => captureSessions(supabase, locationId, cfg, now, deadline));
+  summary.sessions = sessions?.stored ?? null;
+  summary.sessions_complete = sessions?.complete ?? null;
   return summary;
 }
 
 export async function captureAllInvestigation(
   supabase: SupabaseClient,
-  { now = new Date(), budgetMs = 50_000 }: { now?: Date; budgetMs?: number } = {}
+  { now = new Date(), budgetMs = 45_000 }: { now?: Date; budgetMs?: number } = {}
 ): Promise<{ enabled: boolean; locations: InvestigationLocationSummary[]; skipped: number }> {
   if ((await getCachedSetting(supabase, INVESTIGATION_ENABLED_KEY)) !== "true") return { enabled: false, locations: [], skipped: 0 };
 
   const targets = await unifiManagedLocations(supabase);
-  const started = Date.now();
+  const end = Date.now() + budgetMs;
   const locations: InvestigationLocationSummary[] = [];
   let skipped = 0;
-  for (const loc of targets) {
-    if (Date.now() - started > budgetMs) { skipped++; continue; }
-    locations.push(await captureLocationInvestigation(supabase, { locationId: loc.id, cfg: siteConfigFromLocation(loc), now }));
+  for (const [i, loc] of targets.entries()) {
+    const share = shareBudget(end - Date.now(), targets.length - i);
+    if (share <= 0) { skipped++; continue; }
+    locations.push(await captureLocationInvestigation(supabase, { locationId: loc.id, cfg: siteConfigFromLocation(loc), now, deadline: Date.now() + share }));
   }
   return { enabled: true, locations, skipped };
 }
