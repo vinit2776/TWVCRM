@@ -49,6 +49,15 @@ export function NoNextStepChip() {
   );
 }
 
+/** A parked lead waits on purpose, so it says so instead of reading as forgotten. */
+export function ParkedChip() {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-lg border-[1.5px] border-slate-300 bg-slate-50 px-2.5 py-0.5 text-sm font-extrabold text-slate-700">
+      Waiting for space
+    </span>
+  );
+}
+
 /**
  * A lead's next step as one clear block: the day count first, the exact date beside it, and a
  * "change" menu for the three things you can do with it. Reschedule moves the same follow-up;
