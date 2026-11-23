@@ -445,9 +445,9 @@ export function computeRenewalSplitRentSegments(
  * Builds rent line items across one or more rate segments (2+ only when a
  * phase transition splits the month). Reuses buildRentLineItems per segment
  * so multi-room space-allocation splitting still applies within each segment.
- * monthly_rate/days_used/days_in_month are only persisted when something was
- * actually prorated (a split month, or the existing contract-boundary case) —
- * an untouched full month stays a plain line item, unchanged from before.
+ * monthly_rate/days_used/days_in_month and the period dates are stored on every
+ * line, full month or not, so the PDF can state the overall monthly rent and the
+ * dates covered (a full month reads "full month", a part month shows the days).
  * `forceRangeLabel` shows each segment's date range even when there's only
  * one — used when this call covers only one side (own or draft) of a
  * renewal split-month, so a lone partial segment doesn't read as a full month.
@@ -461,11 +461,10 @@ export function buildSegmentedRentLineItems(
   prepaidDaysInMonth: number,
   forceRangeLabel: boolean = false,
   fixedShare: number = 0
-): { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number }[] {
+): { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number; period_start?: string; period_end?: string }[] {
   const multi = segments.length > 1 || forceRangeLabel;
-  const anyProration = multi || (segments.length === 1 && segments[0].days < prepaidDaysInMonth);
 
-  const out: { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number }[] = [];
+  const out: { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number; period_start?: string; period_end?: string }[] = [];
   for (const seg of segments) {
     const label = multi ? formatDateRange(seg.start, seg.end) : billedMonthLabel;
     // A fixed component (maintenance) is carved out of the segment as its own
@@ -479,11 +478,14 @@ export function buildSegmentedRentLineItems(
         qty: it.seats,
         unit_price: it.seats ? it.amount / it.seats : it.amount,
         amount: it.amount,
-        ...(anyProration ? {
-          monthly_rate: it.seats ? rentRate / it.seats : rentRate,
-          days_used: seg.days,
-          days_in_month: prepaidDaysInMonth,
-        } : {}),
+        // Overall monthly rent for this line (its room's share when rent is
+        // split across rooms) — never a per-seat figure; the invoice shows
+        // the customer the rent, and the seat count lives in the description.
+        monthly_rate: rentAmount > 0 ? rentRate * (it.amount / rentAmount) : rentRate,
+        days_used: seg.days,
+        days_in_month: prepaidDaysInMonth,
+        period_start: seg.start,
+        period_end: seg.end,
       });
     }
     if (maintenance > 0) {
@@ -492,11 +494,11 @@ export function buildSegmentedRentLineItems(
         qty: 1,
         unit_price: maintenance,
         amount: maintenance,
-        ...(anyProration ? {
-          monthly_rate: seg.rate * fixedShare,
-          days_used: seg.days,
-          days_in_month: prepaidDaysInMonth,
-        } : {}),
+        monthly_rate: seg.rate * fixedShare,
+        days_used: seg.days,
+        days_in_month: prepaidDaysInMonth,
+        period_start: seg.start,
+        period_end: seg.end,
       });
     }
   }
@@ -951,6 +953,7 @@ export async function generateRentProformas(
       const addonLineItems: {
         description: string; amount: number; note?: string;
         monthly_rate?: number; days_used?: number; days_in_month?: number;
+        period_start?: string; period_end?: string;
       }[] = [];
       const billedWindows: MonthWindow[] = [];
       let prepaidRentAmount = 0;
@@ -1031,12 +1034,12 @@ export async function generateRentProformas(
             // the same add-on charged N times for no stated reason.
             description: cycleMonths > 1 ? `${addon.description} | ${monthShort}` : addon.description,
             amount: addonAmt,
-            ...(isProrated ? {
-              note: `Pro-rated ${billDays}/${w.days} days`,
-              monthly_rate: addon.amount,
-              days_used: billDays,
-              days_in_month: w.days,
-            } : {}),
+            ...(isProrated ? { note: `Pro-rated ${billDays}/${w.days} days` } : {}),
+            monthly_rate: addon.amount,
+            days_used: billDays,
+            days_in_month: w.days,
+            period_start: billStart.toISOString().slice(0, 10),
+            period_end: billEnd.toISOString().slice(0, 10),
           });
           addonsSubtotal += addonAmt;
         }
@@ -1065,7 +1068,7 @@ export async function generateRentProformas(
         // Build line-item breakdown for the expandable detail view
         const previewLineItems: {
           description: string; amount: number; qty?: number; unit_price?: number; note?: string;
-          monthly_rate?: number; days_used?: number; days_in_month?: number;
+          monthly_rate?: number; days_used?: number; days_in_month?: number; period_start?: string; period_end?: string;
         }[] = [
           ...rentLineItems.map((it) => ({ ...it })),
           ...addonLineItems,

@@ -116,6 +116,8 @@ export async function POST(
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const daysRemaining = daysInMonth - dayOfMonth + 1;
   const prorationFactor = daysRemaining / daysInMonth;
+  const periodStartYmd = occupation_start_date.slice(0, 10);
+  const periodEndYmd = `${periodStartYmd.slice(0, 7)}-${String(daysInMonth).padStart(2, "0")}`;
 
   const taxPercentage = Number(proposal.tax_percentage || 18);
 
@@ -129,6 +131,7 @@ export async function POST(
   type InvoiceLine = {
     description: string; qty: number; unit_price: number; amount: number; hsn_sac_code: string;
     monthly_rate?: number; days_used?: number; days_in_month?: number;
+    period_start?: string; period_end?: string;
   };
   const lineItems: InvoiceLine[] = overrideItems
     ? overrideItems.map((item) => ({
@@ -145,9 +148,12 @@ export async function POST(
           qty: item.quantity,
           unit_price: proratedRate,
           amount: Math.round(item.quantity * proratedRate * 100) / 100,
-          monthly_rate: item.unit_price,
+          // Overall monthly rent for the line (quantity included), not per unit.
+          monthly_rate: Math.round(item.quantity * item.unit_price * 100) / 100,
           days_used: daysRemaining,
           days_in_month: daysInMonth,
+          period_start: periodStartYmd,
+          period_end: periodEndYmd,
           hsn_sac_code: resolveHsnCode("rent"),
         };
       });
@@ -166,6 +172,8 @@ export async function POST(
       monthly_rate: addon.amount,
       days_used: daysRemaining,
       days_in_month: daysInMonth,
+      period_start: periodStartYmd,
+      period_end: periodEndYmd,
       hsn_sac_code: resolveHsnCode("rent"),
     });
   }

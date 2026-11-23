@@ -15,6 +15,8 @@ export interface ProrataAddonLine {
   monthly_rate: number;
   days_used: number;
   days_in_month: number;
+  period_start: string;
+  period_end: string;
 }
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -39,6 +41,8 @@ export function prorataAddonLines(addons: AddonTerms[], startDate: string): Pror
       monthly_rate: addon.amount,
       days_used: Number(line.days_used ?? month.days),
       days_in_month: month.days,
+      period_start: from,
+      period_end: `${startDate.slice(0, 7)}-${String(month.days).padStart(2, "0")}`,
     });
   }
   return lines;
