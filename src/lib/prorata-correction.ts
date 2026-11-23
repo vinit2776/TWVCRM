@@ -102,7 +102,9 @@ export function buildProrataLineItems(params: {
   const { rent, maintenance } = splitByShare(params.prorataSubtotal, params.fixedShare);
   // monthly_rate / days are persisted so the PDF breakdown reflects the rate
   // actually charged, even if the contract's rate later changes.
-  const detail = { days_used: prorataDays, days_in_month: daysInMonth };
+  // period_start / period_end let the PDF say exactly which dates were counted.
+  const ymd = (day: number) => `${params.startDate.slice(0, 7)}-${String(day).padStart(2, "0")}`;
+  const detail = { days_used: prorataDays, days_in_month: daysInMonth, period_start: ymd(startDay), period_end: ymd(daysInMonth) };
   const items: Array<Record<string, unknown>> = [{
     description: `Pro-Rata Workspace Fee (${period})`,
     quantity: 1,
