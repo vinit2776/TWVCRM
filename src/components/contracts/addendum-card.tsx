@@ -215,6 +215,7 @@ function AddendumPanel({ base, a, userRole, others, onChanged }: { base: string;
   const [note, setNote] = useState("");
   const [sendingBack, setSendingBack] = useState(false);
   const [stamping, setStamping] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [pdfKey, setPdfKey] = useState(0);
   const dirty = text !== a.current_text;
   const open = findPlaceholders(text);
@@ -228,7 +229,7 @@ function AddendumPanel({ base, a, userRole, others, onChanged }: { base: string;
       const res = await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) return void toast.error(j.error ?? "That did not work. Try again.");
-      toast.success(ok); setSendingBack(false); setNote(""); setPdfKey((k) => k + 1); onChanged();
+      toast.success(ok); setSendingBack(false); setWithdrawing(false); setNote(""); setPdfKey((k) => k + 1); onChanged();
     } finally { setBusy(false); }
   }
   async function uploadSigned(file: File) {
@@ -314,7 +315,15 @@ function AddendumPanel({ base, a, userRole, others, onChanged }: { base: string;
       {status === "applied" && <p className="flex items-center gap-1 text-sm text-green-700"><CheckCircle2 className="h-4 w-4" />Applied{a.applied_at ? ` on ${formatDate(a.applied_at)}` : ""}. The signed copy is filed as a contract document.</p>}
 
       {["draft", "pending_approval", "changes_requested", "approved", "signed"].includes(status) && canAuthorAddendum(userRole) && (
-        <button className="text-muted-foreground text-xs underline" disabled={busy} onClick={() => confirm("Withdraw this addendum?") && act({ action: "withdraw" }, "Withdrawn")}>Withdraw addendum</button>
+        withdrawing ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-800">
+            <span>Withdraw this addendum? It cannot be restarted; you would create a new one.</span>
+            <Button size="sm" variant="destructive" disabled={busy} onClick={() => act({ action: "withdraw" }, "Withdrawn")}>Yes, withdraw</Button>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => setWithdrawing(false)}>Keep it</Button>
+          </div>
+        ) : (
+          <button className="text-muted-foreground text-xs underline" disabled={busy} onClick={() => setWithdrawing(true)}>Withdraw addendum</button>
+        )
       )}
       {stamping && a.signed_document_id && <StampDialog url={url} documentId={a.signed_document_id} onClose={() => setStamping(false)} onDone={() => { setStamping(false); onChanged(); }} />}
     </div>
