@@ -66,6 +66,7 @@ import { ContractBookingsSection } from "@/components/contracts/contract-booking
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { SpecialClauseCard, SpecialClauseBadge } from "@/components/contracts/special-clause-card";
+import { AddendumCard } from "@/components/contracts/addendum-card";
 import { specialClauseGate } from "@/lib/special-clause/gate";
 import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
 import {
@@ -2039,6 +2040,10 @@ export default function ContractDetailPage({
             }}
             onChanged={() => fetchContract(false)}
           />
+
+          {["active", "renewal_in_progress", "accepted", "sent", "viewed"].includes(contract.status) && (
+            <AddendumCard contractId={id} userRole={userRole} onChanged={() => fetchContract(false)} />
+          )}
 
           {/* Line Items Table */}
           <Card>
