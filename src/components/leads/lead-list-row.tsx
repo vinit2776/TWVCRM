@@ -4,7 +4,7 @@ import Link from "next/link";
 import { MapPin, Phone } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
-import { NextStepChip, NoNextStepChip } from "@/components/leads/next-step-chip";
+import { NextStepChip, NoNextStepChip, ParkedChip } from "@/components/leads/next-step-chip";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
@@ -153,6 +153,11 @@ export function LeadListRow({
             <NextStepChip leadId={lead.id} next={lead._followup.next} onChanged={onChanged} />
           ) : CLOSED_STATUSES.includes(lead.status) ? (
             <span className="text-muted-foreground">—</span>
+          ) : lead.parked_at ? (
+            <span className="flex flex-wrap items-center gap-2.5">
+              <ParkedChip />
+              <span className="text-muted-foreground">Comes back when someone takes it out of Waiting for space</span>
+            </span>
           ) : (
             <span className="flex flex-wrap items-center gap-2.5">
               <NoNextStepChip />

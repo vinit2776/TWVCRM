@@ -12,7 +12,8 @@ import { ParkControl } from "@/components/leads/park-control";
 import { KeepInformed } from "@/components/leads/keep-informed";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
-import { NextStepChip, NoNextStepChip } from "@/components/leads/next-step-chip";
+import { LeadOpenJobs } from "@/components/leads/lead-open-jobs";
+import { NextStepChip, NoNextStepChip, ParkedChip } from "@/components/leads/next-step-chip";
 import { useLead, useUsers } from "@/hooks/use-leads";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 import { dayLabel, istDayKey } from "@/lib/lead-days";
@@ -206,6 +207,11 @@ export default function LeadActivityPage() {
           <div>
             {next ? (
               <NextStepChip leadId={lead.id} next={next} onChanged={changed} />
+            ) : lead.parked_at ? (
+              <span className="flex flex-wrap items-center gap-2.5 text-sm">
+                <ParkedChip />
+                <span className="text-muted-foreground">Comes back when someone takes it out of Waiting for space</span>
+              </span>
             ) : (
               <span className="flex flex-wrap items-center gap-2.5 text-sm">
                 <NoNextStepChip />
@@ -214,6 +220,8 @@ export default function LeadActivityPage() {
             )}
           </div>
         )}
+
+        {!closed && <LeadOpenJobs leadId={id} version={timeline} />}
 
         {timeline?.stale && timeline.stale.state !== "active" && (
           <div className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700">

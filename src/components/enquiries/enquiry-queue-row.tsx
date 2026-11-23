@@ -248,6 +248,9 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-64">
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  Labels this whole number. Its future messages stop opening enquiries; Undo is offered right after.
+                </div>
                 {NUMBER_LABELS.map((label) => (
                   <DropdownMenuItem key={label} onClick={() => markNotALead(item.enquiryId, label)}>
                     {NUMBER_LABEL_TEXT[label]}
