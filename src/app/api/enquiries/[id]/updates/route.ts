@@ -172,6 +172,31 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { error: updateError } = await admin.from("lead_enquiries").update(update).eq("id", id);
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
 
+  // The other half of "one next step": a dated next step set on the enquiry card also becomes the
+  // lead's follow-up, so whoever opens the lead sees it instead of "No next step". If the lead
+  // already has an open follow-up, that one stays: the lead is the source of truth, and nothing
+  // is closed or replaced here.
+  if (old.lead_id && nextStep && followUpDate) {
+    const { count: openFollowUps } = await admin
+      .from("activities")
+      .select("id", { count: "exact", head: true })
+      .eq("lead_id", old.lead_id)
+      .eq("is_follow_up_done", false)
+      .not("follow_up_date", "is", null);
+    if ((openFollowUps ?? 0) === 0) {
+      const { error: leadStepError } = await admin.from("activities").insert({
+        lead_id: old.lead_id,
+        type: "note",
+        subject: "Next step",
+        description: note,
+        follow_up_date: `${followUpDate}T10:00:00+05:30`,
+        follow_up_notes: nextStep,
+        created_by: dbUser.id,
+      });
+      if (leadStepError) console.error("[enquiry update] lead next step failed", leadStepError.code, leadStepError.message);
+    }
+  }
+
   if (old.lead_id) {
     logAudit(supabase, {
       entityType: "lead",

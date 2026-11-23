@@ -17,6 +17,8 @@ import { useLead, useUsers } from "@/hooks/use-leads";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 import { dayLabel, istDayKey } from "@/lib/lead-days";
 import { formatCurrency } from "@/lib/utils";
+import { suggestRequirement } from "@/lib/requirement-hint";
+import { toast } from "sonner";
 import type { TimelineEvent, TimelineGroup } from "@/lib/lead-timeline";
 
 type Filter = "all" | TimelineGroup;
@@ -103,7 +105,8 @@ export default function LeadActivityPage() {
 
   if (!lead) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
 
-  const name = `${lead.first_name} ${lead.last_name}`.trim();
+  // "-" is the stored placeholder for a customer who gave one name; it is not part of the name.
+  const name = `${lead.first_name} ${lead.last_name === "-" ? "" : lead.last_name}`.trim();
   const closed = CLOSED.includes(lead.status) || !!lead.archived_at;
   const req = timeline?.requirement;
   const type = lead.workspace_type ?? req?.workspace_type;
@@ -115,6 +118,36 @@ export default function LeadActivityPage() {
     budget ? `${formatCurrency(budget)}/seat` : null,
   ].filter(Boolean);
   const place = lead.location?.name ?? req?.preferred_location ?? null;
+  // Nothing recorded yet: offer what the customer's message and the team's notes already say.
+  const hint =
+    want.length === 0 && !closed
+      ? suggestRequirement((timeline?.events ?? []).flatMap((e) => [e.title, e.detail]))
+      : null;
+  const hintText = hint
+    ? [
+        hint.workspace_type ? (WORKSPACE_TYPE_LABELS[hint.workspace_type] ?? hint.workspace_type) : null,
+        hint.seat_capacity ? `${hint.seat_capacity} seat${hint.seat_capacity === 1 ? "" : "s"}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
+  const applyHint = async () => {
+    if (!hint) return;
+    const res = await fetch(`/api/leads/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(hint.workspace_type ? { workspace_type: hint.workspace_type } : {}),
+        ...(hint.seat_capacity ? { seat_capacity: hint.seat_capacity } : {}),
+      }),
+    });
+    if (res.ok) {
+      toast.success("Requirement saved");
+      changed();
+    } else {
+      toast.error("Could not save the requirement");
+    }
+  };
   const next = timeline?.next_step ?? null;
 
   return (
@@ -153,6 +186,16 @@ export default function LeadActivityPage() {
         <div className="text-sm">
           <span className="text-muted-foreground">Wants </span>
           <span className="font-medium">{want.length > 0 ? want.join(" · ") : "no requirement recorded"}</span>
+          {hintText && (
+            <button
+              type="button"
+              onClick={() => void applyHint()}
+              className="ml-2 rounded-full border border-dashed border-primary px-2 py-0.5 text-xs font-semibold text-primary hover:bg-primary/5"
+              title="Read from the customer's message and your notes. Click to save it on the lead."
+            >
+              Add: {hintText}
+            </button>
+          )}
           {place && (
             <span className="ml-2 inline-flex items-center gap-1 text-muted-foreground"><MapPin className="h-3.5 w-3.5" />{place}</span>
           )}
