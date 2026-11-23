@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { captureAllWifi } from "@/lib/wifi-ledger-capture";
-import { captureAllInvestigation } from "@/lib/wifi-investigation-capture";
 import { withCronHealth } from "@/lib/cron-ping";
 
 // Hourly. Copies each UniFi-managed center's hourly Wi-Fi usage into our own
 // ledger before the console ages it out (it keeps hourly figures for about 7
-// days). Read-only against UniFi; writes only the Wi-Fi ledger tables and, when
-// app_settings.wifi_investigation_enabled is on, the investigation records
-// (sessions, device assignments, public IP); sends nothing to anyone.
+// days). Read-only against UniFi; writes only wifi_client_hourly, wifi_site_hourly
+// and the daily tables; sends nothing to anyone. The investigation records
+// (sessions, device assignments, public IP) have their own run, wifi-investigation-capture,
+// so a long back-fill there can never time this one out.
 export const maxDuration = 60;
 
 async function handler(request: NextRequest) {
@@ -18,17 +18,13 @@ async function handler(request: NextRequest) {
   }
 
   try {
-    const admin = createAdminClient();
-    const { locations, skipped } = await captureAllWifi(admin);
+    const { locations, skipped } = await captureAllWifi(createAdminClient());
     const failed = locations.filter((l) => l.status === "error");
-    // Separate from the usage capture above: a failure here must not hide that the usage rows were stored.
-    const investigation = await captureAllInvestigation(admin);
-    const investigationFailed = investigation.locations.filter((l) => l.failed_parts.length > 0);
     // Non-2xx so cron_health records "error": a rejected key or an unreachable
     // console must not look like a healthy run.
     return NextResponse.json(
-      { checked: locations.length, failed: failed.length, skipped, locations, investigation },
-      { status: failed.length > 0 || investigationFailed.length > 0 ? 502 : 200 }
+      { checked: locations.length, failed: failed.length, skipped, locations },
+      { status: failed.length > 0 ? 502 : 200 }
     );
   } catch (err) {
     console.error("[wifi-ledger-capture] run failed:", err instanceof Error ? err.message : err);

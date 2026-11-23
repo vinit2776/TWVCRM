@@ -29,6 +29,8 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/energy-ledger-capture":   3 * HOUR,
   // hourly at :17 — the console keeps hourly Wi-Fi figures ~7 days, so 3h is far inside what can be lost
   "cron/wifi-ledger-capture":     3 * HOUR,
+  // hourly at :32 — sessions are re-read from a few hours before the newest stored one, so 3h loses nothing
+  "cron/wifi-investigation-capture": 3 * HOUR,
   "cron/comp-request-expiry":     3 * HOUR,
   // every 6h
   "cron/facility-sla-check":      8,

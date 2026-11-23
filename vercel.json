@@ -203,6 +203,10 @@
       "schedule": "17 * * * *"
     },
     {
+      "path": "/api/cron/wifi-investigation-capture",
+      "schedule": "32 * * * *"
+    },
+    {
       "path": "/api/cron/wifi-investigation-purge",
       "schedule": "0 22 * * *"
     },
