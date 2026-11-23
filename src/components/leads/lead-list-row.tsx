@@ -54,7 +54,7 @@ export function LeadListRow({
 }) {
   const want = wantLine(lead);
   const place = lead.location?.name ?? lead._enquiry?.preferred_location ?? null;
-  const name = `${lead.first_name} ${lead.last_name}`.trim();
+  const name = `${lead.first_name} ${lead.last_name === "-" ? "" : lead.last_name}`.trim();
   // A mobile is what people actually answer, so it wins over a landline.
   const callNumber = lead.mobile?.trim() || lead.phone?.trim() || null;
 

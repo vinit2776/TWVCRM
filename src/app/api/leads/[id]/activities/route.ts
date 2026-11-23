@@ -8,6 +8,7 @@ import { istLocalToUtcIso } from "@/lib/utils";
 import { followUpClosedRows } from "@/lib/follow-up-closed-note";
 import { completeHandoverJobsForActivity } from "@/lib/handover-finish-server";
 import { syncTourCalendar } from "@/lib/tour-calendar-server";
+import { LEAD_HANDLER_ROLES } from "@/lib/constants";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -210,9 +211,73 @@ export async function POST(
 
     const { data: oldLead } = await supabase
       .from("leads")
-      .select("first_name, last_name, company")
+      .select("first_name, last_name, company, assigned_to, archived_at")
       .eq("id", id)
       .single();
+
+    // The person who works an enquiry owns the lead. Without this, a lead that someone has called
+    // still reads "Unassigned" and belongs to nobody if they go on leave. Only for a real contact
+    // (not a bare note), only when nobody handles it yet, and only for roles that can handle leads.
+    const { data: me } = await supabase.from("users").select("role, full_name").eq("id", dbUser.id).single();
+    if (
+      result.data.type !== "note" &&
+      oldLead &&
+      !oldLead.assigned_to &&
+      !oldLead.archived_at &&
+      me &&
+      (LEAD_HANDLER_ROLES as readonly string[]).includes(me.role)
+    ) {
+      const { count: openCount } = await admin
+        .from("lead_enquiries")
+        .select("id", { count: "exact", head: true })
+        .eq("lead_id", id)
+        .is("resolved_at", null);
+      if ((openCount ?? 0) > 0) {
+        // Compare-and-set: if someone claimed it a moment ago, leave theirs.
+        const { data: taken } = await admin
+          .from("leads")
+          .update({ assigned_to: dbUser.id })
+          .eq("id", id)
+          .is("assigned_to", null)
+          .select("id")
+          .maybeSingle();
+        if (taken) {
+          const { error: claimNoteError } = await supabase.from("activities").insert({
+            lead_id: id,
+            type: "note",
+            subject: "Claimed",
+            description: `${me.full_name} took this lead`,
+            created_by: dbUser.id,
+          });
+          if (claimNoteError) console.error("[activities] claim note failed", claimNoteError.code, claimNoteError.message);
+          logAudit(supabase, {
+            entityType: "lead",
+            entityId: id,
+            action: "update",
+            performedBy: dbUser.id,
+            changes: { assigned_to: { old: null, new: dbUser.id } },
+          });
+        }
+      }
+    }
+
+    // One next step, whichever screen it was set on: a follow-up set on the lead also becomes the
+    // open enquiry's "Next:" line, so the enquiry card never says something the lead doesn't.
+    if (result.data.follow_up_date && result.data.type !== "tour") {
+      const day = new Date(new Date(result.data.follow_up_date).getTime() + 330 * 60 * 1000).toISOString().slice(0, 10);
+      const stepText = (result.data.follow_up_notes || result.data.subject || "Follow up").slice(0, 500);
+      const { error: mirrorError } = await admin
+        .from("lead_enquiries")
+        .update({
+          next_step: stepText,
+          follow_up_at: `${day}T00:00:00+05:30`,
+          next_step_by: dbUser.id,
+          next_step_at: new Date().toISOString(),
+        })
+        .eq("lead_id", id)
+        .is("resolved_at", null);
+      if (mirrorError) console.error("[activities] enquiry next step mirror failed", mirrorError.code, mirrorError.message);
+    }
 
     if (result.data.follow_up_date && dbUser.email) {
       const leadName =
