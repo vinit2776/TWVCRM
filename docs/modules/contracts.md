@@ -86,6 +86,10 @@ All under `src/app/api/contracts/`:
 - `[id]/electricity-config/route.ts` — `GET`, `PATCH`
 - `[id]/email/route.ts` — `POST` (email membership agreement PDF)
 - `[id]/addendum/route.ts` — `GET` (generate renewal addendum PDF)
+- `[id]/addenda/route.ts` — `GET` (list + create-form context), `POST` (start a change-of-name addendum draft)
+- `[id]/addenda/[aid]/route.ts` — `GET`, `PATCH` (`save` / `submit` / `approve` / `send_back` / `withdraw` / `apply`)
+- `[id]/addenda/[aid]/pdf/route.ts` — `GET` (renders current wording; DRAFT watermark until approved)
+- `[id]/addenda/[aid]/signed/route.ts` — `POST` (customer-signed scan), `PUT` (copy after TWV stamp and seal, admin only)
 - `[id]/cosec-wizard/route.ts` — `POST` (cosec access provisioning steps)
 - `contracts/kyc-pending/route.ts` — `GET`
 - `contracts/kyc-summary/route.ts` — `GET`
@@ -303,6 +307,16 @@ If the allocated seats in `contract_space_allocations` total fewer than `contrac
 - The PATCH handler performs an application-level duplicate check (returning HTTP 409 with the conflicting contract number) before DB insert.
 - Contract must have a `location_id` before a `department_id` can be set (returns HTTP 400 otherwise).
 - Empty string is normalised to NULL.
+
+### Addenda (change of name)
+
+A written change to a signed agreement. The only purpose for now is **change of name** (`src/lib/addendum/change-of-name.ts`, migration `00753`). Changing the number of seats is deliberately out of scope: it moves billing, deposit and seat allocation.
+
+The form first asks which case it is, and the wording template follows:
+- `same_entity`: the same person or company renamed. Two signatures; nothing is assigned or released.
+- `new_entity`: a different party takes the agreement over (an individual becoming any entity, or one entity replacing another). Three signatures; the deposit and earlier dues are settled in the wording; an outgoing entity names its own signatory.
+
+Flow and roles: `draft` (admin/manager/sales rep edit, every save is a kept revision) → `pending_approval` (admin/manager approve or send back; only an admin may approve their own draft) → `approved` (print, customer signs on paper) → `signed` (scan uploaded) → `sealed` (admin stamps; same click-to-place approach as the agreement stamp) → `applied` (admin; a separate click that updates the customer record's company, and for a takeover also its entity type, GSTIN and PAN). Billing reads the customer record when it generates, so only invoices after Apply use the new name; earlier ones keep the old name. The record is shared, so other contracts on the same customer change name too (the Apply panel lists them). One open addendum per contract at a time. PAN and entity-type mismatches against the chosen case warn, never block. The wording is a template, not AI.
 
 ### Renewal Rules
 
