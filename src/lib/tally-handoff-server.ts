@@ -13,6 +13,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { HandoffState } from "@/lib/tally-handoff";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { formatCurrency } from "@/lib/utils";
+import { syncNocOnPaid } from "@/lib/noc/payment-sync";
 
 /** Where per-event intimations land. EMAIL_REPLY_TO is the canonical accounts inbox. */
 const ACCOUNTS_INBOX_EMAIL = EMAIL_REPLY_TO;
@@ -374,6 +375,8 @@ export async function handleStatementPaid(
   // so without this the invoice stays stuck on "sent" even after the linked
   // statement is correctly paid and its GST invoice issued.
   if (invoiceId) {
+    // A NOC fee is an ad-hoc invoice too: tell the NOC order its payment is in (never throws, never blocks this).
+    await syncNocOnPaid(invoiceId, statementId, trigger, performedBy);
     const now = new Date().toISOString();
     const { data: invoiceRow } = await supabase
       .from("proforma_invoices")

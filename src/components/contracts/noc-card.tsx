@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, FileText, Loader2, Lock, Plus, ShieldCheck, Stamp } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, BadgeIndianRupee, Copy, FileText, Loader2, Lock, Mail, MessageCircle, Plus, RefreshCw, ShieldCheck, Stamp } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   canOrderNoc, canVoidNoc, isVoidable, issueBlocker, nocMarkers, NOC_STATUS_COLORS, NOC_STATUS_LABELS, PURPOSE_LABELS,
@@ -28,6 +29,16 @@ interface NocRow {
   noc_address: string;
   fee_excl_gst: number;
   tax_percentage: number;
+  gstin: string | null;
+  invoice_id: string | null;
+  billing_statement_id: string | null;
+  sent_at: string | null;
+  sent_to: string | null;
+  accepted_at: string | null;
+  accepted_by_name: string | null;
+  razorpay_link_url: string | null;
+  paid_at: string | null;
+  payment_reference: string | null;
   void_reason: string | null;
   created_at: string;
   location: { id: string; name: string } | null;
@@ -147,7 +158,12 @@ export function NocSidebarCard({ contractId, userRole }: { contractId: string; u
             <Badge variant="secondary" className={`shrink-0 ${NOC_STATUS_COLORS[n.status]}`}>{NOC_STATUS_LABELS[n.status]}</Badge>
           </button>
         ))}
-        {canOrder && <Button size="sm" variant="outline" className="w-full" onClick={() => emit(EV_ORDER)}><Plus className="mr-1 h-4 w-4" />Order NOC</Button>}
+        {canOrder && (
+          <div className="space-y-1">
+            <Button size="sm" variant="outline" className="w-full" onClick={() => emit(EV_ORDER)}><Plus className="mr-1 h-4 w-4" />Order NOC</Button>
+            <p className="text-muted-foreground text-[11px]">Opens a form to choose the purpose and centre. Nothing is created until you confirm there.</p>
+          </div>
+        )}
         <p className="text-muted-foreground text-[11px]">₹20,000 + GST each for ROC and GST. Valid till the contract ends, and not carried into a renewal.</p>
       </CardContent>
     </Card>
@@ -197,57 +213,164 @@ export function NocPanel({ contractId, userRole }: { contractId: string; userRol
   );
 }
 
+/** A button with a plain-words line saying what pressing it will (and will not) do. */
+function ActionRow({ children, note }: { children: React.ReactNode; note: string }) {
+  return (
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3">
+      <div className="sm:w-64 sm:shrink-0 [&>button]:w-full [&>button]:justify-start">{children}</div>
+      <p className="text-muted-foreground text-xs leading-snug sm:pt-1.5">{note}</p>
+    </div>
+  );
+}
+
+interface DetailData { events: AuditEvent[]; invoice: { invoice_number: string; status: string; total_amount: number; due_date: string | null } | null; customerLink: string | null }
+
+const BANNER: Record<NocStatus, { tone: string; text: string }> = {
+  draft: { tone: "border-amber-200 bg-amber-50 text-amber-800", text: "Not sent yet. Email the customer the proforma and link, or copy the link to send it by hand. The watermark stays and stamp and seal stay locked until the fee is paid in full." },
+  sent: { tone: "border-amber-200 bg-amber-50 text-amber-800", text: "With the customer. Waiting for them to read and accept the terms on the link, then pay." },
+  accepted: { tone: "border-amber-200 bg-amber-50 text-amber-800", text: "The customer has accepted the terms. Waiting for the payment." },
+  paid: { tone: "border-indigo-200 bg-indigo-50 text-indigo-800", text: "Paid in full. Stamp, seal and issue unlocks for an admin in the next release." },
+  issued: { tone: "border-green-200 bg-green-50 text-green-800", text: "Issued." },
+  void: { tone: "border-slate-200 bg-slate-50 text-slate-600", text: "Void." },
+};
+
 function NocDetail({ contractId, noc, data, userRole, onChanged, onClose }: {
   contractId: string; noc: NocRow; data: NocData; userRole: string | null; onChanged: () => void; onClose: () => void;
 }) {
   const base = `/api/contracts/${contractId}/noc/${noc.id}`;
-  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [detail, setDetail] = useState<DetailData>({ events: [], invoice: null, customerLink: null });
   const [confirming, setConfirming] = useState(false);
   const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const fee = useMemo(() => {
     const tax = Math.round(noc.fee_excl_gst * noc.tax_percentage) / 100;
     return { excl: noc.fee_excl_gst, tax, total: Math.round((noc.fee_excl_gst + tax) * 100) / 100 };
   }, [noc]);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(base).then((r) => (r.ok ? r.json() : null)).then((j) => { if (!cancelled && j) setEvents(j.data.events ?? []); });
-    return () => { cancelled = true; };
-  }, [base, noc.status]);
+  // Held in refs so a new callback or a status change does not re-run the fetch (which would loop).
+  const onChangedRef = useRef(onChanged);
+  const statusRef = useRef(noc.status);
+  useEffect(() => { onChangedRef.current = onChanged; statusRef.current = noc.status; });
+  const reload = useCallback(async () => {
+    const r = await fetch(base);
+    if (r.ok) {
+      const j = (await r.json()).data;
+      setDetail({ events: j.events ?? [], invoice: j.invoice ?? null, customerLink: j.customerLink ?? null });
+      // The server may have caught a payment up (see reconcileNocPaid): refresh the list behind this panel.
+      if (j.noc.status !== statusRef.current) onChangedRef.current();
+    }
+  }, [base]);
+  useEffect(() => { reload(); }, [reload, noc.status, noc.invoice_id, noc.razorpay_link_url]);
 
+  const canSend = canOrderNoc(userRole) && (noc.status === "draft" || noc.status === "sent");
+  const canTrackPayment = canOrderNoc(userRole) && ["draft", "sent", "accepted"].includes(noc.status);
+
+  /** Makes sure the proforma and the link exist (idempotent), then returns the customer link. */
+  async function prepare(): Promise<string | null> {
+    const res = await fetch(`${base}/prepare`, { method: "POST" });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { toast.error(j.error ?? "Could not prepare the link."); return null; }
+    onChanged(); reload();
+    return j.data.link as string;
+  }
+  async function shareLink(channel: "copy" | "whatsapp") {
+    setBusy(channel);
+    try {
+      const link = detail.customerLink ?? (await prepare());
+      if (!link) return;
+      if (channel === "copy") { await navigator.clipboard.writeText(link); toast.success("Customer link copied"); }
+      else window.open(`https://wa.me/?text=${encodeURIComponent(`Please review the terms and pay for the NOC for ${noc.company_name}: ${link}`)}`, "_blank", "noopener");
+      await fetch(`${base}/shared`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel }) });
+      reload();
+    } finally { setBusy(null); }
+  }
+  async function retryGatewayLink() {
+    setBusy("gateway");
+    try {
+      const res = await fetch(`${base}/payment-link`, { method: "POST" });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) return void toast.error(j.error ?? "Could not create the payment link.");
+      toast.success("Payment link created"); onChanged(); reload();
+    } finally { setBusy(null); }
+  }
   async function voidIt() {
-    setBusy(true);
+    setBusy("void");
     try {
       const res = await fetch(base, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "void", reason }) });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) return void toast.error(j.error ?? "That did not work. Try again.");
       toast.success("NOC order voided");
       setConfirming(false); setReason(""); onChanged(); onClose();
-    } finally { setBusy(false); }
+    } finally { setBusy(null); }
   }
 
-  const steps = ["Ordered", "Emailed to customer", "Accepted terms", "Paid in full", "Stamped, sealed, issued"];
+  const steps = ["Ordered", "Emailed or shared", "Accepted terms", "Paid in full", "Stamped, sealed, issued"];
   const doneUpTo = { draft: 0, sent: 1, accepted: 2, paid: 3, issued: 4, void: -1 }[noc.status];
+  const banner = BANNER[noc.status];
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-1.5">
-        {steps.map((s, i) => (
-          <span key={s} className={`rounded-full border px-2.5 py-0.5 text-xs ${i <= doneUpTo ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "text-muted-foreground bg-white"}`}>{s}</span>
+        {steps.map((st, i) => (
+          <span key={st} className={`rounded-full border px-2.5 py-0.5 text-xs ${i <= doneUpTo ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "text-muted-foreground bg-white"}`}>{st}</span>
         ))}
       </div>
-      {noc.status !== "issued" && noc.status !== "void" && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-          <span><b>Draft only.</b> The watermark stays and the stamp and seal cannot be placed until the fee is paid in full. Sending to the customer and payment arrive in the next release; for now this is a staff-only draft and nothing has been sent to anyone.</span>
+      <div className={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${banner.tone}`}>
+        <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>{noc.status === "void" && noc.void_reason ? `Void. ${noc.void_reason}` : banner.text}{noc.status === "paid" && !noc.accepted_at ? " Note: the customer has not accepted the terms on the link yet, and must before the NOC is issued." : ""}</span>
+      </div>
+
+      {(canSend || canTrackPayment) && (
+        <div className="rounded-lg border">
+          <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Send to the customer</div>
+          <div className="space-y-3 p-3">
+            <div className="space-y-2.5">
+              {canSend && (
+                <ActionRow note="Opens a preview of the email first and sends nothing until you press Send there. Sending creates the proforma invoice (once) and emails it, with the customer link, to the customer.">
+                  <Button size="sm" onClick={() => setSendOpen(true)}><Mail className="mr-1 h-4 w-4" />Email PI and payment link</Button>
+                </ActionRow>
+              )}
+              {canSend && (
+                <ActionRow note="Creates the proforma invoice (once) and copies the customer link to your clipboard. Sends nothing: you share it yourself.">
+                  <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => shareLink("copy")}>{busy === "copy" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Copy className="mr-1 h-4 w-4" />}Copy customer link</Button>
+                </ActionRow>
+              )}
+              {canSend && (
+                <ActionRow note="Creates the proforma invoice (once) and opens WhatsApp with the message and link ready. Nothing is sent until you press send there.">
+                  <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => shareLink("whatsapp")}><MessageCircle className="mr-1 h-4 w-4" />Share on WhatsApp</Button>
+                </ActionRow>
+              )}
+              {canTrackPayment && noc.billing_statement_id && (
+                <ActionRow note="Tells accounts the customer says they paid outside the CRM (for example a bank transfer). Accounts check the bank and record it. Nothing is marked paid until they do.">
+                  <Button size="sm" variant="outline" className="border-teal-200 text-teal-700 hover:bg-teal-50" onClick={() => setReportOpen(true)}>
+                    <BadgeIndianRupee className="mr-1 h-4 w-4" />Report payment received
+                  </Button>
+                </ActionRow>
+              )}
+              {noc.status === "accepted" && !noc.razorpay_link_url && canOrderNoc(userRole) && (
+                <ActionRow note="Asks the payment gateway for the customer&apos;s pay link for the exact total. The customer has already accepted. Sends nothing to the customer; the link then shows here.">
+                  <Button size="sm" variant="outline" disabled={busy !== null} onClick={retryGatewayLink}>{busy === "gateway" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}Create payment link</Button>
+                </ActionRow>
+              )}
+            </div>
+            {detail.customerLink ? (
+              <div className="space-y-1 text-[13px]">
+                <p className="text-muted-foreground text-xs">Customer link (opens our page, where the terms are accepted before payment). Use it to send by hand:</p>
+                <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5"><span className="min-w-0 flex-1 break-all font-mono text-xs">{detail.customerLink}</span></div>
+                {noc.razorpay_link_url && <p className="text-muted-foreground break-all text-xs">Payment link made after acceptance (for reference): <span className="font-mono">{noc.razorpay_link_url}</span></p>}
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-xs">The proforma invoice and the customer link are created the first time you email or copy the link. Nothing is sent until you do.</p>
+            )}
+            {noc.status === "accepted" && !noc.razorpay_link_url && <p className="flex items-start gap-1 text-xs text-amber-700"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />No payment link yet. If online payment is switched off here, or the gateway failed, use Create payment link once it is available. The customer can also pay by bank transfer: use Report payment received.</p>}
+          </div>
         </div>
       )}
-      {noc.status === "void" && (
-        <div className="rounded-md border bg-slate-50 px-3 py-2 text-sm text-slate-600">Void. {noc.void_reason}</div>
-      )}
+
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
         <div>
-          <p className="mb-1 text-sm font-medium">Draft certificate</p>
+          <p className="mb-1 text-sm font-medium">Draft certificate (staff only, never sent)</p>
           <iframe key={noc.id} title="NOC draft" src={`${base}/pdf#toolbar=0`} className="h-[560px] w-full rounded-md border" />
           <a className="text-primary mt-1 inline-flex items-center gap-1 text-sm underline" href={`${base}/pdf`} target="_blank" rel="noreferrer"><FileText className="h-3.5 w-3.5" />Open / print draft PDF</a>
         </div>
@@ -257,21 +380,25 @@ function NocDetail({ contractId, noc, data, userRole, onChanged, onClose }: {
             <dl className="grid grid-cols-[110px_1fr] gap-x-2 gap-y-1 p-3 text-[13px]">
               <dt className="text-muted-foreground">Company</dt><dd>{noc.company_name}</dd>
               {noc.cin && (<><dt className="text-muted-foreground">CIN</dt><dd>{noc.cin}</dd></>)}
+              {noc.gstin && (<><dt className="text-muted-foreground">GSTIN</dt><dd>{noc.gstin}</dd></>)}
               <dt className="text-muted-foreground">Centre</dt><dd>{noc.location?.name}</dd>
               <dt className="text-muted-foreground">Address</dt><dd>{noc.noc_address}</dd>
               <dt className="text-muted-foreground">Fee</dt><dd>{formatCurrency(fee.total)} <span className="text-muted-foreground text-xs">({formatCurrency(fee.excl)} + {noc.tax_percentage}% GST)</span></dd>
+              <dt className="text-muted-foreground">Invoice</dt><dd>{detail.invoice ? <>{detail.invoice.invoice_number} <span className="text-muted-foreground text-xs">({detail.invoice.status})</span></> : "not created yet"}</dd>
               <dt className="text-muted-foreground">Valid till</dt><dd>{data.contract ? formatDate(data.contract.end_date) : "—"} <span className="text-muted-foreground text-xs">(the contract&apos;s end date)</span></dd>
-              <dt className="text-muted-foreground">Ordered</dt><dd>{formatDate(noc.created_at)}</dd>
+              {noc.sent_to && (<><dt className="text-muted-foreground">Sent to</dt><dd>{noc.sent_to}</dd></>)}
+              {noc.accepted_by_name && (<><dt className="text-muted-foreground">Accepted by</dt><dd>{noc.accepted_by_name} <a className="text-primary text-xs underline" href={`${base}/acceptance`} target="_blank" rel="noreferrer">Acceptance certificate (PDF)</a></dd></>)}
+              {noc.paid_at && (<><dt className="text-muted-foreground">Paid</dt><dd>{formatDate(noc.paid_at)}{noc.payment_reference ? ` · ${noc.payment_reference}` : ""}</dd></>)}
             </dl>
           </div>
           <div className="rounded-lg border">
-            <div className="border-b bg-muted/40 px-3 py-2 font-medium">Audit trail</div>
+            <div className="border-b bg-muted/40 px-3 py-2 font-medium">Tracking and audit trail</div>
             <ul className="space-y-1.5 p-3 text-[13px]">
-              {events.length === 0 && <li className="text-muted-foreground">No entries yet.</li>}
-              {events.map((e) => (
+              {detail.events.length === 0 && <li className="text-muted-foreground">No entries yet.</li>}
+              {detail.events.map((e) => (
                 <li key={e.id}>
                   <span className="font-medium">{EVENT_LABELS[e.event] ?? e.event}</span>
-                  <span className="text-muted-foreground block text-xs">{new Date(e.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}{e.actor_label ? ` · ${e.actor_label}` : ""}</span>
+                  <span className="text-muted-foreground block text-xs">{new Date(e.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}{e.actor_label ? ` · ${e.actor_label}` : ""}{eventNote(e)}</span>
                 </li>
               ))}
             </ul>
@@ -279,33 +406,137 @@ function NocDetail({ contractId, noc, data, userRole, onChanged, onClose }: {
           </div>
         </div>
       </div>
+
       {noc.status !== "void" && noc.status !== "issued" && (
         <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-3 py-2">
-          <Button size="sm" disabled title={issueBlocker(userRole, noc.status, false) ?? ""}><Stamp className="mr-1 h-4 w-4" />Stamp, seal and issue</Button>
-          <span className="text-muted-foreground text-xs">{issueBlocker(userRole, noc.status, false)} Admin only, using the same company stamp and seal as contracts and Virtual Office.</span>
+          <Button size="sm" disabled title={issueBlocker(userRole, noc.status, noc.status === "paid") ?? ""}><Stamp className="mr-1 h-4 w-4" />Stamp, seal and issue</Button>
+          <span className="text-muted-foreground text-xs">{noc.status === "paid" ? "Paid. Arrives in the next release for an admin." : issueBlocker(userRole, noc.status, false)} Admin only, using the same company stamp and seal as contracts and Virtual Office.</span>
         </div>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <Button size="sm" variant="outline" onClick={onClose}>Close</Button>
+        <span className="flex items-center gap-2"><Button size="sm" variant="outline" onClick={onClose}>Close</Button><span className="text-muted-foreground text-xs">Closes this panel. Changes nothing.</span></span>
         {canVoidNoc(userRole) && isVoidable(noc.status) && (
           confirming ? (
             <div className="flex flex-1 flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              <span>Void this order? It cannot be restarted; you would order again.</span>
+              <span>Void this order? This cancels the unpaid proforma invoice and the payment link, takes it out of Receivables, and stops the customer&apos;s link working. It cannot be restarted; you would order again.</span>
               <Textarea className="min-h-[36px] w-full basis-full bg-white" rows={1} placeholder="Why (required)" value={reason} onChange={(e) => setReason(e.target.value)} />
-              <Button size="sm" variant="destructive" disabled={busy || reason.trim().length < 5} onClick={voidIt}>Yes, void</Button>
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirming(false)}>Keep it</Button>
+              <Button size="sm" variant="destructive" disabled={busy !== null || reason.trim().length < 5} onClick={voidIt}>Yes, void</Button>
+              <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setConfirming(false)}>Keep it</Button>
             </div>
           ) : (
-            <button className="text-muted-foreground text-sm underline" onClick={() => setConfirming(true)}>Void order</button>
+            <span className="flex flex-wrap items-center gap-2"><button className="text-muted-foreground text-sm underline" onClick={() => setConfirming(true)}>Void order</button><span className="text-muted-foreground text-xs">Asks you to confirm first. Cancels the unpaid proforma and the customer link.</span></span>
           )
         )}
       </div>
+
+      {sendOpen && <SendDialog base={base} noc={noc} onClose={() => setSendOpen(false)} onSent={() => { setSendOpen(false); onChanged(); reload(); }} />}
+      {noc.billing_statement_id && (
+        <ReportPaymentDialog
+          open={reportOpen} onOpenChange={setReportOpen} entityType="billing_statement" entityId={noc.billing_statement_id}
+          partyLabel={`${noc.company_name} · NOC ${noc.reference}`} suggestedAmount={fee.total} onReported={() => { onChanged(); reload(); }}
+        />
+      )}
     </div>
   );
 }
 
+/** Previews the email (sends nothing), then sends it when staff confirm. */
+function SendDialog({ base, noc, onClose, onSent }: { base: string; noc: NocRow; onClose: () => void; onSent: () => void }) {
+  const [to, setTo] = useState(noc.sent_to ?? "");
+  const [preview, setPreview] = useState<{ to: string; subject: string; html: string; attachment: string | null; blockedReason: string | null; piProblem: string | null } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = useCallback(async (address?: string) => {
+    setBusy(true); setErr("");
+    try {
+      const res = await fetch(`${base}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preview: true, ...(address ? { to: address } : {}) }) });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) return void setErr(j.error ?? "Could not build the email.");
+      setPreview(j.data); setTo(j.data.to);
+    } finally { setBusy(false); }
+  }, [base]);
+  useEffect(() => { load(); }, [load]);
+
+  async function send() {
+    setBusy(true); setErr("");
+    try {
+      const res = await fetch(`${base}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to }) });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) return void setErr(j.error ?? "The email was not sent.");
+      toast.success(`Sent to ${to}`); onSent();
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+        <DialogHeader><DialogTitle>Email the proforma and payment link</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label>To</Label>
+            <div className="flex gap-2">
+              <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="customer@company.com" />
+              <Button variant="outline" size="sm" disabled={busy || !to.includes("@")} onClick={() => load(to)} title="Rebuilds the preview for this address. Sends nothing.">Update preview</Button>
+            </div>
+          </div>
+          {preview ? (
+            <>
+              <p className="text-sm"><b>Subject:</b> {preview.subject}</p>
+              <p className="text-muted-foreground text-xs">Attached: {preview.attachment ?? "no proforma (see below)"}</p>
+              {preview.piProblem && <p className="text-xs text-red-700">The proforma invoice could not be prepared: {preview.piProblem}</p>}
+              <div className="max-h-[320px] overflow-y-auto rounded-md border bg-white p-3" dangerouslySetInnerHTML={{ __html: preview.html }} />
+              {preview.blockedReason && <p className="flex items-start gap-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{preview.blockedReason}</p>}
+            </>
+          ) : <Loader2 className="h-5 w-5 animate-spin" />}
+          {err && <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
+          <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">This preview sends nothing. The proforma invoice is created now (once) and joins Receivables with the usual reminders.</p>
+        </div>
+        <DialogFooter>
+          <span className="text-muted-foreground mr-auto self-center text-xs">{preview ? `Send email emails this message now to ${to || "the address above"}, with the proforma attached.` : "Building the preview…"} Cancel closes without sending.</span>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={send} disabled={busy || !preview || !!preview.blockedReason || !!preview.piProblem || !to.includes("@")}>{busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Send email</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const eventNote = (e: AuditEvent): string => {
+  const d = e.detail as Record<string, unknown>;
+  if (e.event === "emailed" || e.event === "email_failed" || e.event === "receipt_emailed") return d.to ? ` · ${String(d.to)}` : "";
+  if (e.event === "code_sent" || e.event === "code_verified") return d.to ? ` · ${String(d.to)}` : d.sent_to ? ` · ${String(d.sent_to)}` : "";
+  if (e.event === "clauses_accepted") {
+    const m = { matches: "name matches the agreement's signatory", partial: "name partly matches the signatory", mismatch: "name does NOT match the signatory (review before issuing)", no_record: "no signatory recorded on the agreement to compare" }[String(d.signatory_match ?? "")];
+    return m ? ` · ${m}` : "";
+  }
+  if (e.event === "payment_received") return ` · ${d.reference ? String(d.reference) : "recorded"}`;
+  if (e.event === "invoice_created") return d.invoice_number ? ` · ${String(d.invoice_number)}` : "";
+  if (e.event === "link_shared") return d.channel ? ` · ${String(d.channel)}` : "";
+  return "";
+};
+
 const EVENT_LABELS: Record<string, string> = {
   order_created: "Order created",
+  invoice_created: "Proforma invoice created",
+  emailed: "Emailed to the customer with the proforma",
+  email_failed: "Email not sent",
+  link_shared: "Customer link shared by hand",
+  link_opened: "Customer opened the link",
+  code_sent: "One-time code emailed to the customer",
+  code_send_failed: "Code could not be sent",
+  code_rejected: "A wrong or expired code was entered",
+  code_verified: "One-time code verified",
+  clauses_accepted: "Terms accepted by the customer",
+  acceptance_certificate_made: "Acceptance certificate made",
+  acceptance_certificate_failed: "Acceptance certificate could not be made",
+  payment_link_created: "Payment link created",
+  payment_link_failed: "Payment link could not be created",
+  payment_received: "Payment received in full",
+  paid_without_acceptance: "Paid before the terms were accepted",
+  receipt_emailed: "Receipt and acceptance certificate emailed",
+  receipt_not_sent: "Receipt could not be emailed",
+  receipt_skipped: "Receipt not emailed",
   voided: "Order voided",
 };
 
@@ -314,15 +545,16 @@ function OrderDialog({ contractId, data, onClose, onCreated }: { contractId: str
   const [locationId, setLocationId] = useState("");
   const [companyName, setCompanyName] = useState(data.suggestedCompany ?? "");
   const [cin, setCin] = useState("");
+  const [gstin, setGstin] = useState("");
   const [busy, setBusy] = useState(false);
   const centre = data.centres?.find((c) => c.id === locationId);
   const fee = purpose && data.fees ? data.fees[purpose] : null;
-  const problems = validateOrder({ purpose, locationId, companyName, cin });
+  const problems = validateOrder({ purpose, locationId, companyName, cin, gstin });
 
   async function create() {
     setBusy(true);
     try {
-      const res = await fetch(`/api/contracts/${contractId}/noc`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purpose, locationId, companyName, cin }) });
+      const res = await fetch(`/api/contracts/${contractId}/noc`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purpose, locationId, companyName, cin, gstin }) });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) return void toast.error(j.error ?? "Could not create the order");
       toast.success("NOC order created as a draft. Nothing has been sent.");
@@ -365,6 +597,7 @@ function OrderDialog({ contractId, data, onClose, onCreated }: { contractId: str
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1"><Label>Company name</Label><Input value={companyName} onChange={(e) => setCompanyName(e.target.value)} /></div>
             <div className="space-y-1"><Label>CIN (if incorporated)</Label><Input value={cin} onChange={(e) => setCin(e.target.value)} placeholder="optional" /></div>
+            <div className="space-y-1 sm:col-span-2"><Label>Company GSTIN (for the GST invoice)</Label><Input value={gstin} onChange={(e) => setGstin(e.target.value)} placeholder="optional, accounts raise the GST invoice to this" /></div>
           </div>
           <div className="rounded-md border bg-muted/30 p-3 text-sm">
             {fee ? (
@@ -380,6 +613,7 @@ function OrderDialog({ contractId, data, onClose, onCreated }: { contractId: str
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <span className="text-muted-foreground mr-auto self-center text-xs">Creates a draft order only. Nothing is sent and no money is taken.</span>
           <Button onClick={create} disabled={busy || problems.length > 0 || (!!centre && !centre.hasNocAddress && !centre.hasAddress)}>{busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Create draft order</Button>
         </DialogFooter>
       </DialogContent>

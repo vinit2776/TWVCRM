@@ -87,7 +87,7 @@ The disclaimers printed in the NOC are shown on the link the customer opens, and
 - Stamped, sealed and issued: by whom, reference number, and a hash of the issued PDF.
 - NOC emailed to the customer.
 
-**Acceptance certificate.** At acceptance a one-page PDF is made: who accepted, the clauses and their hash, the date, time, IP and device, the verification code result and the order reference. It is emailed to the customer, filed on the contract, and linked from the staff audit-trail view (mock screen 9). Staff cannot edit it.
+**Acceptance certificate.** At acceptance (built in part 2) a PDF is made, and is not changed afterwards. Payment is not on it (it is not known yet): the receipt email carries the payment details and attaches the certificate. It shows: who accepted, the clauses and their hash, the date, time, IP and device, the verification code result and the order reference. It is emailed to the customer, filed on the contract, and linked from the staff audit-trail view (mock screen 9). Staff cannot edit it.
 
 **Staff view.** A read-only audit trail on the NOC, the same list as above.
 

@@ -93,6 +93,12 @@ All under `src/app/api/contracts/`:
 - `[id]/noc/route.ts` — `GET` (a contract's NOC orders + order-form context; `{enabled:false}` when the service is off), `POST` (create a draft NOC order)
 - `[id]/noc/[nid]/route.ts` — `GET` (order + audit trail), `PATCH` (`void`, unpaid orders only)
 - `[id]/noc/[nid]/pdf/route.ts` — `GET` (the DRAFT certificate, staff only; always watermarked in part 1)
+- `[id]/noc/[nid]/prepare/route.ts` — `POST` (creates the proforma invoice once and returns the customer link; sends nothing)
+- `[id]/noc/[nid]/send/route.ts` — `POST {preview?, to?}` (emails the proforma + customer link; `preview:true` sends nothing; refused to non-test addresses outside production)
+- `[id]/noc/[nid]/shared/route.ts` — `POST` (logs that staff shared the link by hand)
+- `[id]/noc/[nid]/payment-link/route.ts` — `POST` (retry the gateway link after acceptance)
+- `[id]/noc/[nid]/acceptance/route.ts` — `GET` (the acceptance certificate PDF, staff only)
+- `/api/public/noc/[token]` — `GET` (customer page data, no sign-in), `/send-code` and `/accept` `POST`
 - `/api/noc/markers` — `GET ?contract_ids=` (light per-contract summary for the contracts list chip)
 - `[id]/cosec-wizard/route.ts` — `POST` (cosec access provisioning steps)
 - `contracts/kyc-pending/route.ts` — `GET`
@@ -322,7 +328,7 @@ The form first asks which case it is, and the wording template follows:
 
 Flow and roles: `draft` (admin/manager/sales rep edit, every save is a kept revision) → `pending_approval` (admin/manager approve or send back; only an admin may approve their own draft) → `approved` (print, customer signs on paper) → `signed` (scan uploaded) → `sealed` (admin stamps; same click-to-place approach as the agreement stamp) → `applied` (admin; a separate click that updates the customer record's company, and for a takeover also its entity type, GSTIN and PAN). Billing reads the customer record when it generates, so only invoices after Apply use the new name; earlier ones keep the old name. The record is shared, so other contracts on the same customer change name too (the Apply panel lists them). One open addendum per contract at a time. PAN and entity-type mismatches against the chosen case warn, never block. The wording is a template, not AI.
 
-### NOC service (part 1: order and draft)
+### NOC service (parts 1 and 2: order, draft, customer link, acceptance, payment)
 
 A paid No Objection Certificate that lets a customer's company use a TWV centre as its registered office (ROC) or place of business (GST). Full design: `docs/plans/noc-service.md`. **Part 1 only creates and voids draft orders: it sends nothing to any customer and takes no money.** Ships dark behind `app_settings.noc_service_enabled` (`false`); with it off the card, badges, chips, endpoints and PDF all refuse or render nothing.
 
@@ -332,7 +338,11 @@ A paid No Objection Certificate that lets a customer's company use a TWV centre 
 - The address printed is the centre's `noc_address` (Locations → Edit), else its normal address, frozen on the order.
 - Markers: header badge on the contract page and a chip on the contracts list. An issued NOC always shows; an ordered-but-unissued one shows in a calmer tone; void shows nothing.
 - UI: `src/components/contracts/noc-card.tsx` (sidebar card beside Signed Contract, panel in the main column, order dialog), wired by window events like the addendum card.
-- Later parts (not built): email with the PI and link, public acceptance page with the legal audit trail and acceptance certificate, payment and Tally Inbox, issue with stamp and seal, and the "update the agreements" addendum. The per-centre address proof copy is deferred (the letter does not mention it).
+- **Part 2 (customer link and money)**, migration `00756`: staff click **Email PI and payment link** (preview first) or **Copy customer link**; either one creates the ad-hoc proforma invoice for the fee once (`src/lib/noc/prepare.ts`), mirrored into a billing statement so it follows normal Receivables reminders and the Tally Inbox. Until acceptance the invoice's payment URL is our page `/noc/[token]`, so reminders and the proforma QR also go through the terms first.
+- The customer page (`src/app/noc/[token]/page.tsx`, public): fee, the three printed paragraphs plus the service terms (four ticks), typed name and designation, a one-time code emailed to the contract's email (hashed, 10 min, 5 tries, 3 sends per 10 min). Acceptance records the words hash, person, IP and device, makes the **acceptance certificate** PDF (`certificate-pdf.ts`), then creates the Razorpay link (exact total, gateway notifications off). Back from the gateway the page waits and shows the confirmation.
+- Payment: every full payment reaches `handleStatementPaid`, which calls `syncNocOnPaid` (own service-role client). It marks the order paid, logs it, and emails the customer a receipt with the acceptance certificate. `reconcileNocPaid` catches an order whose invoice is paid but which missed the sync, whenever the order is read. Report paid and Record payment are the existing Receivables flows.
+- **Safe send** (`src/lib/noc/safe-send.ts`): outside real production (production build AND Vercel production AND production database) a customer email may only go to a reserved test address (example.com/.org/.net, .test, .invalid). A pulled `.env.local` can say `VERCEL_ENV=production`, so that alone is never trusted.
+- Not built yet: stamp, seal and issue (admin only, once paid), the issued NOC email, and the "update the agreements" addendum. Address proof is deferred.
 
 ### Renewal Rules
 

@@ -106,9 +106,11 @@ export interface NocOrderInput {
   locationId?: string;
   companyName?: string;
   cin?: string;
+  gstin?: string;
 }
 
 const CIN_RE = /^[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$/;
+const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 
 export function validateOrder(p: NocOrderInput): string[] {
   const errors: string[] = [];
@@ -116,6 +118,7 @@ export function validateOrder(p: NocOrderInput): string[] {
   if (!p.locationId) errors.push("Choose the centre.");
   if (!p.companyName?.trim()) errors.push("Enter the company's name as it should appear on the NOC.");
   if (p.cin?.trim() && !CIN_RE.test(p.cin.trim().toUpperCase())) errors.push("The CIN does not look right (21 characters, for example U45400TN1987PTC014408).");
+  if (p.gstin?.trim() && !GSTIN_RE.test(p.gstin.trim().toUpperCase())) errors.push("The GSTIN does not look right (15 characters).");
   return errors;
 }
 

@@ -50,7 +50,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       enabled: true,
       contract: { id: contract.id, contract_number: contract.contract_number, status: contract.status, end_date: contract.end_date, location_id: contract.location_id, orderable: canOrderOnContract(contract.status) },
       suggestedCompany: lead?.company?.trim() || `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim(),
-      nocs: (nocs ?? []).map((n) => ({ ...n, reference: nocReference(contract.contract_number, n.sequence_in_contract) })),
+      nocs: (nocs ?? []).map(({ public_token: _token, ...n }) => ({ ...n, reference: nocReference(contract.contract_number, n.sequence_in_contract) })),
       centres: (centres ?? []).map((c) => ({ id: c.id, name: c.name, hasNocAddress: !!c.noc_address?.trim(), hasAddress: [c.address, c.city, c.state].some((v) => !!v?.trim()) })),
       fees: { roc: computeFee(settings.feeRoc, settings.taxPercentage), gst: computeFee(settings.feeGst, settings.taxPercentage), taxPercentage: settings.taxPercentage },
     },
@@ -62,6 +62,7 @@ const orderSchema = z.object({
   locationId: z.string().uuid("Choose the centre."),
   companyName: z.string().trim().min(1, "Enter the company's name as it should appear on the NOC."),
   cin: z.string().trim().optional(),
+  gstin: z.string().trim().optional(),
 });
 
 /** POST /api/contracts/[id]/noc: creates a draft order. Contacts nobody and takes no money. */
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const parsed = orderSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request" }, { status: 400 });
   const input = parsed.data;
-  const problems = validateOrder({ purpose: input.purpose, locationId: input.locationId, companyName: input.companyName, cin: input.cin });
+  const problems = validateOrder({ purpose: input.purpose, locationId: input.locationId, companyName: input.companyName, cin: input.cin, gstin: input.gstin });
   if (problems.length) return NextResponse.json({ error: problems[0], errors: problems }, { status: 400 });
   const purpose = input.purpose as NocPurpose;
 
@@ -121,7 +122,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     .from("noc_requests")
     .insert({
       contract_id: id, sequence_in_contract: sequence, lead_id: contract.lead_id, purpose, location_id: centre.id,
-      company_name: input.companyName.trim(), cin: input.cin?.trim().toUpperCase() || null, noc_address: address,
+      company_name: input.companyName.trim(), cin: input.cin?.trim().toUpperCase() || null, gstin: input.gstin?.trim().toUpperCase() || null, noc_address: address,
       fee_excl_gst: fee, tax_percentage: settings.taxPercentage, status: "draft", created_by: actor.id,
     })
     .select("*")

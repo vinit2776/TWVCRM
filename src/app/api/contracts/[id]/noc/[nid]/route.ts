@@ -3,13 +3,15 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { getActor } from "@/lib/addendum/server";
-import { clientIp, loadNocSettings, recordNocEvent } from "@/lib/noc/server";
+import { appOrigin, clientIp, customerLink, loadNocSettings, recordNocEvent } from "@/lib/noc/server";
+import { reconcileNocPaid } from "@/lib/noc/payment-sync";
+import { cancelNocInvoice } from "@/lib/noc/prepare";
 import { canVoidNoc, isVoidable, nocReference, type NocStatus } from "@/lib/noc/rules";
 
 type Ctx = { params: Promise<{ id: string; nid: string }> };
 
 /** GET: one order with its audit trail (read-only). */
-export async function GET(_req: NextRequest, { params }: Ctx) {
+export async function GET(req: NextRequest, { params }: Ctx) {
   const { id, nid } = await params;
   const supabase = await createClient();
   const who = await getActor(supabase);
@@ -17,22 +19,33 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   const admin = createAdminClient();
   if (!(await loadNocSettings(admin)).enabled) return NextResponse.json({ error: "The NOC service is not switched on." }, { status: 403 });
 
-  const { data: noc } = await supabase
+  let { data: noc } = await supabase
     .from("noc_requests")
     .select("*, location:locations!noc_requests_location_id_fkey(id, name)")
     .eq("id", nid).eq("contract_id", id).single();
   if (!noc) return NextResponse.json({ error: "NOC not found" }, { status: 404 });
+  if (await reconcileNocPaid(noc)) {
+    ({ data: noc } = await supabase.from("noc_requests").select("*, location:locations!noc_requests_location_id_fkey(id, name)").eq("id", nid).eq("contract_id", id).single());
+    if (!noc) return NextResponse.json({ error: "NOC not found" }, { status: 404 });
+  }
   const { data: contract } = await supabase.from("contracts").select("contract_number, end_date").eq("id", id).single();
   const { data: events } = await supabase
     .from("noc_audit_events")
     .select("id, event, actor_label, detail, created_at")
     .eq("noc_id", nid)
     .order("created_at", { ascending: true });
+  const { data: invoice } = noc.invoice_id
+    ? await supabase.from("proforma_invoices").select("invoice_number, status, total_amount, due_date").eq("id", noc.invoice_id).maybeSingle()
+    : { data: null };
+  // Staff can see the customer link; the raw token stays out of the order object.
+  const { public_token: token, ...order } = noc;
   return NextResponse.json({
     data: {
-      noc: { ...noc, reference: nocReference(contract?.contract_number ?? "", noc.sequence_in_contract) },
+      noc: { ...order, reference: nocReference(contract?.contract_number ?? "", noc.sequence_in_contract) },
       validUntil: contract?.end_date ?? null,
       events: events ?? [],
+      invoice: invoice ?? null,
+      customerLink: noc.invoice_id ? customerLink(appOrigin(req.url), token) : null,
     },
   });
 }
@@ -58,6 +71,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   if (!isVoidable(noc.status as NocStatus)) {
     return NextResponse.json({ error: noc.status === "void" ? "This NOC is already void." : "A NOC that is paid or issued cannot be voided here. Ask accounts about a refund." }, { status: 409 });
   }
+
+  // The money side first: cancel the proforma and its statement so Receivables stops chasing it.
+  const cancelled = await cancelNocInvoice(admin, nid, actor.id, parsed.data.reason);
+  if (!cancelled.ok) return NextResponse.json({ error: cancelled.error }, { status: 409 });
 
   const now = new Date().toISOString();
   const { data, error } = await admin
