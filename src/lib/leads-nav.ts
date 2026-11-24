@@ -50,7 +50,8 @@ export interface LeadsNav {
 export function buildLeadsNav(state: LeadsNavState, counts: LeadsNavCounts, options: { showHome?: boolean; showWaiting?: boolean; showChannels?: boolean } = {}): LeadsNav {
   const onAll = state.view === "all";
   const daily: LeadsNavItem[] = [
-    ...(options.showHome ? [{ key: "home", label: "Home", count: 0, tone: "", target: { kind: "view", view: "home" } as LeadsNavTarget, active: state.view === "home" }] : []),
+    ...(options.showHome ? [{ key: "sheet", label: "Home", count: 0, tone: "", target: { kind: "view", view: "sheet" } as LeadsNavTarget, active: state.view === "sheet" }] : []),
+    ...(options.showHome ? [{ key: "home", label: "My tasks", count: 0, tone: "", target: { kind: "view", view: "home" } as LeadsNavTarget, active: state.view === "home" }] : []),
     { key: "enquiries", label: "New enquiries", count: counts.enquiries, tone: "bg-emerald-500 text-white", target: { kind: "view", view: "enquiries" }, active: state.view === "enquiries" },
     { key: "followups", label: "Follow-ups", count: counts.followups, tone: "bg-red-500 text-white", target: { kind: "view", view: "followups" }, active: state.view === "followups" },
     { key: "tours", label: "Tours", count: counts.tours, tone: "bg-violet-600 text-white", target: { kind: "view", view: "tours" }, active: state.view === "tours" },

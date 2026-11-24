@@ -63,7 +63,7 @@ function LeadCard({
         "rounded-lg border bg-background p-3 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow",
         (isSortableDragging || isDragging) && "opacity-50"
       )}
-      onClick={() => router.push(`/leads/${lead.id}`)}
+      onClick={() => router.push(`/leads/${lead.id}/activity`)}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
