@@ -1,5 +1,6 @@
 import { leadStaleState, latestInstant, NON_EVENT_SUBJECTS } from "@/lib/lead-stale";
 import { isLastContactActivity } from "@/lib/lead-last-contact";
+import { enquiryTextMatches, ENQUIRY_SEARCH_MIN_CHARS, type EnquirySearchPayload } from "@/lib/enquiry-text-search";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { pinState, type PinState } from "@/lib/pin-age";
@@ -59,6 +60,12 @@ export async function GET(request: NextRequest) {
   let searchOr = "";
   if (search && !search.startsWith("#")) {
     searchOr = `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`;
+    // A full name ("Priya Kumar") spans the two name columns, so match first word against the first
+    // name and the rest against the last name as well.
+    const words = search.trim().replace(/[,()]/g, " ").split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      searchOr += `,and(first_name.ilike.%${words[0]}%,last_name.ilike.%${words.slice(1).join(" ")}%)`;
+    }
     const phoneClauses = phoneMatchClauses(search, ["phone", "mobile"]);
     if (phoneClauses.length) searchOr += `,${phoneClauses.join(",")}`;
     const refMatch = search.trim().match(/^(?:twv-)?e-?(\d+)$/i);
@@ -72,6 +79,21 @@ export async function GET(request: NextRequest) {
         .limit(1);
       const leadId = (refRows?.[0] as { lead_id: string } | undefined)?.lead_id;
       if (leadId) searchOr += `,id.eq.${leadId}`;
+    }
+    // What the customer wrote in an enquiry (form text, WhatsApp messages, the area they asked for).
+    // Enquiries are few, so they are read and matched here instead of querying inside the JSON.
+    if (search.trim().length >= ENQUIRY_SEARCH_MIN_CHARS) {
+      const { data: enquiryRows } = await supabase
+        .from("lead_enquiries")
+        .select("lead_id, payload")
+        .not("lead_id", "is", null)
+        .order("received_at", { ascending: false })
+        .limit(1000);
+      const textIds = new Set<string>();
+      for (const r of (enquiryRows ?? []) as { lead_id: string; payload: EnquirySearchPayload | null }[]) {
+        if (/^[0-9a-f-]{36}$/i.test(r.lead_id) && enquiryTextMatches(r.payload, search)) textIds.add(r.lead_id);
+      }
+      if (textIds.size > 0) searchOr += `,id.in.(${[...textIds].slice(0, 100).join(",")})`;
     }
   }
 

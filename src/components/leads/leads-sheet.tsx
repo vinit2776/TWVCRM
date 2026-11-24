@@ -55,6 +55,13 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
   const [center, setCenter] = useState("");
   const [channel, setChannel] = useState("");
   const [owner, setOwner] = useState("");
+  // What is typed, and the part of it the list is actually fetched with (after a short pause).
+  const [searchText, setSearchText] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchText.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchText]);
   const [filters, setFilters] = useState<SheetFilters>({ notContacted: false, lastAction: "", seats: "", statuses: [] });
 
   const [rows, setRows] = useState<Lead[]>([]);
@@ -73,9 +80,10 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
       if (center) p.set("location_id", center);
       if (channel) p.set("source", channel);
       if (owner) p.set("assigned_to", owner);
+      if (search) p.set("search", search);
       return `/api/leads?${p.toString()}`;
     },
-    [center, channel, owner],
+    [center, channel, owner, search],
   );
 
   useEffect(() => {
@@ -113,7 +121,7 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
   }
 
   const today = istDay(nowMs);
-  const filtering = filtersActive(filters, { center, channel, owner });
+  const filtering = filtersActive(filters, { center, channel, owner }) || !!search;
 
   // The guide's counts follow every filter except its own status picks.
   const forGuide = useMemo(() => rows.filter((l) => passesSheetFilters(l, filters, { skipStatuses: true })), [rows, filters]);
@@ -127,6 +135,8 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
     setCenter("");
     setChannel("");
     setOwner("");
+    setSearchText("");
+    setSearch("");
     setFilters({ notContacted: false, lastAction: "", seats: "", statuses: [] });
   };
   const isFolded = (day: string) => (closed.has(day) ? true : opened.has(day) ? false : startsFolded(day, today, filtering));
@@ -148,6 +158,16 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
     <div className="space-y-3">
       {/* The only filters: not contacted, center, channel, owner, last action, and All. */}
       <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
+        <label className="flex min-w-[240px] flex-1 flex-col gap-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+          Search
+          <input
+            type="search"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Name, phone, email, company, or what they asked for"
+            className="h-9 rounded-md border bg-background px-3 text-sm normal-case tracking-normal text-foreground"
+          />
+        </label>
         <button
           type="button"
           onClick={() => setFilters((f) => ({ ...f, notContacted: !f.notContacted }))}
