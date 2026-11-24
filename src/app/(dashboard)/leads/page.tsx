@@ -47,6 +47,7 @@ import { EnquiryPanel } from "@/components/leads/enquiry-panel";
 import { LeadsHome } from "@/components/leads/leads-home";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { LeadsNavV2 } from "@/components/leads/leads-nav-v2";
+import { LeadsSheet } from "@/components/leads/leads-sheet";
 import { WaitingForSpaceView } from "@/components/leads/waiting-for-space-view";
 import { ChannelsView } from "@/components/leads/channels-view";
 import { useSpaceWaitingEnabled } from "@/hooks/use-space-waiting";
@@ -79,7 +80,9 @@ function LeadsPageContent() {
   // Until the switch and the person's role are known the right tabs are unknown, so draw nothing
   // rather than the old tabs for a moment (and load no list meanwhile).
   const resolvingNav = !homeV2Ready || meLoading;
-  const tab = requestedView === "home" && !showHome && !resolvingNav ? "all" : bareLanding && (showHome || resolvingNav) ? "home" : requestedView;
+  // The sheet and Home belong to the new navigation; without it they fall back to All leads.
+  const needsNav = requestedView === "home" || requestedView === "sheet";
+  const tab = needsNav && !showHome && !resolvingNav ? "all" : bareLanding && (showHome || resolvingNav) ? "sheet" : requestedView;
   // The page number belongs to the view it was set in; another view starts again at page 1.
   const [pageState, setPageState] = useState<{ view: LeadsView; page: number }>({ view: tab, page: 1 });
   const page = pageState.view === tab ? pageState.page : 1;
@@ -174,7 +177,7 @@ function LeadsPageContent() {
     include_archived: showDisabled,
     pinned: pinnedOnly,
     // The Follow-ups tab loads its own rows (FollowUpsView), so this asks for none: view=ids with no ids.
-    view: tab === "followups" || tab === "home" ? "ids" : "all",
+    view: tab === "followups" || tab === "home" || tab === "sheet" ? "ids" : "all",
   });
 
   // Whole-day counts for the day headers, for the days this page spans, under the same filters.
@@ -225,7 +228,7 @@ function LeadsPageContent() {
   };
 
   const switchTab = (next: LeadsView) => {
-    router.push(leadsViewHref(next, { bareIsHome: showHome }));
+    router.push(leadsViewHref(next, { bareIsLanding: showHome }));
   };
 
   // The new navigation (behind leads_home_v2_enabled). Buckets are All leads under a filter, so they
@@ -250,7 +253,7 @@ function LeadsPageContent() {
     if (t.kind === "bucket") {
       setPinnedOnly(t.bucket === "pinned");
       setStatusFilter(t.bucket === "junk" ? "junk" : "");
-      router.push(t.bucket === "pinned" ? "/leads?pinned=1" : t.bucket === "junk" ? "/leads?status=junk" : leadsViewHref("all", { bareIsHome: showHome }));
+      router.push(t.bucket === "pinned" ? "/leads?pinned=1" : t.bucket === "junk" ? "/leads?status=junk" : leadsViewHref("all", { bareIsLanding: showHome }));
       return;
     }
     setPinnedOnly(false);
@@ -282,8 +285,8 @@ function LeadsPageContent() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Leads</h1>
-          {/* Home and Follow-ups load no rows here (they fetch their own), so a total would read 0. */}
-          {tab !== "home" && tab !== "followups" && (
+          {/* Home, the sheet and Follow-ups load no rows here (they fetch their own), so a total would read 0. */}
+          {tab !== "home" && tab !== "sheet" && tab !== "followups" && (
             <p className="text-sm text-muted-foreground">
               {pagination.total} total leads
             </p>
@@ -334,6 +337,8 @@ function LeadsPageContent() {
         />
       )}
 
+      {tab === "sheet" && <LeadsSheet onShowAll={() => switchTab("all")} />}
+
       {tab === "home" && (
         <LeadsHome
           counts={{
@@ -366,7 +371,7 @@ function LeadsPageContent() {
 
       {tab === "channels" && <ChannelsView />}
 
-      {tab !== "home" && tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && tab !== "waiting" && tab !== "channels" && (
+      {tab !== "sheet" && tab !== "home" && tab !== "enquiries" && tab !== "replies" && tab !== "tours" && tab !== "whatsapp" && tab !== "waiting" && tab !== "channels" && (
         <>
       {tab === "all" && <OverdueFollowupBanner summary={followupSummary} onReview={handleReviewOverdue} />}
 

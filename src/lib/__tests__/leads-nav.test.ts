@@ -29,11 +29,14 @@ describe("buildLeadsNav", () => {
     }
   });
 
-  it("adds Home first when the person can work leads, and marks it current on the Home view", () => {
+  it("adds Sheet and Home first when the person can work leads, and marks each current on its own view", () => {
     const nav = buildLeadsNav({ view: "home", pinnedOnly: false, statusFilter: "" }, counts, { showHome: true });
-    expect(nav.daily.map((i) => i.label)).toEqual(["Home", "New enquiries", "Follow-ups", "Tours"]);
+    expect(nav.daily.map((i) => i.label)).toEqual(["Sheet", "Home", "New enquiries", "Follow-ups", "Tours"]);
     expect(all(nav).filter((i) => i.active).map((i) => i.key)).toEqual(["home"]);
+    const onSheet = buildLeadsNav({ view: "sheet", pinnedOnly: false, statusFilter: "" }, counts, { showHome: true });
+    expect(all(onSheet).filter((i) => i.active).map((i) => i.key)).toEqual(["sheet"]);
     expect(buildLeadsNav(state, counts).daily.map((i) => i.key)).not.toContain("home");
+    expect(buildLeadsNav(state, counts).daily.map((i) => i.key)).not.toContain("sheet");
   });
 
   it("a status filter other than junk is still All leads", () => {
