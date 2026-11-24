@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { getActor, reference } from "@/lib/addendum/server";
 import { buildAddendumPdf } from "@/lib/addendum/pdf";
+import { COMPANY_NAME } from "@/lib/pdf-utils";
 import { signatureBlocks, type ChangeOfNameParams } from "@/lib/addendum/change-of-name";
 
 /**
@@ -27,6 +28,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     contractNumber: contract?.contract_number ?? "",
     text: a.current_text,
     signatories: signatureBlocks(p),
+    boldTerms: [p.newName, p.outgoingName, p.signatoryName, p.outgoingSignatoryName ?? "", COMPANY_NAME],
     draft: ["draft", "pending_approval", "changes_requested"].includes(a.status),
   });
   return new NextResponse(new Uint8Array(pdf), {
