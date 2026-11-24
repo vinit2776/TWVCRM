@@ -66,7 +66,7 @@ import { ContractBookingsSection } from "@/components/contracts/contract-booking
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { SpecialClauseCard, SpecialClauseBadge } from "@/components/contracts/special-clause-card";
-import { AddendumCard } from "@/components/contracts/addendum-card";
+import { AddendumCard, AddendumSidebarCard } from "@/components/contracts/addendum-card";
 import { specialClauseGate } from "@/lib/special-clause/gate";
 import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
 import {
@@ -2041,10 +2041,6 @@ export default function ContractDetailPage({
             onChanged={() => fetchContract(false)}
           />
 
-          {["active", "renewal_in_progress", "accepted", "sent", "viewed"].includes(contract.status) && (
-            <AddendumCard contractId={id} userRole={userRole} onChanged={() => fetchContract(false)} />
-          )}
-
           {/* Line Items Table */}
           <Card>
             <CardHeader>
@@ -2129,6 +2125,11 @@ export default function ContractDetailPage({
             hasExistingDocument={!!contract.signed_document}
             onChanged={fetchContract}
           />
+
+          {/* Addenda sit right under the signed agreement they amend. */}
+          {["active", "renewal_in_progress", "accepted", "sent", "viewed"].includes(contract.status) && (
+            <AddendumCard contractId={id} userRole={userRole} onChanged={() => fetchContract(false)} />
+          )}
 
           {/* Terms & Conditions */}
           {contract.terms_and_conditions && (
@@ -2734,6 +2735,11 @@ export default function ContractDetailPage({
               )}
             </CardContent>
           </Card>
+
+          {/* Addenda entry point sits beside the signed contract it amends; the full panel opens in the main column. */}
+          {["active", "renewal_in_progress", "accepted", "sent", "viewed"].includes(contract.status) && (
+            <AddendumSidebarCard contractId={id} userRole={userRole} />
+          )}
 
           {/* E-Signing Card — shown when Leegality signing has been initiated */}
           {contract.leegality_document_id && (
