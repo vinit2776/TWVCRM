@@ -18,6 +18,10 @@ describe("leadsViewHref", () => {
     expect(leadsViewHref("all")).toBe("/leads");
     expect(leadsViewHref("tours")).toBe("/leads?view=tours");
   });
+  it("names All leads when the bare page is Home", () => {
+    expect(leadsViewHref("all", { bareIsHome: true })).toBe("/leads?view=all");
+    expect(leadsViewHref("tours", { bareIsHome: true })).toBe("/leads?view=tours");
+  });
   it("round-trips through parseLeadsView", () => {
     for (const v of LEADS_VIEWS) expect(parseLeadsView(new URL(leadsViewHref(v), "http://x").searchParams.get("view"))).toBe(v);
   });

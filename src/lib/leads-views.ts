@@ -8,7 +8,11 @@ export function parseLeadsView(value: string | null | undefined): LeadsView {
   return (LEADS_VIEWS as readonly string[]).includes(value ?? "") ? (value as LeadsView) : DEFAULT_LEADS_VIEW;
 }
 
-/** The Leads page address for a view. All leads is the bare page, so existing links keep working. */
-export function leadsViewHref(view: LeadsView): string {
-  return view === DEFAULT_LEADS_VIEW ? "/leads" : `/leads?view=${view}`;
+/**
+ * The Leads page address for a view. All leads is the bare page, so existing links keep working.
+ * With the new navigation on, the bare page is Home instead, so All leads is then asked for by name.
+ */
+export function leadsViewHref(view: LeadsView, options: { bareIsHome?: boolean } = {}): string {
+  if (view === DEFAULT_LEADS_VIEW && !options.bareIsHome) return "/leads";
+  return `/leads?view=${view}`;
 }
