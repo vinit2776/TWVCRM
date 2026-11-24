@@ -10,6 +10,8 @@ import { LEAD_SOURCES, LEAD_SOURCE_LABELS } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
 import {
   LAST_ACTION_CHOICES,
+  SEAT_BANDS,
+  sheetSeats,
   SHEET_STATUSES,
   SHEET_STATUS_META,
   dayHeading,
@@ -51,7 +53,7 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
   const [center, setCenter] = useState("");
   const [channel, setChannel] = useState("");
   const [owner, setOwner] = useState("");
-  const [filters, setFilters] = useState<SheetFilters>({ notContacted: false, lastAction: "", statuses: [] });
+  const [filters, setFilters] = useState<SheetFilters>({ notContacted: false, lastAction: "", seats: "", statuses: [] });
 
   const [rows, setRows] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
@@ -123,7 +125,7 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
     setCenter("");
     setChannel("");
     setOwner("");
-    setFilters({ notContacted: false, lastAction: "", statuses: [] });
+    setFilters({ notContacted: false, lastAction: "", seats: "", statuses: [] });
   };
   const isFolded = (day: string) => (closed.has(day) ? true : opened.has(day) ? false : startsFolded(day, today, filtering));
   const toggleDay = (day: string) => {
@@ -186,6 +188,16 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
             {LAST_ACTION_CHOICES.map((a) => (
               <option key={a} value={a}>{a}</option>
             ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+          Seats
+          <select className={selectClass} value={filters.seats} onChange={(e) => setFilters((f) => ({ ...f, seats: e.target.value }))}>
+            <option value="">Any seats</option>
+            {SEAT_BANDS.map((b) => (
+              <option key={b.value} value={b.value}>{b.label}</option>
+            ))}
+            <option value="none">Not captured</option>
           </select>
         </label>
         <button
@@ -314,7 +326,7 @@ function isGap(l: Lead): boolean {
   if (st === "none" || st === "won" || st === "lost" || st === "junk") return false;
   return !seatsOf(l) || !centerOf(l);
 }
-const seatsOf = (l: Lead) => l.seat_capacity ?? l._enquiry?.seat_capacity ?? null;
+const seatsOf = (l: Lead) => sheetSeats(l) || null;
 const centerOf = (l: Lead) => l.location?.name ?? l._enquiry?.preferred_location ?? null;
 
 function SheetRow({ lead: l, nowMs, onOpen }: { lead: Lead; nowMs: number; onOpen: () => void }) {
