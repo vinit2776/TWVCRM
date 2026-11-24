@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
 
   const LEAD_SELECT =
-    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(id, follow_up_date, is_follow_up_done, follow_up_notes, subject, type)";
+    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), flagger:users!leads_flagged_by_fkey(full_name), _pending_followups:activities!activities_lead_id_fkey(id, follow_up_date, is_follow_up_done, follow_up_notes, subject, type)";
 
   type Followup = {
     id: string;

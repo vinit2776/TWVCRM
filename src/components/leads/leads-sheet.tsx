@@ -15,6 +15,7 @@ import {
   SHEET_STATUSES,
   SHEET_STATUS_META,
   dayHeading,
+  flagTooltip,
   filtersActive,
   groupByDay,
   istDay,
@@ -26,6 +27,7 @@ import {
   type SheetFilters,
   type SheetStatus,
 } from "@/lib/lead-sheet";
+import { LeadFlagControl, type FlagFields } from "@/components/leads/lead-flag-control";
 import type { Lead } from "@/types";
 
 const PAGE_SIZE = 100;
@@ -218,17 +220,17 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
         <table className="w-full min-w-[1080px] border-collapse text-sm">
           <thead className="sticky top-0 z-10 bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
-              {["Received", "Channel", "Full name", "Phone", "Seats", "Center", "Last action", "Next call", "Owner"].map((h) => (
+              {["Received", "Channel", "Full name", "Phone", "Seats", "Center", "Last action", "Next call", "Owner", "Flag"].map((h) => (
                 <th key={h} className="whitespace-nowrap px-3 py-2 font-medium">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={9} className="px-3 py-10 text-center text-muted-foreground"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></td></tr>
+              <tr><td colSpan={10} className="px-3 py-10 text-center text-muted-foreground"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></td></tr>
             )}
             {!loading && groups.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">No leads match these filters.</td></tr>
+              <tr><td colSpan={10} className="px-3 py-10 text-center text-muted-foreground">No leads match these filters.</td></tr>
             )}
             {!loading &&
               groups.map((g) => {
@@ -237,7 +239,7 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
                 return (
                   <Fragment key={g.day}>
                     <tr onClick={() => toggleDay(g.day)} className="cursor-pointer bg-slate-200/70 hover:bg-slate-200">
-                      <td colSpan={9} className="sticky top-8 px-3 py-1.5">
+                      <td colSpan={10} className="sticky top-8 px-3 py-1.5">
                         <span className="inline-flex items-center gap-2">
                           {folded ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                           <b>{dayHeading(g.day, today)}</b>
@@ -253,7 +255,7 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
                         </span>
                       </td>
                     </tr>
-                    {!folded && g.rows.map((l) => <SheetRow key={l.id} lead={l} nowMs={nowMs} onOpen={() => router.push(`/leads/${l.id}/activity`)} />)}
+                    {!folded && g.rows.map((l) => <SheetRow key={l.id} lead={l} nowMs={nowMs} onOpen={() => router.push(`/leads/${l.id}/activity`)} onFlag={(f) => setRows((prev) => prev.map((r) => (r.id === l.id ? { ...r, ...f } : r)))} />)}
                   </Fragment>
                 );
               })}
@@ -329,7 +331,7 @@ function isGap(l: Lead): boolean {
 const seatsOf = (l: Lead) => sheetSeats(l) || null;
 const centerOf = (l: Lead) => l.location?.name ?? l._enquiry?.preferred_location ?? null;
 
-function SheetRow({ lead: l, nowMs, onOpen }: { lead: Lead; nowMs: number; onOpen: () => void }) {
+function SheetRow({ lead: l, nowMs, onOpen, onFlag }: { lead: Lead; nowMs: number; onOpen: () => void; onFlag: (f: FlagFields) => void }) {
   const st = sheetStatus(l);
   const meta = SHEET_STATUS_META[st];
   const last = sheetLastAction(l);
@@ -344,6 +346,7 @@ function SheetRow({ lead: l, nowMs, onOpen }: { lead: Lead; nowMs: number; onOpe
   return (
     <tr
       onClick={onOpen}
+      title={flagTooltip(l) || undefined}
       className="cursor-pointer border-b hover:brightness-95"
       style={{ background: meta.bg, color: st === "lost" || st === "junk" ? "#7a6a6a" : undefined }}
     >
@@ -383,6 +386,9 @@ function SheetRow({ lead: l, nowMs, onOpen }: { lead: Lead; nowMs: number; onOpe
         )}
       </td>
       <td className={cell}>{l.assigned_user?.full_name ?? <span className="text-muted-foreground">Unassigned</span>}</td>
+      <td className="px-2 py-2 text-center">
+        <LeadFlagControl lead={l} onChanged={onFlag} />
+      </td>
     </tr>
   );
 }

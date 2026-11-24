@@ -4,7 +4,7 @@
  * tested without a screen.
  */
 
-export type SheetStatus = "none" | "spoke" | "noanswer" | "tour" | "quote" | "won" | "lost" | "junk";
+export type SheetStatus = "none" | "flag" | "spoke" | "noanswer" | "tour" | "quote" | "won" | "lost" | "junk";
 
 export interface SheetStatusMeta {
   label: string;
@@ -15,10 +15,11 @@ export interface SheetStatusMeta {
 }
 
 /** The colour scheme, in the order the guide lists it. */
-export const SHEET_STATUSES: SheetStatus[] = ["none", "spoke", "noanswer", "tour", "quote", "won", "lost", "junk"];
+export const SHEET_STATUSES: SheetStatus[] = ["none", "flag", "spoke", "noanswer", "tour", "quote", "won", "lost", "junk"];
 
 export const SHEET_STATUS_META: Record<SheetStatus, SheetStatusMeta> = {
   none: { label: "Not attended", hint: "Nobody has acted yet. Needs a call now.", bg: "#ffe1dc", bar: "#d92d20" },
+  flag: { label: "Flagged", hint: "Marked for attention. Hover the row for why.", bg: "#ffd8a8", bar: "#f06a00" },
   spoke: { label: "Spoke", hint: "Reached; waiting on the next step", bg: "#e4effc", bar: "#3b82d6" },
   noanswer: { label: "No answer", hint: "Tried, not reached; retry due", bg: "#fff3c8", bar: "#e0a800" },
   tour: { label: "Tour booked", hint: "Visit planned", bg: "#efe6fb", bar: "#8a52d6" },
@@ -34,6 +35,9 @@ export interface SheetLeadInput {
   created_at: string;
   seat_capacity?: number | null;
   _enquiry?: { seat_capacity?: number | null } | null;
+  flagged_at?: string | null;
+  flag_reason?: string | null;
+  flagger?: { full_name?: string | null } | null;
   assigned_user?: { full_name?: string | null } | null;
   _last_contact?: { subject: string; at: string; note: string | null; by?: string | null } | null;
 }
@@ -66,6 +70,8 @@ const BY_SUBJECT: Record<string, SheetStatus> = {
  * when it is sent), then the last thing a person logged, then what the status implies.
  */
 export function sheetStatus(lead: SheetLeadInput): SheetStatus {
+  // A flag is a person's call to look at this one, so it wins over where the lead stands.
+  if (lead.flagged_at) return "flag";
   const s = lead.status;
   if (s === "won") return "won";
   if (s === "lost") return "lost";
@@ -134,6 +140,13 @@ export function groupByDay<T extends { created_at: string }>(rows: T[]): DayGrou
     else groups.push({ day, rows: [r] });
   }
   return groups;
+}
+
+/** The hover text for a flagged row: why, who, when. Empty when the lead is not flagged. */
+export function flagTooltip(lead: Pick<SheetLeadInput, "flagged_at" | "flag_reason" | "flagger">): string {
+  if (!lead.flagged_at) return "";
+  const who = lead.flagger?.full_name;
+  return `Flagged${who ? ` by ${who}` : ""}: ${lead.flag_reason ?? "no reason given"}`;
 }
 
 /** Days older than this start folded, while nothing is filtered. */

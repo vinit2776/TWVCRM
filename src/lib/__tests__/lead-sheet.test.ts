@@ -10,6 +10,7 @@ import {
   istDay,
   standardActionLabel,
   sheetSeats,
+  flagTooltip,
   type SheetLeadInput,
 } from "../lead-sheet";
 
@@ -165,5 +166,30 @@ describe("seats filter", () => {
     expect(passesSheetFilters(lead(), f("none"))).toBe(true);
     expect(passesSheetFilters(lead({ seat_capacity: 5 }), f("none"))).toBe(false);
     expect(passesSheetFilters(lead(), f("2-3"))).toBe(false);
+  });
+});
+
+describe("flag", () => {
+  const flagged = (over: Partial<SheetLeadInput> = {}) =>
+    lead({ flagged_at: "2026-11-24T06:00:00Z", flag_reason: "Big company, call today", flagger: { full_name: "Priya" }, ...over });
+  it("takes over the row colour from every status, closed ones included", () => {
+    expect(sheetStatus(flagged())).toBe("flag");
+    expect(sheetStatus(flagged({ status: "won" }))).toBe("flag");
+    expect(sheetStatus(flagged({ status: "junk" }))).toBe("flag");
+    expect(sheetStatus(lead({ flagged_at: null }))).toBe("none");
+  });
+  it("does not change the last action or what Not contacted means", () => {
+    expect(sheetLastAction(flagged())).toBeNull();
+    expect(sheetLastAction(flagged({ _last_contact: call("Spoke") }))?.label).toBe("Spoke");
+  });
+  it("says why, and who, on hover; nothing when not flagged", () => {
+    expect(flagTooltip(flagged())).toBe("Flagged by Priya: Big company, call today");
+    expect(flagTooltip(flagged({ flagger: null }))).toBe("Flagged: Big company, call today");
+    expect(flagTooltip(lead())).toBe("");
+  });
+  it("can be picked in the colour guide like any status", () => {
+    const f = { notContacted: false, lastAction: "", seats: "", statuses: ["flag"] as "flag"[] };
+    expect(passesSheetFilters(flagged(), f)).toBe(true);
+    expect(passesSheetFilters(lead(), f)).toBe(false);
   });
 });
