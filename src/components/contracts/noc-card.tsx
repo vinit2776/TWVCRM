@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, FileText, Loader2, Lock, Plus, ShieldCheck } from "lucide-react";
+import { AlertTriangle, FileText, Loader2, Lock, Plus, ShieldCheck, Stamp } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
-  canOrderNoc, canVoidNoc, isVoidable, nocMarkers, NOC_STATUS_COLORS, NOC_STATUS_LABELS, PURPOSE_LABELS,
+  canOrderNoc, canVoidNoc, isVoidable, issueBlocker, nocMarkers, NOC_STATUS_COLORS, NOC_STATUS_LABELS, PURPOSE_LABELS,
   validateOrder, type NocBrief, type NocMarker, type NocPurpose, type NocStatus,
 } from "@/lib/noc/rules";
 
@@ -239,7 +239,7 @@ function NocDetail({ contractId, noc, data, userRole, onChanged, onClose }: {
       {noc.status !== "issued" && noc.status !== "void" && (
         <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-          <span><b>Draft only.</b> The watermark stays and the stamp and seal cannot be placed until the fee is paid in full. Sending to the customer, payment and issue arrive in the next release; for now this is a staff-only draft and nothing has been sent to anyone.</span>
+          <span><b>Draft only.</b> The watermark stays and the stamp and seal cannot be placed until the fee is paid in full. Sending to the customer and payment arrive in the next release; for now this is a staff-only draft and nothing has been sent to anyone.</span>
         </div>
       )}
       {noc.status === "void" && (
@@ -279,6 +279,12 @@ function NocDetail({ contractId, noc, data, userRole, onChanged, onClose }: {
           </div>
         </div>
       </div>
+      {noc.status !== "void" && noc.status !== "issued" && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-3 py-2">
+          <Button size="sm" disabled title={issueBlocker(userRole, noc.status, false) ?? ""}><Stamp className="mr-1 h-4 w-4" />Stamp, seal and issue</Button>
+          <span className="text-muted-foreground text-xs">{issueBlocker(userRole, noc.status, false)} Admin only, using the same company stamp and seal as contracts and Virtual Office.</span>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         <Button size="sm" variant="outline" onClick={onClose}>Close</Button>
         {canVoidNoc(userRole) && isVoidable(noc.status) && (

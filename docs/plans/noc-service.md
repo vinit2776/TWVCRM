@@ -25,7 +25,7 @@ A paid service on a contract. The customer asks for a No Objection Certificate s
 3. **Customer page** (public, token, no login). Shows the service, centre, fee and the disclaimers. Payment opens only after the customer ticks acceptance. We record when and from where. Accepting creates a fresh Razorpay link for the exact total, never reusing an old one, then forwards to the gateway.
 4. **Payment**. By the gateway (webhook marks it paid), or by **Report paid** on the page, on the contract or on the Receivables row, which goes to accounts to verify against the bank, the same as every other receivable. Only a gateway payment or an accounts-verified payment counts.
 5. **Confirmation**. The customer page shows payment details (amount, date, payment ID, validity). The customer also gets a receipt email.
-6. **Issue**. Once paid in full, a manager or admin stamps and seals the NOC (existing seal tools), the watermark goes, and the NOC is emailed to the customer.
+6. **Issue**. Once the payment is recorded in full, the stamp and seal function unlocks for an **admin only**. It is the same company signature and seal already used on contracts and Virtual Office agreements (`drawCompanyStamp`, with a unique stamp reference printed beside the seal and logged). The watermark goes, and the NOC is emailed to the customer. Before payment the button is visible but disabled, with the reason beside it, so nobody is left guessing.
 7. **Tally and AR**. The ad-hoc invoice mirrors into a billing statement, so it appears in Receivables with the usual reminder ladder (soft ladder, Remind, Report paid), and on payment lands in the Tally Inbox as a GST invoice task. Accounts do what they already do.
 8. **Update the agreements**. After payment (and issue) the contract page offers "Update the agreements?", listing every live contract for the same customer. One click drafts a "Change of address" addendum for each, using the addendum flow (approve, customer signs on paper, stamp and seal, apply). The prompt is derived from data, so it stays until each addendum is applied or someone records why not.
 
@@ -185,7 +185,7 @@ These were checked by reading the code. Not yet exercised end to end on staging.
 ## Needs your decision before building
 
 1. **Clause wording.** Now taken from your template, so approved in substance. Please still have the lawyer confirm the clauses and service terms as shown to the customer. They are stored with a version and hash, so a later change never rewrites what a customer accepted.
-2. **Who issues.** Proposed: admin and manager can stamp, seal and issue; sales rep can order and email. OK?
+2. **Who issues.** Settled: admin only, and only once the payment is recorded. Admin, manager and sales rep can order, email and void an unpaid order.
 3. **Validity and extensions.** Proposed: validity follows the contract's end date live, so a short extension also lengthens the NOC. Or should it be frozen at the date of issue?
 4. **GST invoice details.** SAC code and 18% for this service: confirm with accounts, since the Tally invoice will carry it.
 5. **Addressee.** The template is addressed 'To The Registrar of Companies, (Tamilnadu)' for both purposes. For GST, should it name the GST officer instead? Proposed: one template, with the addressee switching by purpose unless you say it stays the same.

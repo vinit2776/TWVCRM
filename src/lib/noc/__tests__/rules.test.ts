@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildNocLetter, canIssueNoc, canOrderNoc, canOrderOnContract, computeFee, dotDate, isNocExpired, isVoidable,
+  buildNocLetter, canIssueNoc, issueBlocker, canOrderNoc, canOrderOnContract, computeFee, dotDate, isNocExpired, isVoidable,
   nocLetterText, nocMarkers, nocReference, nocValidUntil, NOC_CLAUSES, validateOrder, type NocLetterInput,
 } from "../rules";
 
@@ -101,11 +101,20 @@ describe("markers", () => {
 });
 
 describe("who and when", () => {
-  it("lets admin, manager and sales rep order, and only admin and manager issue", () => {
+  it("lets admin, manager and sales rep order, and only an admin stamp, seal and issue", () => {
     for (const r of ["admin", "manager", "sales_rep"]) expect(canOrderNoc(r)).toBe(true);
     for (const r of ["accounts", "fms", "coordinator", null]) expect(canOrderNoc(r as string | null)).toBe(false);
-    expect(canIssueNoc("sales_rep")).toBe(false);
-    expect(canIssueNoc("manager")).toBe(true);
+    expect(canIssueNoc("admin")).toBe(true);
+    for (const r of ["manager", "sales_rep", "accounts", "office_admin", null]) expect(canIssueNoc(r as string | null)).toBe(false);
+  });
+
+  it("opens stamp, seal and issue only for an admin and only once the payment is recorded in full", () => {
+    expect(issueBlocker("admin", "draft", false)).toContain("payment is recorded in full");
+    expect(issueBlocker("admin", "accepted", false)).toContain("payment is recorded in full");
+    expect(issueBlocker("manager", "paid", true)).toContain("Only an admin");
+    expect(issueBlocker("admin", "paid", true)).toBeNull();
+    expect(issueBlocker("admin", "issued", true)).toBe("Already issued.");
+    expect(issueBlocker("admin", "void", true)).toBe("This order is void.");
   });
 
   it("voids only before payment", () => {

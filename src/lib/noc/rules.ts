@@ -37,8 +37,24 @@ export const canOrderOnContract = (status: string) => (NOC_CONTRACT_STATUSES as 
 // ── Roles ────────────────────────────────────────────────────────────────────────────────────────────────────
 export const canOrderNoc = (role: string | null | undefined) => ["admin", "manager", "sales_rep"].includes(role ?? "");
 export const canVoidNoc = canOrderNoc;
-/** Stamp, seal and issue: arrives in a later part, defined here so the rule lives in one place. */
-export const canIssueNoc = (role: string | null | undefined) => ["admin", "manager"].includes(role ?? "");
+/**
+ * Stamp, seal and issue: admin only, the same as the stamp and seal already used on contracts and Virtual Office
+ * agreements (the company signature and seal, with a unique stamp reference). The action itself arrives in a later
+ * part; the rule lives here so the screen and the API cannot disagree.
+ */
+export const canIssueNoc = (role: string | null | undefined) => role === "admin";
+
+/**
+ * Why stamp-seal-issue cannot be used right now, in plain words, or null when it can. Payment must be recorded in
+ * full (read from the payment itself by the caller, never a flag a person can set), and only an admin may do it.
+ */
+export function issueBlocker(role: string | null | undefined, status: NocStatus, paymentRecordedInFull: boolean): string | null {
+  if (status === "issued") return "Already issued.";
+  if (status === "void") return "This order is void.";
+  if (!paymentRecordedInFull) return "Unlocks when the payment is recorded in full.";
+  if (!canIssueNoc(role)) return "Only an admin can stamp, seal and issue.";
+  return null;
+}
 
 /** A paid or issued order cannot be voided: a refund is a manual, accounts-led step. */
 export const isVoidable = (status: NocStatus) => status === "draft" || status === "sent" || status === "accepted";
