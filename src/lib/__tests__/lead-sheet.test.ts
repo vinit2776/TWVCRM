@@ -9,6 +9,7 @@ import {
   passesSheetFilters,
   istDay,
   standardActionLabel,
+  sheetSeats,
   type SheetLeadInput,
 } from "../lead-sheet";
 
@@ -105,7 +106,7 @@ describe("waitingText", () => {
 });
 
 describe("passesSheetFilters", () => {
-  const none = { notContacted: false, lastAction: "", statuses: [] as never[] };
+  const none = { notContacted: false, lastAction: "", seats: "", statuses: [] as never[] };
   it("passes everything with no filters", () => {
     expect(passesSheetFilters(lead(), none)).toBe(true);
   });
@@ -142,7 +143,27 @@ describe("standardActionLabel", () => {
   it("shows the standard label in the last action, and the filter matches it", () => {
     const l = lead({ status: "contacted", _last_contact: call("call") });
     expect(sheetLastAction(l)?.label).toBe("Call logged");
-    expect(passesSheetFilters(l, { notContacted: false, lastAction: "Call logged", statuses: [] })).toBe(true);
+    expect(passesSheetFilters(l, { notContacted: false, lastAction: "Call logged", seats: "", statuses: [] })).toBe(true);
     expect(sheetStatus(lead({ status: "tour_scheduled", _last_contact: call("tour") }))).toBe("tour");
+  });
+});
+
+describe("seats filter", () => {
+  const f = (seats: string) => ({ notContacted: false, lastAction: "", seats, statuses: [] as never[] });
+  it("reads the lead's own seat count, else the enquiry's", () => {
+    expect(sheetSeats(lead({ seat_capacity: 4 }))).toBe(4);
+    expect(sheetSeats(lead({ _enquiry: { seat_capacity: 6 } }))).toBe(6);
+    expect(sheetSeats(lead())).toBeNull();
+  });
+  it("matches a range, inclusive at both ends", () => {
+    expect(passesSheetFilters(lead({ seat_capacity: 3 }), f("2-3"))).toBe(true);
+    expect(passesSheetFilters(lead({ seat_capacity: 4 }), f("2-3"))).toBe(false);
+    expect(passesSheetFilters(lead({ seat_capacity: 30 }), f("26+"))).toBe(true);
+    expect(passesSheetFilters(lead({ seat_capacity: 1 }), f("1"))).toBe(true);
+  });
+  it("'not captured' keeps only leads with no seat count", () => {
+    expect(passesSheetFilters(lead(), f("none"))).toBe(true);
+    expect(passesSheetFilters(lead({ seat_capacity: 5 }), f("none"))).toBe(false);
+    expect(passesSheetFilters(lead(), f("2-3"))).toBe(false);
   });
 });

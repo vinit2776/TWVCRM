@@ -32,6 +32,8 @@ export const SHEET_STATUS_META: Record<SheetStatus, SheetStatusMeta> = {
 export interface SheetLeadInput {
   status: string;
   created_at: string;
+  seat_capacity?: number | null;
+  _enquiry?: { seat_capacity?: number | null } | null;
   assigned_user?: { full_name?: string | null } | null;
   _last_contact?: { subject: string; at: string; note: string | null; by?: string | null } | null;
 }
@@ -157,23 +159,47 @@ export function waitingText(createdAt: string, nowMs: number): string {
   return hours < 24 ? `${hours} h` : `${Math.round(hours / 24)} d`;
 }
 
+/** The seat count captured for a lead: its own, else what the latest enquiry asked for. */
+export function sheetSeats(lead: SheetLeadInput): number | null {
+  return lead.seat_capacity ?? lead._enquiry?.seat_capacity ?? null;
+}
+
+/** The ranges in the Seats filter. "none" is a lead whose seat count was never captured. */
+export const SEAT_BANDS: { value: string; label: string; min: number; max: number }[] = [
+  { value: "1", label: "1 seat", min: 1, max: 1 },
+  { value: "2-3", label: "2 to 3", min: 2, max: 3 },
+  { value: "4-6", label: "4 to 6", min: 4, max: 6 },
+  { value: "7-10", label: "7 to 10", min: 7, max: 10 },
+  { value: "11-25", label: "11 to 25", min: 11, max: 25 },
+  { value: "26+", label: "26 or more", min: 26, max: Infinity },
+];
+
+function inSeatBand(seats: number | null, band: string): boolean {
+  if (band === "none") return seats === null || seats === 0;
+  const b = SEAT_BANDS.find((x) => x.value === band);
+  return !b || (seats !== null && seats >= b.min && seats <= b.max);
+}
+
 export interface SheetFilters {
   /** Only leads nobody has acted on. */
   notContacted: boolean;
   /** Last action label, or "" for any. */
   lastAction: string;
+  /** A seat range from SEAT_BANDS, "none" for not captured, or "" for any. */
+  seats: string;
   /** Statuses picked in the colour guide; empty means all. */
   statuses: SheetStatus[];
 }
 
 export function filtersActive(f: SheetFilters, extra: { center: string; channel: string; owner: string }): boolean {
-  return f.notContacted || !!f.lastAction || f.statuses.length > 0 || !!extra.center || !!extra.channel || !!extra.owner;
+  return f.notContacted || !!f.lastAction || !!f.seats || f.statuses.length > 0 || !!extra.center || !!extra.channel || !!extra.owner;
 }
 
 export function passesSheetFilters(lead: SheetLeadInput, f: SheetFilters, opts: { skipStatuses?: boolean } = {}): boolean {
   const last = sheetLastAction(lead);
   if (f.notContacted && last) return false;
   if (f.lastAction && last?.label !== f.lastAction) return false;
+  if (f.seats && !inSeatBand(sheetSeats(lead), f.seats)) return false;
   if (!opts.skipStatuses && f.statuses.length > 0 && !f.statuses.includes(sheetStatus(lead))) return false;
   return true;
 }
