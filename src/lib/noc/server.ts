@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createHash, randomInt } from "crypto";
+import { isRealProduction } from "@/lib/noc/safe-send";
 import { buildNocLetter, type NocLetterInput, type NocPurpose } from "@/lib/noc/rules";
 
 export interface NocSettings {
@@ -67,3 +69,16 @@ export function letterFor(noc: NocRow, contract: ContractFacts, s: NocSettings, 
 }
 
 export const clientIp = (h: Headers) => h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || null;
+
+// ── Crypto helpers (server only) ─────────────────────────────────────────────────────────────────────────────
+export const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
+export const generateOtp = () => String(randomInt(0, 1_000_000)).padStart(6, "0");
+/** Codes are stored hashed and tied to the order, so a leaked table row is useless for another order. */
+export const hashOtp = (code: string, nocId: string) => sha256(`noc-otp:${nocId}:${code.trim()}`);
+
+/** Where customer-facing links point: the live address in production, otherwise the address the request came in on. */
+export function appOrigin(reqUrl: string): string {
+  if (isRealProduction()) return (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim().replace(/\/$/, "");
+  return new URL(reqUrl).origin;
+}
+export const customerLink = (origin: string, token: string) => `${origin}/noc/${token}`;

@@ -16,6 +16,7 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/walkin") ||
     pathname.startsWith("/feedback") ||
     pathname.startsWith("/pay") ||
+    pathname.startsWith("/noc") ||
     pathname.startsWith("/verify") ||
     pathname === "/offline" ||
     pathname.startsWith("/asset");
