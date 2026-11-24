@@ -14,7 +14,7 @@ import { formatDate } from "@/lib/utils";
 import { ENTITY_TYPE_LABELS } from "@/lib/constants";
 import {
   ADDENDUM_STATUS_LABELS, checklistFor, KIND_LABELS, contextWarnings, canApproveAddendum, canAuthorAddendum, canSealAddendum,
-  findPlaceholders, isEditable, longDate, type AddendumStatus, type ChangeOfNameKind,
+  findPlaceholders, isEditable, longDate, careOfInText, CARE_OF_MESSAGE, isCompanyLike, CARE_OF_RE, type AddendumStatus, type ChangeOfNameKind,
 } from "@/lib/addendum/change-of-name";
 
 interface Addendum {
@@ -27,7 +27,7 @@ interface Addendum {
   decision_note: string | null;
   signed_document_id: string | null;
   sealed_document_id: string | null;
-  params: { kind?: ChangeOfNameKind; newName: string; effectiveDate: string; docsHeld?: string[] };
+  params: { kind?: ChangeOfNameKind; newName: string; entityType?: string; effectiveDate: string; docsHeld?: string[] };
   created_by: string | null;
   created_by_user?: { full_name: string } | null;
   decided_by_user?: { full_name: string } | null;
@@ -185,6 +185,7 @@ function CreateDialog({ base, lead, onClose, onCreated }: { base: string; lead: 
   const checklist = kind ? checklistFor(kind, f.outgoingIsEntity) : [];
   const missing = checklist.filter((d) => !docs.includes(d));
   const same = kind === "same_entity";
+  const careOfBadForm = isCompanyLike(same ? (lead?.entity_type || "other") : f.entityType, f.newName) && CARE_OF_RE.test(f.registeredAddress);
   const warnings = kind ? contextWarnings(kind, f.pan, lead?.pan_number, f.entityType, lead?.entity_type) : [];
   const currentName = lead?.company?.trim() || `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim();
 
@@ -226,7 +227,8 @@ function CreateDialog({ base, lead, onClose, onCreated }: { base: string; lead: 
           <div className="space-y-1"><Label>PAN{same ? " (if re-issued)" : ""}</Label><Input value={f.pan} onChange={set("pan")} placeholder="optional" /></div>
           <div className="space-y-1"><Label>CIN / registration no.</Label><Input value={f.cin} onChange={set("cin")} placeholder="optional" /></div>
           <div className="space-y-1"><Label>Effective from (first invoice in the new name)</Label><Input type="date" value={f.effectiveDate} onChange={set("effectiveDate")} /></div>
-          <div className="space-y-1 sm:col-span-2"><Label>{same ? "Address" : "Registered address"}</Label><Input value={f.registeredAddress} onChange={set("registeredAddress")} /></div>
+          <div className="space-y-1 sm:col-span-2"><Label>{same ? "Address" : "Registered address"}</Label><Input value={f.registeredAddress} onChange={set("registeredAddress")} />
+            {careOfBadForm && <p className="flex items-start gap-1 text-xs text-red-700"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{CARE_OF_MESSAGE}</p>}</div>
           {!same && (<>
             <div className="space-y-1"><Label>Who is the outgoing party?</Label>
               <select className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm" value={String(f.outgoingIsEntity)} onChange={(e) => setF({ ...f, outgoingIsEntity: e.target.value === "true" })}>
@@ -260,7 +262,7 @@ function CreateDialog({ base, lead, onClose, onCreated }: { base: string; lead: 
           {missing.length > 0 && <p className="mt-2 flex items-start gap-1 text-xs text-amber-700"><AlertTriangle className="mt-0.5 h-3.5 w-3.5" />Not yet received: {missing.join("; ")}. This does not stop the draft. Upload them on the Documents card above.</p>}
         </div>
         </>)}
-        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={create} disabled={busy || !kind || !f.newName || !f.signatoryName || (kind === "new_entity" && f.outgoingIsEntity && !f.outgoingSignatoryName) || reason.trim().length < 5}>{busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Draft addendum</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={create} disabled={busy || careOfBadForm || !kind || !f.newName || !f.signatoryName || (kind === "new_entity" && f.outgoingIsEntity && !f.outgoingSignatoryName) || reason.trim().length < 5}>{busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Draft addendum</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -278,6 +280,7 @@ function AddendumPanel({ base, a, userRole, others, onChanged }: { base: string;
   const [pdfKey, setPdfKey] = useState(0);
   const dirty = text !== a.current_text;
   const open = findPlaceholders(text);
+  const careOfBad = careOfInText(text, a.params);
 
   useEffect(() => { setText(a.current_text); }, [a.current_text]);
   useEffect(() => { fetch(url).then((r) => r.ok ? r.json() : null).then((j) => j && setDetail(j.data)); }, [url, a.status]);
@@ -313,6 +316,7 @@ function AddendumPanel({ base, a, userRole, others, onChanged }: { base: string;
           <Label>Addendum wording{editable ? " (editable)" : " (locked)"}</Label>
           <Textarea className="min-h-[380px] font-serif text-sm leading-relaxed" value={text} readOnly={!editable} onChange={(e) => setText(e.target.value)} />
           {open.length > 0 && editable && <p className="flex items-start gap-1 text-xs text-amber-700"><AlertTriangle className="mt-0.5 h-3.5 w-3.5" />Fill in {open.join(", ")} before submitting.</p>}
+          {editable && careOfBad && <p className="flex items-start gap-1 text-xs text-red-700"><AlertTriangle className="mt-0.5 h-3.5 w-3.5" />{CARE_OF_MESSAGE} Edit the new party&apos;s line above, then save.</p>}
           {editable && text.includes(SIGNING_PLACEHOLDER) && (
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <Label htmlFor={`sign-date-${a.id}`} className="text-xs">Date of signing</Label>
@@ -323,7 +327,7 @@ function AddendumPanel({ base, a, userRole, others, onChanged }: { base: string;
           {editable && (
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" disabled={!dirty || busy} onClick={() => act({ action: "save", text }, "Saved as a new revision")}>Save changes</Button>
-              <Button size="sm" disabled={busy || dirty || open.length > 0} onClick={() => act({ action: "submit" }, "Submitted for approval")}>Submit for approval</Button>
+              <Button size="sm" disabled={busy || dirty || open.length > 0 || careOfBad} onClick={() => act({ action: "submit" }, "Submitted for approval")}>Submit for approval</Button>
               {dirty && <span className="text-muted-foreground self-center text-xs">Save before submitting.</span>}
             </div>
           )}

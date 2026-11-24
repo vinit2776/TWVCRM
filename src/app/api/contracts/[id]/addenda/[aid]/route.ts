@@ -4,7 +4,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { getActor } from "@/lib/addendum/server";
 import {
-  applyChanges, canApproveAddendum, canAuthorAddendum, canSealAddendum, findPlaceholders, isEditable,
+  applyChanges, canApproveAddendum, careOfInText, CARE_OF_MESSAGE, canAuthorAddendum, canSealAddendum, findPlaceholders, isEditable,
   type ChangeOfNameParams,
 } from "@/lib/addendum/change-of-name";
 
@@ -94,6 +94,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
       if (!canAuthorAddendum(actor.role)) return NextResponse.json({ error: "Your role cannot submit an addendum" }, { status: 403 });
       const open = findPlaceholders(a.current_text);
       if (open.length) return NextResponse.json({ error: `Fill in ${open.join(", ")} before submitting.`, placeholders: open }, { status: 400 });
+      if (careOfInText(a.current_text, a.params as ChangeOfNameParams)) return NextResponse.json({ error: CARE_OF_MESSAGE }, { status: 400 });
       const res = await move(["draft", "changes_requested"], { status: "pending_approval", decision_note: null });
       if (res.status === 200) audit("submitted");
       return res;

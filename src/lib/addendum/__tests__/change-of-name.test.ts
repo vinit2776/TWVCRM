@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyChanges, buildChangeOfNameText, canApproveAddendum, canAuthorAddendum, canSealAddendum, contextWarnings, checklistFor,
+  applyChanges, buildChangeOfNameText, careOfInText, canApproveAddendum, canAuthorAddendum, canSealAddendum, contextWarnings, checklistFor,
   findPlaceholders, signatureBlocks, isEditable, validateParams, type ChangeOfNameParams,
 } from "../change-of-name";
 
@@ -133,5 +133,25 @@ describe("entity-to-entity takeover", () => {
   it("uses an address, not a registered office, for a partnership", () => {
     expect(buildChangeOfNameText({ ...base, entityType: "partnership" }, 1)).toContain("having its address at");
     expect(buildChangeOfNameText({ ...base, entityType: "llp" }, 1)).toContain("registered office at");
+  });
+});
+
+describe("a company's address cannot be a personal care-of address", () => {
+  const co = { ...base, newName: "ANIQA GLITZ PRIVATE LIMITED", entityType: "pvt_ltd", registeredAddress: "S/O; Najimudeen, No 15, Egmore, Chennai" };
+  it("refuses S/O, D/O, W/O and C/O for a company", () => {
+    for (const mark of ["S/O", "D/O", "W/O", "C/O", "s / o"]) {
+      expect(validateParams({ ...co, registeredAddress: `${mark} Someone, Chennai` }).join()).toContain("address cannot read");
+    }
+  });
+  it("catches a company name even when the record is typed Individual", () => {
+    expect(validateParams({ ...co, entityType: "individual" }).join()).toContain("address cannot read");
+  });
+  it("still allows it for a person", () => {
+    expect(validateParams({ ...co, newName: "Mr Sample", entityType: "individual" })).toEqual([]);
+  });
+  it("flags the new party's line in the wording, not the outgoing person's", () => {
+    const text = '(2) Mr Old, of S/O; X, Chennai (the "Outgoing Member"); and\n(3) ANIQA GLITZ PRIVATE LIMITED, having its registered office at S/O; X (the "Incoming Member").';
+    expect(careOfInText(text, { entityType: "pvt_ltd", newName: "ANIQA GLITZ PRIVATE LIMITED" })).toBe(true);
+    expect(careOfInText(text.replace("S/O; X (the \"Inc", "Egmore (the \"Inc"), { entityType: "pvt_ltd", newName: "ANIQA GLITZ PRIVATE LIMITED" })).toBe(false);
   });
 });
