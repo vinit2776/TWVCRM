@@ -160,10 +160,11 @@ function Accept({ v, token, onDone }: { v: View; token: string; onDone: (d: { pa
       <div className="mb-4 rounded-lg border bg-gray-50 p-3">
         <p className="mb-2 text-xs text-gray-600">To confirm it is you, we email a code to {v.codeDestination ? <b>{v.codeDestination}</b> : "the email on your contract"}.</p>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={sendCode} disabled={busy || !v.codeDestination} className="rounded-md border border-[#015E65] px-3 py-1.5 text-sm font-semibold text-[#015E65] disabled:opacity-50">{sentTo ? "Send a new code" : "Email me a code"}</button>
+          <button type="button" onClick={sendCode} disabled={busy || !v.codeDestination} title={`Emails a 6-digit code to ${v.codeDestination ?? "the email on your contract"}. Nothing else happens.`} className="rounded-md border border-[#015E65] px-3 py-1.5 text-sm font-semibold text-[#015E65] disabled:opacity-50">{sentTo ? "Send a new code" : "Email me a code"}</button>
           <input className="w-36 rounded-md border px-3 py-1.5 text-sm tracking-widest" inputMode="numeric" maxLength={6} placeholder="6-digit code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
         </div>
-        {msg && <p className="mt-2 text-xs text-emerald-700">{msg}</p>}
+        <p className="mt-2 text-xs text-gray-500">{sentTo ? "Sends another code and the earlier one stops working." : `Emails a 6-digit code to ${v.codeDestination ?? "the email on your contract"}. Nothing else happens yet.`}</p>
+        {msg && <p className="mt-1 text-xs text-emerald-700">{msg}</p>}
         {!v.codeDestination && <p className="mt-2 text-xs text-red-600">We have no email on record for this contract. Please contact The WorkVilla.</p>}
       </div>
 
@@ -171,7 +172,7 @@ function Accept({ v, token, onDone }: { v: View; token: string; onDone: (d: { pa
       <button type="button" onClick={accept} disabled={!ready || busy} className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#015E65] px-4 py-3 font-semibold text-white disabled:opacity-40">
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}Accept and pay {inr(v.fee.total)}
       </button>
-      <p className="mt-2 text-center text-xs text-gray-500">We record when and from which device you accept. You then go to the secure payment page.</p>
+      <p className="mt-2 text-center text-xs text-gray-500">This records that you have read and accept the paragraphs above (with the time and your device) and then takes you to the secure payment page. You are not charged until you pay there.</p>
     </>
   );
 }
@@ -182,7 +183,10 @@ function Accepted({ v }: { v: View }) {
       <Summary v={v} />
       <p className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Thank you{v.acceptedBy ? `, ${v.acceptedBy}` : ""}. Your acceptance is recorded.</p>
       {v.payUrl ? (
-        <a href={v.payUrl} className="block w-full rounded-lg bg-[#015E65] px-4 py-3 text-center font-semibold text-white">Continue to payment · {inr(v.fee.total)}</a>
+        <>
+          <a href={v.payUrl} className="block w-full rounded-lg bg-[#015E65] px-4 py-3 text-center font-semibold text-white">Continue to payment · {inr(v.fee.total)}</a>
+          <p className="mt-2 text-center text-xs text-gray-500">Opens the secure payment page for {inr(v.fee.total)}. You are charged only when you complete the payment there.</p>
+        </>
       ) : (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{v.linkProblem ?? "The payment page is not ready yet. Please contact The WorkVilla."}</p>
       )}

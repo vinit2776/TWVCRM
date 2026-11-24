@@ -83,3 +83,40 @@ export async function prepareNocInvoice(admin: SupabaseClient, nocId: string, or
   const fresh = await loadNocBundle(admin, { id: nocId });
   return fresh ? { ok: true, bundle: fresh, link, created: true } : { ok: false, error: "NOC not found", status: 404 };
 }
+
+/**
+ * Takes a voided NOC's money side with it: cancels the gateway link (best effort), cancels the proforma invoice and
+ * voids its billing statement, so it drops out of Receivables and the reminder ladder stops chasing it. Refuses when a
+ * payment is already recorded (a paid order needs a credit note, not a void). The same three steps as cancelling an
+ * ad-hoc invoice by hand (POST /api/invoices/[id]/cancel), kept here so the NOC void is one action.
+ */
+export async function cancelNocInvoice(admin: SupabaseClient, nocId: string, actorId: string, reason: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { data: noc } = await admin.from("noc_requests").select("invoice_id, billing_statement_id, razorpay_link_id").eq("id", nocId).maybeSingle();
+  if (!noc?.invoice_id) return { ok: true }; // nothing was ever created, nothing to cancel
+
+  const { data: invoice } = await admin.from("proforma_invoices").select("id, invoice_number, status, notes").eq("id", noc.invoice_id).maybeSingle();
+  const { data: statement } = await admin.from("billing_statements").select("id, payment_status, voided_at").eq("invoice_id", noc.invoice_id).maybeSingle();
+  if (invoice?.status === "paid" || statement?.payment_status === "paid") return { ok: false, error: "A payment is already recorded for this order, so it cannot be voided. Ask accounts about a credit note." };
+
+  if (noc.razorpay_link_id) {
+    try {
+      const { data: rows } = await admin.from("app_settings").select("key, value").in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
+      const m: Record<string, string> = {};
+      (rows ?? []).forEach((r: { key: string; value: string }) => { m[r.key] = r.value; });
+      if (m.razorpay_enabled === "true" && m.razorpay_key_id && m.razorpay_key_secret) {
+        const auth = Buffer.from(`${m.razorpay_key_id}:${m.razorpay_key_secret}`).toString("base64");
+        await fetch(`https://api.razorpay.com/v1/payment_links/${noc.razorpay_link_id}/cancel`, { method: "POST", headers: { Authorization: `Basic ${auth}` } });
+      }
+    } catch (e) {
+      console.warn("[noc void] gateway link cancel failed (non-fatal):", e);
+    }
+  }
+  const now = new Date().toISOString();
+  if (invoice && invoice.status !== "cancelled") {
+    await admin.from("proforma_invoices").update({ status: "cancelled", notes: `${invoice.notes ? invoice.notes + "\n" : ""}Cancelled: NOC order voided (${reason})` }).eq("id", invoice.id);
+  }
+  if (statement && !statement.voided_at) {
+    await admin.from("billing_statements").update({ status: "voided", voided_at: now, voided_by: actorId, void_reason: `NOC order voided: ${reason}` }).eq("id", statement.id);
+  }
+  return { ok: true };
+}

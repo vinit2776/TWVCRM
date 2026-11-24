@@ -158,7 +158,12 @@ export function NocSidebarCard({ contractId, userRole }: { contractId: string; u
             <Badge variant="secondary" className={`shrink-0 ${NOC_STATUS_COLORS[n.status]}`}>{NOC_STATUS_LABELS[n.status]}</Badge>
           </button>
         ))}
-        {canOrder && <Button size="sm" variant="outline" className="w-full" onClick={() => emit(EV_ORDER)}><Plus className="mr-1 h-4 w-4" />Order NOC</Button>}
+        {canOrder && (
+          <div className="space-y-1">
+            <Button size="sm" variant="outline" className="w-full" onClick={() => emit(EV_ORDER)}><Plus className="mr-1 h-4 w-4" />Order NOC</Button>
+            <p className="text-muted-foreground text-[11px]">Opens a form to choose the purpose and centre. Nothing is created until you confirm there.</p>
+          </div>
+        )}
         <p className="text-muted-foreground text-[11px]">₹20,000 + GST each for ROC and GST. Valid till the contract ends, and not carried into a renewal.</p>
       </CardContent>
     </Card>
@@ -205,6 +210,16 @@ export function NocPanel({ contractId, userRole }: { contractId: string; userRol
       </Card>
       {dialog}
     </>
+  );
+}
+
+/** A button with a plain-words line saying what pressing it will (and will not) do. */
+function ActionRow({ children, note }: { children: React.ReactNode; note: string }) {
+  return (
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3">
+      <div className="sm:w-64 sm:shrink-0 [&>button]:w-full [&>button]:justify-start">{children}</div>
+      <p className="text-muted-foreground text-xs leading-snug sm:pt-1.5">{note}</p>
+    </div>
   );
 }
 
@@ -310,17 +325,33 @@ function NocDetail({ contractId, noc, data, userRole, onChanged, onClose }: {
         <div className="rounded-lg border">
           <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Send to the customer</div>
           <div className="space-y-3 p-3">
-            <div className="flex flex-wrap gap-2">
-              {canSend && <Button size="sm" onClick={() => setSendOpen(true)}><Mail className="mr-1 h-4 w-4" />Email PI and payment link</Button>}
-              {canSend && <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => shareLink("copy")}>{busy === "copy" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Copy className="mr-1 h-4 w-4" />}Copy customer link</Button>}
-              {canSend && <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => shareLink("whatsapp")}><MessageCircle className="mr-1 h-4 w-4" />Share on WhatsApp</Button>}
+            <div className="space-y-2.5">
+              {canSend && (
+                <ActionRow note="Opens a preview of the email first and sends nothing until you press Send there. Sending creates the proforma invoice (once) and emails it, with the customer link, to the customer.">
+                  <Button size="sm" onClick={() => setSendOpen(true)}><Mail className="mr-1 h-4 w-4" />Email PI and payment link</Button>
+                </ActionRow>
+              )}
+              {canSend && (
+                <ActionRow note="Creates the proforma invoice (once) and copies the customer link to your clipboard. Sends nothing: you share it yourself.">
+                  <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => shareLink("copy")}>{busy === "copy" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Copy className="mr-1 h-4 w-4" />}Copy customer link</Button>
+                </ActionRow>
+              )}
+              {canSend && (
+                <ActionRow note="Creates the proforma invoice (once) and opens WhatsApp with the message and link ready. Nothing is sent until you press send there.">
+                  <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => shareLink("whatsapp")}><MessageCircle className="mr-1 h-4 w-4" />Share on WhatsApp</Button>
+                </ActionRow>
+              )}
               {canTrackPayment && noc.billing_statement_id && (
-                <Button size="sm" variant="outline" className="border-teal-200 text-teal-700 hover:bg-teal-50" onClick={() => setReportOpen(true)} title="The customer says they paid outside the CRM: accounts will check the bank and record it">
-                  <BadgeIndianRupee className="mr-1 h-4 w-4" />Report payment received
-                </Button>
+                <ActionRow note="Tells accounts the customer says they paid outside the CRM (for example a bank transfer). Accounts check the bank and record it. Nothing is marked paid until they do.">
+                  <Button size="sm" variant="outline" className="border-teal-200 text-teal-700 hover:bg-teal-50" onClick={() => setReportOpen(true)}>
+                    <BadgeIndianRupee className="mr-1 h-4 w-4" />Report payment received
+                  </Button>
+                </ActionRow>
               )}
               {noc.status === "accepted" && !noc.razorpay_link_url && canOrderNoc(userRole) && (
-                <Button size="sm" variant="outline" disabled={busy !== null} onClick={retryGatewayLink}>{busy === "gateway" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}Create payment link</Button>
+                <ActionRow note="Asks the payment gateway for the customer&apos;s pay link for the exact total. The customer has already accepted. Sends nothing to the customer; the link then shows here.">
+                  <Button size="sm" variant="outline" disabled={busy !== null} onClick={retryGatewayLink}>{busy === "gateway" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}Create payment link</Button>
+                </ActionRow>
               )}
             </div>
             {detail.customerLink ? (
@@ -383,17 +414,17 @@ function NocDetail({ contractId, noc, data, userRole, onChanged, onClose }: {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <Button size="sm" variant="outline" onClick={onClose}>Close</Button>
+        <span className="flex items-center gap-2"><Button size="sm" variant="outline" onClick={onClose}>Close</Button><span className="text-muted-foreground text-xs">Closes this panel. Changes nothing.</span></span>
         {canVoidNoc(userRole) && isVoidable(noc.status) && (
           confirming ? (
             <div className="flex flex-1 flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              <span>Void this order? It cannot be restarted; you would order again.</span>
+              <span>Void this order? This cancels the unpaid proforma invoice and the payment link, takes it out of Receivables, and stops the customer&apos;s link working. It cannot be restarted; you would order again.</span>
               <Textarea className="min-h-[36px] w-full basis-full bg-white" rows={1} placeholder="Why (required)" value={reason} onChange={(e) => setReason(e.target.value)} />
               <Button size="sm" variant="destructive" disabled={busy !== null || reason.trim().length < 5} onClick={voidIt}>Yes, void</Button>
               <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setConfirming(false)}>Keep it</Button>
             </div>
           ) : (
-            <button className="text-muted-foreground text-sm underline" onClick={() => setConfirming(true)}>Void order</button>
+            <span className="flex flex-wrap items-center gap-2"><button className="text-muted-foreground text-sm underline" onClick={() => setConfirming(true)}>Void order</button><span className="text-muted-foreground text-xs">Asks you to confirm first. Cancels the unpaid proforma and the customer link.</span></span>
           )
         )}
       </div>
@@ -446,7 +477,7 @@ function SendDialog({ base, noc, onClose, onSent }: { base: string; noc: NocRow;
             <Label>To</Label>
             <div className="flex gap-2">
               <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="customer@company.com" />
-              <Button variant="outline" size="sm" disabled={busy || !to.includes("@")} onClick={() => load(to)}>Update preview</Button>
+              <Button variant="outline" size="sm" disabled={busy || !to.includes("@")} onClick={() => load(to)} title="Rebuilds the preview for this address. Sends nothing.">Update preview</Button>
             </div>
           </div>
           {preview ? (
@@ -462,6 +493,7 @@ function SendDialog({ base, noc, onClose, onSent }: { base: string; noc: NocRow;
           <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">This preview sends nothing. The proforma invoice is created now (once) and joins Receivables with the usual reminders.</p>
         </div>
         <DialogFooter>
+          <span className="text-muted-foreground mr-auto self-center text-xs">{preview ? `Send email emails this message now to ${to || "the address above"}, with the proforma attached.` : "Building the preview…"} Cancel closes without sending.</span>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={send} disabled={busy || !preview || !!preview.blockedReason || !!preview.piProblem || !to.includes("@")}>{busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Send email</Button>
         </DialogFooter>
@@ -581,6 +613,7 @@ function OrderDialog({ contractId, data, onClose, onCreated }: { contractId: str
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <span className="text-muted-foreground mr-auto self-center text-xs">Creates a draft order only. Nothing is sent and no money is taken.</span>
           <Button onClick={create} disabled={busy || problems.length > 0 || (!!centre && !centre.hasNocAddress && !centre.hasAddress)}>{busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Create draft order</Button>
         </DialogFooter>
       </DialogContent>

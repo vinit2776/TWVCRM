@@ -5,6 +5,7 @@ import { logAudit } from "@/lib/audit";
 import { getActor } from "@/lib/addendum/server";
 import { appOrigin, clientIp, customerLink, loadNocSettings, recordNocEvent } from "@/lib/noc/server";
 import { reconcileNocPaid } from "@/lib/noc/payment-sync";
+import { cancelNocInvoice } from "@/lib/noc/prepare";
 import { canVoidNoc, isVoidable, nocReference, type NocStatus } from "@/lib/noc/rules";
 
 type Ctx = { params: Promise<{ id: string; nid: string }> };
@@ -70,6 +71,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   if (!isVoidable(noc.status as NocStatus)) {
     return NextResponse.json({ error: noc.status === "void" ? "This NOC is already void." : "A NOC that is paid or issued cannot be voided here. Ask accounts about a refund." }, { status: 409 });
   }
+
+  // The money side first: cancel the proforma and its statement so Receivables stops chasing it.
+  const cancelled = await cancelNocInvoice(admin, nid, actor.id, parsed.data.reason);
+  if (!cancelled.ok) return NextResponse.json({ error: cancelled.error }, { status: 409 });
 
   const now = new Date().toISOString();
   const { data, error } = await admin
