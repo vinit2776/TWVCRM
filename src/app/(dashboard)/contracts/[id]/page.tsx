@@ -2041,10 +2041,6 @@ export default function ContractDetailPage({
             onChanged={() => fetchContract(false)}
           />
 
-          {["active", "renewal_in_progress", "accepted", "sent", "viewed"].includes(contract.status) && (
-            <AddendumCard contractId={id} userRole={userRole} onChanged={() => fetchContract(false)} />
-          )}
-
           {/* Line Items Table */}
           <Card>
             <CardHeader>
@@ -2129,6 +2125,11 @@ export default function ContractDetailPage({
             hasExistingDocument={!!contract.signed_document}
             onChanged={fetchContract}
           />
+
+          {/* Addenda sit right under the signed agreement they amend. */}
+          {["active", "renewal_in_progress", "accepted", "sent", "viewed"].includes(contract.status) && (
+            <AddendumCard contractId={id} userRole={userRole} onChanged={() => fetchContract(false)} />
+          )}
 
           {/* Terms & Conditions */}
           {contract.terms_and_conditions && (
