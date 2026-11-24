@@ -8,6 +8,7 @@ import {
   waitingText,
   passesSheetFilters,
   istDay,
+  standardActionLabel,
   type SheetLeadInput,
 } from "../lead-sheet";
 
@@ -121,5 +122,27 @@ describe("passesSheetFilters", () => {
     expect(passesSheetFilters(lead(), f)).toBe(true);
     expect(passesSheetFilters(lead({ status: "lost" }), f)).toBe(false);
     expect(passesSheetFilters(lead({ status: "lost" }), f, { skipStatuses: true })).toBe(true);
+  });
+});
+
+describe("standardActionLabel", () => {
+  it("keeps the standard labels, whatever their case", () => {
+    expect(standardActionLabel("Spoke")).toBe("Spoke");
+    expect(standardActionLabel("no answer")).toBe("No answer");
+    expect(standardActionLabel("Quote sent")).toBe("Quote sent");
+  });
+  it("turns the free text found in real data into a short fixed label", () => {
+    expect(standardActionLabel("call")).toBe("Call logged");
+    expect(standardActionLabel("Inbound call")).toBe("Call logged");
+    expect(standardActionLabel("tour")).toBe("Tour booked");
+    expect(standardActionLabel("Tour (yesterday, no outcome)")).toBe("Tour booked");
+    expect(standardActionLabel("Conference Room Booking — Arcade Conference Room")).toBe("Room booking");
+    expect(standardActionLabel("something else")).toBe("Contact logged");
+  });
+  it("shows the standard label in the last action, and the filter matches it", () => {
+    const l = lead({ status: "contacted", _last_contact: call("call") });
+    expect(sheetLastAction(l)?.label).toBe("Call logged");
+    expect(passesSheetFilters(l, { notContacted: false, lastAction: "Call logged", statuses: [] })).toBe(true);
+    expect(sheetStatus(lead({ status: "tour_scheduled", _last_contact: call("tour") }))).toBe("tour");
   });
 });

@@ -36,6 +36,22 @@ export interface SheetLeadInput {
   _last_contact?: { subject: string; at: string; note: string | null; by?: string | null } | null;
 }
 
+/**
+ * Activity subjects are free text: a call logged without one is saved as its type ("call"), a tour
+ * as "tour", a room booking as "Conference Room Booking — …". The sheet shows a short fixed set, so
+ * anything typed or defaulted maps to one of these.
+ */
+export function standardActionLabel(subject: string): string {
+  const t = subject.trim();
+  const exact = ["Spoke", "No answer", "Tour booked", "Quote sent"].find((x) => x.toLowerCase() === t.toLowerCase());
+  if (exact) return exact;
+  if (/^tour/i.test(t)) return "Tour booked";
+  if (/quote/i.test(t)) return "Quote sent";
+  if (/booking/i.test(t)) return "Room booking";
+  if (/call/i.test(t)) return "Call logged";
+  return "Contact logged";
+}
+
 const BY_SUBJECT: Record<string, SheetStatus> = {
   Spoke: "spoke",
   "No answer": "noanswer",
@@ -53,7 +69,7 @@ export function sheetStatus(lead: SheetLeadInput): SheetStatus {
   if (s === "lost") return "lost";
   if (s === "junk") return "junk";
   if (s === "proposal_sent" || s === "negotiating") return "quote";
-  const logged = lead._last_contact ? BY_SUBJECT[lead._last_contact.subject] : undefined;
+  const logged = lead._last_contact ? BY_SUBJECT[standardActionLabel(lead._last_contact.subject)] : undefined;
   if (logged) return logged;
   // A logged contact with a free-text subject ("Tour (tomorrow)", "Call"): the status says what it was.
   if (s === "tour_scheduled" || s === "tour_completed") return "tour";
@@ -78,7 +94,7 @@ export function sheetLastAction(lead: SheetLeadInput): SheetLastAction | null {
     return { label: "Proposal sent", by: owner, at: lead._last_contact?.at ?? null, auto: true };
   }
   if (lead._last_contact) {
-    return { label: lead._last_contact.subject, by: lead._last_contact.by ?? owner, at: lead._last_contact.at, auto: false };
+    return { label: standardActionLabel(lead._last_contact.subject), by: lead._last_contact.by ?? owner, at: lead._last_contact.at, auto: false };
   }
   // Moved on by the system or another screen without a logged call: the status still says someone acted.
   if (st === "tour_scheduled") return { label: "Tour booked", by: owner, at: null, auto: false };
@@ -163,4 +179,4 @@ export function passesSheetFilters(lead: SheetLeadInput, f: SheetFilters, opts: 
 }
 
 /** The choices in the Last action filter. */
-export const LAST_ACTION_CHOICES = ["Spoke", "No answer", "Tour booked", "Quote sent", "Proposal sent", "Won", "Not interested"];
+export const LAST_ACTION_CHOICES = ["Spoke", "No answer", "Tour booked", "Quote sent", "Proposal sent", "Won", "Not interested", "Call logged", "Room booking"];
