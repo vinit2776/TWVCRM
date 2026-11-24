@@ -141,7 +141,6 @@ export function AddendumCard({ contractId, userRole, onChanged }: Props) {
     };
   }, [load]);
 
-  const canAuthor = canAuthorAddendum(userRole);
   const refresh = () => { load(); emit(EV_CHANGED); onChanged?.(); };
   const dialog = creating && <CreateDialog base={base} lead={lead} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); refresh(); setOpenId(id); }} />;
   // With nothing to show, the sidebar card (Create button) is the only entry point; this panel appears with the first addendum.
