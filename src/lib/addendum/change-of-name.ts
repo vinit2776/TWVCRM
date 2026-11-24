@@ -57,6 +57,8 @@ export interface ChangeOfNameParams {
   outgoingSignatoryName?: string;
   outgoingSignatoryDesignation?: string;
   agreementDate: string;
+  /** The agreement's Commencement Date (schedule item 9). Optional so addenda drafted before this field still render. */
+  commencementDate?: string;
   contractNumber: string;
 }
 
@@ -70,12 +72,31 @@ export function validateParams(p: Partial<ChangeOfNameParams>): string[] {
   if (!p.effectiveDate || !/^\d{4}-\d{2}-\d{2}$/.test(p.effectiveDate)) errors.push("Pick the date the change takes effect.");
   if (!p.signatoryName?.trim()) errors.push("Enter the authorised signatory's name.");
   if (p.kind === "new_entity" && p.outgoingIsEntity && !p.outgoingSignatoryName?.trim()) errors.push("Enter who signs for the outgoing entity.");
+  if (isCompanyLike(p.entityType, p.newName) && CARE_OF_RE.test(p.registeredAddress ?? "")) errors.push(CARE_OF_MESSAGE);
   if (p.gstin && !GSTIN_RE.test(p.gstin.trim().toUpperCase())) errors.push("The GSTIN does not look right (15 characters).");
   if (p.pan && !PAN_RE.test(p.pan.trim().toUpperCase())) errors.push("The PAN does not look right (for example ABCDE1234F).");
   return errors;
 }
 
-const longDate = (iso: string) => {
+const COMPANY_TYPES = ["partnership", "llp", "pvt_ltd", "public_ltd", "trust", "society"];
+const COMPANY_NAME_RE = /\b(pvt\.?|private|limited|ltd\.?|llp|trust|society|inc\.?|corporation)\b/i;
+/** "S/O", "D/O", "W/O", "C/O": son of, daughter of, wife of, care of. Words that describe a person, not an organisation. */
+export const CARE_OF_RE = /\b[SDWC]\s*\/\s*O\b/i;
+
+/** True when the party being named is a company or other organisation, by its type or by how its name reads. */
+export const isCompanyLike = (entityType: string | undefined, name: string | undefined) =>
+  COMPANY_TYPES.includes(entityType ?? "") || COMPANY_NAME_RE.test(name ?? "");
+
+export const CARE_OF_MESSAGE =
+  "A company's address cannot read \"S/O\" (son of), \"D/O\", \"W/O\" or \"C/O\". Those describe a person. Use the registered office from its incorporation papers.";
+
+/** The party line for the new name in the wording, checked for a personal care-of address. */
+export function careOfInText(text: string, p: { entityType?: string; newName?: string }): boolean {
+  if (!isCompanyLike(p.entityType, p.newName) || !p.newName) return false;
+  return text.split("\n").some((l) => /^\(\d\)/.test(l.trim()) && l.includes(p.newName as string) && CARE_OF_RE.test(l));
+}
+
+export const longDate = (iso: string) => {
   const d = new Date(`${iso}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
@@ -89,7 +110,7 @@ const idList = (p: ChangeOfNameParams) =>
 const twvParty = `${COMPANY_NAME}, operating as ${BRAND_NAME}, of ${COMPANY_ADDRESS.join(" ")} ("TWV")`;
 
 function agreementLine(p: ChangeOfNameParams, n: number) {
-  return `This ADDENDUM NO. ${n} is made on [date of signing] to the Membership Agreement dated ${p.agreementDate ? longDate(p.agreementDate) : "[agreement date]"} (Contract ${p.contractNumber}) (the "Agreement") between:`;
+  return `This ADDENDUM NO. ${n} is made on [date of signing] to the Membership Agreement dated ${p.agreementDate ? longDate(p.agreementDate) : "[agreement date]"} (Contract ${p.contractNumber}), with a Commencement Date of ${p.commencementDate ? longDate(p.commencementDate) : "[commencement date]"} (the "Agreement"), between:`;
 }
 
 const gstClause = (p: ChangeOfNameParams, who: string) =>
