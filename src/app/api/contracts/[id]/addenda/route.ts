@@ -84,7 +84,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, contract_number, status, agreement_date, created_at, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
+    .select("id, contract_number, status, agreement_date, created_at, start_date, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
     .eq("id", id)
     .single();
   if (!contract) return NextResponse.json({ error: "Contract not found" }, { status: 404 });
@@ -110,6 +110,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     outgoingName,
     // The date printed on the agreement itself ("entered into on ..."), not when the contract was accepted in the CRM.
     agreementDate: (contract.agreement_date ?? contract.created_at ?? "").toString().slice(0, 10),
+    commencementDate: (contract.start_date ?? "").toString().slice(0, 10),
     contractNumber: contract.contract_number,
   };
   const errors = validateParams(full);

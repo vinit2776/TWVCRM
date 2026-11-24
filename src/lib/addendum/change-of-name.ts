@@ -57,6 +57,8 @@ export interface ChangeOfNameParams {
   outgoingSignatoryName?: string;
   outgoingSignatoryDesignation?: string;
   agreementDate: string;
+  /** The agreement's Commencement Date (schedule item 9). Optional so addenda drafted before this field still render. */
+  commencementDate?: string;
   contractNumber: string;
 }
 
@@ -89,7 +91,7 @@ const idList = (p: ChangeOfNameParams) =>
 const twvParty = `${COMPANY_NAME}, operating as ${BRAND_NAME}, of ${COMPANY_ADDRESS.join(" ")} ("TWV")`;
 
 function agreementLine(p: ChangeOfNameParams, n: number) {
-  return `This ADDENDUM NO. ${n} is made on [date of signing] to the Membership Agreement dated ${p.agreementDate ? longDate(p.agreementDate) : "[agreement date]"} (Contract ${p.contractNumber}) (the "Agreement") between:`;
+  return `This ADDENDUM NO. ${n} is made on [date of signing] to the Membership Agreement dated ${p.agreementDate ? longDate(p.agreementDate) : "[agreement date]"} (Contract ${p.contractNumber}), with a Commencement Date of ${p.commencementDate ? longDate(p.commencementDate) : "[commencement date]"} (the "Agreement"), between:`;
 }
 
 const gstClause = (p: ChangeOfNameParams, who: string) =>

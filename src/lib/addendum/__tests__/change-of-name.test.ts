@@ -9,7 +9,7 @@ const base: ChangeOfNameParams = {
   newName: "Sample Customer Private Limited", entityType: "pvt_ltd", gstin: "33AAAAA0000A1Z5", pan: "AAAAA0000A",
   cin: "U00000TN2026PTC000000", registeredAddress: "1 Test Road, Chennai", signatoryName: "A Director",
   signatoryDesignation: "Director", effectiveDate: "2026-12-01", depositCarriesOver: true,
-  companyTakesEarlierDues: false, outgoingName: "Mr Sample", outgoingAddress: "2 Test Road", agreementDate: "2026-06-14",
+  companyTakesEarlierDues: false, outgoingName: "Mr Sample", outgoingAddress: "2 Test Road", agreementDate: "2026-06-14", commencementDate: "2026-07-01",
   contractNumber: "TWV-C-0125",
 };
 
@@ -27,6 +27,10 @@ describe("validateParams", () => {
 
 describe("buildChangeOfNameText", () => {
   const text = buildChangeOfNameText(base, 1);
+  it("cites the agreement date and the commencement date", () => {
+    expect(text).toContain("dated 14 June 2026");
+    expect(text).toContain("Commencement Date of 1 July 2026");
+  });
   it("names all three parties and the effective date", () => {
     expect(text).toContain("SREE DESIGN INFRASTRUCTURE PRIVATE LIMITED");
     expect(text).toContain("Mr Sample");
