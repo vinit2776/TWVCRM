@@ -55,7 +55,7 @@ export async function PUT(
     return NextResponse.json({ error: "Admin, Manager or IT Manager access required" }, { status: 403 });
   }
   const {
-    name, code, address, city, state, is_active, capacity_config, requires_headcount,
+    name, code, address, noc_address, city, state, is_active, capacity_config, requires_headcount,
     latitude, longitude, incharge_user_id_1, incharge_user_id_2,
     unifi_site_id, unifi_console_id, wifi_voucher_mode, wifi_ssid, proposal_amenity_icons, agreement_terms,
     proposal_terms, proposal_defaults,
@@ -63,6 +63,7 @@ export async function PUT(
     name?: string;
     code?: string;
     address?: string;
+    noc_address?: string | null;
     city?: string;
     state?: string;
     is_active?: boolean;
@@ -171,6 +172,7 @@ export async function PUT(
   if (name !== undefined) updates.name = name;
   if (code !== undefined) updates.code = code.toUpperCase();
   if (address !== undefined) updates.address = address;
+  if (noc_address !== undefined) updates.noc_address = noc_address?.trim() || null;
   if (city !== undefined) updates.city = city;
   if (state !== undefined) updates.state = state;
   if (is_active !== undefined) updates.is_active = is_active;

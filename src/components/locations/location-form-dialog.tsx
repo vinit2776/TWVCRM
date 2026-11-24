@@ -55,6 +55,7 @@ export function LocationFormDialog({
   const [companyId, setCompanyId] = useState("");
   const [companies, setCompanies] = useState<Company[]>([]);
   const [address, setAddress] = useState("");
+  const [nocAddress, setNocAddress] = useState("");
   const [city, setCity]       = useState("");
   const [state, setState]     = useState("");
   const [isActive, setIsActive] = useState(true);
@@ -91,6 +92,7 @@ export function LocationFormDialog({
       setCode(location.code);
       setCompanyId(location.company_id || "");
       setAddress(location.address || "");
+      setNocAddress(location.noc_address || "");
       setCity(location.city || "");
       setState(location.state || "");
       setIsActive(location.is_active);
@@ -223,7 +225,7 @@ export function LocationFormDialog({
       }
 
       const payload = {
-        name, code: code.toUpperCase(), company_id: companyId, address, city, state,
+        name, code: code.toUpperCase(), company_id: companyId, address, noc_address: nocAddress, city, state,
         is_active: isActive,
         requires_headcount: requiresHeadcount,
         capacity_config,
@@ -346,6 +348,15 @@ export function LocationFormDialog({
             <Textarea id="loc-address" value={address}
               onChange={e => setAddress(e.target.value)}
               placeholder="Full address" rows={2} />
+          </div>
+
+          {/* Address as printed on a NOC (No Objection Certificate) */}
+          <div className="space-y-2">
+            <Label htmlFor="loc-noc-address">NOC address <span className="text-muted-foreground font-normal">(optional)</span></Label>
+            <Textarea id="loc-noc-address" value={nocAddress}
+              onChange={e => setNocAddress(e.target.value)}
+              placeholder="Exactly as it should print on a NOC, for example Old No.669/GF-11, New No.306/GF-11, Anna Salai, Thousand Lights, Chennai 600006" rows={2} />
+            <p className="text-xs text-muted-foreground">Used on the No Objection Certificate. Leave empty to use the address above.</p>
           </div>
 
           {/* City + State */}

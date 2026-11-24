@@ -90,6 +90,10 @@ All under `src/app/api/contracts/`:
 - `[id]/addenda/[aid]/route.ts` — `GET`, `PATCH` (`save` / `submit` / `approve` / `send_back` / `withdraw` / `apply`)
 - `[id]/addenda/[aid]/pdf/route.ts` — `GET` (renders current wording; DRAFT watermark until approved)
 - `[id]/addenda/[aid]/signed/route.ts` — `POST` (customer-signed scan), `PUT` (copy after TWV stamp and seal, admin only)
+- `[id]/noc/route.ts` — `GET` (a contract's NOC orders + order-form context; `{enabled:false}` when the service is off), `POST` (create a draft NOC order)
+- `[id]/noc/[nid]/route.ts` — `GET` (order + audit trail), `PATCH` (`void`, unpaid orders only)
+- `[id]/noc/[nid]/pdf/route.ts` — `GET` (the DRAFT certificate, staff only; always watermarked in part 1)
+- `/api/noc/markers` — `GET ?contract_ids=` (light per-contract summary for the contracts list chip)
 - `[id]/cosec-wizard/route.ts` — `POST` (cosec access provisioning steps)
 - `contracts/kyc-pending/route.ts` — `GET`
 - `contracts/kyc-summary/route.ts` — `GET`
@@ -317,6 +321,18 @@ The form first asks which case it is, and the wording template follows:
 - `new_entity`: a different party takes the agreement over (an individual becoming any entity, or one entity replacing another). Three signatures; the deposit and earlier dues are settled in the wording; an outgoing entity names its own signatory.
 
 Flow and roles: `draft` (admin/manager/sales rep edit, every save is a kept revision) → `pending_approval` (admin/manager approve or send back; only an admin may approve their own draft) → `approved` (print, customer signs on paper) → `signed` (scan uploaded) → `sealed` (admin stamps; same click-to-place approach as the agreement stamp) → `applied` (admin; a separate click that updates the customer record's company, and for a takeover also its entity type, GSTIN and PAN). Billing reads the customer record when it generates, so only invoices after Apply use the new name; earlier ones keep the old name. The record is shared, so other contracts on the same customer change name too (the Apply panel lists them). One open addendum per contract at a time. PAN and entity-type mismatches against the chosen case warn, never block. The wording is a template, not AI.
+
+### NOC service (part 1: order and draft)
+
+A paid No Objection Certificate that lets a customer's company use a TWV centre as its registered office (ROC) or place of business (GST). Full design: `docs/plans/noc-service.md`. **Part 1 only creates and voids draft orders: it sends nothing to any customer and takes no money.** Ships dark behind `app_settings.noc_service_enabled` (`false`); with it off the card, badges, chips, endpoints and PDF all refuse or render nothing.
+
+- Migration `00754`: `noc_requests`, `noc_audit_events` (append-only: a trigger refuses UPDATE always and DELETE except via the parent order), `locations.noc_address`, and the settings `noc_fee_roc` / `noc_fee_gst` (20000), `noc_tax_percentage` (18), `noc_signatory_name` / `noc_signatory_designation`.
+- Rules and wording in `src/lib/noc/rules.ts`: one letter template for both purposes (the approved format; only the purpose phrase changes, and a certificate never names the other purpose), the three accepted paragraphs as the single source (`NOC_CLAUSES`, version `NOC-T1`), validity = the contract's `end_date` read live (never carried into a renewal), who may order/void (admin, manager, sales rep) and issue (admin, manager; later part).
+- A NOC never blocks activation: it can be ordered on a sent/viewed/accepted/active/renewal contract and nothing in the activation gate reads it (a test pins this).
+- The address printed is the centre's `noc_address` (Locations → Edit), else its normal address, frozen on the order.
+- Markers: header badge on the contract page and a chip on the contracts list. An issued NOC always shows; an ordered-but-unissued one shows in a calmer tone; void shows nothing.
+- UI: `src/components/contracts/noc-card.tsx` (sidebar card beside Signed Contract, panel in the main column, order dialog), wired by window events like the addendum card.
+- Later parts (not built): email with the PI and link, public acceptance page with the legal audit trail and acceptance certificate, payment and Tally Inbox, issue with stamp and seal, and the "update the agreements" addendum. The per-centre address proof copy is deferred (the letter does not mention it).
 
 ### Renewal Rules
 

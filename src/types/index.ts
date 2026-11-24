@@ -39,6 +39,8 @@ export interface Location {
   company_id: string;
   companies?: Pick<Company, "id" | "name" | "brand_name"> | null;
   address?: string;
+  /** Address text printed on NOCs for this centre; falls back to `address`. */
+  noc_address?: string | null;
   city?: string;
   state?: string;
   is_active: boolean;
