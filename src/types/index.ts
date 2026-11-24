@@ -225,6 +225,11 @@ export interface Lead {
   pinned_at?: string | null;
   /** Set while the enquiry is waiting for space we cannot offer yet. */
   parked_at?: string | null;
+  // A flag for attention, with why (migration 00755); flagger is attached by GET /api/leads.
+  flagged_at?: string | null;
+  flagged_by?: string | null;
+  flag_reason?: string | null;
+  flagger?: { full_name: string } | null;
   /** Set by the Leads list when the lead has gone quiet (see src/lib/lead-stale.ts). */
   _stale?: { state: "warning"; daysLeft: number } | { state: "stale"; daysQuiet: number };
   /** How long it has been pinned and whether the pin has gone quiet; `pinnedBy` only for admin and manager. */
