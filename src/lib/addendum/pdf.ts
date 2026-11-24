@@ -81,13 +81,21 @@ export function buildAddendumPdf(input: AddendumPdfInput): Buffer {
     const measure = (w: Word) => { doc.setFont("helvetica", w.bold ? "bold" : "normal"); doc.setFontSize(9); return doc.getTextWidth(w.text); };
     const flush = () => {
       ctx.checkPageBreak(lineHeight + 2);
+      // Draw each run of same-weight words in one piece so the font spaces the words itself.
+      const runs: Word[] = [];
+      for (const w of row) {
+        const last = runs[runs.length - 1];
+        if (last && last.bold === w.bold) last.text += ` ${w.text}`;
+        else runs.push({ ...w });
+      }
       let cx = x;
-      row.forEach((w, i) => {
-        doc.setFont("helvetica", w.bold ? "bold" : "normal");
+      runs.forEach((r, i) => {
+        doc.setFont("helvetica", r.bold ? "bold" : "normal");
         doc.setFontSize(9);
         doc.setTextColor(...BODY);
-        doc.text(w.text, cx, ctx.y);
-        cx += measure(w) + (i < row.length - 1 ? space() : 0);
+        doc.text(r.text, cx, ctx.y);
+        // The fonts are not embedded, so a viewer's own Helvetica can differ a hair from the metrics: pad where weight changes.
+        cx += doc.getTextWidth(r.text) + (i < runs.length - 1 ? space() + 0.8 : 0);
       });
       ctx.y += lineHeight;
       row = [];
