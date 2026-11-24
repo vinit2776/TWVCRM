@@ -239,7 +239,7 @@ export function LeadsSheet({ onShowAll }: { onShowAll: () => void }) {
                 return (
                   <Fragment key={g.day}>
                     <tr onClick={() => toggleDay(g.day)} className="cursor-pointer bg-slate-200/70 hover:bg-slate-200">
-                      <td colSpan={10} className="sticky top-8 px-3 py-1.5">
+                      <td colSpan={10} className="px-3 py-1.5">
                         <span className="inline-flex items-center gap-2">
                           {folded ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                           <b>{dayHeading(g.day, today)}</b>
