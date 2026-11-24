@@ -75,7 +75,7 @@ export function validateParams(p: Partial<ChangeOfNameParams>): string[] {
   return errors;
 }
 
-const longDate = (iso: string) => {
+export const longDate = (iso: string) => {
   const d = new Date(`${iso}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });

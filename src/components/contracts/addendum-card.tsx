@@ -14,7 +14,7 @@ import { formatDate } from "@/lib/utils";
 import { ENTITY_TYPE_LABELS } from "@/lib/constants";
 import {
   ADDENDUM_STATUS_LABELS, checklistFor, KIND_LABELS, contextWarnings, canApproveAddendum, canAuthorAddendum, canSealAddendum,
-  findPlaceholders, isEditable, type AddendumStatus, type ChangeOfNameKind,
+  findPlaceholders, isEditable, longDate, type AddendumStatus, type ChangeOfNameKind,
 } from "@/lib/addendum/change-of-name";
 
 interface Addendum {
@@ -58,6 +58,51 @@ interface LeadInfo { company: string | null; pan_number: string | null; entity_t
 
 interface Props { contractId: string; userRole: string | null; onChanged?: () => void }
 
+// The compact card beside the Signed Contract card and the full panel in the main column are separate
+// components on the page; they talk through these window events so neither has to know where the other sits.
+const SIGNING_PLACEHOLDER = "[date of signing]";
+const EV_CREATE = "addendum:create";
+const EV_OPEN = "addendum:open";
+const EV_CHANGED = "addendum:changed";
+const emit = (name: string, detail?: unknown) => window.dispatchEvent(new CustomEvent(name, { detail }));
+
+/** Compact card for the sidebar, next to the signed contract: the Create button and a status line per addendum. */
+export function AddendumSidebarCard({ contractId, userRole }: { contractId: string; userRole: string | null }) {
+  const [addenda, setAddenda] = useState<Pick<Addendum, "id" | "addendum_number" | "status">[]>([]);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/contracts/${contractId}/addenda`);
+    if (res.ok) setAddenda((await res.json()).data.addenda ?? []);
+    setLoading(false);
+  }, [contractId]);
+  useEffect(() => {
+    load();
+    window.addEventListener(EV_CHANGED, load);
+    return () => window.removeEventListener(EV_CHANGED, load);
+  }, [load]);
+
+  const canAuthor = canAuthorAddendum(userRole);
+  if (!loading && addenda.length === 0 && !canAuthor) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base"><FileText className="h-4 w-4" />Addenda</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+        {!loading && addenda.length === 0 && <p className="text-muted-foreground text-xs">Changes to the signed agreement, such as a change of name.</p>}
+        {addenda.map((a) => (
+          <button key={a.id} className="hover:bg-muted flex w-full items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left text-sm" onClick={() => emit(EV_OPEN, a.id)}>
+            <span className="font-medium">Addendum {a.addendum_number}</span>
+            <Badge variant="secondary" className={BADGE[a.status]}>{ADDENDUM_STATUS_LABELS[a.status]}</Badge>
+          </button>
+        ))}
+        {canAuthor && <Button size="sm" variant="outline" className="w-full" onClick={() => emit(EV_CREATE)}><Plus className="mr-1 h-4 w-4" />Create addendum</Button>}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AddendumCard({ contractId, userRole, onChanged }: Props) {
   const base = `/api/contracts/${contractId}/addenda`;
   const [addenda, setAddenda] = useState<Addendum[]>([]);
@@ -79,21 +124,36 @@ export function AddendumCard({ contractId, userRole, onChanged }: Props) {
     setLoading(false);
   }, [base]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const onCreate = () => setCreating(true);
+    const onOpen = (e: Event) => {
+      setOpenId((e as CustomEvent<string>).detail);
+      setTimeout(() => document.getElementById("addenda-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    };
+    const onChangedEv = () => load();
+    window.addEventListener(EV_CREATE, onCreate);
+    window.addEventListener(EV_OPEN, onOpen);
+    window.addEventListener(EV_CHANGED, onChangedEv);
+    return () => {
+      window.removeEventListener(EV_CREATE, onCreate);
+      window.removeEventListener(EV_OPEN, onOpen);
+      window.removeEventListener(EV_CHANGED, onChangedEv);
+    };
+  }, [load]);
 
   const canAuthor = canAuthorAddendum(userRole);
-  if (!loading && addenda.length === 0 && !canAuthor) return null;
-  const refresh = () => { load(); onChanged?.(); };
+  const refresh = () => { load(); emit(EV_CHANGED); onChanged?.(); };
+  const dialog = creating && <CreateDialog base={base} lead={lead} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); refresh(); setOpenId(id); }} />;
+  // With nothing to show, the sidebar card (Create button) is the only entry point; this panel appears with the first addendum.
+  if (loading || addenda.length === 0) return <>{dialog}</>;
 
   return (
-    <Card>
+    <Card id="addenda-panel" className="scroll-mt-4">
       <CardHeader className="flex flex-row flex-wrap items-center gap-3">
         <CardTitle className="text-base">Addenda</CardTitle>
         <p className="text-muted-foreground flex-1 text-sm">Written changes to this agreement, signed by the customer and sealed by TWV.</p>
-        {canAuthor && <Button size="sm" onClick={() => setCreating(true)}><Plus className="mr-1 h-4 w-4" />Create addendum</Button>}
       </CardHeader>
       <CardContent className="space-y-3">
-        {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-        {!loading && addenda.length === 0 && <p className="text-muted-foreground text-sm">No addendum yet.</p>}
         {addenda.map((a) => (
           <div key={a.id} className="rounded-lg border">
             <button className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left" onClick={() => setOpenId(openId === a.id ? null : a.id)}>
@@ -106,7 +166,7 @@ export function AddendumCard({ contractId, userRole, onChanged }: Props) {
           </div>
         ))}
       </CardContent>
-      {creating && <CreateDialog base={base} lead={lead} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); refresh(); setOpenId(id); }} />}
+      {dialog}
     </Card>
   );
 }
@@ -254,6 +314,13 @@ function AddendumPanel({ base, a, userRole, others, onChanged }: { base: string;
           <Label>Addendum wording{editable ? " (editable)" : " (locked)"}</Label>
           <Textarea className="min-h-[380px] font-serif text-sm leading-relaxed" value={text} readOnly={!editable} onChange={(e) => setText(e.target.value)} />
           {open.length > 0 && editable && <p className="flex items-start gap-1 text-xs text-amber-700"><AlertTriangle className="mt-0.5 h-3.5 w-3.5" />Fill in {open.join(", ")} before submitting.</p>}
+          {editable && text.includes(SIGNING_PLACEHOLDER) && (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Label htmlFor={`sign-date-${a.id}`} className="text-xs">Date of signing</Label>
+              <Input id={`sign-date-${a.id}`} type="date" className="h-8 w-44" onChange={(e) => e.target.value && setText((t) => t.split(SIGNING_PLACEHOLDER).join(longDate(e.target.value)))} />
+              <span className="text-muted-foreground text-xs">Fills it into the wording. Save changes, then submit.</span>
+            </div>
+          )}
           {editable && (
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" disabled={!dirty || busy} onClick={() => act({ action: "save", text }, "Saved as a new revision")}>Save changes</Button>
