@@ -29,6 +29,8 @@ import {
   type RenewalDeskTab,
 } from "@/lib/vo-renewal-desk";
 import { toast } from "sonner";
+import { RenewalTermHint } from "@/components/cases/renewal-guidance";
+import type { RenewalTerm } from "@/lib/vo-renewal-guidance";
 
 interface DeskRow {
   id: string;
@@ -94,6 +96,9 @@ function graceLeft(lastDay: string, today: string): string {
   if (left <= 0) return "last grace day today";
   return `${left} grace day${left === 1 ? "" : "s"} left`;
 }
+
+/** Desk tabs whose name is a renewal term with a definition on hover. */
+const TAB_TERM: Partial<Record<RenewalDeskTab, RenewalTerm>> = { grace: "grace", lapsed: "lapsed" };
 
 const DATE_COLUMN: Record<RenewalDeskTab, string> = {
   coming: "Ends",
@@ -193,7 +198,9 @@ export default function RenewalsDeskPage() {
               tab === t && "border-primary ring-1 ring-primary",
             )}
           >
-            <span className="text-sm font-medium text-muted-foreground">{RENEWAL_DESK_TAB_LABELS[t]}</span>
+            <span className="text-sm font-medium text-muted-foreground">
+              {TAB_TERM[t] ? <RenewalTermHint term={TAB_TERM[t]!}>{RENEWAL_DESK_TAB_LABELS[t]}</RenewalTermHint> : RENEWAL_DESK_TAB_LABELS[t]}
+            </span>
             <span className="text-2xl font-bold tabular-nums">{loading ? "–" : counts[t]}</span>
             <span className="text-xs text-muted-foreground">{renewalDeskTabHint(t, graceDays)}</span>
           </button>
