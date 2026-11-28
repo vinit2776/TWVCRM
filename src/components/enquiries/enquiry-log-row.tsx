@@ -39,6 +39,46 @@ const RESOLVE_OUTCOMES: { value: ResolutionOutcome; label: string; dot: string }
 /** One enquiry as a single line: who, what they said, one main button and a menu. Clicking the
  *  row opens the conversation and every action underneath. */
 export function EnquiryLogRow({ row, readOnly, onChanged }: { row: EnquiryItem; readOnly: boolean; onChanged: () => void }) {
+  // The read-only role's shell has no EnquiryNotificationsProvider, so it must never reach the
+  // full row, which reads that context for its actions.
+  if (readOnly) return <EnquiryViewerRow row={row} />;
+  return <EnquiryLogRowFull row={row} onChanged={onChanged} />;
+}
+
+function EnquiryStatus({ row }: { row: EnquiryItem }) {
+  return row.resolutionOutcome ? (
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${OUTCOME_CLASS[row.resolutionOutcome]}`}>
+      {enquiryOutcomeLabel(row.resolutionOutcome)}
+    </span>
+  ) : (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${row.claimedAt ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800"}`}
+    >
+      {row.resolvedAt ? "Resolved" : enquiryStateLabel(row)}
+    </span>
+  );
+}
+
+/** What the read-only role sees: who, how it ended, where it came from, when. No contact
+ *  details, message text, links or actions. */
+function EnquiryViewerRow({ row }: { row: EnquiryItem }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t px-3 py-2.5 first:border-t-0">
+      <div className="flex min-w-0 flex-1 basis-56 flex-wrap items-center gap-1.5">
+        <span className="text-sm font-medium">{row.name}</span>
+        {row.isReEnquiry && (
+          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Re-enquiry</span>
+        )}
+        <EnquiryStatus row={row} />
+        <span className="text-xs text-muted-foreground">{row.source}</span>
+      </div>
+      <span className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(row.attentionResetAt)}</span>
+    </div>
+  );
+}
+
+function EnquiryLogRowFull({ row, onChanged }: { row: EnquiryItem; onChanged: () => void }) {
+  const readOnly = false;
   const v2 = useLeadsHomeV2();
   const { claim, resolve } = useEnquiryNotifications();
   const [open, setOpen] = useState(false);
@@ -64,17 +104,7 @@ export function EnquiryLogRow({ row, readOnly, onChanged }: { row: EnquiryItem; 
     } else setOpen(true);
   }
 
-  const status = row.resolutionOutcome ? (
-    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${OUTCOME_CLASS[row.resolutionOutcome]}`}>
-      {enquiryOutcomeLabel(row.resolutionOutcome)}
-    </span>
-  ) : (
-    <span
-      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${row.claimedAt ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800"}`}
-    >
-      {row.resolvedAt ? "Resolved" : enquiryStateLabel(row)}
-    </span>
-  );
+  const status = <EnquiryStatus row={row} />;
 
   return (
     <div className="border-t first:border-t-0">

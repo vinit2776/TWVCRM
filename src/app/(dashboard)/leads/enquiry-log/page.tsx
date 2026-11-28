@@ -14,7 +14,7 @@ import { LocationSelector } from "@/components/shared/location-selector";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { EnquiryLogRow } from "@/components/enquiries/enquiry-log-row";
 import { PossibleLeadsTray } from "@/components/enquiries/possible-leads-tray";
-import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
+import { ENQUIRY_VIEWER_ROLE, ENQUIRY_VIEWER_WINDOW_DAYS } from "@/lib/restricted-roles";
 import {
   toEnquiryItem,
   type EnquiryItem,
@@ -88,7 +88,9 @@ export default function EnquiryLogPage() {
       <div>
         <h1 className="text-2xl font-bold">Enquiry Log</h1>
         <p className="text-sm text-muted-foreground">
-          Campaign attribution and historical record of every enquiry from the public forms.
+          {readOnly
+            ? `Every enquiry from the public forms, last ${ENQUIRY_VIEWER_WINDOW_DAYS} days.`
+            : "Campaign attribution and historical record of every enquiry from the public forms."}
         </p>
       </div>
 

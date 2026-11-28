@@ -7,6 +7,19 @@ export const ENQUIRY_VIEWER_ROLE = "enquiry_viewer";
 /** The only dashboard page an enquiry_viewer may open. */
 export const ENQUIRY_VIEWER_HOME = "/leads/enquiry-log";
 
+/** How far back an enquiry_viewer can see, counted from received date. */
+export const ENQUIRY_VIEWER_WINDOW_DAYS = 45;
+
+/**
+ * Earliest received-at an enquiry_viewer may read: the later of what they asked for and the
+ * window start, so a typed date can narrow the view but never widen it.
+ */
+export function enquiryViewerFrom(requested: string | null, now: Date = new Date()): string {
+  const floor = new Date(now.getTime() - ENQUIRY_VIEWER_WINDOW_DAYS * 86_400_000);
+  const asked = requested ? new Date(requested) : null;
+  return asked && !Number.isNaN(asked.getTime()) && asked > floor ? asked.toISOString() : floor.toISOString();
+}
+
 /**
  * Coordinator sees Sales, Operations, Procurement and day-to-day Facility, but nothing under
  * Finance, HR & Payroll or Admin. The sidebar already hides those entries; this list is what

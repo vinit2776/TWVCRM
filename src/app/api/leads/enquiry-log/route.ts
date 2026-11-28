@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { ENQUIRY_SELECT, type RawEnquiryRow } from "@/lib/enquiries";
-import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
+import { ENQUIRY_VIEWER_ROLE, enquiryViewerFrom } from "@/lib/restricted-roles";
 import { loadEnquiryProgress } from "@/lib/enquiry-progress-load";
 
 // GET /api/leads/enquiry-log — one row per public-form enquiry (lead_enquiries).
@@ -20,13 +20,20 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // An enquiry_viewer (e.g. the social media manager) follows enquiry activity, not the
+  // customers: contact details are stripped below, and they only see a rolling window.
+  const { data: me } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+  const viewer = me?.role === ENQUIRY_VIEWER_ROLE;
+
   const sp = request.nextUrl.searchParams;
   const source = sp.get("source");
   const outcome = sp.get("outcome");
-  const from = sp.get("from");
+  // For the viewer the window is enforced here, on received date alone, so neither a typed
+  // date nor include_unresolved can reach older enquiries.
+  const from = viewer ? enquiryViewerFrom(sp.get("from")) : sp.get("from");
   const to = sp.get("to");
   const locationId = sp.get("location_id");
-  const includeUnresolved = sp.get("include_unresolved") === "true";
+  const includeUnresolved = !viewer && sp.get("include_unresolved") === "true";
   const limit = Math.min(parseInt(sp.get("limit") || "200", 10), 500);
 
   // Filtering on the lead's location needs an inner join so non-matching enquiries drop out.
@@ -42,7 +49,9 @@ export async function GET(request: NextRequest) {
 
   if (source) query = query.eq("source", source);
   if (locationId) query = query.eq("lead.location_id", locationId);
-  if (from) {
+  if (from && viewer) {
+    query = query.gte("received_at", from);
+  } else if (from) {
     const parts = [`received_at.gte.${from}`, `resolved_at.gte.${from}`];
     if (includeUnresolved) parts.push("resolved_at.is.null");
     query = query.or(parts.join(","));
@@ -83,11 +92,6 @@ export async function GET(request: NextRequest) {
     },
     { total: 0, unresolved: 0, converted: 0, notInterested: 0, noResponse: 0, superseded: 0 }
   );
-
-  // An enquiry_viewer (e.g. the social media manager) follows enquiry activity, not the
-  // customers: strip contact details here so they never reach that browser.
-  const { data: me } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
-  const viewer = me?.role === ENQUIRY_VIEWER_ROLE;
 
   // Stage comes from the lead's proposals and contracts, so it is worked out here (and left
   // off for the read-only viewer, who sees no customer detail).
