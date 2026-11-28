@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, ScrollText, Search, X, CalendarX, RefreshCw, Settings2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { NocListChip, useNocMarkers } from "@/components/contracts/noc-card";
 import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -47,6 +48,7 @@ export default function ContractsPage() {
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
   const [contracts, setContracts] = useState<ContractWithQuotaCount[]>([]);
+  const nocMarkers = useNocMarkers(contracts.map((c) => c.id));
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -306,6 +308,7 @@ export default function ContractsPage() {
                       <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(c)]}>
                         {CONTRACT_STATUS_LABELS[contractDisplayStatus(c)]}
                       </Badge>
+                      <NocListChip nocs={nocMarkers[c.id]} endDate={c.end_date} />
                       {unsignedIds.has(c.id) && (
                         <span
                           title="No signed agreement attached. WiFi vouchers stay blocked until one is."

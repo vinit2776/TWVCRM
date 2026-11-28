@@ -66,6 +66,7 @@ import { ContractBookingsSection } from "@/components/contracts/contract-booking
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { SpecialClauseCard, SpecialClauseBadge } from "@/components/contracts/special-clause-card";
+import { NocHeaderBadges, NocPanel, NocSidebarCard } from "@/components/contracts/noc-card";
 import { AddendumCard, AddendumSidebarCard } from "@/components/contracts/addendum-card";
 import { specialClauseGate } from "@/lib/special-clause/gate";
 import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
@@ -1168,6 +1169,7 @@ export default function ContractDetailPage({
                 {CONTRACT_STATUS_LABELS[contractDisplayStatus(contract)]}
               </Badge>
               <SpecialClauseBadge status={contract.special_clause_status} />
+              <NocHeaderBadges contractId={id} />
               {contract.signed_document && (
                 <Badge className="bg-green-100 text-green-700 border-green-200">
                   <CheckCircle2 className="h-3 w-3 mr-1" /> Signed
@@ -2115,6 +2117,8 @@ export default function ContractDetailPage({
           />
           </div>
 
+          <NocPanel contractId={id} userRole={userRole} />
+
           {/* Agreement document history — old executed versions stay
               visible/downloadable after a reupload (e.g. customer name
               change or a change-of-law redocumentation). */}
@@ -2739,6 +2743,11 @@ export default function ContractDetailPage({
           {/* Addenda entry point sits beside the signed contract it amends; the full panel opens in the main column. */}
           {["active", "renewal_in_progress", "accepted", "sent", "viewed"].includes(contract.status) && (
             <AddendumSidebarCard contractId={id} userRole={userRole} />
+          )}
+
+          {/* NOC service entry point sits beside the signed contract; the opened NOC shows in the main column. */}
+          {["active", "renewal_in_progress", "accepted", "sent", "viewed"].includes(contract.status) && (
+            <NocSidebarCard contractId={id} userRole={userRole} />
           )}
 
           {/* E-Signing Card — shown when Leegality signing has been initiated */}
