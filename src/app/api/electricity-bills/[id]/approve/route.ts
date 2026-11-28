@@ -76,10 +76,12 @@ export async function POST(
     },
   });
 
-  // No contract mapped at this location — the RPC auto-approved the linked
-  // vendor bill so it's immediately payable in Acc Payables, skipping the
-  // usual separate Procurement approval step. Audit that decision too.
-  if (!customerBillsGenerated && bill.vendor_bill_id) {
+  // No contract mapped at this location — when an admin approved, the RPC also
+  // approved the linked vendor bill so it's immediately payable in Acc Payables.
+  // A manager's approval leaves it pending for admin (vendor bills are
+  // admin-approval-only). Audit the vendor-bill decision only when it happened.
+  const vendorBillAutoApproved = !customerBillsGenerated && !!bill.vendor_bill_id && dbUser.role === "admin";
+  if (vendorBillAutoApproved) {
     await logAudit(supabase, {
       entityType: "vendor_bill",
       entityId: bill.vendor_bill_id,
@@ -92,5 +94,10 @@ export async function POST(
     });
   }
 
-  return NextResponse.json({ data: result });
+  return NextResponse.json({
+    data: {
+      ...(result as object),
+      vendor_bill_awaiting_admin: !customerBillsGenerated && !!bill.vendor_bill_id && !vendorBillAutoApproved,
+    },
+  });
 }
