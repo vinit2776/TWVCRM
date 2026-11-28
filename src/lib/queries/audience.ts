@@ -211,3 +211,44 @@ export function validateTargeting(input: {
     },
   };
 }
+
+export interface InvolvementInput extends AwaitingInput {
+  /** Everyone who has posted in the thread. */
+  message_author_ids: readonly string[];
+}
+
+/**
+ * Open threads you are part of but that are not your move: you raised them,
+ * were addressed, or already answered, and the ball is with someone else.
+ * Drives the "Waiting on others" tab.
+ */
+export function isWaitingOnOthers(query: InvolvementInput, def: QueryEntityDef, viewer: Viewer): boolean {
+  if (query.status !== "open") return false;
+  if (isAwaitingUser(query, def, viewer)) return false;
+  return (
+    query.created_by_id === viewer.id ||
+    query.message_author_ids.includes(viewer.id) ||
+    isInAudience(query, def, viewer)
+  );
+}
+
+/**
+ * Has someone else posted since this viewer last opened the thread?
+ *
+ * Your own message never counts as new, and nothing before `effectiveFrom`
+ * does either (see migration 00648: existing history must not light up on
+ * day one). With no cutoff at all, nothing is new.
+ */
+export function isThreadUnread(params: {
+  lastMessageAt: string | null;
+  lastMessageAuthorId: string | null;
+  viewerId: string;
+  lastReadAt: string | null;
+  effectiveFrom: string | null;
+}): boolean {
+  const { lastMessageAt, lastMessageAuthorId, viewerId, lastReadAt, effectiveFrom } = params;
+  if (!lastMessageAt || !effectiveFrom) return false;
+  if (lastMessageAuthorId === viewerId) return false;
+  if (lastMessageAt <= effectiveFrom) return false;
+  return !lastReadAt || lastMessageAt > lastReadAt;
+}
