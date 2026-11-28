@@ -6,6 +6,8 @@ import { resolveWatermark } from "@/lib/agreement-watermark-server";
 import { buildAgreementEmail, parseCcList, type AgreementEmailCase } from "@/lib/case-agreement-email";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { evaluateDraftSendGate } from "@/lib/vo-draft-gate";
+import { getPaymentOverride } from "@/lib/vo-execution-gate";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -176,6 +178,20 @@ export async function POST(request: NextRequest, { params }: Params) {
     return NextResponse.json({ error: decision.refused }, { status: 400 });
   }
 
+  // The draft-send gate applies only to a watermarked draft; a clean copy is
+  // already behind payment in full.
+  if (decision.applyWatermark) {
+    const draftGate = await evaluateDraftSendGate({
+      admin,
+      caseId,
+      role: dbUser.role,
+      agreementStatus: agreement.status,
+    });
+    if (!draftGate.allowed) {
+      return NextResponse.json({ error: draftGate.reason }, { status: 403 });
+    }
+  }
+
   const original = new Uint8Array(await file.arrayBuffer());
   const draft = decision.applyWatermark;
   const bytes = draft ? await applyDraftWatermark(original) : original;
@@ -207,6 +223,8 @@ export async function POST(request: NextRequest, { params }: Params) {
     })
     .eq("id", agreement.id);
 
+  const override = await getPaymentOverride(admin, caseId);
+
   logAudit(supabase, {
     entityType: "case",
     entityId: caseId,
@@ -218,7 +236,8 @@ export async function POST(request: NextRequest, { params }: Params) {
         new:
           `sent to ${email.toKind}: ${email.to}` +
           `${cc.length ? ` (cc ${cc.join(", ")})` : ""}` +
-          `${draft ? "" : " — CLEAN COPY, no watermark"}`,
+          `${draft ? "" : " — CLEAN COPY, no watermark"}` +
+          `${override ? " — under admin payment override" : ""}`,
       },
     },
   });

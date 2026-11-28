@@ -14,6 +14,31 @@
  */
 import { PDFDocument, rgb, degrees, StandardFonts } from "pdf-lib";
 
+/** The mark itself. Says what the document may not be used for, not only what it is. */
+export const DRAFT_WATERMARK_TEXT = "DRAFT, not for signing";
+
+/**
+ * Font size and position that keep the rotated text inside the page.
+ * The text runs along a 45 degree line centred on the page, so its width may
+ * be at most the page's shorter side times sqrt(2); we use 85% of that.
+ */
+export function draftWatermarkLayout(
+  width: number,
+  height: number,
+  textWidthAtSize1: number,
+): { size: number; x: number; y: number } {
+  const angle = 45;
+  const rad = (angle * Math.PI) / 180;
+  const maxTextWidth = Math.min(width, height) * Math.SQRT2 * 0.85;
+  const size = maxTextWidth / textWidthAtSize1;
+  const textWidth = textWidthAtSize1 * size;
+  return {
+    size,
+    x: width / 2 - (textWidth / 2) * Math.cos(rad),
+    y: height / 2 - (textWidth / 2) * Math.sin(rad),
+  };
+}
+
 /**
  * Overlays a diagonal DRAFT watermark across every page.
  *
@@ -25,19 +50,12 @@ export async function applyDraftWatermark(pdfBytes: Uint8Array | Buffer): Promis
   try {
     const pdf = await PDFDocument.load(pdfBytes as Uint8Array, { ignoreEncryption: true });
     const font = await pdf.embedFont(StandardFonts.HelveticaBold);
-    const text = "DRAFT";
+    const text = DRAFT_WATERMARK_TEXT;
 
     for (const page of pdf.getPages()) {
       const { width, height } = page.getSize();
-      // Size the word to span most of the diagonal, whatever the page format.
-      const size = Math.min(width, height) * 0.28;
-      const textWidth = font.widthOfTextAtSize(text, size);
+      const { size, x, y } = draftWatermarkLayout(width, height, font.widthOfTextAtSize(text, 1));
       const angle = 45;
-      const rad = (angle * Math.PI) / 180;
-
-      // Centre the rotated baseline on the page.
-      const x = width / 2 - (textWidth / 2) * Math.cos(rad);
-      const y = height / 2 - (textWidth / 2) * Math.sin(rad);
 
       page.drawText(text, {
         x,
