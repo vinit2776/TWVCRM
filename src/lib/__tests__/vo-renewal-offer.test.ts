@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renewalOffer, escalationFor } from "@/lib/vo-renewal-offer";
+import { renewalOffer, escalationFor, termFee, RENEWAL_DURATIONS } from "@/lib/vo-renewal-offer";
 
 const BASE = {
   currentFee: 18000,
@@ -42,5 +42,29 @@ describe("escalationFor", () => {
   it("never escalates below zero", () => {
     expect(escalationFor("agreed", null, null)).toBe(0);
     expect(escalationFor("custom", 10, -3)).toBe(0);
+  });
+});
+
+describe("renewal durations start at one year", () => {
+  it("offers 12, 24, 36 and 48 months only", () => {
+    expect([...RENEWAL_DURATIONS]).toEqual([12, 24, 36, 48]);
+  });
+  it("scales pro rata for 48 months", () => {
+    const o = renewalOffer({ ...BASE, durationMonths: 48, mode: "none" });
+    expect(o.fee).toBe(72000);
+    expect(o.term.end).toBe("2030-12-18");
+  });
+});
+
+describe("termFee", () => {
+  it("treats rate as the whole-term fee up to 12 months", () => {
+    expect(termFee(18000, 6)).toBe(18000);
+    expect(termFee(18000, 11)).toBe(18000);
+    expect(termFee(18000, 12)).toBe(18000);
+  });
+  it("treats rate as the annual rate beyond 12 months", () => {
+    expect(termFee(18000, 24)).toBe(36000);
+    expect(termFee(18000, 36)).toBe(54000);
+    expect(termFee(18000, 48)).toBe(72000);
   });
 });

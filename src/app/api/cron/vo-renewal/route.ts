@@ -12,6 +12,7 @@ import { generateDiscontinuationDraftsForCase } from "@/lib/vo-discontinuation";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { withCronHealth } from "@/lib/cron-ping";
 import { renewalRecipients } from "@/lib/renewal-recipients";
+import { caseOwnerEmail, renewalCopies } from "@/lib/vo-renewal-copies";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import {
   VO_RENEWAL_GRACE_DAYS_SETTING,
@@ -76,6 +77,7 @@ const CASE_SELECT =
 
 type CaseRow = VoCaseForRenewal & {
   status: string;
+  assigned_to?: string | null;
   metadata?: unknown;
   renewal_notices_enabled: boolean;
   renewal_last_reminder_at: string | null;
@@ -334,8 +336,13 @@ async function execute(
   if (stage >= 4 && routing.headsUp?.email) {
     await sendRenewalEmail({ ...notice, recipient: routing.headsUp });
   }
+  const cc = renewalCopies({
+    reminderNumber: stage,
+    ownerEmail: await caseOwnerEmail(admin, c.assigned_to),
+    alreadyAddressed: [routing.billing.email],
+  });
   const [emailSent, whatsAppSent] = await Promise.all([
-    sendRenewalEmail({ ...notice, recipient: routing.billing, pdfBuffer }),
+    sendRenewalEmail({ ...notice, recipient: routing.billing, pdfBuffer, cc }),
     sendRenewalWhatsApp({
       caseData: c,
       recipient: routing.billing,
@@ -355,7 +362,9 @@ async function execute(
     return;
   }
 
-  if (stage === 4) {
+  // Accounts is already copied on the notice itself from reminder 4 on, so this
+  // separate heads-up is only needed when the email did not go out.
+  if (stage === 4 && !emailSent) {
     await resend.emails.send({
       from: EMAIL_FROM,
       to: ["accounts@theworkvilla.com"],

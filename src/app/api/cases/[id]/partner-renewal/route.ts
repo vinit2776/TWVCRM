@@ -8,7 +8,7 @@ import {
   partnerRenewalRecord,
   type PartnerRenewalRecord,
 } from "@/lib/vo-renewal-reminders";
-import { RENEWAL_DURATIONS, RENEWAL_ESCALATION_MODES } from "@/lib/vo-renewal-offer";
+import { RENEWAL_DURATIONS, RENEWAL_DURATIONS_TEXT, RENEWAL_ESCALATION_MODES } from "@/lib/vo-renewal-offer";
 
 /**
  * Postpaid partner cases have no renewal bill: the partner is invoiced monthly
@@ -38,7 +38,7 @@ const confirmSchema = z
     duration_months: z
       .number()
       .int()
-      .refine((n) => (RENEWAL_DURATIONS as readonly number[]).includes(n), "Choose 6, 12, 24 or 36 months"),
+      .refine((n) => (RENEWAL_DURATIONS as readonly number[]).includes(n), `Choose ${RENEWAL_DURATIONS_TEXT}`),
     escalation_mode: z.enum(RENEWAL_ESCALATION_MODES),
     custom_percentage: z.number().min(0).max(100).nullish(),
     escalation_reason: z.string().trim().max(500).nullish(),
