@@ -8,6 +8,7 @@ import { Receipt, Eye, Send, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { DispatchRunPanel } from "@/components/billing/dispatch-run-panel";
+import { RunSendConfirmDialog } from "@/components/billing/run-send-confirm-dialog";
 
 type Mode = "rent" | "usage";
 
@@ -79,6 +80,7 @@ export function ProformaBillingCard({
   const [newSinceLastRun, setNewSinceLastRun] = useState<Set<string>>(new Set());
   const [previewing, setPreviewing]     = useState(false);
   const [previewed, setPreviewed]       = useState(false);
+  const [previewedAt, setPreviewedAt]   = useState<number | null>(null);
   const [running, setRunning]           = useState(false);
   const [confirmOpen, setConfirmOpen]   = useState(false);
   const [doneThisCycle, setDoneThisCycle] = useState<boolean | null>(null);
@@ -146,6 +148,7 @@ export function ProformaBillingCard({
           : new Set()
       );
       setPreviewed(true);
+      setPreviewedAt(Date.now());
       setDoneThisCycle(items.length === 0 && skipped.length === 0);
       if (json.errors?.length) for (const e of json.errors) toast.error(e);
     } catch (e) {
@@ -404,8 +407,24 @@ export function ProformaBillingCard({
         </div>
       )}
 
-      {/* Run confirmation dialog */}
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      {/* Rent: live send to customers — summary + typed confirmation */}
+      {isRent && previewItems && (
+        <RunSendConfirmDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          periodLabel={periodLabel}
+          items={previewItems}
+          alreadySent={alreadySent}
+          newSinceLastRun={newSinceLastRun}
+          previewedAt={previewedAt}
+          running={running}
+          onConfirm={handleRun}
+          onRerunPreview={handlePreview}
+        />
+      )}
+
+      {/* Usage: drafts only, nothing reaches customers */}
+      <Dialog open={!isRent && confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{isRent ? "Run & send" : "Generate"} {isRent ? "rent proformas" : "usage drafts"} for {periodLabel}?</DialogTitle>
