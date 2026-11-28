@@ -19,6 +19,12 @@ import {
   type LapseDecision,
   type LapseDecisionRecord,
 } from "@/lib/vo-lapse-decision";
+import {
+  RELEASE_BADGE_LABELS,
+  type ChecklistStep,
+  type MarkableKey,
+  type ReleaseBadge,
+} from "@/lib/vo-non-renewal";
 
 interface LapseState {
   today: string;
@@ -281,6 +287,7 @@ export function CaseLapsePanel({
       </Card>
 
       {discontinuing && <DiscontinuationDocuments caseId={caseId} />}
+      {discontinuing && <NonRenewalChecklist caseId={caseId} />}
 
       {state.open_bill && (
         <ReportPaymentDialog
@@ -493,6 +500,144 @@ function DiscontinuationDocuments({ caseId }: { caseId: string }) {
           Emails go only after approval. Letters to authorities are printed and posted by hand; record the
           registered-post number.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface NonRenewalState {
+  available: boolean;
+  can_act?: boolean;
+  steps?: ChecklistStep[];
+  badge?: ReleaseBadge;
+  deadline?: string | null;
+  second_request_draft?: { subject: string; body: string } | null;
+  marks?: Partial<Record<MarkableKey, { status: string }>>;
+}
+
+const STEP_STATE_LABELS: Record<ChecklistStep["state"], string> = {
+  done: "Done",
+  open: "Needs action",
+  wait: "Waiting",
+  overdue: "Overdue",
+  skipped: "Not needed",
+};
+
+/** Which mark button(s) each checklist step offers while it is open. */
+function stepActions(step: ChecklistStep, state: NonRenewalState): { mark: MarkableKey; label: string; outcome?: "done" | "issue" }[] {
+  const m = state.marks ?? {};
+  if (step.state === "done" || step.state === "skipped" || step.state === "wait") return [];
+  switch (step.key) {
+    case "services_off":
+      return [{ mark: "services_off", label: "Mark services off" }];
+    case "delivered":
+      return [{ mark: "delivered", label: "Mark delivered" }];
+    case "confirmation":
+      if (!m.confirmation_requested) return [{ mark: "confirmation_requested", label: "Request sent: start the 15 day clock" }];
+      return [
+        { mark: "confirmation_received", label: "Confirmation received" },
+        ...(step.state === "overdue" && !m.confirmation_second_request
+          ? [{ mark: "confirmation_second_request" as MarkableKey, label: "Mark second request drafted" }]
+          : []),
+      ];
+    case "gst_portal_check":
+      return [
+        { mark: "gst_portal_check", label: "Cleared", outcome: "done" },
+        ...(m.gst_portal_check?.status === "issue" ? [] : [{ mark: "gst_portal_check" as MarkableKey, label: "Still shows our address", outcome: "issue" as const }]),
+      ];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Steps after the discontinuation documents until our address is released.
+ * Nothing is sent from here; the second confirmation request is only drafted.
+ */
+function NonRenewalChecklist({ caseId }: { caseId: string }) {
+  const [data, setData] = useState<NonRenewalState | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/cases/${caseId}/non-renewal`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load");
+      setData(json.data);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load the non-renewal checklist");
+    }
+  }, [caseId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (!data || !data.available || !data.steps) return null;
+
+  const act = async (mark: MarkableKey, outcome?: "done" | "issue") => {
+    setBusy(`${mark}:${outcome ?? ""}`);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/non-renewal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ step: mark, ...(outcome ? { outcome } : {}) }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to update the step");
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update the step");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const draft = data.second_request_draft;
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">Non-renewal checklist</CardTitle>
+          {data.badge && <Badge variant="outline">{RELEASE_BADGE_LABELS[data.badge]}</Badge>}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {data.steps.map((step, i) => (
+          <div key={step.key} className="rounded-md border p-3 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">{i + 1}. {step.label}</p>
+              <Badge variant="outline" className={cn(step.state === "overdue" && "border-red-300 text-red-700")}>
+                {STEP_STATE_LABELS[step.state]}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">{step.detail}</p>
+            {data.can_act && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {stepActions(step, data).map((a) => (
+                  <Button
+                    key={`${a.mark}:${a.outcome ?? ""}`}
+                    size="sm"
+                    variant="outline"
+                    disabled={busy !== null}
+                    onClick={() => act(a.mark, a.outcome)}
+                  >
+                    {busy === `${a.mark}:${a.outcome ?? ""}` && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
+                    {a.label}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        {draft && (
+          <div className="rounded-md border border-amber-300 p-3 space-y-1">
+            <p className="text-sm font-medium">Second request (draft, not sent)</p>
+            <p className="text-xs text-muted-foreground">Review it and send it yourself. The system does not send it.</p>
+            <p className="text-xs font-medium">{draft.subject}</p>
+            <Textarea readOnly value={draft.body} rows={8} className="text-xs" />
+          </div>
+        )}
       </CardContent>
     </Card>
   );
