@@ -79,9 +79,13 @@ export async function POST(request: NextRequest) {
     // "renewed" parents (early renewal: child activated before the parent's
     // own end_date) stay billable for their own remaining days — the
     // end_date.gte gate below already excludes them once that date lapses.
+    // renewal_in_progress parents stay billable indefinitely after end_date
+    // lapses (same rule as generateRentProformas / generateUsageStatements) —
+    // otherwise the batch never queues a job for them and their rent is
+    // silently skipped until the renewal activates.
     .in("status", ["active", "renewal_in_progress", "renewed"])
     .lte("start_date", periodLast)
-    .gte("end_date", periodFirst);
+    .or(`status.eq.renewal_in_progress,end_date.gte.${periodFirst}`);
 
   if (contractsErr) {
     return NextResponse.json({ error: contractsErr.message }, { status: 500 });
