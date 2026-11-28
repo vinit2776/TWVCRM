@@ -38,6 +38,7 @@ const supa = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROL
 
 const USERS = [
   { email: "accounts@staging.theworkvilla.test", password: "StagingAccounts!2026", full_name: "Staging Accounts", role: "accounts" },
+  { email: "enquiryviewer@staging.theworkvilla.test", password: "StagingViewer!2026", full_name: "Staging Enquiry Viewer", role: "enquiry_viewer" },
 ];
 
 for (const u of USERS) {
