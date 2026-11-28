@@ -3,6 +3,29 @@ import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
 import { caseDisplayName } from "@/lib/case-workflow";
+import {
+  AGG_BILLABLE_CASE_STATUSES,
+  AGG_BILLING_MODE_KEY,
+  billableCasesForPeriod,
+  legacyLineAmount,
+  parseAggBillingMode,
+  type AggBillingMode,
+  type BilledTerm,
+} from "@/lib/aggregator-term-billing";
+
+// 42P01 is Postgres; PGRST205 is PostgREST saying the table is not in its schema cache.
+const TABLE_MISSING_CODES = ["42P01", "PGRST205"];
+let warnedTermsTableMissing = false;
+
+/**
+ * The billing mode is read live, not through the 5-minute settings cache: a flip made in the database
+ * or the admin screen must apply to the very next run, on every server instance, or that run can bill
+ * the old way. It is read once per invoice run, so the extra query costs nothing.
+ */
+export async function loadAggBillingMode(supabase: SupabaseClient): Promise<AggBillingMode> {
+  const { data } = await supabase.from("app_settings").select("value").eq("key", AGG_BILLING_MODE_KEY).maybeSingle();
+  return parseAggBillingMode(data?.value);
+}
 
 export interface GenerateConsolidatedInvoiceParams {
   supabase: SupabaseClient;
@@ -74,7 +97,7 @@ export async function generateConsolidatedInvoice({
     .from("cases")
     .select("id, case_number, client_name, client_company_name, purpose, rate, tenure_months, start_date, activated_at, status")
     .eq("aggregator_id", aggregatorId)
-    .in("status", ["active", "renewal_due", "invoiced", "executed"]);
+    .in("status", [...AGG_BILLABLE_CASE_STATUSES]);
 
   if (caseIds && caseIds.length > 0) {
     caseQuery = caseQuery.in("id", caseIds);
@@ -99,43 +122,70 @@ export async function generateConsolidatedInvoice({
   const periodStartStr = `${periodYear}-${String(periodMonth).padStart(2, "0")}-01`;
   const periodEndStr = `${periodYear}-${String(periodMonth).padStart(2, "0")}-${String(totalDaysInMonth).padStart(2, "0")}`;
 
-  const lineItems = cases
-    .filter((c) => c.rate && c.rate > 0)
-    .map((c) => {
-      let activeDays = totalDaysInMonth;
-      let proRatedDays: number | undefined;
-
-      // Pro-rate if activated mid-month
-      if (c.activated_at) {
-        const activatedDate = new Date(c.activated_at);
-        if (
-          activatedDate.getMonth() === periodMonth - 1 &&
-          activatedDate.getFullYear() === periodYear
-        ) {
-          activeDays = totalDaysInMonth - activatedDate.getDate() + 1;
-          proRatedDays = activeDays;
-        }
+  // once_per_tenure bills each case once per term; anything else is the
+  // legacy monthly behaviour. The ledger table may not exist yet (deploy
+  // precedes migration), in which case we stay on legacy.
+  let oncePerTenure = (await loadAggBillingMode(supabase)) === "once_per_tenure";
+  let alreadyBilled: BilledTerm[] = [];
+  if (oncePerTenure) {
+    const { data: billedRows, error: billedError } = await supabase
+      .from("aggregator_case_terms_billed")
+      .select("case_id, term_start")
+      .in("case_id", cases.map((c) => c.id));
+    if (TABLE_MISSING_CODES.includes(billedError?.code ?? "")) {
+      if (!warnedTermsTableMissing) {
+        warnedTermsTableMissing = true;
+        console.error("[aggregator-invoicing] aggregator_case_terms_billed missing (migration 00686 not applied); using legacy billing");
       }
+      oncePerTenure = false;
+    } else if (billedError) {
+      return { error: billedError.message, status: 500 };
+    } else {
+      alreadyBilled = (billedRows ?? []) as BilledTerm[];
+    }
+  }
 
-      const monthlyRate = c.rate || 0;
-      const amount =
-        proRatedDays !== undefined
-          ? Math.round((monthlyRate / totalDaysInMonth) * activeDays * 100) / 100
-          : monthlyRate;
+  const termBillings = oncePerTenure
+    ? billableCasesForPeriod({ cases, periodMonth, periodYear, alreadyBilled })
+    : [];
 
-      return {
+  if (oncePerTenure && termBillings.length === 0) {
+    return {
+      error: "No billable cases found for this aggregator in the period",
+      status: 400,
+    };
+  }
+
+  const lineItems = oncePerTenure
+    ? termBillings.map(({ case: c, amount }) => ({
         case_id: c.id,
         case_number: c.case_number,
         client_name: caseDisplayName(c),
         purpose: c.purpose,
         purpose_label: VO_PURPOSE_LABELS[c.purpose] || c.purpose,
         tenure_months: c.tenure_months,
-        rate: monthlyRate,
-        pro_rated_days: proRatedDays,
+        rate: c.rate as number,
+        pro_rated_days: undefined as number | undefined,
         total_days: totalDaysInMonth,
         amount,
-      };
-    });
+      }))
+    : cases
+        .filter((c) => c.rate && c.rate > 0)
+        .map((c) => {
+          const { amount, proRatedDays } = legacyLineAmount(c, periodMonth, periodYear);
+          return {
+            case_id: c.id,
+            case_number: c.case_number,
+            client_name: caseDisplayName(c),
+            purpose: c.purpose,
+            purpose_label: VO_PURPOSE_LABELS[c.purpose] || c.purpose,
+            tenure_months: c.tenure_months,
+            rate: c.rate || 0,
+            pro_rated_days: proRatedDays,
+            total_days: totalDaysInMonth,
+            amount,
+          };
+        });
 
   const subtotal = lineItems.reduce((sum, item) => sum + item.amount, 0);
   const isInterstate = !aggregator.same_state_as_twv;
@@ -177,6 +227,20 @@ export async function generateConsolidatedInvoice({
 
   if (invoiceError) {
     return { error: invoiceError.message, status: 500 };
+  }
+
+  if (oncePerTenure) {
+    const { error: ledgerError } = await supabase.from("aggregator_case_terms_billed").insert(
+      termBillings.map((t) => ({
+        case_id: t.case.id,
+        term_start: t.termStart,
+        aggregator_invoice_id: invoice.id,
+        amount: t.amount,
+      })),
+    );
+    if (ledgerError) {
+      console.error("[aggregator-invoicing] Failed to record billed terms:", ledgerError.message);
+    }
   }
 
   // Feed the real AR/Ageing/Tally Inbox pipeline — aggregator_invoices stays
