@@ -23,6 +23,17 @@ const OWNER_LABEL: Record<JourneyOwner, string> = {
   it: "IT",
 };
 
+/** Short names so seven stage labels fit under the bars. Full titles stay in the expanded list. */
+const PHASE_SHORT_LABEL: Record<string, string> = {
+  lead: "Lead",
+  proposal: "Proposal",
+  money: "Money",
+  contract: "Contract",
+  activate: "Activate",
+  onboard: "Get in",
+  bill: "First bill",
+};
+
 function StepDot({ state }: { state: JourneyStep["state"] }) {
   if (state === "done") {
     return (
@@ -117,16 +128,32 @@ export function JourneyPanel({ leadId, proposalId, contractId }: Props) {
         </Button>
       </div>
 
-      <div className="mt-3 flex gap-1" aria-hidden="true">
-        {journey.phases.map((p) => (
-          <div
-            key={p.key}
-            title={`${p.title}: ${p.requiredDone} of ${p.requiredTotal}`}
-            className={`h-1.5 flex-1 rounded-full ${
-              p.complete ? "bg-green-500" : p.requiredDone > 0 || next?.phase === p.key ? "bg-blue-500" : "bg-muted"
-            }`}
-          />
-        ))}
+      <div className="mt-3 flex gap-1" role="list" aria-label="Journey stages">
+        {journey.phases.map((p) => {
+          const isCurrent = !p.complete && (next?.phase === p.key || (!next && p.requiredDone > 0));
+          return (
+            <div key={p.key} role="listitem" className="min-w-0 flex-1" title={`${p.title}: ${p.requiredDone} of ${p.requiredTotal}`}>
+              <div
+                className={`h-1.5 rounded-full ${
+                  p.complete ? "bg-green-500" : p.requiredDone > 0 || next?.phase === p.key ? "bg-blue-500" : "bg-muted"
+                }`}
+              />
+              <div className={`mt-1 truncate text-[11px] leading-tight ${isCurrent ? "font-medium text-blue-700" : "text-muted-foreground"}`}>
+                {PHASE_SHORT_LABEL[p.key] ?? p.title}
+              </div>
+              {isCurrent && (
+                <div className="truncate text-[11px] leading-tight text-blue-700">
+                  {p.requiredDone} of {p.requiredTotal}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground" data-testid="journey-key">
+        <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-3.5 rounded-full bg-green-500" />Done</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-3.5 rounded-full bg-blue-500" />In progress</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-3.5 rounded-full bg-muted" />Not started</span>
       </div>
 
       {journey.complete ? (
