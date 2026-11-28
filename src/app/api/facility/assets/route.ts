@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assetSearchTerms, assetTermFilter } from "@/lib/facility/asset-search";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { assetIdsWithInvoice } from "@/lib/facility/asset-invoice";
 import { logAudit } from "@/lib/audit";
@@ -32,9 +33,9 @@ export async function GET(request: NextRequest) {
   if (locationId) query = query.eq("location_id", locationId);
   if (categoryId) query = query.eq("category_id", categoryId);
   if (status) query = query.eq("status", status);
-  if (search) {
-    const s = `%${search}%`;
-    query = query.or(`name.ilike.${s},asset_code.ilike.${s},serial_number.ilike.${s},mac_address.ilike.${s}`);
+  // Every word must match somewhere on the asset, so "hvac 68" finds an HVAC whose serial holds 68.
+  for (const term of assetSearchTerms(search ?? "")) {
+    query = query.or(assetTermFilter(term));
   }
 
   const { data: assets, error } = await query;
