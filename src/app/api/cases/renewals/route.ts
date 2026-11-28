@@ -4,6 +4,7 @@ import { getCachedSettings } from "@/lib/app-settings-cache";
 import { renewalRate } from "@/lib/vo-renewal";
 import { renewalRecipients } from "@/lib/renewal-recipients";
 import { partnerRenewalRecord } from "@/lib/vo-renewal-reminders";
+import { loadRenewalJourneys } from "@/lib/vo-renewal-journey-load";
 import {
   RENEWAL_DESK_STATUSES,
   RENEWAL_DESK_WINDOW_DAYS,
@@ -107,6 +108,11 @@ export async function GET(request: NextRequest) {
     drafts.set(d.case_id as string, (drafts.get(d.case_id as string) ?? 0) + 1);
   }
 
+  const journeys = await loadRenewalJourneys(supabase, (cases ?? []) as Record<string, unknown>[], {
+    today,
+    graceDays,
+  });
+
   const rows = (cases ?? []).flatMap((c) => {
     const bill = openBill.get(c.id as string) ?? null;
     const term = {
@@ -171,6 +177,7 @@ export async function GET(request: NextRequest) {
         : null,
       reminders: reminders.get(c.id as string) ?? { count: 0, last_sent_at: null },
       draft_documents: drafts.get(c.id as string) ?? 0,
+      journey: journeys.get(c.id as string) ?? null,
     }];
   });
 

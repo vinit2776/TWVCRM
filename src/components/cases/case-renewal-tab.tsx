@@ -8,6 +8,7 @@ import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { CaseLapsePanel } from "@/components/cases/case-lapse-panel";
 import { CaseRemindersCard } from "@/components/cases/case-reminders-card";
+import { RenewalJourneyPanel } from "@/components/cases/renewal-journey-panel";
 
 interface Reminder {
   id: string;
@@ -83,10 +84,12 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 export function CaseRenewalTab({
   caseId,
   onStartRenewal,
+  onConfirmPartner,
   onChanged,
 }: {
   caseId: string;
   onStartRenewal?: () => void;
+  onConfirmPartner?: () => void;
   onChanged?: () => void;
 }) {
   const [history, setHistory] = useState<History | null>(null);
@@ -127,7 +130,10 @@ export function CaseRenewalTab({
 
   return (
     <div className="space-y-6">
-      <CaseLapsePanel caseId={caseId} onStartRenewal={onStartRenewal} onChanged={onChanged} />
+      <RenewalJourneyPanel caseId={caseId} onStartRenewal={onStartRenewal} onConfirmPartner={onConfirmPartner} />
+      <div id="renewal-lapse-panel">
+        <CaseLapsePanel caseId={caseId} onStartRenewal={onStartRenewal} onChanged={onChanged} />
+      </div>
       <CaseRemindersCard caseId={caseId} onChanged={onChanged} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>

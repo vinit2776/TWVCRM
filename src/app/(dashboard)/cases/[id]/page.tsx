@@ -491,6 +491,7 @@ export default function CaseDetailPage({
             key={renewalVersion}
             caseId={id}
             onStartRenewal={() => setStartRenewalOpen(true)}
+            onConfirmPartner={isPostpaidPartner ? () => setPartnerRenewalOpen(true) : undefined}
             onChanged={refetch}
           />
         </TabsContent>
