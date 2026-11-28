@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { uploadDocumentForSigning, getSigningStatus } from "@/lib/digio";
 import { logAudit } from "@/lib/audit";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 /**
  * POST: Initiate e-signing via Digio OR handle Digio webhook callback.
@@ -60,6 +61,12 @@ async function handleInitiate(
   caseId: string,
   userId?: string
 ) {
+  // Same rule as execution: no signing link while the case invoice is unpaid.
+  const unpaidMessage = await checkVoExecutionPaymentGate(supabase, caseId);
+  if (unpaidMessage) {
+    return NextResponse.json({ error: unpaidMessage }, { status: 403 });
+  }
+
   // Get the agreement
   const { data: agreement, error } = await supabase
     .from("case_agreements")
