@@ -29,6 +29,7 @@ import {
   type RenewalDeskTab,
 } from "@/lib/vo-renewal-desk";
 import { toast } from "sonner";
+import { nextStepFor, needsRole, type RenewalJourney } from "@/lib/vo-renewal-journey";
 
 interface DeskRow {
   id: string;
@@ -50,6 +51,7 @@ interface DeskRow {
   partner_confirmation: { term_start: string; new_rate: number } | null;
   reminders: { count: number; last_sent_at: string | null };
   draft_documents: number;
+  journey: RenewalJourney | null;
 }
 
 type PayerFilter = "all" | "client" | "partner";
@@ -110,6 +112,17 @@ export default function RenewalsDeskPage() {
   const [tab, setTab] = useState<RenewalDeskTab>("coming");
   const [locationId, setLocationId] = useState<string | null>(null);
   const [payer, setPayer] = useState<PayerFilter>("all");
+  const [role, setRole] = useState<string | null>(null);
+  const [needsMe, setNeedsMe] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((j) => setRole(j.role ?? null))
+      .catch(() => {
+        // Without a role the desk still lists every case; only "Needs me" is unavailable.
+      });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -135,10 +148,11 @@ export default function RenewalsDeskPage() {
 
   const filtered = useMemo(
     () =>
-      rows.filter((r) =>
-        payer === "all" ? true : payer === "client" ? r.payer.kind === "client" : r.payer.kind === "aggregator",
-      ),
-    [rows, payer],
+      rows.filter((r) => {
+        const payerOk = payer === "all" ? true : payer === "client" ? r.payer.kind === "client" : r.payer.kind === "aggregator";
+        return payerOk && (!needsMe || (!!r.journey && needsRole(r.journey, role)));
+      }),
+    [rows, payer, needsMe, role],
   );
 
   const counts = useMemo(() => {
@@ -179,6 +193,16 @@ export default function RenewalsDeskPage() {
               <SelectItem value="partner">Billed to partner</SelectItem>
             </SelectContent>
           </Select>
+          <Button
+            type="button"
+            variant={needsMe ? "default" : "outline"}
+            disabled={!role}
+            onClick={() => setNeedsMe((v) => !v)}
+            aria-pressed={needsMe}
+            title="Show only the cases where the next step is yours to do"
+          >
+            Needs me
+          </Button>
         </div>
       </div>
 
@@ -283,6 +307,20 @@ export default function RenewalsDeskPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
+                      {(() => {
+                        const view = r.journey ? nextStepFor(r.journey, role) : null;
+                        if (!view) return null;
+                        return (
+                          <div className="mb-1.5 text-xs">
+                            <div className={cn("font-medium", view.mine ? "text-blue-700 dark:text-blue-300" : "text-muted-foreground")}>
+                              {view.step.label}
+                            </div>
+                            <div className="text-muted-foreground">
+                              {view.mine ? "Yours to do" : `Waiting on ${view.waitingOn?.toLowerCase()}`}
+                            </div>
+                          </div>
+                        );
+                      })()}
                       {(() => {
                         // A case with no renewal bill yet gets Start renewal; one
                         // already offered is followed up from the case.
