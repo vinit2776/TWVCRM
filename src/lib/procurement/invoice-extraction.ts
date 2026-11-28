@@ -1,10 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { ExtractedInvoice } from "@/lib/procurement/invoice-check";
+import { reasonFromError, type InvoiceCheckReason } from "@/lib/procurement/invoice-check-reasons";
 
 // Reads a vendor invoice (PDF/image) into structured fields so the new-bill form can
-// show an advisory check. Advisory only: every failure path returns "unavailable" and
-// the form simply carries on with manual entry.
+// show an advisory check. Advisory only: every failure path returns "unavailable" with a reason
+// and the form simply carries on with manual entry.
 // Deliberately fixed to Haiku (cheapest tier) with no env override, so the first pass can never run on a larger model.
 const MODEL = "claude-haiku-5-5";
 const REQUEST_TIMEOUT_MS = 40_000;
@@ -38,13 +39,18 @@ const responseSchema = z.object({
 
 export type InvoiceExtractionOutcome =
   | { status: "ok"; extracted: ExtractedInvoice }
-  | { status: "unavailable" };
+  | { status: "unavailable"; reason: InvoiceCheckReason };
+
+const unreadable = (): InvoiceExtractionOutcome => {
+  console.error("[extractInvoice]", "reason=unreadable");
+  return { status: "unavailable", reason: "unreadable" };
+};
 
 const clean = (s: string | null) => (s && s.trim() ? s.trim().slice(0, 200) : null);
 const money = (n: number | null) => (n !== null && Number.isFinite(n) && n >= 0 && n < 1e10 ? n : null);
 
 export async function extractInvoice(base64: string, mediaType: ExtractionMediaType): Promise<InvoiceExtractionOutcome> {
-  if (!process.env.ANTHROPIC_API_KEY) return { status: "unavailable" };
+  if (!process.env.ANTHROPIC_API_KEY) return { status: "unavailable", reason: "not_configured" };
 
   try {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -65,10 +71,10 @@ export async function extractInvoice(base64: string, mediaType: ExtractionMediaT
 
     const raw = message.content.map((b) => (b.type === "text" ? b.text : "")).join("");
     const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) return { status: "unavailable" };
+    if (!match) return unreadable();
 
     const parsed = responseSchema.safeParse(JSON.parse(match[0]));
-    if (!parsed.success) return { status: "unavailable" };
+    if (!parsed.success) return unreadable();
     const d = parsed.data;
 
     const extracted: ExtractedInvoice = {
@@ -81,10 +87,13 @@ export async function extractInvoice(base64: string, mediaType: ExtractionMediaT
       confidence: d.confidence,
     };
     const readAnything = Object.entries(extracted).some(([k, v]) => k !== "confidence" && v !== null);
-    return readAnything ? { status: "ok", extracted } : { status: "unavailable" };
+    return readAnything ? { status: "ok", extracted } : unreadable();
   } catch (err) {
-    // Message only — never the invoice content or the request payload.
-    console.error("[extractInvoice]", err instanceof Error ? err.name : "error");
-    return { status: "unavailable" };
+    // Class name, status and reason only — never the invoice content, request payload or key.
+    // A JSON.parse failure on the model's text is a SyntaxError: nothing parseable came back.
+    const reason = err instanceof SyntaxError ? "unreadable" : reasonFromError(err);
+    const status = (err as { status?: unknown } | null)?.status;
+    console.error("[extractInvoice]", `reason=${reason}`, err instanceof Error ? err.name : "error", typeof status === "number" ? `status=${status}` : "");
+    return { status: "unavailable", reason };
   }
 }

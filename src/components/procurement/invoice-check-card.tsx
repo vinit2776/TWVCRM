@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useMemo } from "react";
-import { AlertTriangle, CheckCircle2, Loader2, ScanSearch } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, Loader2, ScanSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   checkInvoice,
@@ -10,11 +10,12 @@ import {
   type ExtractedInvoice,
   type SuggestionField,
 } from "@/lib/procurement/invoice-check";
+import { invoiceCheckFailureMessage, type InvoiceCheckReason } from "@/lib/procurement/invoice-check-reasons";
 
 export type InvoiceCheckState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "unavailable" }
+  | { status: "unavailable"; reason: InvoiceCheckReason }
   | { status: "ok"; extracted: ExtractedInvoice };
 
 interface Props {
@@ -44,7 +45,16 @@ export const InvoiceCheckCard = memo(function InvoiceCheckCard({ state, entered,
     [extracted, entered, poCeiling],
   );
 
-  if (state.status === "idle" || state.status === "unavailable") return null;
+  if (state.status === "idle") return null;
+
+  if (state.status === "unavailable") {
+    return (
+      <p className="flex items-start gap-2 rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground" data-testid="invoice-check-unavailable">
+        <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+        {invoiceCheckFailureMessage(state.reason)}
+      </p>
+    );
+  }
 
   if (state.status === "loading") {
     return (
